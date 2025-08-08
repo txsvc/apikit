@@ -7,8 +7,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/cloudlib/helpers"
-	"github.com/txsvc/cloudlib/settings"
 	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 
 	"github.com/txsvc/apikit/auth"
 	"github.com/txsvc/apikit/config"
@@ -62,7 +62,7 @@ func InitEndpoint(c echo.Context) error {
 	// prepare the settings for registration
 	cfg.Credentials.Token = CreateSimpleToken() // ignore anything that was provided
 	cfg.Credentials.Expires = stdlib.IncT(stdlib.Now(), LoginExpiresAfter)
-	cfg.Credentials.Status = settings.StateInit // signals init
+	cfg.Credentials.Status = StateInit // signals init
 
 	if err := auth.UpdateStore(&cfg); err != nil {
 		return StandardResponse(c, http.StatusBadRequest, nil) // FIXME: or 409/Conflict ?
@@ -121,7 +121,7 @@ func LoginEndpoint(c echo.Context) error {
 	cfg := ds.Clone()           // clone, otherwise stupid things happen with pointers !
 	cfg.Credentials.Expires = 0 // FIXME: really never ?
 	cfg.Credentials.Token = CreateSimpleToken()
-	cfg.Credentials.Status = settings.StateAuthorized
+	cfg.Credentials.Status = StateAuthorized
 
 	// FIXME: what about scopes ?
 
@@ -170,7 +170,7 @@ func LogoutEndpoint(c echo.Context) error {
 	}
 
 	// update the cache and store
-	cfg.Credentials.Status = settings.StateUndefined // just set to invalid and expired
+	cfg.Credentials.Status = StateUndefined // just set to invalid and expired
 	cfg.Credentials.Expires = stdlib.Now() - 1
 	if err := auth.UpdateStore(cfg); err != nil {
 		return ErrorResponse(c, http.StatusBadRequest, err, "update store")

@@ -9,12 +9,12 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/txsvc/cloudlib"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 const (
-	TypeAuthProvider cloudlib.ProviderType = 40
+	TypeAuthProvider stdlib.ProviderType = 40
 
 	// anonymous
 	ScopeAnonymous = "api:anonymous" // this basically means that the Client is unknown
@@ -60,19 +60,19 @@ var (
 	// ErrNoScope indicates that no scope was provided
 	ErrNoScope = errors.New("no scope provided")
 
-	authProvider *cloudlib.Provider
+	authProvider *stdlib.Provider
 )
 
 //
 // The generic AuthProvider parts
 //
 
-func NewConfig(opts cloudlib.ProviderConfig) (*cloudlib.Provider, error) {
+func NewConfig(opts stdlib.ProviderConfig) (*stdlib.Provider, error) {
 	if opts.Type != TypeAuthProvider {
-		return nil, fmt.Errorf(cloudlib.MsgUnsupportedProviderType, opts.Type)
+		return nil, fmt.Errorf(stdlib.MsgUnsupportedProviderType, opts.Type)
 	}
 
-	o, err := cloudlib.New(opts)
+	o, err := stdlib.New(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +81,9 @@ func NewConfig(opts cloudlib.ProviderConfig) (*cloudlib.Provider, error) {
 	return o, nil
 }
 
-func UpdateConfig(opts cloudlib.ProviderConfig) (*cloudlib.Provider, error) {
+func UpdateConfig(opts stdlib.ProviderConfig) (*stdlib.Provider, error) {
 	if opts.Type != TypeAuthProvider {
-		return nil, fmt.Errorf(cloudlib.MsgUnsupportedProviderType, opts.Type)
+		return nil, fmt.Errorf(stdlib.MsgUnsupportedProviderType, opts.Type)
 	}
 
 	return authProvider, authProvider.RegisterProviders(true, opts)

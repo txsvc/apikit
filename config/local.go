@@ -5,9 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/txsvc/cloudlib/helpers"
-	"github.com/txsvc/cloudlib/settings"
 	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 
 	"github.com/txsvc/apikit/auth"
 )
@@ -88,11 +87,11 @@ func (c *localConfig) Settings() *settings.DialSettings {
 
 	// try to load the dial settings
 	pathToFile := filepath.Join(c.ConfigLocation(), DefaultConfigName)
-	cfg, err := helpers.ReadDialSettings(pathToFile)
+	cfg, err := settings.ReadDialSettings(pathToFile)
 	if err != nil {
 		cfg = c.defaultSettings()
 		// save to the default location
-		if err = helpers.WriteDialSettings(cfg, pathToFile); err != nil {
+		if err = settings.WriteDialSettings(cfg, pathToFile); err != nil {
 			log.Fatal(err)
 		}
 	}

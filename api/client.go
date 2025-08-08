@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/txsvc/cloudlib/settings"
 	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 
 	"github.com/txsvc/apikit/config"
 )
@@ -138,7 +138,7 @@ func (c *Client) roundTrip(req *http.Request, response interface{}) (int, error)
 			if err != nil {
 				return resp.StatusCode, fmt.Errorf(MsgStatus, err.Error(), resp.StatusCode)
 			}
-			return status.Status, fmt.Errorf(status.Message)
+			return status.Status, fmt.Errorf("%s", status.Message)
 		}
 		return resp.StatusCode, ErrApiInvocationError
 	}

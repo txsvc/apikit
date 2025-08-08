@@ -5,7 +5,7 @@ import (
 
 	"github.com/txsvc/apikit/auth"
 	"github.com/txsvc/apikit/config"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 // FIXME: make this Google AppEngine specific !

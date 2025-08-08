@@ -6,6 +6,14 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"github.com/txsvc/stdlib/v2/settings"
+)
+
+const (
+	StateInit       settings.State = iota - 2 // waiting to swap tokens
+	StateInvalid                              // a config in this state should not be used
+	StateUndefined                            // logged out
+	StateAuthorized                           // logged in
 )
 
 type (

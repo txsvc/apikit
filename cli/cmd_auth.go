@@ -6,9 +6,8 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	"github.com/txsvc/cloudlib/helpers"
-	"github.com/txsvc/cloudlib/settings"
 	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 
 	"github.com/txsvc/apikit/api"
 	"github.com/txsvc/apikit/auth"
@@ -64,7 +63,7 @@ func InitCommand(c *cli.Context) error {
 	}
 
 	// create or validate the words
-	mnemonic, err := helpers.CreateMnemonic(phrase)
+	mnemonic, err := stdlib.CreateMnemonic(phrase)
 	if err != nil {
 		return err
 	}
@@ -108,7 +107,7 @@ func InitCommand(c *cli.Context) error {
 		Token:     api.CreateSimpleToken(),
 		Expires:   0, // FIXME: should this expire after some time?
 	}
-	cfg.Credentials.Status = settings.StateInit
+	cfg.Credentials.Status = api.StateInit
 	cfg.SetOption("APIKey", _apiKey)
 	cfg.Scopes = make([]string, 0)
 	cfg.DefaultScopes = make([]string, 0)
@@ -123,7 +122,7 @@ func InitCommand(c *cli.Context) error {
 
 	// finally save the file
 	pathToFile := filepath.Join(config.GetConfig().ConfigLocation(), config.DefaultConfigName)
-	if err := helpers.WriteDialSettings(cfg, pathToFile); err != nil {
+	if err := settings.WriteDialSettings(cfg, pathToFile); err != nil {
 		return config.ErrInitializingConfiguration
 	}
 
@@ -162,13 +161,13 @@ func LoginCommand(c *cli.Context) error {
 
 	// update the local config
 	cfg.Credentials.Token = status.Message
-	cfg.Credentials.Status = settings.StateAuthorized // LOGGED_IN
+	cfg.Credentials.Status = api.StateAuthorized // LOGGED_IN
 	if !cfg.Credentials.IsValid() {
 		return config.ErrInvalidConfiguration
 	}
 
 	pathToFile := filepath.Join(config.GetConfig().ConfigLocation(), config.DefaultConfigName)
-	if err := helpers.WriteDialSettings(cfg, pathToFile); err != nil {
+	if err := settings.WriteDialSettings(cfg, pathToFile); err != nil {
 		return config.ErrInitializingConfiguration
 	}
 
@@ -200,10 +199,10 @@ func LogoutCommand(c *cli.Context) error {
 
 	// update the local config
 	cfg.Credentials.Expires = stdlib.Now() - 1
-	cfg.Credentials.Status = settings.StateUndefined // LOGGED_OUT
+	cfg.Credentials.Status = api.StateUndefined // LOGGED_OUT
 
 	pathToFile := filepath.Join(config.GetConfig().ConfigLocation(), config.DefaultConfigName)
-	if err := helpers.WriteDialSettings(cfg, pathToFile); err != nil {
+	if err := settings.WriteDialSettings(cfg, pathToFile); err != nil {
 		return config.ErrInitializingConfiguration
 	}
 

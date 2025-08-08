@@ -15,8 +15,7 @@ import (
 	"github.com/txsvc/apikit/api"
 	"github.com/txsvc/apikit/auth"
 	"github.com/txsvc/apikit/config"
-	"github.com/txsvc/cloudlib/helpers"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 // the below version numbers should match the git release tags,
@@ -73,7 +72,7 @@ func init() {
 		cfg := config.GetConfig().Settings()
 
 		// save the new configuration
-		if err := helpers.WriteDialSettings(cfg, path); err != nil {
+		if err := settings.WriteDialSettings(cfg, path); err != nil {
 			// Handle error appropriately for your application
 			return
 		}

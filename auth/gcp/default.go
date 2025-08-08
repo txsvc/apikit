@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/txsvc/cloudlib"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 
 	"github.com/txsvc/apikit/auth"
 )
@@ -21,7 +21,7 @@ var (
 	// This enforces a compile-time check of the provider implmentation,
 	// making sure all the methods defined in the interfaces are implemented.
 
-	_ cloudlib.GenericProvider = (*defaultGCPAuthImpl)(nil)
+	_ stdlib.GenericProvider = (*defaultGCPAuthImpl)(nil)
 
 	_ auth.AuthProvider = (*defaultGCPAuthImpl)(nil)
 
@@ -37,7 +37,7 @@ func init() {
 	idToAuth = make(map[string]*settings.DialSettings)
 
 	// initialize the Google Cloud Store backed provider
-	authConfig := cloudlib.WithProvider("apikit.gcp.auth", auth.TypeAuthProvider, NewGCPProvider)
+	authConfig := stdlib.WithProvider("apikit.gcp.auth", auth.TypeAuthProvider, NewGCPProvider)
 	authProvider, err := auth.NewConfig(authConfig)
 	if err != nil {
 		log.Fatal(err)

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 const (

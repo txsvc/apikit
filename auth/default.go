@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/txsvc/cloudlib"
-	"github.com/txsvc/cloudlib/settings"
+	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 type (
@@ -19,7 +19,7 @@ var (
 	// This enforces a compile-time check of the provider implmentation,
 	// making sure all the methods defined in the interfaces are implemented.
 
-	_ cloudlib.GenericProvider = (*defaultAuthImpl)(nil)
+	_ stdlib.GenericProvider = (*defaultAuthImpl)(nil)
 
 	_ AuthProvider = (*defaultAuthImpl)(nil)
 
@@ -39,7 +39,7 @@ func init() {
 	idToAuth = make(map[string]*settings.DialSettings)
 
 	// initialize the default in-memory only auth provider
-	authConfig := cloudlib.WithProvider("apikit.default.auth", TypeAuthProvider, NewDefaultProvider)
+	authConfig := stdlib.WithProvider("apikit.default.auth", TypeAuthProvider, NewDefaultProvider)
 
 	if _, err := NewConfig(authConfig); err != nil {
 		log.Fatal(err)

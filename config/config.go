@@ -4,9 +4,8 @@ import (
 	"errors"
 	"log"
 
-	"github.com/txsvc/cloudlib/helpers"
-	"github.com/txsvc/cloudlib/settings"
 	"github.com/txsvc/stdlib/v2"
+	"github.com/txsvc/stdlib/v2/settings"
 )
 
 const (
@@ -67,7 +66,7 @@ var (
 	config_ ConfigProvider
 
 	// the current session key
-	sessionKey = stdlib.GetString(AppSessionKeyENV, helpers.RandStringSimple(128))
+	sessionKey = stdlib.GetString(AppSessionKeyENV, stdlib.RandStringSimple(128))
 )
 
 func init() {
