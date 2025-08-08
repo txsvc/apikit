@@ -100,7 +100,9 @@ func HandleFileUpload(ctx context.Context, req *http.Request, location, formName
 			if err != nil {
 				return "", err
 			}
-			defer out.Close()
+			defer func() {
+				_ = out.Close() // Ignore error on close
+			}()
 
 			if _, err := io.Copy(out, part); err != nil {
 				return "", err

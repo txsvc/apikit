@@ -134,39 +134,45 @@ func CheckAuthorization(ctx context.Context, c echo.Context, scope string) (*set
 }
 
 func GetBearerToken(r *http.Request) (string, error) {
-
-	// FIXME: optimize this !!
+	const bearerPrefix = "Bearer "
 
 	auth := r.Header.Get("Authorization")
-	if len(auth) == 0 {
+	if auth == "" {
 		return "", ErrNoToken
 	}
 
-	parts := strings.Split(auth, " ")
-	if len(parts) != 2 {
+	if !strings.HasPrefix(auth, bearerPrefix) {
 		return "", ErrNoToken
 	}
-	if parts[0] == "Bearer" {
-		return parts[1], nil
+
+	token := auth[len(bearerPrefix):]
+	if token == "" {
+		return "", ErrNoToken
 	}
 
-	return "", ErrNoToken
+	return token, nil
 }
 
 // FIXME: this is a VERY simple implementation
 func hasScope(target []string, scope string) bool {
+	// Handle empty inputs
+	if len(target) == 0 || scope == "" {
+		return false
+	}
 
+	// Convert target slice to map for O(1) lookups
+	targetMap := make(map[string]struct{}, len(target))
+	for _, s := range target {
+		targetMap[s] = struct{}{}
+	}
+
+	// Split requested scopes and check each exists in target
 	scopes := strings.Split(scope, ",")
-	mustMatch := len(scopes)
-
 	for _, s := range scopes {
-		for _, ss := range target {
-			if s == ss {
-				mustMatch--
-				break
-			}
+		if _, exists := targetMap[s]; !exists {
+			return false
 		}
 	}
 
-	return mustMatch == 0
+	return true
 }

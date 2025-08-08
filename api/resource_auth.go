@@ -43,7 +43,7 @@ func (c *Client) InitCommand(ds *settings.DialSettings) error {
 
 func InitEndpoint(c echo.Context) error {
 	// get the payload
-	var ds *settings.DialSettings = new(settings.DialSettings)
+	ds := new(settings.DialSettings)
 	if err := c.Bind(ds); err != nil {
 		return StandardResponse(c, http.StatusBadRequest, nil)
 	}

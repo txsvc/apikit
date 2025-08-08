@@ -11,11 +11,11 @@ app.yaml
 *.dylib
 
 # Build, test, internal stuff
-coverage.txt
 /hack/
 bin/
 stuff.md
 lint.txt
+coverage.txt
 
 # Test binary, built with `go test -c`
 *.test

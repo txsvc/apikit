@@ -27,13 +27,19 @@ func init() {
 	// create a default configuration for the service (if none exists)
 	path := filepath.Join(config.GetConfig().ConfigLocation(), config.DefaultConfigName)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		os.MkdirAll(filepath.Dir(path), os.ModePerm)
+		if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+			// Handle error appropriately for your application
+			return
+		}
 
 		// create credentials and keys with defaults from this config provider
 		cfg := config.GetConfig().Settings()
 
 		// save the new configuration
-		helpers.WriteDialSettings(cfg, path)
+		if err := helpers.WriteDialSettings(cfg, path); err != nil {
+			// Handle error appropriately for your application
+			return
+		}
 	}
 }
 

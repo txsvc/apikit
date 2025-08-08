@@ -123,7 +123,9 @@ func (c *Client) roundTrip(req *http.Request, response interface{}) (int, error)
 		return resp.StatusCode, err
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Ignore error on close
+	}()
 
 	// anything other than OK, Created, Accepted, NoContent is treated as an error
 	if resp.StatusCode > http.StatusNoContent {
