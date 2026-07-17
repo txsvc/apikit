@@ -1,0 +1,115 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The user_management PRD is exceptionally well-written and comprehensive. The Intent, Goals, Non-Goals, Background/context (via Source and Design Decisions), and Functional Requirements sections are all present and detailed. The spec includes precise HTTP semantics, complete interface definitions, a thorough test matrix, and clear design rationale. It correctly declares dependencies on server_core, database_layer, and auth_middleware. However, two issues require clarification before this spec is fully ready: (1) a potential scope overlap with the admin_bootstrap spec regarding user creation mechanics, and (2) a minor but meaningful inconsistency in the revoke endpoints' HTTP response codes (returning 204 on success but 200 on already-revoked). Additionally, the PATCH /user endpoint uses `users:read` permission rather than a `users:write` permission, which appears to be a copy-paste error. One missing dependency is also flagged: the oauth_provider_registry spec, which governs the `provider` field semantics used in this spec.",
+      "gaps": [
+        "**Overlap with admin_bootstrap (active spec):** The admin_bootstrap spec governs initial admin user creation on first boot. The user_management spec's `POST /users` endpoint also creates users (including potentially admin-role users via subsequent promote). It is not clear whether `POST /users` could conflict with or duplicate logic from admin_bootstrap's user-seeding mechanism, or whether admin_bootstrap's bootstrap token is validated through auth_middleware (which this spec also depends on). The relationship between these two specs needs explicit clarification.",
+        "**Inconsistent HTTP response on already-revoked credentials:** `DELETE /users/:id/keys/:key_id` returns 204 on success but 200 when already revoked (idempotent). Similarly for `DELETE /users/:id/tokens/:token_id`. The Goals section states action endpoints return HTTP 200, but successful revocation returns 204. This inconsistency (200 vs 204 on idempotent already-revoked path) should be explicitly justified or corrected.",
+        "**PATCH /user uses `users:read` permission for a write operation:** The `PATCH /user` (Update Own Profile) behavior step 1 calls `auth.RequirePermission(c, \"users\", \"read\")`. A mutation endpoint should likely require a `users:write` (or equivalent) permission, not `users:read`. This appears to be a copy-paste error from `GET /user`.",
+        "**Missing dependency on oauth_provider_registry:** The user object includes `provider` and `provider_id` fields, and the `POST /users` request body requires `provider` and `provider_id`. The oauth_provider_registry spec governs the OAuth provider abstraction. The PRD should either declare a dependency on oauth_provider_registry or explicitly state that the provider string is free-form and not validated against the registry.",
+        "**No Background section:** While the Source note and Design Decisions serve as implicit background, the PRD lacks a formal Background section explaining the motivation (e.g., why admin-managed user lifecycle is needed, what problem this solves in the apikit system). This is a minor gap given the richness of surrounding context.",
+        "**`GET /user/orgs` depends on org/membership tables not declared as dependencies:** The endpoint queries `org_members` and `orgs` tables, implying a dependency on an organization management spec. No such spec is listed in the Dependencies table or the Existing Spec Landscape, leaving the schema of those tables undefined within this PRD."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The active admin_bootstrap spec also involves user creation (seeding the first admin). Should user_management's `POST /users` depend on, extend, or explicitly supersede any user-creation logic in admin_bootstrap? How do these two specs interact at the database level?",
+          "context": "Both specs touch user records in the `users` table. Clarifying the boundary prevents duplicate logic and ensures the auth_middleware correctly distinguishes bootstrap tokens from admin session tokens when protecting `POST /users`.",
+          "options": [
+            "user_management POST /users is independent \u2014 admin_bootstrap only seeds via a one-time CLI flag, not via the API endpoint",
+            "user_management should declare a dependency on admin_bootstrap (admin_bootstrap must complete before POST /users is usable)",
+            "admin_bootstrap's user-seeding logic should be absorbed into user_management and admin_bootstrap updated accordingly"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "The `DELETE /users/:id/keys/:key_id` and `DELETE /users/:id/tokens/:token_id` endpoints return HTTP 204 on successful revocation but HTTP 200 when the credential is already revoked. Is this intentional, and if so, what is the rationale for the asymmetry?",
+          "context": "The Goals section states action endpoints return HTTP 200; returning 204 on the success path but 200 on the idempotent path is unusual. Clients that check status codes may behave differently depending on which path they hit. A consistent 204 (or 200 with body) on both paths would be simpler.",
+          "options": [
+            "Intentional \u2014 204 signals a state change occurred, 200 signals no change was needed (idempotent path)",
+            "Not intentional \u2014 standardize both to 204 (no body on either path)",
+            "Not intentional \u2014 standardize both to 200 with the credential metadata object"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "The `PATCH /user` (Update Own Profile) endpoint calls `auth.RequirePermission(c, \"users\", \"read\")` in step 1. Should this be `users:write` (or a similar write-scoped permission) instead of `users:read`, since it mutates data?",
+          "context": "Using a read permission to gate a write operation means any PAT with read-only user access can also modify the user's profile. This may be intentional (self-service write is treated as part of read scope) or a copy-paste error.",
+          "options": [
+            "Intentional \u2014 self-service profile updates are gated on users:read (there is no separate users:write scope)",
+            "Error \u2014 should be users:write or a dedicated users:update permission",
+            "Intentional \u2014 but the PRD should be updated to explicitly justify this decision"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should user_management declare a dependency on the oauth_provider_registry spec? The `provider` field in the user object and `POST /users` request body references OAuth providers. Is the provider string validated against the registry, or is it treated as a free-form string?",
+          "context": "If the provider value must match a registered provider in oauth_provider_registry, then user_management has an implicit runtime dependency on that spec. If it is free-form (e.g., 'github', 'google' as arbitrary strings), no dependency is needed but that should be stated explicitly.",
+          "options": [
+            "Free-form string \u2014 no validation against oauth_provider_registry; add a note clarifying this",
+            "Must match a registered provider \u2014 add oauth_provider_registry as a dependency",
+            "Validated only during OAuth login, not during admin POST /users \u2014 no dependency needed"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "The `GET /user/orgs` endpoint queries `org_members` and `orgs` tables. Is there an existing or planned spec that defines the schema for these tables? Should user_management declare a dependency on an organization management spec?",
+          "context": "Without a defined schema for `org_members` and `orgs`, implementers must infer the table structure from the JSON response shape alone. If an org management spec exists or is planned, declaring it as a dependency ensures schema consistency.",
+          "options": [
+            "An org management spec is planned \u2014 user_management should declare a dependency on it once created",
+            "The org tables are defined within user_management itself \u2014 add schema definitions to this PRD",
+            "The org tables are defined in database_layer \u2014 reference that spec for schema details"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The user_management PRD is now complete and ready. All five previously identified gaps have been resolved: (1) the relationship between `POST /users` and `admin_bootstrap` is explicitly documented in a new Background section, in the Dependencies table note, in the POST /users endpoint description, and in Design Decisions; (2) credential revocation endpoints now consistently return 204 on both the success and already-revoked paths, with rationale documented; (3) the `PATCH /user` permission intentionally using `users:read` is explained in Behavior step 1 and in Design Decisions, referencing the master PRD's fixed permission set; (4) the `provider` field is explicitly documented as a free-form string with no dependency on `oauth_provider_registry`; (5) the `orgs`/`org_members` table dependency is clarified as already covered by the existing `database_layer` dependency. Two new tests were also added for `PATCH /user` PAT permission coverage, and the `TestRevokeUserKey_AlreadyRevoked` / `TestRevokeUserToken_AlreadyRevoked` tests were corrected from 200 to 204. The spec is internally consistent, complete, and implementation-ready.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "detail": "user_management POST /users is independent. admin_bootstrap seeds the first admin user via the --admin-email CLI flag during the OAuth callback flow. POST /users is a separate API endpoint used by admin users to create user records directly. They operate on the same users table but serve different purposes. admin_bootstrap is a one-time server startup concern; user_management is runtime API behavior."
+        },
+        "q2": {
+          "choice": 1,
+          "detail": "Standardize both to 204 (no body on either path). DELETE endpoints that revoke credentials should consistently return 204 No Content whether the credential was just revoked or was already revoked. This is simpler for clients and aligns with standard REST DELETE semantics."
+        },
+        "q3": {
+          "choice": 0,
+          "detail": "Intentional. The master PRD defines built-in PAT permissions as users:read, orgs:read, keys:read, keys:manage, tokens:read, tokens:manage. There is no users:write permission. Self-service profile updates (only full_name) are considered part of the users:read scope since the user is only modifying their own non-sensitive metadata. This keeps the permission model simple and matches the master PRD's defined permission set."
+        },
+        "q4": {
+          "choice": 2,
+          "detail": "The provider string in POST /users is a free-form string stored as-is. Validation against the provider registry only occurs during the OAuth login flow, not during admin user creation. An admin may create a user with a provider that is not currently configured (e.g., preparing for a future provider). No dependency on oauth_provider_registry is needed."
+        },
+        "q5": {
+          "choice": 2,
+          "detail": "The org and org_members tables are defined in the database_layer spec (02_database_layer), which creates all six tables on boot. The user_management spec already declares database_layer as a dependency. The GET /user/orgs endpoint simply joins these tables -- no additional dependency declaration is needed beyond what is already listed."
+        }
+      },
+      "timestamp": "2026-07-17T11:29:54.654378+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

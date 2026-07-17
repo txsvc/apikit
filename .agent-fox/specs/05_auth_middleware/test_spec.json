@@ -1,0 +1,1410 @@
+{
+  "$schema": null,
+  "spec_id": "05",
+  "spec_name": "auth_middleware",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-05-1",
+      "requirement_id": "05-REQ-1.1",
+      "kind": "unit",
+      "description": "NewAuthMiddleware returns a valid echo.MiddlewareFunc when given non-nil db.DB and PermissionRegistry arguments.",
+      "preconditions": [
+        "A valid *db.DB handle connected to an in-memory SQLite database is available.",
+        "A valid *PermissionRegistry created via NewPermissionRegistry() is available."
+      ],
+      "input": {
+        "database": "non-nil *db.DB",
+        "registry": "non-nil *PermissionRegistry"
+      },
+      "expected": "NewAuthMiddleware returns a non-nil echo.MiddlewareFunc without panicking.",
+      "assertion_pseudocode": "mw = NewAuthMiddleware(db, registry)\nassert mw != nil"
+    },
+    {
+      "id": "TS-05-2",
+      "requirement_id": "05-REQ-1.2",
+      "kind": "integration",
+      "description": "All routes registered on the APIGroup are intercepted by the auth middleware before the handler executes.",
+      "preconditions": [
+        "Echo server is configured with APIGroup and auth middleware applied to it.",
+        "A test handler is registered on a route under APIGroup.",
+        "SQLite database is initialised with the required tables."
+      ],
+      "input": {
+        "request": "GET /api/some-protected-route with no Authorization header"
+      },
+      "expected": "Response is HTTP 401 with JSON body {\"error\":{\"code\":401,\"message\":\"missing authorization header\"}}; the test handler is never invoked.",
+      "assertion_pseudocode": "resp = httptest_send(GET, \"/api/some-protected-route\", headers={})\nassert resp.status == 401\nassert resp.body.error.message == \"missing authorization header\"\nassert handler_was_invoked == false"
+    },
+    {
+      "id": "TS-05-3",
+      "requirement_id": "05-REQ-1.3",
+      "kind": "integration",
+      "description": "Health probe and OAuth paths are not intercepted by the auth middleware and respond normally without an Authorization header.",
+      "preconditions": [
+        "Echo server has /healthz, /readyz, /version, /auth/providers, /auth/callback registered on an unprotected group.",
+        "Auth middleware is applied only to the APIGroup."
+      ],
+      "input": {
+        "requests": [
+          "GET /healthz (no Authorization header)",
+          "GET /readyz (no Authorization header)",
+          "GET /version (no Authorization header)",
+          "GET /auth/providers (no Authorization header)",
+          "GET /auth/callback (no Authorization header)"
+        ]
+      },
+      "expected": "All unprotected paths respond with HTTP 200 (or their normal status); none return 401.",
+      "assertion_pseudocode": "for each path in [\"/healthz\", \"/readyz\", \"/version\", \"/auth/providers\", \"/auth/callback\"]:\n  resp = httptest_send(GET, path, headers={})\n  assert resp.status != 401"
+    },
+    {
+      "id": "TS-05-4",
+      "requirement_id": "05-REQ-2.1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'missing authorization header' when the Authorization header is absent.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "Echo test context is created with no Authorization header set."
+      ],
+      "input": {
+        "Authorization": "(absent)"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'missing authorization header'.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"missing authorization header\""
+    },
+    {
+      "id": "TS-05-5",
+      "requirement_id": "05-REQ-2.2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid authorization header format' when the Authorization header uses a non-Bearer scheme.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "Echo test context is created with Authorization: Basic dXNlcjpwYXNz"
+      ],
+      "input": {
+        "Authorization": "Basic dXNlcjpwYXNz"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid authorization header format'.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Basic dXNlcjpwYXNz\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid authorization header format\""
+    },
+    {
+      "id": "TS-05-6",
+      "requirement_id": "05-REQ-2.3",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'missing token' when the Authorization header is exactly 'Bearer ' with no token.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "Echo test context is created with Authorization: Bearer  (Bearer followed by exactly one space, nothing else)"
+      ],
+      "input": {
+        "Authorization": "Bearer "
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'missing token'.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer \"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"missing token\""
+    },
+    {
+      "id": "TS-05-7",
+      "requirement_id": "05-REQ-2.4",
+      "kind": "unit",
+      "description": "Auth middleware extracts the token string after 'Bearer ' and passes it to credential type detection when the header is well-formed.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite database has a valid admin_token_hash in admin_config.",
+        "Echo test context has Authorization: Bearer <valid_admin_token>"
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899"
+      },
+      "expected": "The middleware proceeds past extraction and invokes credential type detection (does not return 'missing authorization header', 'invalid authorization header format', or 'missing token').",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"})\nresp = run_middleware(req)\nmsg = parse_json(resp.body).error.message\nassert msg not in [\"missing authorization header\", \"invalid authorization header format\", \"missing token\"]"
+    },
+    {
+      "id": "TS-05-8",
+      "requirement_id": "05-REQ-3.1",
+      "kind": "unit",
+      "description": "parseToken checks admin pattern first, then PAT, then API key, and returns correct credential type for each.",
+      "preconditions": [
+        "apikit.TokenPrefix is set to 'ak'.",
+        "parseToken function is accessible for direct unit testing."
+      ],
+      "input": {
+        "tokens": [
+          "ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899",
+          "ak_pat_tokenid_secretval",
+          "ak_keyid_secretval"
+        ]
+      },
+      "expected": "parseToken returns 'admin_token', 'pat', 'api_key' respectively for the three token strings.",
+      "assertion_pseudocode": "credType, _, err = parseToken(\"ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\")\nassert err == nil and credType == \"admin_token\"\n\ncredType, _, err = parseToken(\"ak_pat_tokenid_secretval\")\nassert err == nil and credType == \"pat\"\n\ncredType, _, err = parseToken(\"ak_keyid_secretval\")\nassert err == nil and credType == \"api_key\""
+    },
+    {
+      "id": "TS-05-9",
+      "requirement_id": "05-REQ-3.2",
+      "kind": "unit",
+      "description": "parseToken returns credential type 'admin_token' and the full token as the sole component for a valid admin token.",
+      "preconditions": [
+        "apikit.TokenPrefix is set to 'ak'.",
+        "parseToken function is accessible for direct unit testing."
+      ],
+      "input": {
+        "token": "ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899"
+      },
+      "expected": "parseToken returns ('admin_token', ['ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899'], nil).",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\")\nassert err == nil\nassert credType == \"admin_token\"\nassert len(components) == 1\nassert components[0] == \"ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\""
+    },
+    {
+      "id": "TS-05-10",
+      "requirement_id": "05-REQ-3.3",
+      "kind": "unit",
+      "description": "parseToken returns credential type 'pat' with token_id and secret as components for a valid PAT token.",
+      "preconditions": [
+        "apikit.TokenPrefix is set to 'ak'.",
+        "parseToken function is accessible for direct unit testing."
+      ],
+      "input": {
+        "token": "ak_pat_mytoken123_mysecret456"
+      },
+      "expected": "parseToken returns ('pat', ['mytoken123', 'mysecret456'], nil).",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"ak_pat_mytoken123_mysecret456\")\nassert err == nil\nassert credType == \"pat\"\nassert len(components) == 2\nassert components[0] == \"mytoken123\"\nassert components[1] == \"mysecret456\""
+    },
+    {
+      "id": "TS-05-11",
+      "requirement_id": "05-REQ-3.4",
+      "kind": "unit",
+      "description": "parseToken returns credential type 'api_key' with key_id and secret as components for a valid API key token.",
+      "preconditions": [
+        "apikit.TokenPrefix is set to 'ak'.",
+        "parseToken function is accessible for direct unit testing."
+      ],
+      "input": {
+        "token": "ak_mykey123_mysecretabc"
+      },
+      "expected": "parseToken returns ('api_key', ['mykey123', 'mysecretabc'], nil).",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"ak_mykey123_mysecretabc\")\nassert err == nil\nassert credType == \"api_key\"\nassert len(components) == 2\nassert components[0] == \"mykey123\"\nassert components[1] == \"mysecretabc\""
+    },
+    {
+      "id": "TS-05-12",
+      "requirement_id": "05-REQ-3.5",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'unrecognized token format' when the token does not match any recognized pattern.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer totally_garbage_token"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'unrecognized token format'.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer totally_garbage_token\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"unrecognized token format\""
+    },
+    {
+      "id": "TS-05-13",
+      "requirement_id": "05-REQ-4.1",
+      "kind": "unit",
+      "description": "Auth middleware validates that the admin token hex suffix is exactly 64 valid hex characters before performing any database lookup.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite database is initialised (no admin_token_hash row required for this test).",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_tooshort"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'; no database query is made for admin_config.",
+      "assertion_pseudocode": "db_query_count_before = get_db_query_count()\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_tooshort\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\"\nassert get_db_query_count() == db_query_count_before"
+    },
+    {
+      "id": "TS-05-14",
+      "requirement_id": "05-REQ-4.2",
+      "kind": "unit",
+      "description": "Auth middleware computes SHA-256 of the full admin token string and uses ConstantTimeCompare against the stored hash.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite database has admin_config row with key='admin_token_hash' set to the SHA-256 hex of the full token string.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "admin_config": "admin_token_hash = sha256(full_token_string)",
+        "token": "ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899"
+      },
+      "expected": "Auth middleware successfully authenticates and calls the next handler with admin AuthInfo.",
+      "assertion_pseudocode": "full_token = \"ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"\nstored_hash = hex(sha256(full_token))\ndb.set(\"admin_config\", \"admin_token_hash\", stored_hash)\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer \" + full_token})\nresp = run_middleware_with_capture(req)\nassert resp.status == 200\nassert captured_auth_info.CredentialType == \"admin_token\"\nassert captured_auth_info.Role == \"admin\""
+    },
+    {
+      "id": "TS-05-15",
+      "requirement_id": "05-REQ-4.3",
+      "kind": "unit",
+      "description": "Auth middleware injects AuthInfo with CredentialType='admin_token', UserID='', Role='admin' when admin token hash matches.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite admin_config table has row key='admin_token_hash' with correct hash value.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899"
+      },
+      "expected": "Next handler is called; GetAuthInfo returns AuthInfo{CredentialType:'admin_token', UserID:'', Role:'admin', KeyID:'', TokenID:'', Permissions:nil}.",
+      "assertion_pseudocode": "full_token = \"ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"\nstored_hash = hex(sha256(full_token))\ndb.insert_admin_config(\"admin_token_hash\", stored_hash)\nresp, captured_ctx = run_middleware_with_ctx_capture(GET, \"/\", headers={\"Authorization\": \"Bearer \" + full_token})\nauth = GetAuthInfo(captured_ctx)\nassert auth.CredentialType == \"admin_token\"\nassert auth.UserID == \"\"\nassert auth.Role == \"admin\"\nassert auth.KeyID == \"\"\nassert auth.TokenID == \"\"\nassert auth.Permissions == nil"
+    },
+    {
+      "id": "TS-05-16",
+      "requirement_id": "05-REQ-4.4",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when admin_token_hash row is missing from admin_config.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite admin_config table has no row with key='admin_token_hash' (db.ErrNotFound is returned by the query).",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.ensure_no_row(\"admin_config\", key=\"admin_token_hash\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-17",
+      "requirement_id": "05-REQ-4.5",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when the admin token hash does not match the stored hash.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite admin_config table has admin_token_hash set to a different hash value than the provided token's hash.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899",
+        "admin_config": "admin_token_hash = sha256('wrong_token_value')"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.insert_admin_config(\"admin_token_hash\", hex(sha256(\"wrong_token_value\")))\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-18",
+      "requirement_id": "05-REQ-5.1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when the API key key_id is not found in the api_keys table.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys table is empty or does not contain the key_id 'unknownkey'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_unknownkey_somesecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.ensure_no_api_key(key_id=\"unknownkey\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_unknownkey_somesecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-19",
+      "requirement_id": "05-REQ-5.2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'credential revoked' when the matched API key has a non-NULL revoked_at.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys table has a row with key_id='revokedkey', secret_hash=sha256('mysecret'), revoked_at=<timestamp>.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_revokedkey_mysecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'credential revoked'.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"revokedkey\", secret_hash=hex(sha256(\"mysecret\")), revoked_at=\"2025-01-01T00:00:00Z\", expires_at=null, user_id=\"uid1\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_revokedkey_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"credential revoked\""
+    },
+    {
+      "id": "TS-05-20",
+      "requirement_id": "05-REQ-5.3",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'credential expired' when the API key expires_at is non-NULL and in the past.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys table has a row with key_id='expiredkey', secret_hash=sha256('mysecret'), revoked_at=null, expires_at=<past timestamp>.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_expiredkey_mysecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'credential expired'.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"expiredkey\", secret_hash=hex(sha256(\"mysecret\")), revoked_at=null, expires_at=\"2000-01-01T00:00:00Z\", user_id=\"uid1\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_expiredkey_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"credential expired\""
+    },
+    {
+      "id": "TS-05-21",
+      "requirement_id": "05-REQ-5.4",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when the API key secret hash does not match.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys table has key_id='mykey', secret_hash=sha256('correctsecret'), revoked_at=null, expires_at=null.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_wrongsecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"mykey\", secret_hash=hex(sha256(\"correctsecret\")), revoked_at=null, expires_at=null, user_id=\"uid1\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_mykey_wrongsecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-22",
+      "requirement_id": "05-REQ-5.5",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 403 with 'user is blocked' when the API key is valid but the owning user has status='blocked'.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys table has key_id='mykey', secret_hash=sha256('mysecret'), revoked_at=null, expires_at=null, user_id='blockeduid'.",
+        "SQLite users table has user_id='blockeduid', status='blocked'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_mysecret"
+      },
+      "expected": "Response is HTTP 403 with JSON error message 'user is blocked'.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"mykey\", secret_hash=hex(sha256(\"mysecret\")), revoked_at=null, expires_at=null, user_id=\"blockeduid\")\ndb.insert_user(user_id=\"blockeduid\", status=\"blocked\", role=\"user\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_mykey_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 403\nassert parse_json(resp.body).error.message == \"user is blocked\""
+    },
+    {
+      "id": "TS-05-23",
+      "requirement_id": "05-REQ-5.6",
+      "kind": "unit",
+      "description": "Auth middleware injects correct AuthInfo for a valid API key after all checks pass and user is not blocked.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys has key_id='goodkey', secret_hash=sha256('goodsecret'), revoked_at=null, expires_at=null, user_id='uid-abc'.",
+        "SQLite users has user_id='uid-abc', status='active', role='user'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_goodkey_goodsecret"
+      },
+      "expected": "Next handler is called; GetAuthInfo returns AuthInfo{CredentialType:'api_key', UserID:'uid-abc', Role:'user', KeyID:'goodkey', TokenID:'', Permissions:nil}.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"goodkey\", secret_hash=hex(sha256(\"goodsecret\")), user_id=\"uid-abc\")\ndb.insert_user(user_id=\"uid-abc\", status=\"active\", role=\"user\")\nresp, ctx = run_middleware_with_ctx_capture(GET, \"/\", headers={\"Authorization\": \"Bearer ak_goodkey_goodsecret\"})\nauth = GetAuthInfo(ctx)\nassert auth.CredentialType == \"api_key\"\nassert auth.UserID == \"uid-abc\"\nassert auth.Role == \"user\"\nassert auth.KeyID == \"goodkey\"\nassert auth.TokenID == \"\"\nassert auth.Permissions == nil"
+    },
+    {
+      "id": "TS-05-24",
+      "requirement_id": "05-REQ-6.1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when the PAT token_id is not found in the pats table.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats table is empty or does not contain token_id='unknowntok'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_unknowntok_somesecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.ensure_no_pat(token_id=\"unknowntok\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_unknowntok_somesecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-25",
+      "requirement_id": "05-REQ-6.2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'credential revoked' when the matched PAT has a non-NULL revoked_at.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats table has token_id='revokedtok', secret_hash=sha256('mysecret'), revoked_at=<timestamp>, expires_at=null, user_id='uid1'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_revokedtok_mysecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'credential revoked'.",
+      "assertion_pseudocode": "db.insert_pat(token_id=\"revokedtok\", secret_hash=hex(sha256(\"mysecret\")), revoked_at=\"2025-01-01T00:00:00Z\", expires_at=null, user_id=\"uid1\", permissions=[])\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_revokedtok_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"credential revoked\""
+    },
+    {
+      "id": "TS-05-26",
+      "requirement_id": "05-REQ-6.3",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'credential expired' when the PAT expires_at is non-NULL and in the past.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats table has token_id='expiredtok', secret_hash=sha256('mysecret'), revoked_at=null, expires_at=<past timestamp>, user_id='uid1'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_expiredtok_mysecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'credential expired'.",
+      "assertion_pseudocode": "db.insert_pat(token_id=\"expiredtok\", secret_hash=hex(sha256(\"mysecret\")), revoked_at=null, expires_at=\"2000-01-01T00:00:00Z\", user_id=\"uid1\", permissions=[])\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_expiredtok_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"credential expired\""
+    },
+    {
+      "id": "TS-05-27",
+      "requirement_id": "05-REQ-6.4",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' when the PAT secret hash does not match.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats has token_id='mytok', secret_hash=sha256('correctsecret'), revoked_at=null, expires_at=null.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_mytok_wrongsecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials'.",
+      "assertion_pseudocode": "db.insert_pat(token_id=\"mytok\", secret_hash=hex(sha256(\"correctsecret\")), revoked_at=null, expires_at=null, user_id=\"uid1\", permissions=[])\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_mytok_wrongsecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-28",
+      "requirement_id": "05-REQ-6.5",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 403 with 'user is blocked' when the PAT is valid but the owning user is blocked.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats has token_id='mytok', secret_hash=sha256('mysecret'), revoked_at=null, expires_at=null, user_id='blockeduid'.",
+        "SQLite users has user_id='blockeduid', status='blocked', role='user'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_mytok_mysecret"
+      },
+      "expected": "Response is HTTP 403 with JSON error message 'user is blocked'.",
+      "assertion_pseudocode": "db.insert_pat(token_id=\"mytok\", secret_hash=hex(sha256(\"mysecret\")), user_id=\"blockeduid\", permissions=[])\ndb.insert_user(user_id=\"blockeduid\", status=\"blocked\", role=\"user\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_mytok_mysecret\"})\nresp = run_middleware(req)\nassert resp.status == 403\nassert parse_json(resp.body).error.message == \"user is blocked\""
+    },
+    {
+      "id": "TS-05-29",
+      "requirement_id": "05-REQ-6.6",
+      "kind": "unit",
+      "description": "Auth middleware injects correct AuthInfo for a valid PAT after all checks pass and user is not blocked.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite pats has token_id='goodtok', secret_hash=sha256('goodsecret'), revoked_at=null, expires_at=null, user_id='uid-xyz', permissions=['keys:read','tokens:read'].",
+        "SQLite users has user_id='uid-xyz', status='active', role='user'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_goodtok_goodsecret"
+      },
+      "expected": "Next handler is called; GetAuthInfo returns AuthInfo{CredentialType:'pat', UserID:'uid-xyz', Role:'user', TokenID:'goodtok', Permissions:['keys:read','tokens:read']}.",
+      "assertion_pseudocode": "db.insert_pat(token_id=\"goodtok\", secret_hash=hex(sha256(\"goodsecret\")), user_id=\"uid-xyz\", permissions=[\"keys:read\",\"tokens:read\"])\ndb.insert_user(user_id=\"uid-xyz\", status=\"active\", role=\"user\")\nresp, ctx = run_middleware_with_ctx_capture(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_goodtok_goodsecret\"})\nauth = GetAuthInfo(ctx)\nassert auth.CredentialType == \"pat\"\nassert auth.UserID == \"uid-xyz\"\nassert auth.Role == \"user\"\nassert auth.TokenID == \"goodtok\"\nassert auth.Permissions == [\"keys:read\", \"tokens:read\"]"
+    },
+    {
+      "id": "TS-05-30",
+      "requirement_id": "05-REQ-7.1",
+      "kind": "unit",
+      "description": "RequireAdmin returns nil when called with an admin token credential.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'admin_token', Role:'admin'} injected."
+      ],
+      "input": {
+        "context_auth": "AuthInfo{CredentialType:'admin_token', Role:'admin'}"
+      },
+      "expected": "RequireAdmin(c) returns nil.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType: \"admin_token\", Role: \"admin\"})\nerr = RequireAdmin(ctx)\nassert err == nil"
+    },
+    {
+      "id": "TS-05-31",
+      "requirement_id": "05-REQ-7.2",
+      "kind": "unit",
+      "description": "RequireAdmin returns HTTP 403 with 'forbidden' when the authenticated credential is a regular-user API key.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'api_key', Role:'user'} injected."
+      ],
+      "input": {
+        "context_auth": "AuthInfo{CredentialType:'api_key', Role:'user'}"
+      },
+      "expected": "RequireAdmin(c) returns an error that translates to HTTP 403 with message 'forbidden'.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType: \"api_key\", Role: \"user\"})\nerr = RequireAdmin(ctx)\nassert err != nil\nassert http_status(err) == 403\nassert error_message(err) == \"forbidden\""
+    },
+    {
+      "id": "TS-05-32",
+      "requirement_id": "05-REQ-7.3",
+      "kind": "unit",
+      "description": "RequireOwnerOrAdmin returns nil when the resourceOwnerID matches the authenticated user's UUID.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'api_key', Role:'user', UserID:'uid-abc'} injected."
+      ],
+      "input": {
+        "context_auth": "AuthInfo{CredentialType:'api_key', UserID:'uid-abc', Role:'user'}",
+        "resourceOwnerID": "uid-abc"
+      },
+      "expected": "RequireOwnerOrAdmin(c, 'uid-abc') returns nil.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType: \"api_key\", UserID: \"uid-abc\", Role: \"user\"})\nerr = RequireOwnerOrAdmin(ctx, \"uid-abc\")\nassert err == nil"
+    },
+    {
+      "id": "TS-05-33",
+      "requirement_id": "05-REQ-7.4",
+      "kind": "unit",
+      "description": "RequireOwnerOrAdmin returns HTTP 403 with 'forbidden' when the user is not the resource owner and not an admin.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'api_key', Role:'user', UserID:'uid-abc'} injected."
+      ],
+      "input": {
+        "context_auth": "AuthInfo{CredentialType:'api_key', UserID:'uid-abc', Role:'user'}",
+        "resourceOwnerID": "uid-other"
+      },
+      "expected": "RequireOwnerOrAdmin(c, 'uid-other') returns an error translating to HTTP 403 with message 'forbidden'.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType: \"api_key\", UserID: \"uid-abc\", Role: \"user\"})\nerr = RequireOwnerOrAdmin(ctx, \"uid-other\")\nassert err != nil\nassert http_status(err) == 403\nassert error_message(err) == \"forbidden\""
+    },
+    {
+      "id": "TS-05-34",
+      "requirement_id": "05-REQ-7.5",
+      "kind": "unit",
+      "description": "RequirePermission returns nil without checking PAT permissions when the credential is an admin token or any API key.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'admin_token', Role:'admin'} or AuthInfo{CredentialType:'api_key', Role:'user'} injected."
+      ],
+      "input": {
+        "action": "manage",
+        "context_auth_variants": [
+          "AuthInfo{CredentialType:'admin_token', Role:'admin'}",
+          "AuthInfo{CredentialType:'api_key', Role:'user'}"
+        ],
+        "resourceType": "keys"
+      },
+      "expected": "RequirePermission(c, 'keys', 'manage') returns nil for both admin token and API key credential types.",
+      "assertion_pseudocode": "for auth_info in [AuthInfo{CredentialType:\"admin_token\", Role:\"admin\"}, AuthInfo{CredentialType:\"api_key\", Role:\"user\"}]:\n  ctx = new_echo_context()\n  set_auth_info(ctx, auth_info)\n  err = RequirePermission(ctx, \"keys\", \"manage\")\n  assert err == nil"
+    },
+    {
+      "id": "TS-05-35",
+      "requirement_id": "05-REQ-7.6",
+      "kind": "unit",
+      "description": "RequirePermission returns nil when the PAT includes the requested resource_type:action permission.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'pat', Permissions:['keys:read','tokens:manage']} injected."
+      ],
+      "input": {
+        "action": "read",
+        "context_auth": "AuthInfo{CredentialType:'pat', Permissions:['keys:read','tokens:manage']}",
+        "resourceType": "keys"
+      },
+      "expected": "RequirePermission(c, 'keys', 'read') returns nil.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType:\"pat\", Permissions:[\"keys:read\",\"tokens:manage\"]})\nerr = RequirePermission(ctx, \"keys\", \"read\")\nassert err == nil"
+    },
+    {
+      "id": "TS-05-36",
+      "requirement_id": "05-REQ-7.7",
+      "kind": "unit",
+      "description": "RequirePermission returns HTTP 403 with 'insufficient permissions' when the PAT lacks the requested permission.",
+      "preconditions": [
+        "Echo test context has AuthInfo{CredentialType:'pat', Permissions:['keys:read']} injected."
+      ],
+      "input": {
+        "action": "manage",
+        "context_auth": "AuthInfo{CredentialType:'pat', Permissions:['keys:read']}",
+        "resourceType": "keys"
+      },
+      "expected": "RequirePermission(c, 'keys', 'manage') returns an error translating to HTTP 403 with message 'insufficient permissions'.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType:\"pat\", Permissions:[\"keys:read\"]})\nerr = RequirePermission(ctx, \"keys\", \"manage\")\nassert err != nil\nassert http_status(err) == 403\nassert error_message(err) == \"insufficient permissions\""
+    },
+    {
+      "id": "TS-05-37",
+      "requirement_id": "05-REQ-8.1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 403 with 'user is blocked' after credential validation succeeds but before calling the next handler when user status is blocked.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys has a valid, non-expired, non-revoked key for user_id='blockeduid'.",
+        "SQLite users has user_id='blockeduid', status='blocked'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_mysecret"
+      },
+      "expected": "Response is HTTP 403 with 'user is blocked'; next handler is not invoked; no AuthInfo injected into context.",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"mykey\", secret_hash=hex(sha256(\"mysecret\")), user_id=\"blockeduid\")\ndb.insert_user(user_id=\"blockeduid\", status=\"blocked\", role=\"user\")\nresp, handler_called = run_middleware_tracking_handler(GET, \"/\", {\"Authorization\": \"Bearer ak_mykey_mysecret\"})\nassert resp.status == 403\nassert parse_json(resp.body).error.message == \"user is blocked\"\nassert handler_called == false"
+    },
+    {
+      "id": "TS-05-38",
+      "requirement_id": "05-REQ-8.2",
+      "kind": "unit",
+      "description": "Blocked user check applies to both API key and PAT credential types; admin tokens are exempt.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite has a blocked user 'blockeduid' with a valid API key and a valid PAT.",
+        "SQLite admin_config has admin_token_hash for a valid admin token.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "scenarios": [
+          "API key for blocked user",
+          "PAT for blocked user",
+          "Admin token (no user association)"
+        ]
+      },
+      "expected": "API key and PAT for blocked user receive HTTP 403 'user is blocked'. Admin token proceeds successfully.",
+      "assertion_pseudocode": "db.insert_user(user_id=\"blockeduid\", status=\"blocked\", role=\"user\")\ndb.insert_api_key(key_id=\"k1\", secret_hash=hex(sha256(\"s1\")), user_id=\"blockeduid\")\ndb.insert_pat(token_id=\"t1\", secret_hash=hex(sha256(\"s2\")), user_id=\"blockeduid\", permissions=[])\nresp_key = run_middleware(GET, \"/\", {\"Authorization\": \"Bearer ak_k1_s1\"})\nassert resp_key.status == 403\nresp_pat = run_middleware(GET, \"/\", {\"Authorization\": \"Bearer ak_pat_t1_s2\"})\nassert resp_pat.status == 403\nadmin_tok = make_valid_admin_token()\nresp_admin = run_middleware(GET, \"/\", {\"Authorization\": \"Bearer \" + admin_tok})\nassert resp_admin.status == 200"
+    },
+    {
+      "id": "TS-05-39",
+      "requirement_id": "05-REQ-9.1",
+      "kind": "unit",
+      "description": "NewPermissionRegistry returns a registry pre-populated with all 6 built-in permissions.",
+      "preconditions": [],
+      "input": {},
+      "expected": "NewPermissionRegistry().List() returns exactly ['keys:manage','keys:read','orgs:read','tokens:manage','tokens:read','users:read'] in sorted order.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nlist = registry.List()\nassert len(list) == 6\nassert list == sort([\"users:read\", \"orgs:read\", \"keys:read\", \"keys:manage\", \"tokens:read\", \"tokens:manage\"])"
+    },
+    {
+      "id": "TS-05-40",
+      "requirement_id": "05-REQ-9.2",
+      "kind": "unit",
+      "description": "PermissionRegistry.Register adds a valid new resource_type:action and returns nil.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() is available.",
+        "Permission 'widgets:export' is not already registered."
+      ],
+      "input": {
+        "action": "export",
+        "resourceType": "widgets"
+      },
+      "expected": "Register returns nil; IsValid('widgets', 'export') returns true; List includes 'widgets:export'.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nerr = registry.Register(\"widgets\", \"export\")\nassert err == nil\nassert registry.IsValid(\"widgets\", \"export\") == true\nassert \"widgets:export\" in registry.List()"
+    },
+    {
+      "id": "TS-05-41",
+      "requirement_id": "05-REQ-9.3",
+      "kind": "unit",
+      "description": "PermissionRegistry.Register returns a non-nil error when the same resource_type:action pair is registered a second time.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() is available.",
+        "Permission 'widgets:export' has already been registered once."
+      ],
+      "input": {
+        "action": "export",
+        "resourceType": "widgets"
+      },
+      "expected": "Second call to Register('widgets','export') returns a non-nil error; registry state is unchanged.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nregistry.Register(\"widgets\", \"export\")\nerr = registry.Register(\"widgets\", \"export\")\nassert err != nil"
+    },
+    {
+      "id": "TS-05-42",
+      "requirement_id": "05-REQ-9.4",
+      "kind": "unit",
+      "description": "PermissionRegistry.IsValid returns true for registered permissions and false for unregistered ones.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() is available."
+      ],
+      "input": {
+        "registered": "users:read",
+        "unregistered": "nonexistent:action"
+      },
+      "expected": "IsValid('users','read') returns true; IsValid('nonexistent','action') returns false.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nassert registry.IsValid(\"users\", \"read\") == true\nassert registry.IsValid(\"nonexistent\", \"action\") == false"
+    },
+    {
+      "id": "TS-05-43",
+      "requirement_id": "05-REQ-9.5",
+      "kind": "unit",
+      "description": "PermissionRegistry.List returns all registered permissions as a sorted slice in ascending lexicographic order.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() with additional custom permissions 'zz:zzz' and 'aa:aaa' registered."
+      ],
+      "input": {},
+      "expected": "List() output is sorted ascending: includes 'aa:aaa' before built-ins and 'zz:zzz' at the end.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nregistry.Register(\"zz\", \"zzz\")\nregistry.Register(\"aa\", \"aaa\")\nlist = registry.List()\nassert list == sorted(list)\nassert list[0] == \"aa:aaa\"\nassert list[len(list)-1] == \"zz:zzz\""
+    },
+    {
+      "id": "TS-05-44",
+      "requirement_id": "05-REQ-10.1",
+      "kind": "unit",
+      "description": "Auth middleware stores a fully-populated AuthInfo struct in the Echo request context after successful authentication.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "A valid API key is present in the SQLite api_keys and users tables.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_goodkey_goodsecret"
+      },
+      "expected": "The Echo context passed to the next handler contains a non-nil AuthInfo retrievable via GetAuthInfo(c).",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"goodkey\", secret_hash=hex(sha256(\"goodsecret\")), user_id=\"uid1\")\ndb.insert_user(user_id=\"uid1\", status=\"active\", role=\"user\")\nresp, ctx = run_middleware_with_ctx_capture(GET, \"/\", {\"Authorization\": \"Bearer ak_goodkey_goodsecret\"})\nauth = GetAuthInfo(ctx)\nassert auth != nil\nassert auth.CredentialType != \"\""
+    },
+    {
+      "id": "TS-05-45",
+      "requirement_id": "05-REQ-10.2",
+      "kind": "unit",
+      "description": "GetAuthInfo returns the AuthInfo pointer from a context that has been populated by the auth middleware.",
+      "preconditions": [
+        "An Echo context is available with AuthInfo already injected via the middleware or manually via test setup."
+      ],
+      "input": {
+        "context": "Echo context with AuthInfo{CredentialType:'api_key', UserID:'uid1', Role:'user'} injected"
+      },
+      "expected": "GetAuthInfo(c) returns a non-nil *AuthInfo with CredentialType='api_key'.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nset_auth_info(ctx, AuthInfo{CredentialType:\"api_key\", UserID:\"uid1\", Role:\"user\"})\nauth = GetAuthInfo(ctx)\nassert auth != nil\nassert auth.CredentialType == \"api_key\""
+    },
+    {
+      "id": "TS-05-46",
+      "requirement_id": "05-REQ-10.3",
+      "kind": "unit",
+      "description": "GetAuthInfo returns nil without panicking when no AuthInfo is in the context.",
+      "preconditions": [
+        "An Echo context is available with no AuthInfo injected (simulating a test without the middleware)."
+      ],
+      "input": {
+        "context": "Echo context with no AuthInfo set"
+      },
+      "expected": "GetAuthInfo(c) returns nil without panicking.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nauth = GetAuthInfo(ctx)\nassert auth == nil"
+    },
+    {
+      "id": "TS-05-47",
+      "requirement_id": "05-REQ-10.4",
+      "kind": "unit",
+      "description": "GetUserID returns the authenticated user's UUID or an empty string for admin token or nil AuthInfo.",
+      "preconditions": [
+        "Three Echo contexts: one with API key AuthInfo (UserID='uid-123'), one with admin token AuthInfo (UserID=''), one with no AuthInfo."
+      ],
+      "input": {
+        "scenarios": [
+          "AuthInfo{CredentialType:'api_key', UserID:'uid-123'}",
+          "AuthInfo{CredentialType:'admin_token', UserID:''}",
+          "no AuthInfo"
+        ]
+      },
+      "expected": "GetUserID returns 'uid-123', '', '' respectively.",
+      "assertion_pseudocode": "ctx1 = new_echo_context_with_auth(AuthInfo{CredentialType:\"api_key\", UserID:\"uid-123\"})\nassert GetUserID(ctx1) == \"uid-123\"\n\nctx2 = new_echo_context_with_auth(AuthInfo{CredentialType:\"admin_token\", UserID:\"\"})\nassert GetUserID(ctx2) == \"\"\n\nctx3 = new_echo_context()\nassert GetUserID(ctx3) == \"\""
+    },
+    {
+      "id": "TS-05-48",
+      "requirement_id": "05-REQ-10.5",
+      "kind": "unit",
+      "description": "IsAdmin returns true for admin token or admin-role API key; false for user-role API key, PAT, or nil AuthInfo.",
+      "preconditions": [
+        "Multiple Echo contexts with different AuthInfo configurations."
+      ],
+      "input": {
+        "scenarios": [
+          "AuthInfo{CredentialType:'admin_token', Role:'admin'}",
+          "AuthInfo{CredentialType:'api_key', Role:'admin'}",
+          "AuthInfo{CredentialType:'api_key', Role:'user'}",
+          "AuthInfo{CredentialType:'pat', Role:'user'}",
+          "no AuthInfo"
+        ]
+      },
+      "expected": "IsAdmin returns true, true, false, false, false respectively.",
+      "assertion_pseudocode": "assert IsAdmin(ctx_with_auth(AuthInfo{CredentialType:\"admin_token\", Role:\"admin\"})) == true\nassert IsAdmin(ctx_with_auth(AuthInfo{CredentialType:\"api_key\", Role:\"admin\"})) == true\nassert IsAdmin(ctx_with_auth(AuthInfo{CredentialType:\"api_key\", Role:\"user\"})) == false\nassert IsAdmin(ctx_with_auth(AuthInfo{CredentialType:\"pat\", Role:\"user\"})) == false\nassert IsAdmin(new_echo_context()) == false"
+    },
+    {
+      "id": "TS-05-49",
+      "requirement_id": "05-REQ-11.1",
+      "kind": "unit",
+      "description": "All hash comparisons in the auth middleware use crypto/subtle.ConstantTimeCompare and never use == or bytes.Equal.",
+      "preconditions": [
+        "Source files internal/auth/auth.go, internal/auth/credentials.go are available for inspection.",
+        "Go toolchain is available."
+      ],
+      "input": {},
+      "expected": "Code inspection (grep or AST analysis) finds zero occurrences of '== ' or 'bytes.Equal' applied to hash values; at least one occurrence of 'subtle.ConstantTimeCompare' per credential validation function.",
+      "assertion_pseudocode": "source_files = read_files([\"internal/auth/auth.go\", \"internal/auth/credentials.go\"])\nassert count_occurrences(source_files, \"subtle.ConstantTimeCompare\") >= 3\nassert no hash comparison line uses '==' or 'bytes.Equal'"
+    },
+    {
+      "id": "TS-05-50",
+      "requirement_id": "05-REQ-11.2",
+      "kind": "unit",
+      "description": "hashToken computes SHA-256 of the input and returns a 64-character lowercase hex string.",
+      "preconditions": [
+        "hashToken function is accessible for direct unit testing."
+      ],
+      "input": {
+        "input": "hello"
+      },
+      "expected": "hashToken('hello') returns '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
+      "assertion_pseudocode": "result = hashToken(\"hello\")\nassert len(result) == 64\nassert result == \"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\"\nassert result == strings.ToLower(result)"
+    },
+    {
+      "id": "TS-05-51",
+      "requirement_id": "05-REQ-12.1",
+      "kind": "unit",
+      "description": "All auth middleware error responses use the APIError helper and produce the standard JSON error envelope.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "Request triggers an authentication error (e.g., missing Authorization header)."
+      ],
+      "input": {
+        "Authorization": "(absent)"
+      },
+      "expected": "Response body is valid JSON with structure {\"error\":{\"code\":401,\"message\":\"missing authorization header\"}}; Content-Type is application/json.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={})\nresp = run_middleware(req)\nbody = parse_json(resp.body)\nassert body.error != null\nassert body.error.code == 401\nassert body.error.message == \"missing authorization header\"\nassert resp.headers[\"Content-Type\"] contains \"application/json\""
+    },
+    {
+      "id": "TS-05-52",
+      "requirement_id": "05-REQ-12.2",
+      "kind": "unit",
+      "description": "Auth middleware only uses the approved set of error messages and no other messages are exposed to clients.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "All error-triggering scenarios can be exercised via test requests."
+      ],
+      "input": {
+        "scenarios": "all distinct error-triggering request types"
+      },
+      "expected": "Every error response message is one of: 'missing authorization header', 'invalid authorization header format', 'missing token', 'unrecognized token format', 'invalid credentials', 'credential revoked', 'credential expired', 'user is blocked', 'forbidden', 'insufficient permissions', 'internal server error'.",
+      "assertion_pseudocode": "approved_messages = {\"missing authorization header\", \"invalid authorization header format\", \"missing token\", \"unrecognized token format\", \"invalid credentials\", \"credential revoked\", \"credential expired\", \"user is blocked\", \"forbidden\", \"insufficient permissions\", \"internal server error\"}\nfor each error_triggering_request in all_error_scenarios:\n  resp = run_middleware(error_triggering_request)\n  msg = parse_json(resp.body).error.message\n  assert msg in approved_messages"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-05-P1",
+      "property_id": "05-PROP-1",
+      "validates": [
+        "05-REQ-3.1",
+        "05-REQ-3.3",
+        "05-REQ-3.E3"
+      ],
+      "description": "For any token starting with '<TokenPrefix>_pat_', parseToken always returns 'pat' and never 'api_key', regardless of content after the infix.",
+      "for_any_strategy": "Generate arbitrary strings of the form 'ak_pat_' + random_alphanumeric(1..50) + '_' + random_alphanumeric(1..50) using Go's testing/quick or a fuzzer seeded with random lengths and characters.",
+      "invariant_check": "credType, _, err = parseToken(token)\nassert credType == \"pat\" OR err != nil\nassert credType != \"api_key\""
+    },
+    {
+      "id": "TS-05-P2",
+      "property_id": "05-PROP-2",
+      "validates": [
+        "05-REQ-11.1",
+        "05-REQ-4.2",
+        "05-REQ-5.4",
+        "05-REQ-6.4"
+      ],
+      "description": "For any credential validation request, every hash comparison uses crypto/subtle.ConstantTimeCompare; no hash comparison uses == or bytes.Equal.",
+      "for_any_strategy": "Instrument the auth middleware with a comparison counter; exercise with randomly generated admin tokens, API keys, and PAT tokens (valid and invalid).",
+      "invariant_check": "eq_comparison_count = 0  // track plain == comparisons on hash values\nsubtleCompare_count = track_calls_to(\"subtle.ConstantTimeCompare\")\nassert eq_comparison_count == 0\nassert subtleCompare_count >= 1 per credential validation call"
+    },
+    {
+      "id": "TS-05-P3",
+      "property_id": "05-PROP-3",
+      "validates": [
+        "05-REQ-8.1",
+        "05-REQ-5.5",
+        "05-REQ-6.5"
+      ],
+      "description": "For any request with a non-revoked, non-expired API key or PAT whose owning user has status='blocked', the middleware always returns HTTP 403 'user is blocked' and never calls the next handler.",
+      "for_any_strategy": "Generate random key_id, secret, user_id values; insert into SQLite with revoked_at=null, expires_at=null, user status='blocked'; vary between API key and PAT credential types.",
+      "invariant_check": "resp, handler_invoked = run_middleware_tracking_handler(request_with_blocked_user_credential)\nassert resp.status == 403\nassert parse_json(resp.body).error.message == \"user is blocked\"\nassert handler_invoked == false"
+    },
+    {
+      "id": "TS-05-P4",
+      "property_id": "05-PROP-4",
+      "validates": [
+        "05-REQ-4.3",
+        "05-REQ-10.4"
+      ],
+      "description": "For any request authenticated with an admin token, AuthInfo.UserID is always empty and AuthInfo.Role is always 'admin'; GetUserID returns empty string.",
+      "for_any_strategy": "Generate random 64-character hex strings to form valid admin tokens; store their SHA-256 hash in admin_config; run middleware.",
+      "invariant_check": "resp, ctx = run_middleware_with_ctx_capture(request_with_admin_token)\nauth = GetAuthInfo(ctx)\nassert auth.UserID == \"\"\nassert auth.Role == \"admin\"\nassert GetUserID(ctx) == \"\""
+    },
+    {
+      "id": "TS-05-P5",
+      "property_id": "05-PROP-5",
+      "validates": [
+        "05-REQ-9.2",
+        "05-REQ-9.4",
+        "05-REQ-9.5"
+      ],
+      "description": "After any call to PermissionRegistry.Register with a valid, non-duplicate permission, IsValid returns true for that permission and List includes it; no previously registered permission is removed.",
+      "for_any_strategy": "Generate random valid resource_type (lowercase letters/digits/underscores) and action strings; call Register sequentially; verify state after each call.",
+      "invariant_check": "registry = NewPermissionRegistry()\nbefore_list = registry.List()\nerr = registry.Register(new_resource_type, new_action)\nif err == nil:\n  assert registry.IsValid(new_resource_type, new_action) == true\n  after_list = registry.List()\n  assert new_resource_type + \":\" + new_action in after_list\n  for perm in before_list:\n    assert perm in after_list  // no permissions removed\n  assert after_list == sorted(after_list)  // still sorted"
+    },
+    {
+      "id": "TS-05-P6",
+      "property_id": "05-PROP-6",
+      "validates": [
+        "05-REQ-7.5"
+      ],
+      "description": "RequirePermission always returns nil without inspecting the permissions list when AuthInfo.CredentialType is 'admin_token' or 'api_key', regardless of what permissions are present.",
+      "for_any_strategy": "Generate random resource_type and action strings; set AuthInfo.CredentialType to 'admin_token' or 'api_key' with various empty/nil/non-nil Permissions lists; call RequirePermission.",
+      "invariant_check": "for credType in [\"admin_token\", \"api_key\"]:\n  for permissions in [nil, [], [\"some:perm\"], [\"keys:read\"]]:\n    ctx = new_echo_context_with_auth(AuthInfo{CredentialType:credType, Permissions:permissions})\n    err = RequirePermission(ctx, random_resource_type, random_action)\n    assert err == nil"
+    },
+    {
+      "id": "TS-05-P7",
+      "property_id": "05-PROP-7",
+      "validates": [
+        "05-REQ-2.1",
+        "05-REQ-2.2",
+        "05-REQ-2.3",
+        "05-REQ-3.5",
+        "05-REQ-4.5",
+        "05-REQ-5.1",
+        "05-REQ-6.1"
+      ],
+      "description": "For any request to APIGroup that fails token extraction, parsing, or validation, the next handler is never called and AuthInfo is never injected into the context.",
+      "for_any_strategy": "Generate requests spanning all error scenarios: missing header, wrong scheme, empty bearer, unrecognized format, wrong prefix, invalid credentials, expired, revoked, blocked user.",
+      "invariant_check": "resp, handler_invoked, ctx = run_middleware_full_capture(failing_request)\nassert resp.status in [401, 403, 500]\nassert handler_invoked == false\nassert GetAuthInfo(ctx) == nil"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-05-E1",
+      "requirement_id": "05-REQ-1.E1",
+      "kind": "unit",
+      "description": "NewAuthMiddleware panics immediately with a descriptive message when either argument is nil.",
+      "preconditions": [
+        "A valid *PermissionRegistry is available.",
+        "A valid *db.DB is available."
+      ],
+      "input": {
+        "scenarios": [
+          {
+            "database": null,
+            "registry": "valid *PermissionRegistry"
+          },
+          {
+            "database": "valid *db.DB",
+            "registry": null
+          }
+        ]
+      },
+      "expected": "NewAuthMiddleware panics with a non-empty, descriptive message for both nil-database and nil-registry scenarios.",
+      "assertion_pseudocode": "assert_panics(func() { NewAuthMiddleware(nil, registry) })\nassert_panics(func() { NewAuthMiddleware(db, nil) })"
+    },
+    {
+      "id": "TS-05-E2",
+      "requirement_id": "05-REQ-2.E1",
+      "kind": "unit",
+      "description": "Auth middleware treats 'Bearer' with no trailing space or token as an invalid format and returns HTTP 401 with 'invalid authorization header format'.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry."
+      ],
+      "input": {
+        "Authorization": "Bearer"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid authorization header format'.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid authorization header format\""
+    },
+    {
+      "id": "TS-05-E3",
+      "requirement_id": "05-REQ-3.E1",
+      "kind": "unit",
+      "description": "parseToken returns a non-nil error for an empty string input.",
+      "preconditions": [
+        "parseToken function is accessible for direct unit testing.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "token": ""
+      },
+      "expected": "parseToken returns a non-nil error; credential type is empty string.",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"\")\nassert err != nil"
+    },
+    {
+      "id": "TS-05-E4",
+      "requirement_id": "05-REQ-3.E2",
+      "kind": "unit",
+      "description": "parseToken returns a non-nil error when token begins with a wrong prefix instead of TokenPrefix.",
+      "preconditions": [
+        "parseToken function is accessible for direct unit testing.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "token": "wrong_prefix_keyid_secret"
+      },
+      "expected": "parseToken returns a non-nil error.",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"wrong_prefix_keyid_secret\")\nassert err != nil"
+    },
+    {
+      "id": "TS-05-E5",
+      "requirement_id": "05-REQ-3.E3",
+      "kind": "unit",
+      "description": "parseToken correctly identifies a token starting with '<prefix>_pat_' as 'pat' due to detection-order precedence, not 'api_key'.",
+      "preconditions": [
+        "parseToken function is accessible for direct unit testing.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "token": "ak_pat_tokenid_secretval"
+      },
+      "expected": "parseToken returns ('pat', ['tokenid', 'secretval'], nil) — not 'api_key'.",
+      "assertion_pseudocode": "credType, components, err = parseToken(\"ak_pat_tokenid_secretval\")\nassert err == nil\nassert credType == \"pat\"\nassert credType != \"api_key\""
+    },
+    {
+      "id": "TS-05-E6",
+      "requirement_id": "05-REQ-4.E1",
+      "kind": "unit",
+      "description": "Auth middleware logs the error and returns HTTP 500 with 'internal server error' when the admin_config database query fails with a non-ErrNotFound error.",
+      "preconditions": [
+        "Auth middleware is initialised with a db stub that returns a generic error for admin_config queries.",
+        "apikit.TokenPrefix is set to 'ak'.",
+        "The admin token format is valid (64-char hex suffix)."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899",
+        "db_behavior": "admin_config query returns generic error (not db.ErrNotFound)"
+      },
+      "expected": "Response is HTTP 500 with JSON error message 'internal server error'; error is logged.",
+      "assertion_pseudocode": "db_stub = make_db_stub(admin_config_error=errors.New(\"disk failure\"))\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899\"})\nresp = run_middleware_with_stub(req, db_stub)\nassert resp.status == 500\nassert parse_json(resp.body).error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-05-E7",
+      "requirement_id": "05-REQ-4.E2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'invalid credentials' without a database lookup when the admin token hex suffix is not exactly 64 characters.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_admin_abc123"
+      },
+      "expected": "Response is HTTP 401 with 'invalid credentials'; no database query is made.",
+      "assertion_pseudocode": "db_query_count_before = get_db_query_count()\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_admin_abc123\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\"\nassert get_db_query_count() == db_query_count_before"
+    },
+    {
+      "id": "TS-05-E8",
+      "requirement_id": "05-REQ-5.E1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 500 with 'internal server error' when the api_keys database query fails with a non-ErrNotFound error.",
+      "preconditions": [
+        "Auth middleware is initialised with a db stub that returns a generic error for api_keys queries.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_mysecret",
+        "db_behavior": "api_keys query returns generic error"
+      },
+      "expected": "Response is HTTP 500 with JSON error message 'internal server error'.",
+      "assertion_pseudocode": "db_stub = make_db_stub(api_keys_error=errors.New(\"connection lost\"))\nresp = run_middleware_with_stub(GET, \"/\", {\"Authorization\": \"Bearer ak_mykey_mysecret\"}, db_stub)\nassert resp.status == 500\nassert parse_json(resp.body).error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-05-E9",
+      "requirement_id": "05-REQ-5.E2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 500 with 'internal server error' when the users table query fails after a successful API key lookup.",
+      "preconditions": [
+        "Auth middleware is initialised with a db stub that succeeds for api_keys but returns a generic error for users queries.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_mysecret",
+        "db_behavior": "api_keys lookup succeeds; users query returns generic error"
+      },
+      "expected": "Response is HTTP 500 with JSON error message 'internal server error'.",
+      "assertion_pseudocode": "db_stub = make_db_stub(api_keys_ok=true, users_error=errors.New(\"timeout\"))\nresp = run_middleware_with_stub(GET, \"/\", {\"Authorization\": \"Bearer ak_mykey_mysecret\"}, db_stub)\nassert resp.status == 500\nassert parse_json(resp.body).error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-05-E10",
+      "requirement_id": "05-REQ-5.E3",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'unrecognized token format' when an API key token cannot be split into exactly two components.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "apikit.TokenPrefix is set to 'ak'.",
+        "Token has the API key prefix but only one component after the prefix (no underscore separator)."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_onlyonepart"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'unrecognized token format'; no database query is made.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_onlyonepart\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"unrecognized token format\""
+    },
+    {
+      "id": "TS-05-E11",
+      "requirement_id": "05-REQ-6.E1",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 500 with 'internal server error' when the pats database query fails with a non-ErrNotFound error.",
+      "preconditions": [
+        "Auth middleware is initialised with a db stub that returns a generic error for pats queries.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_mytok_mysecret",
+        "db_behavior": "pats query returns generic error"
+      },
+      "expected": "Response is HTTP 500 with JSON error message 'internal server error'.",
+      "assertion_pseudocode": "db_stub = make_db_stub(pats_error=errors.New(\"db locked\"))\nresp = run_middleware_with_stub(GET, \"/\", {\"Authorization\": \"Bearer ak_pat_mytok_mysecret\"}, db_stub)\nassert resp.status == 500\nassert parse_json(resp.body).error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-05-E12",
+      "requirement_id": "05-REQ-6.E2",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 500 with 'internal server error' when the users table query fails after a successful PAT lookup.",
+      "preconditions": [
+        "Auth middleware is initialised with a db stub that succeeds for pats but returns a generic error for users queries.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_goodtok_goodsecret",
+        "db_behavior": "pats lookup succeeds; users query returns generic error"
+      },
+      "expected": "Response is HTTP 500 with JSON error message 'internal server error'.",
+      "assertion_pseudocode": "db_stub = make_db_stub(pats_ok=true, users_error=errors.New(\"timeout\"))\nresp = run_middleware_with_stub(GET, \"/\", {\"Authorization\": \"Bearer ak_pat_goodtok_goodsecret\"}, db_stub)\nassert resp.status == 500\nassert parse_json(resp.body).error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-05-E13",
+      "requirement_id": "05-REQ-6.E3",
+      "kind": "unit",
+      "description": "Auth middleware returns HTTP 401 with 'unrecognized token format' when a PAT token cannot be split into exactly two components after removing the pat_ infix.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "apikit.TokenPrefix is set to 'ak'.",
+        "Token starts with the PAT prefix but has no underscore separator after pat_ infix."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_pat_onlytokenid"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'unrecognized token format'; no database query is made.",
+      "assertion_pseudocode": "req = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_pat_onlytokenid\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"unrecognized token format\""
+    },
+    {
+      "id": "TS-05-E14",
+      "requirement_id": "05-REQ-7.E1",
+      "kind": "unit",
+      "description": "RequireAdmin treats the request as unauthenticated and returns HTTP 403 with 'forbidden' when no AuthInfo is present in the context.",
+      "preconditions": [
+        "An Echo context with no AuthInfo injected (GetAuthInfo returns nil)."
+      ],
+      "input": {
+        "context": "Echo context with no AuthInfo"
+      },
+      "expected": "RequireAdmin(c) returns an error translating to HTTP 403 with message 'forbidden'.",
+      "assertion_pseudocode": "ctx = new_echo_context()\nerr = RequireAdmin(ctx)\nassert err != nil\nassert http_status(err) == 403\nassert error_message(err) == \"forbidden\""
+    },
+    {
+      "id": "TS-05-E15",
+      "requirement_id": "05-REQ-7.E2",
+      "kind": "unit",
+      "description": "RequireOwnerOrAdmin treats empty resourceOwnerID as non-matching and returns HTTP 403 for non-admin, nil for admin.",
+      "preconditions": [
+        "Two Echo contexts: one with user-role API key AuthInfo, one with admin-token AuthInfo."
+      ],
+      "input": {
+        "context_variants": [
+          "AuthInfo{CredentialType:'api_key', UserID:'uid-abc', Role:'user'}",
+          "AuthInfo{CredentialType:'admin_token', Role:'admin', UserID:''}"
+        ],
+        "resourceOwnerID": ""
+      },
+      "expected": "RequireOwnerOrAdmin(user_ctx, '') returns HTTP 403 'forbidden'; RequireOwnerOrAdmin(admin_ctx, '') returns nil.",
+      "assertion_pseudocode": "user_ctx = new_echo_context_with_auth(AuthInfo{CredentialType:\"api_key\", UserID:\"uid-abc\", Role:\"user\"})\nerr = RequireOwnerOrAdmin(user_ctx, \"\")\nassert err != nil\nassert http_status(err) == 403\n\nadmin_ctx = new_echo_context_with_auth(AuthInfo{CredentialType:\"admin_token\", Role:\"admin\", UserID:\"\"})\nerr = RequireOwnerOrAdmin(admin_ctx, \"\")\nassert err == nil"
+    },
+    {
+      "id": "TS-05-E16",
+      "requirement_id": "05-REQ-8.E1",
+      "kind": "unit",
+      "description": "A blocked user with an invalid API key secret still receives 'invalid credentials' (not 'user is blocked'), preventing credential probing.",
+      "preconditions": [
+        "Auth middleware is initialised with valid db and registry.",
+        "SQLite api_keys has key_id='mykey', secret_hash=sha256('correctsecret'), user_id='blockeduid'.",
+        "SQLite users has user_id='blockeduid', status='blocked'.",
+        "apikit.TokenPrefix is set to 'ak'."
+      ],
+      "input": {
+        "Authorization": "Bearer ak_mykey_wrongsecret"
+      },
+      "expected": "Response is HTTP 401 with JSON error message 'invalid credentials' (not HTTP 403 'user is blocked').",
+      "assertion_pseudocode": "db.insert_api_key(key_id=\"mykey\", secret_hash=hex(sha256(\"correctsecret\")), user_id=\"blockeduid\")\ndb.insert_user(user_id=\"blockeduid\", status=\"blocked\", role=\"user\")\nreq = new_request(GET, \"/\", headers={\"Authorization\": \"Bearer ak_mykey_wrongsecret\"})\nresp = run_middleware(req)\nassert resp.status == 401\nassert parse_json(resp.body).error.message == \"invalid credentials\""
+    },
+    {
+      "id": "TS-05-E17",
+      "requirement_id": "05-REQ-9.E1",
+      "kind": "unit",
+      "description": "PermissionRegistry.Register returns a non-nil error for empty or invalid resource_type or action without modifying the registry.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() is available."
+      ],
+      "input": {
+        "invalid_cases": [
+          {
+            "action": "read",
+            "resourceType": ""
+          },
+          {
+            "action": "",
+            "resourceType": "users"
+          },
+          {
+            "action": "read",
+            "resourceType": "Users"
+          },
+          {
+            "action": "READ",
+            "resourceType": "users"
+          },
+          {
+            "action": "do-it",
+            "resourceType": "my-resource"
+          }
+        ]
+      },
+      "expected": "Register returns a non-nil error for each invalid case; registry size remains unchanged after each failed call.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\noriginal_count = len(registry.List())\nfor (rt, a) in [(\"\",\"read\"),(\"users\",\"\"),(\"Users\",\"read\"),(\"users\",\"READ\"),(\"my-resource\",\"do-it\")]:\n  err = registry.Register(rt, a)\n  assert err != nil\n  assert len(registry.List()) == original_count"
+    },
+    {
+      "id": "TS-05-E18",
+      "requirement_id": "05-REQ-9.E2",
+      "kind": "unit",
+      "description": "PermissionRegistry is safe for concurrent use; Register, IsValid, and List can be called from multiple goroutines without data races.",
+      "preconditions": [
+        "A fresh PermissionRegistry from NewPermissionRegistry() is available.",
+        "Go test is run with the -race flag enabled."
+      ],
+      "input": {
+        "concurrency": "10 goroutines each calling Register, IsValid, and List simultaneously"
+      },
+      "expected": "No data race is reported by the Go race detector; all operations complete successfully.",
+      "assertion_pseudocode": "registry = NewPermissionRegistry()\nwg = new_wait_group()\nfor i in range(10):\n  go func(i):\n    registry.Register(\"res\" + str(i), \"action\")\n    registry.IsValid(\"users\", \"read\")\n    registry.List()\n    wg.done()\nwg.wait()\n// run with: go test -race ./internal/auth/..."
+    },
+    {
+      "id": "TS-05-E19",
+      "requirement_id": "05-REQ-10.E1",
+      "kind": "unit",
+      "description": "The auth middleware uses the unexported contextKey type for the context key, preventing external packages from accidentally accessing AuthInfo with a plain string key.",
+      "preconditions": [
+        "Source file internal/auth/context.go is available for inspection.",
+        "The authInfoKey constant is defined as type contextKey (unexported)."
+      ],
+      "input": {},
+      "expected": "Code inspection confirms authInfoKey is of unexported type contextKey; attempting to retrieve AuthInfo from context using a plain string key 'auth_info' returns nil.",
+      "assertion_pseudocode": "// Structural check: contextKey type is unexported\nassert type_of(authInfoKey) == \"auth.contextKey\"  // unexported type\n\n// Behavioral check: plain string key cannot retrieve AuthInfo\nctx = new_echo_context_with_auth_injected_by_middleware()\nval = ctx.Get(\"auth_info\")  // using plain string\nassert val == nil  // AuthInfo is stored under unexported key type"
+    },
+    {
+      "id": "TS-05-E20",
+      "requirement_id": "05-REQ-11.E1",
+      "kind": "unit",
+      "description": "Auth middleware converts both computed and stored hashes to hex-encoded byte slices before ConstantTimeCompare to ensure valid length-safe comparison.",
+      "preconditions": [
+        "Source files internal/auth/credentials.go are available for inspection.",
+        "hashToken returns a lowercase hex string; stored hashes in DB are also lowercase hex strings."
+      ],
+      "input": {
+        "computed_hash": "hex-encoded SHA-256 string from hashToken",
+        "stored_hash": "hex-encoded SHA-256 string from database"
+      },
+      "expected": "Both values are converted to []byte before being passed to subtle.ConstantTimeCompare; no direct string comparison of hash values occurs.",
+      "assertion_pseudocode": "// Code inspection:\nsource = read_file(\"internal/auth/credentials.go\")\nassert count_occurrences(source, \"subtle.ConstantTimeCompare([]byte(\") >= 1 OR\n       count_occurrences(source, \"subtle.ConstantTimeCompare\") >= 1 AND\n       // both args are []byte conversions, not raw string ==\nassert no_occurrence_of(source, \"hashToken(...) ==\")"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-05-SMOKE-1",
+      "execution_path_id": "05-PATH-1",
+      "description": "End-to-end API key authentication: client sends valid API key, middleware validates it, injects AuthInfo, and the handler reads the context successfully.",
+      "trigger": "HTTP GET request to a protected APIGroup endpoint with Authorization: Bearer ak_<key_id>_<secret> using a valid, non-expired, non-revoked API key for an active user.",
+      "real_components": [
+        "internal/auth/auth.go (NewAuthMiddleware, middleware chain)",
+        "internal/auth/credentials.go (API key validation logic)",
+        "internal/auth/context.go (AuthInfo injection, GetAuthInfo)",
+        "internal/db (SQLite api_keys and users table queries)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (replaced with a test handler that captures AuthInfo from context)"
+      ],
+      "expected_effects": [
+        "Response is HTTP 200.",
+        "Test handler is invoked exactly once.",
+        "GetAuthInfo(c) in the handler returns AuthInfo{CredentialType:'api_key', UserID:<uuid>, Role:<role>, KeyID:<key_id>}.",
+        "No authentication error is returned.",
+        "SQLite api_keys and users tables are queried exactly once each."
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-2",
+      "execution_path_id": "05-PATH-2",
+      "description": "End-to-end PAT authentication with permission check: client sends valid PAT, middleware validates and injects permissions, handler calls RequirePermission and proceeds.",
+      "trigger": "HTTP GET request to a protected resource endpoint with Authorization: Bearer ak_pat_<token_id>_<secret> for a PAT that includes the required permission in its permissions list.",
+      "real_components": [
+        "internal/auth/auth.go (NewAuthMiddleware, middleware chain)",
+        "internal/auth/credentials.go (PAT validation logic)",
+        "internal/auth/permissions.go (RequirePermission helper)",
+        "internal/auth/context.go (AuthInfo injection with Permissions)",
+        "internal/db (SQLite pats and users table queries)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (replaced with test handler that calls RequirePermission and captures result)"
+      ],
+      "expected_effects": [
+        "Response is HTTP 200.",
+        "Test handler is invoked exactly once.",
+        "GetAuthInfo(c).CredentialType == 'pat'.",
+        "GetAuthInfo(c).Permissions contains the expected permission string.",
+        "RequirePermission(c, resourceType, action) returns nil inside the handler."
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-3",
+      "execution_path_id": "05-PATH-3",
+      "description": "End-to-end admin token break-glass authentication: infrastructure operator sends valid admin token, middleware validates hash against admin_config and grants full admin access.",
+      "trigger": "HTTP GET request to an admin-only endpoint with Authorization: Bearer ak_admin_<64 hex chars> where the SHA-256 hash of the full token matches admin_config.admin_token_hash.",
+      "real_components": [
+        "internal/auth/auth.go (NewAuthMiddleware, middleware chain)",
+        "internal/auth/credentials.go (admin token validation logic)",
+        "internal/auth/context.go (AuthInfo injection)",
+        "internal/db (SQLite admin_config query)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (replaced with test handler that calls RequireAdmin and captures result)"
+      ],
+      "expected_effects": [
+        "Response is HTTP 200.",
+        "Test handler is invoked exactly once.",
+        "GetAuthInfo(c).CredentialType == 'admin_token'.",
+        "GetAuthInfo(c).UserID == ''.",
+        "GetAuthInfo(c).Role == 'admin'.",
+        "IsAdmin(c) returns true.",
+        "RequireAdmin(c) returns nil inside the handler."
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-4",
+      "execution_path_id": "05-PATH-4",
+      "description": "End-to-end missing Authorization header rejection: client sends request without Authorization header, middleware immediately returns HTTP 401 without invoking the handler.",
+      "trigger": "HTTP GET request to a protected APIGroup endpoint with no Authorization header.",
+      "real_components": [
+        "internal/auth/auth.go (NewAuthMiddleware, token extraction logic)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (to verify it is never invoked)",
+        "Database (no DB queries should be made)"
+      ],
+      "expected_effects": [
+        "Response is HTTP 401.",
+        "Response body is {\"error\":{\"code\":401,\"message\":\"missing authorization header\"}}.",
+        "Handler is never invoked.",
+        "No database queries are made.",
+        "Response Content-Type is application/json."
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-5",
+      "execution_path_id": "05-PATH-5",
+      "description": "End-to-end blocked user rejection: client with a valid API key (correct secret, not revoked, not expired) belonging to a blocked user receives HTTP 403.",
+      "trigger": "HTTP GET request with valid API key where the owning user's status in the SQLite users table is 'blocked'.",
+      "real_components": [
+        "internal/auth/auth.go (NewAuthMiddleware, middleware chain)",
+        "internal/auth/credentials.go (API key validation, user status check)",
+        "internal/db (SQLite api_keys and users table queries)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (to verify it is never invoked)"
+      ],
+      "expected_effects": [
+        "Response is HTTP 403.",
+        "Response body is {\"error\":{\"code\":403,\"message\":\"user is blocked\"}}.",
+        "Handler is never invoked.",
+        "api_keys table is queried once; users table is queried once.",
+        "No AuthInfo is injected into the context."
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-6",
+      "execution_path_id": "05-PATH-6",
+      "description": "End-to-end custom permission registration and PAT usage: consuming project registers a custom permission at startup, PAT with that permission passes RequirePermission.",
+      "trigger": "Startup: NewPermissionRegistry() followed by registry.Register('widgets','export') and NewAuthMiddleware(db, registry). Then HTTP request with a PAT whose permissions include 'widgets:export'.",
+      "real_components": [
+        "internal/auth/permissions.go (NewPermissionRegistry, Register, IsValid)",
+        "internal/auth/auth.go (NewAuthMiddleware)",
+        "internal/auth/credentials.go (PAT validation)",
+        "internal/auth/context.go (AuthInfo injection with Permissions)",
+        "internal/db (SQLite pats and users table queries)",
+        "Echo v4 router and middleware chain"
+      ],
+      "mockable": [
+        "Handler function (replaced with test handler that calls RequirePermission('widgets','export'))"
+      ],
+      "expected_effects": [
+        "registry.Register('widgets','export') returns nil.",
+        "registry.IsValid('widgets','export') returns true.",
+        "HTTP request with PAT containing 'widgets:export' receives HTTP 200.",
+        "RequirePermission(c, 'widgets', 'export') returns nil inside the handler.",
+        "All 6 built-in permissions remain registered alongside 'widgets:export'."
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

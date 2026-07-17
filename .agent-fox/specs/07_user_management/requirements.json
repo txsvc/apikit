@@ -1,0 +1,1197 @@
+{
+  "$schema": null,
+  "spec_id": "07",
+  "spec_name": "user_management",
+  "schema_version": 1,
+  "introduction": "This specification defines the HTTP handler layer for user administration and self-service profile management in apikit. It covers admin-only CRUD, role, and lifecycle endpoints under `/users`, self-service profile endpoints under `/user`, and admin access to per-user credential listings and revocation. Note: requirements referencing `apikit`, `auth`, and `db` package APIs are based on PRD descriptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "APIGroup": "The Echo route group returned by `server.APIGroup()` on which all user management routes are registered.",
+    "APIKeyMeta": "Go struct representing the non-secret metadata fields of an API key.",
+    "CreateUserRequest": "Go struct representing the JSON request body for `POST /users`.",
+    "PATMeta": "Go struct representing the non-secret metadata fields of a personal access token.",
+    "RegisterUserHandlers": "The exported constructor function that registers all user management routes on the Echo API group.",
+    "UpdateUserRequest": "Go struct representing the JSON request body for `PATCH /users/:id` and `PATCH /user`.",
+    "User": "Go struct representing the JSON response object for user endpoints.",
+    "X-Request-ID": "HTTP request header injected by the server core containing a unique identifier for the current request, read from Echo context.",
+    "active admin count": "The count of users in the `users` table where `role = 'admin'` AND `status = 'active'`, used by the demote safeguard.",
+    "admin_bootstrap": "The one-time startup mechanism (spec 04) that seeds the first admin user via an OAuth callback intercept; independent of `POST /users`.",
+    "api_keys table": "The SQLite database table storing API key records, created and owned by the `database_layer` spec.",
+    "apikit.APIError": "Helper function that formats and sends a standard JSON error response with a given HTTP status code and message.",
+    "apikit.CacheNoStore": "Middleware or helper that sets `Cache-Control: no-store` on responses.",
+    "apikit.CheckETag": "Helper function that compares the `If-None-Match` request header against the current resource ETag and returns true when they match (cache hit).",
+    "apikit.SetETag": "Helper function that sets the `ETag` response header based on a resource timestamp.",
+    "auth.GetAuthInfo": "Helper that retrieves the full authentication info struct from the Echo context.",
+    "auth.GetUserID": "Helper that retrieves the authenticated user's UUID from the Echo context.",
+    "auth.RequireAdmin": "Middleware helper that returns 403 if the calling user does not hold the admin role.",
+    "auth.RequirePermission": "Middleware helper that checks whether the authenticated context (PAT or session) holds a specified permission, returning 403 if not.",
+    "db.ErrNotFound": "Sentinel error returned by the database layer when a queried record does not exist.",
+    "db.FormatTime": "Utility function that formats a `time.Time` value as an RFC 3339 UTC timestamp string.",
+    "include_blocked": "Optional boolean query parameter on `GET /users` that controls whether blocked users are included in the response.",
+    "org_members table": "The SQLite database table storing organization membership records, created and owned by the `database_layer` spec.",
+    "orgs table": "The SQLite database table storing organization records, created and owned by the `database_layer` spec.",
+    "orgs:read": "PAT permission scope required for listing a user's own organization memberships.",
+    "pats table": "The SQLite database table storing personal access token records, created and owned by the `database_layer` spec.",
+    "provider": "A free-form string stored on a user record identifying the OAuth provider (e.g. `\"github\"`, `\"google\"`); not validated against the provider registry during admin user creation.",
+    "provider_id": "The identity token issued by the OAuth provider that uniquely identifies a user within that provider.",
+    "revoked_at": "A nullable RFC 3339 timestamp column on `api_keys` and `pats` tables indicating when a credential was revoked; NULL means the credential is still active.",
+    "users table": "The SQLite database table storing user records, created and owned by the `database_layer` spec.",
+    "users:read": "PAT permission scope required for reading a user's own profile and updating own `full_name`.",
+    "\"\"": "Empty string literal value.",
+    "\"active\"": "User status value indicating the user account is active and can authenticate.",
+    "\"admin\"": "User role value indicating the user has admin-level access to all endpoints and resources.",
+    "\"api key not found\"": "Error message returned with HTTP 404 when the specified API key does not exist for the given user.",
+    "\"blocked\"": "User status value indicating the user account is blocked and cannot authenticate.",
+    "\"cannot demote the last admin\"": "Error message returned with HTTP 409 when attempting to demote the only remaining admin user.",
+    "\"insufficient permissions\"": "Error message returned with HTTP 403 when a PAT lacks the required permission for the requested operation.",
+    "\"internal server error\"": "Error message returned with HTTP 500 when an unexpected database or server error occurs.",
+    "\"invalid request body\"": "Error message returned with HTTP 400 when the request body cannot be parsed as valid JSON.",
+    "\"missing required field: <field_name>\"": "Error message template returned with HTTP 400 when a required field is missing or empty in the request body.",
+    "\"missing required field: full_name\"": "Error message returned with HTTP 400 when the full_name field is missing from a PATCH request body.",
+    "\"provider identity already exists\"": "Error message returned with HTTP 409 when the (provider, provider_id) combination already exists in the users table.",
+    "\"token not found\"": "Error message returned with HTTP 404 when the specified PAT does not exist for the given user.",
+    "\"user not found\"": "Error message returned with HTTP 404 when the specified user ID does not exist in the users table.",
+    "\"user\"": "User role value indicating the user has regular (non-admin) access to their own resources only.",
+    "\"username already exists\"": "Error message returned with HTTP 409 when the username already exists in the users table.",
+    "(provider, provider_id)": "Composite unique constraint on the users table ensuring that each OAuth provider identity maps to exactly one user.",
+    "*sql.DB": "Go standard library database handle type used for executing SQL queries against the SQLite database.",
+    "FullName *string": "Pointer-to-string field in UpdateUserRequest, allowing distinction between an omitted field (nil) and an explicitly empty string.",
+    "If-None-Match": "HTTP request header used for conditional GET requests; the server returns HTTP 304 when the header value matches the current ETag.",
+    "WHERE status = 'active'": "SQL filter clause that excludes blocked users from query results.",
+    "[]": "Empty JSON array, returned when a list endpoint matches no results.",
+    "apikit.CheckETag(c, user.UpdatedAt)": "Helper function call that compares the If-None-Match request header against the resource ETag and returns true if the client cache is current.",
+    "apikit.SetETag(c, user.UpdatedAt)": "Helper function call that sets a weak ETag response header derived from the user resource updated_at timestamp.",
+    "auth.GetUserID(c)": "Helper function call that retrieves the authenticated user UUID from the Echo request context.",
+    "auth.RequireAdmin(c)": "Helper function call that returns HTTP 403 if the authenticated credential does not have admin-level access.",
+    "auth.RequirePermission(c, \"orgs\", \"read\")": "Helper function call that returns HTTP 403 if the authenticated PAT does not have the orgs:read permission.",
+    "auth.RequirePermission(c, \"users\", \"read\")": "Helper function call that returns HTTP 403 if the authenticated PAT does not have the users:read permission.",
+    "created_at": "RFC 3339 UTC timestamp field recording when the resource was created.",
+    "email": "User email address field, required at creation.",
+    "expires_at": "Nullable RFC 3339 UTC timestamp field recording when a credential expires; null when the credential has no expiry.",
+    "full_name": "Optional user display name field; the only field mutable via PATCH endpoints.",
+    "func(c echo.Context) error": "Go function signature for Echo HTTP handler functions.",
+    "include_blocked=true": "Query parameter value that includes blocked users in the GET /users list response.",
+    "key_id": "Random 8-character alphanumeric identifier for an API key, used as the primary key in the api_keys table.",
+    "name": "User-provided human-readable label for a PAT.",
+    "permissions": "JSON array of resource_type:action strings defining the access scope of a PAT.",
+    "role": "User field with value \"admin\" or \"user\" that determines access level.",
+    "role = \"admin\"": "Condition indicating the user has the admin role.",
+    "role = \"user\"": "Condition indicating the user has the regular (non-admin) role.",
+    "role = 'admin'": "SQL condition matching users with the admin role.",
+    "status": "User field with value \"active\" or \"blocked\" that determines whether the user can authenticate.",
+    "status = \"active\"": "Condition indicating the user account is active.",
+    "status = \"blocked\"": "Condition indicating the user account is blocked.",
+    "status = 'active'": "SQL condition matching users with active status.",
+    "token_id": "Random identifier for a PAT, used as the primary key in the pats table.",
+    "updated_at": "RFC 3339 UTC timestamp field recording when the resource was last modified.",
+    "user.UpdatedAt": "The updated_at timestamp of a User struct instance, used for ETag generation.",
+    "user_id": "UUID field referencing the owning user in credential tables (api_keys, pats).",
+    "username": "Unique user display name field, required at creation.",
+    "users:write": "A hypothetical PAT permission that does not exist in the master PRD built-in permission set; self-service profile updates use users:read instead."
+  },
+  "requirements": [
+    {
+      "id": "07-REQ-1",
+      "title": "Route Registration",
+      "user_story": {
+        "role": "API developer",
+        "goal": "register all user management routes on the Echo API group via a single constructor call",
+        "benefit": "so that the server wires up user endpoints without needing per-handler registration logic scattered across the codebase"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`RegisterUserHandlers`",
+          "action": "registers all 15 routes (POST /users, GET /users, GET /users/:id, PATCH /users/:id, POST /users/:id/promote, POST /users/:id/demote, POST /users/:id/block, POST /users/:id/unblock, GET /users/:id/keys, DELETE /users/:id/keys/:key_id, GET /users/:id/tokens, DELETE /users/:id/tokens/:token_id, GET /user, PATCH /user, GET /user/orgs) on the provided Echo group and stores the `*sql.DB` handle for use by all handler functions",
+          "return_contract": null
+        },
+        {
+          "id": "07-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "all handler functions",
+          "action": "have the unexported signature `func(c echo.Context) error` and are registered exclusively through `RegisterUserHandlers`",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-2",
+      "title": "Create User (POST /users)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "create a new user record via POST /users with username, email, provider, and provider_id",
+        "benefit": "so that I can provision additional users without requiring them to complete an OAuth login flow"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "createUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, binds the `CreateUserRequest` body, generates a new UUID for the user ID, sets `role` to `\"user\"`, `status` to `\"active\"`, `full_name` to `\"\"`, sets `created_at` and `updated_at` to the current UTC timestamp formatted via `db.FormatTime`, inserts the record into the `users table`, and returns the created `User` object",
+          "return_contract": "HTTP 201 with the complete `User` JSON object; all fields populated",
+          "trigger": "a valid POST /users request with all four required fields is received from an admin user"
+        },
+        {
+          "id": "07-REQ-2.2",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns a 400 error using `apikit.APIError` with message `\"missing required field: <field_name>\"` identifying the offending field",
+          "return_contract": "HTTP 400 with JSON error body containing the specific missing field name",
+          "error_condition": "any of the four required fields (`username`, `email`, `provider`, `provider_id`) is missing or is an empty string"
+        },
+        {
+          "id": "07-REQ-2.3",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns a 400 error via `apikit.APIError` with message `\"invalid request body\"`",
+          "return_contract": "HTTP 400 with JSON error body",
+          "error_condition": "the request body is not valid JSON"
+        },
+        {
+          "id": "07-REQ-2.4",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns a 409 error via `apikit.APIError` with message `\"username already exists\"`",
+          "return_contract": "HTTP 409 with JSON error body",
+          "error_condition": "insertion into the `users table` fails due to a unique constraint violation on `username`"
+        },
+        {
+          "id": "07-REQ-2.5",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns a 409 error via `apikit.APIError` with message `\"provider identity already exists\"`",
+          "return_contract": "HTTP 409 with JSON error body",
+          "error_condition": "insertion into the `users table` fails due to a unique constraint violation on `(provider, provider_id)`"
+        },
+        {
+          "id": "07-REQ-2.6",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)` before any other processing",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "createUser handler",
+          "action": "returns a 500 error via `apikit.APIError` with message `\"internal server error\"` without leaking database internals",
+          "return_contract": "HTTP 500 with JSON error body",
+          "error_condition": "the database INSERT call returns an unexpected (non-constraint) error"
+        },
+        {
+          "id": "07-REQ-2.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "createUser handler",
+          "action": "stores the `provider` field as provided by the admin without any validation against the OAuth provider registry, accepting any non-empty string",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-3",
+      "title": "List Users (GET /users)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "retrieve a list of all users, optionally including blocked users",
+        "benefit": "so that I can audit the user population and manage user lifecycle"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "listUsers handler",
+          "action": "calls `auth.RequireAdmin(c)`, queries the `users table` filtering `WHERE status = 'active'`, and returns the result array",
+          "return_contract": "HTTP 200 with a JSON array of `User` objects excluding blocked users; empty array `[]` if none match",
+          "trigger": "a GET /users request is received from an admin user without the `include_blocked` parameter"
+        },
+        {
+          "id": "07-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "listUsers handler",
+          "action": "queries the `users table` without a status filter, returning all users regardless of status",
+          "return_contract": "HTTP 200 with a JSON array of all `User` objects including blocked users",
+          "trigger": "a GET /users request is received with query parameter `include_blocked=true`"
+        },
+        {
+          "id": "07-REQ-3.3",
+          "ears_pattern": "unwanted",
+          "system": "listUsers handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-3.E1",
+          "ears_pattern": "event_driven",
+          "system": "listUsers handler",
+          "action": "returns an empty JSON array rather than null",
+          "return_contract": "HTTP 200 with body `[]`",
+          "trigger": "the `users table` contains no rows matching the filter"
+        },
+        {
+          "id": "07-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "listUsers handler",
+          "action": "returns a 500 error via `apikit.APIError` with message `\"internal server error\"`",
+          "return_contract": "HTTP 500 with JSON error body",
+          "error_condition": "the database query returns an unexpected error"
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-4",
+      "title": "Get User by ID (GET /users/:id)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "retrieve a single user record by UUID",
+        "benefit": "so that I can inspect a specific user's current state"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "getUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, queries the `users table` by ID, sets the ETag via `apikit.SetETag(c, user.UpdatedAt)`, checks `If-None-Match` via `apikit.CheckETag(c, user.UpdatedAt)`, and returns the user object",
+          "return_contract": "HTTP 200 with the `User` JSON object and ETag header set; HTTP 304 if the client's ETag matches",
+          "trigger": "a GET /users/:id request is received from an admin user for an existing user"
+        },
+        {
+          "id": "07-REQ-4.2",
+          "ears_pattern": "unwanted",
+          "system": "getUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-4.3",
+          "ears_pattern": "unwanted",
+          "system": "getUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-4.E1",
+          "ears_pattern": "event_driven",
+          "system": "getUser handler",
+          "action": "returns 304 without a response body after `apikit.CheckETag` confirms the cache is current",
+          "return_contract": "HTTP 304 with no response body",
+          "trigger": "the client sends an `If-None-Match` header whose value matches the current ETag derived from `user.UpdatedAt`"
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-5",
+      "title": "Update User Full Name (PATCH /users/:id)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "update a user's full_name via PATCH /users/:id",
+        "benefit": "so that I can correct display names without recreating the user record"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "updateUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, binds the `UpdateUserRequest` body, fetches the user from the `users table`, updates `full_name` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object",
+          "trigger": "a valid PATCH /users/:id request with a `full_name` field is received from an admin user for an existing user"
+        },
+        {
+          "id": "07-REQ-5.2",
+          "ears_pattern": "unwanted",
+          "system": "updateUser handler",
+          "action": "returns a 400 error via `apikit.APIError` with message `\"missing required field: full_name\"`",
+          "return_contract": "HTTP 400 with JSON error body",
+          "error_condition": "the request body does not include the `full_name` field (field is absent, not just empty string)"
+        },
+        {
+          "id": "07-REQ-5.3",
+          "ears_pattern": "unwanted",
+          "system": "updateUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-5.4",
+          "ears_pattern": "unwanted",
+          "system": "updateUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-5.E1",
+          "ears_pattern": "event_driven",
+          "system": "updateUser handler",
+          "action": "accepts the value and clears the user's `full_name` to an empty string, persisting and returning the updated user",
+          "return_contract": "HTTP 200 with `User` object where `full_name` is `\"\"`",
+          "trigger": "the `full_name` field in the request body is an empty string"
+        },
+        {
+          "id": "07-REQ-5.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "updateUser handler",
+          "action": "uses `UpdateUserRequest` with `FullName *string` (pointer) to distinguish a missing field from an empty-string value; a nil pointer means the field was absent and triggers a 400 error",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-6",
+      "title": "Promote User to Admin (POST /users/:id/promote)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "promote a user to the admin role via POST /users/:id/promote",
+        "benefit": "so that I can delegate administrative capabilities to trusted users"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "promoteUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, fetches the user from the `users table`, updates `role` to `\"admin\"` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object with `role` set to `\"admin\"`",
+          "trigger": "a POST /users/:id/promote request is received from an admin user for an existing non-admin user"
+        },
+        {
+          "id": "07-REQ-6.2",
+          "ears_pattern": "state_driven",
+          "system": "promoteUser handler",
+          "action": "returns the current user object unchanged without modifying the database (idempotent)",
+          "return_contract": "HTTP 200 with the existing `User` JSON object unmodified",
+          "state": "the target user already has `role = \"admin\"`"
+        },
+        {
+          "id": "07-REQ-6.3",
+          "ears_pattern": "unwanted",
+          "system": "promoteUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-6.4",
+          "ears_pattern": "unwanted",
+          "system": "promoteUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-7",
+      "title": "Demote User from Admin (POST /users/:id/demote)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "demote a user from the admin role via POST /users/:id/demote while preventing removal of the last admin",
+        "benefit": "so that I can revoke administrative access without risking total lockout"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "demoteUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, fetches the user from the `users table`, counts users with `role = 'admin'` AND `status = 'active'`, updates `role` to `\"user\"` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object with `role` set to `\"user\"`",
+          "trigger": "a POST /users/:id/demote request is received from an admin user for an existing admin user when more than one active admin exists"
+        },
+        {
+          "id": "07-REQ-7.2",
+          "ears_pattern": "state_driven",
+          "system": "demoteUser handler",
+          "action": "returns the current user object unchanged without modifying the database (idempotent)",
+          "return_contract": "HTTP 200 with the existing `User` JSON object unmodified",
+          "state": "the target user already has `role = \"user\"`"
+        },
+        {
+          "id": "07-REQ-7.3",
+          "ears_pattern": "unwanted",
+          "system": "demoteUser handler",
+          "action": "returns a 409 error via `apikit.APIError` with message `\"cannot demote the last admin\"` without modifying the user record",
+          "return_contract": "HTTP 409 with JSON error body",
+          "error_condition": "the target user is the only remaining user with `role = 'admin'` AND `status = 'active'` (the `active admin count` equals 1)"
+        },
+        {
+          "id": "07-REQ-7.4",
+          "ears_pattern": "unwanted",
+          "system": "demoteUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-7.5",
+          "ears_pattern": "unwanted",
+          "system": "demoteUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "demoteUser handler",
+          "action": "returns a 500 error via `apikit.APIError` with message `\"internal server error\"` without modifying the user record",
+          "return_contract": "HTTP 500 with JSON error body",
+          "error_condition": "the `active admin count` query returns a database error"
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-8",
+      "title": "Block User (POST /users/:id/block)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "block a user account via POST /users/:id/block",
+        "benefit": "so that I can revoke authentication access for compromised or inactive accounts without deleting audit trail data"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "blockUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, fetches the user from the `users table`, updates `status` to `\"blocked\"` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object with `status` set to `\"blocked\"`",
+          "trigger": "a POST /users/:id/block request is received from an admin user for an existing active user"
+        },
+        {
+          "id": "07-REQ-8.2",
+          "ears_pattern": "state_driven",
+          "system": "blockUser handler",
+          "action": "returns the current user object unchanged without modifying the database (idempotent)",
+          "return_contract": "HTTP 200 with the existing `User` JSON object unmodified",
+          "state": "the target user already has `status = \"blocked\"`"
+        },
+        {
+          "id": "07-REQ-8.3",
+          "ears_pattern": "unwanted",
+          "system": "blockUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-8.4",
+          "ears_pattern": "unwanted",
+          "system": "blockUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-9",
+      "title": "Unblock User (POST /users/:id/unblock)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "unblock a previously blocked user via POST /users/:id/unblock",
+        "benefit": "so that I can restore authentication access after a block was applied in error or the situation has been resolved"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "unblockUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, fetches the user from the `users table`, updates `status` to `\"active\"` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object with `status` set to `\"active\"`",
+          "trigger": "a POST /users/:id/unblock request is received from an admin user for an existing blocked user"
+        },
+        {
+          "id": "07-REQ-9.2",
+          "ears_pattern": "state_driven",
+          "system": "unblockUser handler",
+          "action": "returns the current user object unchanged without modifying the database (idempotent)",
+          "return_contract": "HTTP 200 with the existing `User` JSON object unmodified",
+          "state": "the target user already has `status = \"active\"`"
+        },
+        {
+          "id": "07-REQ-9.3",
+          "ears_pattern": "unwanted",
+          "system": "unblockUser handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-9.4",
+          "ears_pattern": "unwanted",
+          "system": "unblockUser handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-10",
+      "title": "List User API Keys (GET /users/:id/keys)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "list metadata for all API keys belonging to a specific user",
+        "benefit": "so that I can audit credential usage without exposing plaintext secrets"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "listUserKeys handler",
+          "action": "calls `auth.RequireAdmin(c)`, verifies the user exists in the `users table`, queries the `api_keys table` for all keys with matching `user_id`, and returns the metadata array",
+          "return_contract": "HTTP 200 with a JSON array of `APIKeyMeta` objects; empty array `[]` if no keys exist; `revoked_at` and `expires_at` are null-able RFC 3339 strings",
+          "trigger": "a GET /users/:id/keys request is received from an admin user for an existing user"
+        },
+        {
+          "id": "07-REQ-10.2",
+          "ears_pattern": "unwanted",
+          "system": "listUserKeys handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"` without querying the `api_keys table`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-10.3",
+          "ears_pattern": "unwanted",
+          "system": "listUserKeys handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-10.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "listUserKeys handler",
+          "action": "never includes plaintext secret values in any field of the returned `APIKeyMeta` objects; only `key_id`, `user_id`, `created_at`, `expires_at`, and `revoked_at` are returned",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-11",
+      "title": "Revoke User API Key (DELETE /users/:id/keys/:key_id)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "revoke a specific API key belonging to a user via DELETE /users/:id/keys/:key_id",
+        "benefit": "so that I can immediately invalidate compromised or unused credentials"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "revokeUserKey handler",
+          "action": "calls `auth.RequireAdmin(c)`, queries the `api_keys table` for the key matching both `key_id` and `user_id`, sets `revoked_at` to the current UTC timestamp, and returns no body",
+          "return_contract": "HTTP 204 No Content",
+          "trigger": "a DELETE /users/:id/keys/:key_id request is received from an admin user for an existing, active API key"
+        },
+        {
+          "id": "07-REQ-11.2",
+          "ears_pattern": "state_driven",
+          "system": "revokeUserKey handler",
+          "action": "returns 204 without modifying the record (idempotent)",
+          "return_contract": "HTTP 204 No Content with no response body",
+          "state": "the key exists in the `api_keys table` but `revoked_at` is not NULL"
+        },
+        {
+          "id": "07-REQ-11.3",
+          "ears_pattern": "unwanted",
+          "system": "revokeUserKey handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"api key not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no key matching the given `key_id` and `user_id` combination exists in the `api_keys table`"
+        },
+        {
+          "id": "07-REQ-11.4",
+          "ears_pattern": "unwanted",
+          "system": "revokeUserKey handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-12",
+      "title": "List User PATs (GET /users/:id/tokens)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "list metadata for all personal access tokens belonging to a specific user",
+        "benefit": "so that I can audit token usage and permissions without exposing plaintext secrets"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-12.1",
+          "ears_pattern": "event_driven",
+          "system": "listUserTokens handler",
+          "action": "calls `auth.RequireAdmin(c)`, verifies the user exists in the `users table`, queries the `pats table` for all tokens with matching `user_id`, and returns the metadata array",
+          "return_contract": "HTTP 200 with a JSON array of `PATMeta` objects; empty array `[]` if no tokens exist; `revoked_at` and `expires_at` are nullable RFC 3339 strings",
+          "trigger": "a GET /users/:id/tokens request is received from an admin user for an existing user"
+        },
+        {
+          "id": "07-REQ-12.2",
+          "ears_pattern": "unwanted",
+          "system": "listUserTokens handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"user not found\"` without querying the `pats table`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no user with the given ID exists in the `users table`"
+        },
+        {
+          "id": "07-REQ-12.3",
+          "ears_pattern": "unwanted",
+          "system": "listUserTokens handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-12.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "listUserTokens handler",
+          "action": "never includes plaintext token secrets in any field of the returned `PATMeta` objects; only `token_id`, `name`, `permissions`, `user_id`, `created_at`, `expires_at`, and `revoked_at` are returned",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-13",
+      "title": "Revoke User PAT (DELETE /users/:id/tokens/:token_id)",
+      "user_story": {
+        "role": "admin user",
+        "goal": "revoke a specific personal access token belonging to a user via DELETE /users/:id/tokens/:token_id",
+        "benefit": "so that I can immediately invalidate compromised or unused tokens across the user base"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-13.1",
+          "ears_pattern": "event_driven",
+          "system": "revokeUserToken handler",
+          "action": "calls `auth.RequireAdmin(c)`, queries the `pats table` for the token matching both `token_id` and `user_id`, sets `revoked_at` to the current UTC timestamp, and returns no body",
+          "return_contract": "HTTP 204 No Content",
+          "trigger": "a DELETE /users/:id/tokens/:token_id request is received from an admin user for an existing, active PAT"
+        },
+        {
+          "id": "07-REQ-13.2",
+          "ears_pattern": "state_driven",
+          "system": "revokeUserToken handler",
+          "action": "returns 204 without modifying the record (idempotent)",
+          "return_contract": "HTTP 204 No Content with no response body",
+          "state": "the token exists in the `pats table` but `revoked_at` is not NULL"
+        },
+        {
+          "id": "07-REQ-13.3",
+          "ears_pattern": "unwanted",
+          "system": "revokeUserToken handler",
+          "action": "returns a 404 error via `apikit.APIError` with message `\"token not found\"`",
+          "return_contract": "HTTP 404 with JSON error body",
+          "error_condition": "no token matching the given `token_id` and `user_id` combination exists in the `pats table`"
+        },
+        {
+          "id": "07-REQ-13.4",
+          "ears_pattern": "unwanted",
+          "system": "revokeUserToken handler",
+          "action": "returns 403 via `auth.RequireAdmin(c)`",
+          "return_contract": "HTTP 403 with JSON error body containing `\"forbidden\"`",
+          "error_condition": "the caller does not hold admin-level access"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "07-REQ-14",
+      "title": "Get Own Profile (GET /user)",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "retrieve my own profile via GET /user without needing to know my user ID",
+        "benefit": "so that I can display and inspect my current account state in client applications"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-14.1",
+          "ears_pattern": "event_driven",
+          "system": "getOwnProfile handler",
+          "action": "calls `auth.RequirePermission(c, \"users\", \"read\")`, retrieves the user ID via `auth.GetUserID(c)`, queries the `users table`, sets the ETag via `apikit.SetETag(c, user.UpdatedAt)`, checks `If-None-Match` via `apikit.CheckETag(c, user.UpdatedAt)`, and returns the user object",
+          "return_contract": "HTTP 200 with the `User` JSON object and ETag header set; HTTP 304 if the client's ETag matches",
+          "trigger": "a GET /user request is received from an authenticated user with the `users:read` permission"
+        },
+        {
+          "id": "07-REQ-14.2",
+          "ears_pattern": "unwanted",
+          "system": "getOwnProfile handler",
+          "action": "returns 403 via `auth.RequirePermission` with message `\"insufficient permissions\"`",
+          "return_contract": "HTTP 403 with JSON error body",
+          "error_condition": "the PAT or session context lacks the `users:read` permission"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-14.E1",
+          "ears_pattern": "event_driven",
+          "system": "getOwnProfile handler",
+          "action": "returns 304 without a response body",
+          "return_contract": "HTTP 304 with no response body",
+          "trigger": "the client sends an `If-None-Match` header whose value matches the current ETag derived from `user.UpdatedAt`"
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-15",
+      "title": "Update Own Profile (PATCH /user)",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "update my own full_name via PATCH /user",
+        "benefit": "so that I can correct my display name without administrative intervention"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-15.1",
+          "ears_pattern": "event_driven",
+          "system": "updateOwnProfile handler",
+          "action": "calls `auth.RequirePermission(c, \"users\", \"read\")`, retrieves the user ID via `auth.GetUserID(c)`, binds the `UpdateUserRequest` body, fetches the user from the `users table`, updates `full_name` and `updated_at`, persists the change, and returns the updated user",
+          "return_contract": "HTTP 200 with the updated `User` JSON object",
+          "trigger": "a valid PATCH /user request with a `full_name` field is received from an authenticated user with the `users:read` permission"
+        },
+        {
+          "id": "07-REQ-15.2",
+          "ears_pattern": "unwanted",
+          "system": "updateOwnProfile handler",
+          "action": "returns a 400 error via `apikit.APIError` with message `\"missing required field: full_name\"`",
+          "return_contract": "HTTP 400 with JSON error body",
+          "error_condition": "the request body does not include the `full_name` field"
+        },
+        {
+          "id": "07-REQ-15.3",
+          "ears_pattern": "unwanted",
+          "system": "updateOwnProfile handler",
+          "action": "returns 403 via `auth.RequirePermission` with message `\"insufficient permissions\"`",
+          "return_contract": "HTTP 403 with JSON error body",
+          "error_condition": "the PAT or session context lacks the `users:read` permission"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-15.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "updateOwnProfile handler",
+          "action": "uses the `users:read` permission check (not a write permission) because the master PRD PAT permission set does not include a `users:write` scope; self-service `full_name` updates are scoped within `users:read`",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "07-REQ-16",
+      "title": "List Own Organizations (GET /user/orgs)",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "list my organization memberships via GET /user/orgs",
+        "benefit": "so that I can discover which organizations I belong to and their current status"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "07-REQ-16.1",
+          "ears_pattern": "event_driven",
+          "system": "listOwnOrgs handler",
+          "action": "calls `auth.RequirePermission(c, \"orgs\", \"read\")`, retrieves the user ID via `auth.GetUserID(c)`, queries the `org_members table` joined with the `orgs table` filtering for active organizations where the user is a member, and returns the organization array",
+          "return_contract": "HTTP 200 with a JSON array of organization objects containing `id`, `name`, `slug`, `url`, `status`, `created_at`, `updated_at`; empty array `[]` if no active memberships exist",
+          "trigger": "a GET /user/orgs request is received from an authenticated user with the `orgs:read` permission"
+        },
+        {
+          "id": "07-REQ-16.2",
+          "ears_pattern": "unwanted",
+          "system": "listOwnOrgs handler",
+          "action": "returns 403 via `auth.RequirePermission` with message `\"insufficient permissions\"`",
+          "return_contract": "HTTP 403 with JSON error body",
+          "error_condition": "the PAT or session context lacks the `orgs:read` permission"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "07-REQ-16.E1",
+          "ears_pattern": "state_driven",
+          "system": "listOwnOrgs handler",
+          "action": "excludes the blocked organization from the returned array; only active organizations appear in the response",
+          "return_contract": "HTTP 200 with JSON array omitting blocked organizations",
+          "state": "an organization the user is a member of has status `\"blocked\"`"
+        },
+        {
+          "id": "07-REQ-16.E2",
+          "ears_pattern": "state_driven",
+          "system": "listOwnOrgs handler",
+          "action": "returns an empty JSON array rather than null",
+          "return_contract": "HTTP 200 with body `[]`",
+          "state": "the user has no organization memberships or all memberships are in blocked organizations"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "07-PROP-1",
+      "title": "Last admin safeguard is unbreakable",
+      "for_any": "sequence of promote and demote operations",
+      "invariant": "at least one user with `role = 'admin'` AND `status = 'active'` always exists in the `users table` after any demote operation completes; the system refuses to perform a demote that would reduce the `active admin count` to zero",
+      "validates": [
+        "07-REQ-7.3",
+        "07-REQ-7.1"
+      ]
+    },
+    {
+      "id": "07-PROP-2",
+      "title": "Action endpoints are idempotent",
+      "for_any": "repeated calls to promote, demote, block, or unblock with the same user ID",
+      "invariant": "the response is always HTTP 200 with the current user state, and the `users table` record is unchanged after the second and subsequent calls when the user is already in the target state",
+      "validates": [
+        "07-REQ-6.2",
+        "07-REQ-7.2",
+        "07-REQ-8.2",
+        "07-REQ-9.2"
+      ]
+    },
+    {
+      "id": "07-PROP-3",
+      "title": "Credential revocation is idempotent and always returns 204",
+      "for_any": "repeated DELETE calls to revoke the same API key or PAT",
+      "invariant": "every successful call (key or token found) returns HTTP 204 No Content regardless of whether `revoked_at` was already set; the `revoked_at` timestamp is never overwritten once set",
+      "validates": [
+        "07-REQ-11.2",
+        "07-REQ-13.2",
+        "07-REQ-11.1",
+        "07-REQ-13.1"
+      ]
+    },
+    {
+      "id": "07-PROP-4",
+      "title": "Credential listings never expose secrets",
+      "for_any": "response from GET /users/:id/keys or GET /users/:id/tokens",
+      "invariant": "no response field contains a plaintext API key secret or PAT secret; returned objects contain only the metadata fields defined in `APIKeyMeta` and `PATMeta`",
+      "validates": [
+        "07-REQ-10.1",
+        "07-REQ-12.1",
+        "07-REQ-10.E1",
+        "07-REQ-12.E1"
+      ]
+    },
+    {
+      "id": "07-PROP-5",
+      "title": "Admin-only endpoints enforce auth before any data access",
+      "for_any": "request to any endpoint under /users",
+      "invariant": "`auth.RequireAdmin(c)` is the first call in every handler; no database query against the `users table`, `api_keys table`, or `pats table` is executed if the caller is not an admin",
+      "validates": [
+        "07-REQ-2.6",
+        "07-REQ-3.3",
+        "07-REQ-4.3",
+        "07-REQ-5.4",
+        "07-REQ-6.4",
+        "07-REQ-7.5",
+        "07-REQ-8.4",
+        "07-REQ-9.4",
+        "07-REQ-10.3",
+        "07-REQ-11.4",
+        "07-REQ-12.3",
+        "07-REQ-13.4"
+      ]
+    },
+    {
+      "id": "07-PROP-6",
+      "title": "List endpoints return empty array, never null",
+      "for_any": "GET /users, GET /users/:id/keys, GET /users/:id/tokens, GET /user/orgs when no records match",
+      "invariant": "the response body is the JSON literal `[]` and the HTTP status is 200, not a null value or a 404 error",
+      "validates": [
+        "07-REQ-3.E1",
+        "07-REQ-16.E2",
+        "07-REQ-3.1",
+        "07-REQ-10.1",
+        "07-REQ-12.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "07-PATH-1",
+      "title": "Admin creates a new user",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "sends POST /users with JSON body containing username, email, provider, and provider_id, authenticated via admin session or API key"
+        },
+        {
+          "actor": "Echo router",
+          "action": "routes the request to the createUser handler registered by `RegisterUserHandlers`"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "calls `auth.RequireAdmin(c)` to verify admin access; returns 403 if not admin"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "binds the request body into `CreateUserRequest` and validates all four fields are non-empty; returns 400 if any are missing"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "generates a new UUID, sets defaults (role=user, status=active, full_name empty), and inserts a new record into the `users table` via `*sql.DB`"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "detects unique constraint violations and returns 409 if username or (provider, provider_id) already exists"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "serializes the new `User` struct and returns HTTP 201 to the admin client"
+        }
+      ]
+    },
+    {
+      "id": "07-PATH-2",
+      "title": "Admin demotes a user with last-admin safeguard",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "sends POST /users/:id/demote for a target admin user"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "calls `auth.RequireAdmin(c)` to verify caller is admin"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "fetches the target user from the `users table`; returns 404 if not found"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "checks if target already has role=user and returns 200 unchanged if so (idempotent)"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "queries the `users table` to count the `active admin count`"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "returns HTTP 409 with message 'cannot demote the last admin' if the count equals 1"
+        },
+        {
+          "actor": "demoteUser handler",
+          "action": "updates the target user's role to 'user' and updated_at in the `users table`, then returns HTTP 200 with the updated `User` object"
+        }
+      ]
+    },
+    {
+      "id": "07-PATH-3",
+      "title": "Admin revokes a user's API key (idempotent)",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "sends DELETE /users/:id/keys/:key_id for a specific user and key"
+        },
+        {
+          "actor": "revokeUserKey handler",
+          "action": "calls `auth.RequireAdmin(c)` to verify admin access"
+        },
+        {
+          "actor": "revokeUserKey handler",
+          "action": "queries the `api_keys table` for the row matching both key_id and user_id; returns 404 if not found"
+        },
+        {
+          "actor": "revokeUserKey handler",
+          "action": "checks if `revoked_at` is already non-NULL; if so, returns HTTP 204 immediately without a database write"
+        },
+        {
+          "actor": "revokeUserKey handler",
+          "action": "sets `revoked_at` to the current UTC timestamp in the `api_keys table`"
+        },
+        {
+          "actor": "revokeUserKey handler",
+          "action": "returns HTTP 204 No Content to the admin client"
+        }
+      ]
+    },
+    {
+      "id": "07-PATH-4",
+      "title": "Authenticated user reads and updates own profile",
+      "steps": [
+        {
+          "actor": "Authenticated user client",
+          "action": "sends GET /user with a PAT bearing the `users:read` permission"
+        },
+        {
+          "actor": "getOwnProfile handler",
+          "action": "calls `auth.RequirePermission(c, \"users\", \"read\")`; returns 403 if permission is absent"
+        },
+        {
+          "actor": "getOwnProfile handler",
+          "action": "calls `auth.GetUserID(c)` to retrieve the authenticated user's UUID from context"
+        },
+        {
+          "actor": "getOwnProfile handler",
+          "action": "queries the `users table` for the user record and sets the ETag via `apikit.SetETag`; returns 304 if `If-None-Match` matches"
+        },
+        {
+          "actor": "getOwnProfile handler",
+          "action": "returns HTTP 200 with the `User` JSON object"
+        },
+        {
+          "actor": "Authenticated user client",
+          "action": "sends PATCH /user with JSON body containing full_name and the same PAT"
+        },
+        {
+          "actor": "updateOwnProfile handler",
+          "action": "calls `auth.RequirePermission(c, \"users\", \"read\")`, retrieves user ID, updates `full_name` and `updated_at` in the `users table`, and returns HTTP 200 with the updated `User` object"
+        }
+      ]
+    },
+    {
+      "id": "07-PATH-5",
+      "title": "Full end-to-end: admin provisions user, promotes, then user views own orgs",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "sends POST /users with valid body to create a new user; receives HTTP 201 with the new `User` object including the generated UUID"
+        },
+        {
+          "actor": "Echo router (server_core APIGroup)",
+          "action": "routes the request through the Echo group registered by `RegisterUserHandlers` against the `*sql.DB` handle provided by database_layer"
+        },
+        {
+          "actor": "createUser handler",
+          "action": "calls `auth.RequireAdmin(c)` (auth_middleware), inserts into the `users table` (database_layer), and returns HTTP 201"
+        },
+        {
+          "actor": "Admin client",
+          "action": "sends POST /users/:id/promote for the newly created user's UUID"
+        },
+        {
+          "actor": "promoteUser handler",
+          "action": "calls `auth.RequireAdmin(c)`, fetches the user from `users table`, updates role to admin, returns HTTP 200 with updated `User`"
+        },
+        {
+          "actor": "New user client",
+          "action": "sends GET /user/orgs authenticated with a PAT bearing the `orgs:read` permission"
+        },
+        {
+          "actor": "listOwnOrgs handler",
+          "action": "calls `auth.RequirePermission(c, \"orgs\", \"read\")` (auth_middleware), calls `auth.GetUserID(c)`, queries `org_members table` joined with `orgs table` (database_layer) excluding blocked orgs, and returns HTTP 200 with the organization array"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "07-ERR-1",
+      "condition": "caller is not an admin on any /users endpoint",
+      "behavior": "handler calls `auth.RequireAdmin(c)` which responds with HTTP 403 and message `\"forbidden\"` via `apikit.APIError`; no further processing occurs",
+      "requirement_id": "07-REQ-2.6"
+    },
+    {
+      "id": "07-ERR-2",
+      "condition": "PAT lacks required permission on /user or /user/orgs endpoint",
+      "behavior": "handler calls `auth.RequirePermission(c, ...)` which responds with HTTP 403 and message `\"insufficient permissions\"` via `apikit.APIError`; no further processing occurs",
+      "requirement_id": "07-REQ-14.2"
+    },
+    {
+      "id": "07-ERR-3",
+      "condition": "request body is missing or has an empty required field (username, email, provider, provider_id, or full_name)",
+      "behavior": "handler returns HTTP 400 via `apikit.APIError` with message `\"missing required field: <field_name>\"` identifying the specific offending field",
+      "requirement_id": "07-REQ-2.2"
+    },
+    {
+      "id": "07-ERR-4",
+      "condition": "request body is not valid JSON",
+      "behavior": "handler returns HTTP 400 via `apikit.APIError` with message `\"invalid request body\"`",
+      "requirement_id": "07-REQ-2.3"
+    },
+    {
+      "id": "07-ERR-5",
+      "condition": "queried user ID does not exist in the `users table` (database returns `db.ErrNotFound`)",
+      "behavior": "handler returns HTTP 404 via `apikit.APIError` with message `\"user not found\"`",
+      "requirement_id": "07-REQ-4.2"
+    },
+    {
+      "id": "07-ERR-6",
+      "condition": "queried API key matching (key_id, user_id) does not exist in the `api_keys table`",
+      "behavior": "handler returns HTTP 404 via `apikit.APIError` with message `\"api key not found\"`",
+      "requirement_id": "07-REQ-11.3"
+    },
+    {
+      "id": "07-ERR-7",
+      "condition": "queried PAT matching (token_id, user_id) does not exist in the `pats table`",
+      "behavior": "handler returns HTTP 404 via `apikit.APIError` with message `\"token not found\"`",
+      "requirement_id": "07-REQ-13.3"
+    },
+    {
+      "id": "07-ERR-8",
+      "condition": "INSERT into `users table` fails due to unique constraint on `username`",
+      "behavior": "handler returns HTTP 409 via `apikit.APIError` with message `\"username already exists\"`",
+      "requirement_id": "07-REQ-2.4"
+    },
+    {
+      "id": "07-ERR-9",
+      "condition": "INSERT into `users table` fails due to unique constraint on (provider, provider_id)",
+      "behavior": "handler returns HTTP 409 via `apikit.APIError` with message `\"provider identity already exists\"`",
+      "requirement_id": "07-REQ-2.5"
+    },
+    {
+      "id": "07-ERR-10",
+      "condition": "demote attempted when `active admin count` equals 1",
+      "behavior": "handler returns HTTP 409 via `apikit.APIError` with message `\"cannot demote the last admin\"` without modifying the `users table`",
+      "requirement_id": "07-REQ-7.3"
+    },
+    {
+      "id": "07-ERR-11",
+      "condition": "any database operation returns an unexpected error not matching `db.ErrNotFound` or a constraint violation",
+      "behavior": "handler returns HTTP 500 via `apikit.APIError` with message `\"internal server error\"` without leaking internal error details",
+      "requirement_id": "07-REQ-2.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4",
+      "symbols": [
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct",
+          "notes": "Echo route group; all user management routes are registered on the instance returned by server.APIGroup()"
+        },
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface",
+          "notes": "Echo request context passed to every handler function"
+        }
+      ]
+    },
+    {
+      "package": "github.com/google/uuid",
+      "version": "latest",
+      "symbols": [
+        {
+          "name": "New",
+          "import_path": "github.com/google/uuid",
+          "signature": "func New() UUID",
+          "notes": "Generates a new random UUID v4 for user IDs at creation time"
+        }
+      ]
+    }
+  ]
+}

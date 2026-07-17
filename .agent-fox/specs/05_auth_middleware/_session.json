@@ -1,0 +1,58 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `auth_middleware` PRD is exceptionally well-written and comprehensive. All four required sections (Intent, Goals, Non-Goals, Background/context) are present and of high quality. The document covers functional requirements in granular detail, including token extraction, credential type detection, validation logic for all three credential types, RBAC, blocked-user handling, permission registry, context injection, constant-time comparison, and error handling. The interface contracts are well-specified, the testing strategy is thorough, and design decisions are clearly articulated. Dependencies on `server_core` and `database_layer` are declared and accurate. No critical gaps were found. Minor observations are noted below for consideration but do not block artifact generation.",
+      "gaps": [
+        "The PRD declares a dependency on `01_server_core` and `02_database_layer` but uses the spec IDs `01` and `02` \u2014 the active spec landscape shows the canonical spec names are `server_core` and `database_layer` (no numeric prefix). This is a cosmetic inconsistency in the Dependencies table and does not affect functionality.",
+        "The `admin_bootstrap` active spec is the mechanism that generates and stores the admin token hash in `admin_config`. The `auth_middleware` reads from `admin_config` but does not declare a dependency on `admin_bootstrap`. While the relationship is mentioned in the Non-Goals section, a formal dependency entry would make the spec graph complete.",
+        "The PermissionRegistry is described as 'thread-safe' in the Glossary but there is no mention of synchronization primitives (e.g., `sync.RWMutex`) in the interface or implementation notes. If concurrent registration is expected at startup, this should be explicitly addressed.",
+        "The API key format `<prefix>_<key_id>_<secret>` is ambiguous if either `key_id` or `secret` itself contains an underscore \u2014 the parsing logic for splitting on `_` is not fully specified. The PAT format has the same potential ambiguity for the `secret` component.",
+        "There is no explicit specification of what constitutes a valid `key_id` or `token_id` format (e.g., length, character set, UUID vs. random hex), which could affect how `parseToken` splits the token string reliably."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should `admin_bootstrap` be added as a formal dependency in the Dependencies table, given that `auth_middleware` reads the `admin_token_hash` row written by `admin_bootstrap`?",
+          "context": "The active spec landscape includes `admin_bootstrap` as an active spec that writes to `admin_config`. The `auth_middleware` reads from this table, creating an implicit runtime dependency. Declaring it formally ensures the spec graph is accurate and that `admin_bootstrap` is known to run before `auth_middleware` can validate admin tokens.",
+          "options": [
+            "Yes, add `admin_bootstrap` as a dependency with relationship 'reads admin_token_hash from admin_config written by admin_bootstrap'",
+            "No, the Non-Goals section already acknowledges the separation \u2014 keep as-is"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How are `key_id` and `token_id` structured, and how does `parseToken` reliably split the token string when underscores may appear in the secret portion?",
+          "context": "The token formats `<prefix>_<key_id>_<secret>` and `<prefix>_pat_<token_id>_<secret>` are split on underscores. If `key_id`, `token_id`, or `secret` can contain underscores, a simple `strings.SplitN` with a fixed count is required. Specifying the exact format (e.g., key_id is a UUID with no underscores, secret is a fixed-length hex string) removes ambiguity for the implementer.",
+          "options": [
+            "key_id and token_id are UUIDs (no underscores); secret is a fixed-length hex string \u2014 use SplitN with count=3 for API keys and count=4 for PATs",
+            "Use a fixed-position split based on known lengths of each component",
+            "Specify the exact delimiter strategy explicitly in the Functional Requirements"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the PermissionRegistry explicitly document its concurrency guarantees and the synchronization mechanism to be used?",
+          "context": "The Glossary describes the PermissionRegistry as 'thread-safe' but the interface definition and implementation notes do not mention sync.RWMutex or any other mechanism. If Register() is only called at server startup (before requests are served) and IsValid()/List() are called concurrently during request handling, the concurrency model should be stated explicitly to guide the implementer.",
+          "options": [
+            "Add a note that Register() is only called at startup before the server begins serving requests, so no locking is required at call time",
+            "Require sync.RWMutex for full concurrent read/write safety and document this in the interface",
+            "Leave as-is \u2014 the implementer can choose the appropriate synchronization strategy"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

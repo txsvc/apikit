@@ -1,0 +1,1284 @@
+{
+  "$schema": null,
+  "spec_id": "05",
+  "spec_name": "auth_middleware",
+  "schema_version": 1,
+  "introduction": "This specification defines the authentication and authorization middleware for apikit, which intercepts every request to protected endpoints, validates Bearer token credentials against the database, enforces role-based access control, and injects authenticated user context into the request for downstream handlers. Note: requirements referencing Echo v4 and internal db APIs are based on PRD descriptions and should be cross-checked against installed library versions before implementation.",
+  "glossary": {
+    "API key": "A user-scoped credential in the format `<prefix>_<key_id>_<secret>`, issued via OAuth login. Validated by `key_id` lookup and secret hash comparison.",
+    "APIError": "The standard error-response helper from Server Core that produces a consistent JSON error envelope.",
+    "APIGroup": "The Echo route group under the API mount point to which the auth middleware is applied, protecting all routes registered on it.",
+    "Admin token": "A break-glass infrastructure credential in the format `<prefix>_admin_<64 hex>` for emergency access. Validated by SHA-256 hash comparison against the `admin_config` table.",
+    "AuthInfo": "The struct injected into the Echo request context by the auth middleware, containing credential type, user ID, role, and permissions.",
+    "Bearer token": "The authentication scheme used by apikit. Tokens are passed in the `Authorization: Bearer <token>` header.",
+    "GetAuthInfo": "Context helper that retrieves the AuthInfo struct from the Echo request context.",
+    "GetUserID": "Convenience context helper that returns the authenticated user's UUID from the request context.",
+    "IsAdmin": "Context helper that returns true if the authenticated credential has admin-level access.",
+    "NewAuthMiddleware": "The constructor function that creates the Echo middleware function for authentication and authorization.",
+    "PAT": "A user-created, fine-grained credential in the format `<prefix>_pat_<token_id>_<secret>`. Validated by `token_id` lookup, secret hash comparison, and permission check.",
+    "PermissionRegistry": "A thread-safe registry of valid `resource_type:action` pairs used for PAT permission validation. Pre-populated with built-in permissions; extensible by consuming projects.",
+    "RequireAdmin": "Authorization helper that returns HTTP 403 if the authenticated credential does not have admin-level access.",
+    "RequireOwnerOrAdmin": "Authorization helper that returns HTTP 403 if the authenticated user is neither the resource owner nor an admin.",
+    "RequirePermission": "Authorization helper that returns HTTP 403 if a PAT credential lacks the specified permission.",
+    "TokenPrefix": "The build-time configurable variable `apikit.TokenPrefix` (default `ak`) used to identify and parse all credential types.",
+    "action": "A string identifier for an operation on a resource type (e.g., `read`, `manage`) used in PAT permission entries.",
+    "admin_config": "Database table storing singleton server state including `admin_token_hash`.",
+    "admin_token_hash": "The column in `admin_config` where `key = 'admin_token_hash'` stores the SHA-256 hash of the admin token.",
+    "api_keys": "Database table storing API key metadata and secret hashes.",
+    "constant-time comparison": "Using `crypto/subtle.ConstantTimeCompare` for hash comparisons to prevent timing side-channel attacks.",
+    "credential type": "One of three token formats: admin token, API key, or PAT. Detected by examining the token's format prefix.",
+    "crypto/subtle.ConstantTimeCompare": "Go standard library function for constant-time byte-slice comparison, used to prevent timing side-channel attacks during hash verification.",
+    "db.ErrNotFound": "The sentinel error returned by the database layer when a queried row does not exist.",
+    "expires_at": "A nullable timestamp column in `api_keys` and `pats`; non-NULL indicates when the credential expires.",
+    "hashToken": "Internal function that computes the SHA-256 hash of an input string and returns it as a lowercase hex-encoded string.",
+    "key_id": "The plaintext identifier component of an API key used to look up the credential row in `api_keys`.",
+    "parseToken": "Internal function that extracts the credential type and components from a raw Bearer token string.",
+    "pats": "Database table storing PAT metadata, secret hashes, and permissions.",
+    "resource_type": "A string identifier for a category of resources (e.g., `users`, `keys`) used in PAT permission entries.",
+    "revoked_at": "A nullable timestamp column in `api_keys` and `pats`; non-NULL indicates the credential has been revoked.",
+    "secret_hash": "The SHA-256 hash of a credential's secret portion, stored in `api_keys` or `pats` for comparison.",
+    "status": "A column in the `users` table indicating whether the user is active or blocked.",
+    "token_id": "The plaintext identifier component of a PAT used to look up the credential row in `pats`.",
+    "user_id": "The UUID foreign key in `api_keys` and `pats` linking a credential to its owning user in the `users` table.",
+    "users": "Database table storing user profiles including role and status.",
+    "\"admin\"": "String value representing the admin role in the users table.",
+    "\"admin_token\"": "String literal identifying the admin token credential type in AuthInfo.",
+    "\"api_key\"": "String literal identifying the API key credential type in AuthInfo.",
+    "\"blocked\"": "String value for the blocked status in the users table.",
+    "\"credential expired\"": "Error message returned (HTTP 401) when a credential's expires_at has passed.",
+    "\"credential revoked\"": "Error message returned (HTTP 401) when a credential's revoked_at is not NULL.",
+    "\"forbidden\"": "Error message returned (HTTP 403) when a credential lacks required authorization level.",
+    "\"insufficient permissions\"": "Error message returned (HTTP 403) when a PAT lacks the required resource_type:action permission.",
+    "\"internal server error\"": "Error message returned (HTTP 500) when an unexpected database or server error occurs.",
+    "\"invalid authorization header format\"": "Error message returned (HTTP 401) when the Authorization header does not use the Bearer scheme.",
+    "\"invalid credentials\"": "Generic error message returned (HTTP 401) when credential validation fails (hash mismatch or key not found).",
+    "\"missing authorization header\"": "Error message returned (HTTP 401) when the Authorization header is absent or empty.",
+    "\"missing token\"": "Error message returned (HTTP 401) when the Authorization header is 'Bearer ' with no token following.",
+    "\"pat\"": "String literal identifying the PAT credential type in AuthInfo.",
+    "\"unrecognized token format\"": "Error message returned (HTTP 401) when the token does not match any known credential format.",
+    "\"user is blocked\"": "Error message returned (HTTP 403) when the authenticated user's status is blocked.",
+    "*PermissionRegistry": "Pointer to the PermissionRegistry struct, passed to NewAuthMiddleware for PAT permission validation.",
+    "*db.DB": "Pointer to the database handle from internal/db, passed to NewAuthMiddleware for credential lookups.",
+    "/auth/callback": "OAuth callback endpoint, outside the auth middleware scope (public).",
+    "/auth/providers": "OAuth provider listing endpoint, outside the auth middleware scope (public).",
+    "/healthz": "Liveness probe endpoint, outside the auth middleware scope (public).",
+    "/readyz": "Readiness probe endpoint, outside the auth middleware scope (public).",
+    "/version": "Version endpoint, outside the auth middleware scope (public).",
+    "<TokenPrefix>_<key_id>_<secret>": "API key token format using the build-time TokenPrefix variable.",
+    "<TokenPrefix>_admin_<64 hex chars>": "Admin token format using the build-time TokenPrefix variable.",
+    "<TokenPrefix>_pat_": "PAT token format prefix using the build-time TokenPrefix variable.",
+    "<TokenPrefix>_pat_<token_id>_<secret>": "PAT token format using the build-time TokenPrefix variable.",
+    "<prefix>_<key_id>_<secret>": "API key token format using the configurable prefix.",
+    "<prefix>_admin_": "Format prefix for admin tokens.",
+    "<prefix>_pat_": "Format prefix for personal access tokens.",
+    "==": "Go equality operator; must not be used for hash comparisons (use constant-time comparison instead).",
+    "AuthInfo.CredentialType": "The CredentialType field of the AuthInfo struct, one of 'admin_token', 'api_key', or 'pat'.",
+    "AuthInfo.Role": "The Role field of the AuthInfo struct, either 'admin' or 'user'.",
+    "AuthInfo.UserID": "The UserID field of the AuthInfo struct, containing the user's UUID (empty for admin token).",
+    "AuthInfo{CredentialType: \"admin_token\", UserID: \"\", Role: \"admin\"}": "Example AuthInfo populated after successful admin token authentication.",
+    "AuthInfo{CredentialType: \"api_key\", UserID: <uuid>, Role: <role>, KeyID: <key_id>}": "Example AuthInfo populated after successful API key authentication.",
+    "AuthInfo{CredentialType: \"pat\", UserID: <uuid>, Role: <role>, TokenID: <token_id>, Permissions: <[]string>}": "Example AuthInfo populated after successful PAT authentication.",
+    "Authorization": "The HTTP request header carrying the Bearer token for authentication.",
+    "Authorization: Bearer ": "The Authorization header value with Bearer scheme but no token (empty token case).",
+    "Authorization: Bearer <token>": "The expected format of the Authorization header for apikit authentication.",
+    "Bearer": "The HTTP authentication scheme used by apikit (case-sensitive).",
+    "Bearer ": "The exact prefix string (including trailing space) checked in the Authorization header.",
+    "CredentialType": "A field in AuthInfo identifying the type of credential used: admin_token, api_key, or pat.",
+    "IsValid": "Method on PermissionRegistry that returns true if a resource_type:action pair is registered.",
+    "List": "Method on PermissionRegistry that returns a sorted slice of all registered permission strings.",
+    "PermissionRegistry.Register": "Method that adds a new resource_type:action permission to the registry.",
+    "Register": "Method on PermissionRegistry to add a new resource_type:action permission.",
+    "Role": "A field in AuthInfo and users table indicating the user's role (admin or user).",
+    "UserID": "A field in AuthInfo containing the authenticated user's UUID.",
+    "authInfoKey": "The unexported context key constant used to store and retrieve AuthInfo in the Echo request context.",
+    "bytes.Equal": "Go standard library function for byte slice equality; must not be used for hash comparisons (use constant-time comparison instead).",
+    "contextKey": "An unexported string type used for context keys to avoid collisions with other packages.",
+    "echo.MiddlewareFunc": "The Echo v4 middleware function type returned by NewAuthMiddleware.",
+    "encoding/hex": "Go standard library package used for hex-encoding SHA-256 hash output.",
+    "keys:manage": "Built-in PAT permission allowing management of API keys.",
+    "keys:read": "Built-in PAT permission allowing viewing of API keys.",
+    "orgs:read": "Built-in PAT permission allowing viewing of organizations and memberships.",
+    "pat_": "The literal string segment in the PAT token format that distinguishes PATs from API keys.",
+    "resourceOwnerID": "Parameter in RequireOwnerOrAdmin identifying the UUID of the resource's owning user.",
+    "resource_type:action": "The format of PAT permission strings, combining a resource type and action with a colon separator.",
+    "secret": "The secret portion of an API key or PAT credential, hashed with SHA-256 for storage and verification.",
+    "sha256.Sum256": "Go standard library function from crypto/sha256 that computes the SHA-256 hash of input bytes.",
+    "status = \"blocked\"": "User status condition checked after credential validation; triggers HTTP 403 rejection.",
+    "tokens:manage": "Built-in PAT permission allowing management of personal access tokens.",
+    "tokens:read": "Built-in PAT permission allowing viewing of personal access tokens.",
+    "users:read": "Built-in PAT permission allowing viewing of user profiles.",
+    "{\"error\": {\"code\": <status>, \"message\": <message>}}": "The standard JSON error envelope format used by all error responses via APIError.",
+    "db.DB": "The database handle type from the internal/db package, wrapping *sql.DB."
+  },
+  "requirements": [
+    {
+      "id": "05-REQ-1",
+      "title": "Middleware Registration and Constructor",
+      "user_story": {
+        "role": "API server operator",
+        "goal": "register the auth middleware on the protected API route group",
+        "benefit": "every request to a protected endpoint is authenticated before the handler runs"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "NewAuthMiddleware",
+          "action": "accepts a `*db.DB` handle and a `*PermissionRegistry` and returns an `echo.MiddlewareFunc` that wraps the next handler with authentication logic",
+          "return_contract": "returns an `echo.MiddlewareFunc`; panics with a descriptive message if either argument is nil"
+        },
+        {
+          "id": "05-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "is applied to the `APIGroup` Echo group so that all routes mounted under that group are protected",
+          "return_contract": null
+        },
+        {
+          "id": "05-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "does not intercept requests to health probe paths (`/healthz`, `/readyz`, `/version`) or OAuth paths (`/auth/providers`, `/auth/callback`), which are registered on an unprotected group",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "NewAuthMiddleware",
+          "action": "panics immediately with a descriptive message rather than returning a partially-constructed middleware that fails at request time",
+          "return_contract": "panic; no `echo.MiddlewareFunc` is returned",
+          "error_condition": "either the `*db.DB` or `*PermissionRegistry` argument is nil"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-2",
+      "title": "Bearer Token Extraction",
+      "user_story": {
+        "role": "client application",
+        "goal": "send a credential in the Authorization header",
+        "benefit": "the middleware can identify and validate my credential before the handler executes"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "rejects the request with HTTP 401 and message `\"missing authorization header\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "trigger": "receives a request with a missing or empty `Authorization` header"
+        },
+        {
+          "id": "05-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "rejects the request with HTTP 401 and message `\"invalid authorization header format\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "trigger": "receives a request whose `Authorization` header does not begin with the exact prefix `Bearer ` (case-sensitive, single space)"
+        },
+        {
+          "id": "05-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "rejects the request with HTTP 401 and message `\"missing token\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "trigger": "receives a request with `Authorization: Bearer ` (Bearer followed by a single space and nothing else)"
+        },
+        {
+          "id": "05-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "extracts the token string after the `Bearer ` prefix and forwards it to credential type detection",
+          "return_contract": null,
+          "trigger": "receives a request with a well-formed `Authorization: Bearer <token>` header"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "treats this as an invalid format and returns HTTP 401 with message `\"invalid authorization header format\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "`Authorization` header value is `Bearer` with no space or token (no trailing space)"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-3",
+      "title": "Credential Type Detection",
+      "user_story": {
+        "role": "auth middleware",
+        "goal": "determine which validation path to follow for a given token",
+        "benefit": "the correct credential-specific validation logic is applied and token formats cannot be misidentified"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "parseToken",
+          "action": "checks for the `<prefix>_admin_` pattern first, then `<prefix>_pat_`, then falls back to the API key pattern `<prefix>_<key_id>_<secret>`, using `TokenPrefix` for the prefix value",
+          "return_contract": "returns credential type string (`\"admin_token\"`, `\"api_key\"`, or `\"pat\"`) and parsed components slice, or non-nil error"
+        },
+        {
+          "id": "05-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "parseToken",
+          "action": "returns credential type `\"admin_token\"` and the full token as the sole component",
+          "return_contract": "returns `(\"admin_token\", []string{fullToken}, nil)`",
+          "trigger": "given a token matching `<TokenPrefix>_admin_<64 hex chars>`"
+        },
+        {
+          "id": "05-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "parseToken",
+          "action": "returns credential type `\"pat\"` with `token_id` and `secret` as components",
+          "return_contract": "returns `(\"pat\", []string{tokenID, secret}, nil)`",
+          "trigger": "given a token matching `<TokenPrefix>_pat_<token_id>_<secret>`"
+        },
+        {
+          "id": "05-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "parseToken",
+          "action": "returns credential type `\"api_key\"` with `key_id` and `secret` as components",
+          "return_contract": "returns `(\"api_key\", []string{keyID, secret}, nil)`",
+          "trigger": "given a token matching `<TokenPrefix>_<key_id>_<secret>` that is not an admin or PAT token"
+        },
+        {
+          "id": "05-REQ-3.5",
+          "ears_pattern": "unwanted",
+          "system": "parseToken",
+          "action": "returns an error; auth middleware responds with HTTP 401 and message `\"unrecognized token format\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "token does not match any recognized pattern"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "parseToken",
+          "action": "returns a non-nil error indicating unrecognized format",
+          "return_contract": "non-nil error; caller responds HTTP 401",
+          "error_condition": "token is an empty string"
+        },
+        {
+          "id": "05-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "parseToken",
+          "action": "returns a non-nil error indicating unrecognized format",
+          "return_contract": "non-nil error; caller responds HTTP 401",
+          "error_condition": "token begins with a prefix other than `TokenPrefix`"
+        },
+        {
+          "id": "05-REQ-3.E3",
+          "ears_pattern": "event_driven",
+          "system": "parseToken",
+          "action": "correctly identifies the token as `\"pat\"` due to detection-order precedence, not `\"api_key\"`",
+          "return_contract": "returns `(\"pat\", components, nil)`",
+          "trigger": "given a token starting with `<TokenPrefix>_pat_` that could also superficially match the API key pattern"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-4",
+      "title": "Admin Token Validation",
+      "user_story": {
+        "role": "infrastructure operator",
+        "goal": "authenticate using the admin token for break-glass access",
+        "benefit": "I can perform emergency administrative operations without a user account"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "validates that the hex portion of an admin token is exactly 64 characters of valid hexadecimal before performing any database lookup",
+          "return_contract": "HTTP 401 with `\"invalid credentials\"` if validation fails"
+        },
+        {
+          "id": "05-REQ-4.2",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "computes the SHA-256 hash of the full admin token string (including prefix) using `hashToken` and compares it via `crypto/subtle.ConstantTimeCompare` against the `admin_token_hash` value retrieved from the `admin_config` table",
+          "return_contract": "proceeds to context injection on match; returns HTTP 401 with `\"invalid credentials\"` on mismatch"
+        },
+        {
+          "id": "05-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "injects `AuthInfo{CredentialType: \"admin_token\", UserID: \"\", Role: \"admin\"}` into the request context and calls the next handler",
+          "return_contract": "next handler is invoked with populated context",
+          "trigger": "admin token hash matches the stored `admin_token_hash`"
+        },
+        {
+          "id": "05-REQ-4.4",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"invalid credentials\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "the `admin_token_hash` row is missing from `admin_config` (returns `db.ErrNotFound`)"
+        },
+        {
+          "id": "05-REQ-4.5",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"invalid credentials\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "admin token hash does not match the stored `admin_token_hash`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "logs the error and returns HTTP 500 with message `\"internal server error\"`",
+          "return_contract": "HTTP 500 JSON error envelope via `APIError`",
+          "error_condition": "database query for `admin_config` fails with an error other than `db.ErrNotFound`"
+        },
+        {
+          "id": "05-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with `\"invalid credentials\"` without performing a database lookup",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "admin token hex suffix is fewer or more than 64 characters"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-5",
+      "title": "API Key Validation",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "use my API key to access protected endpoints",
+        "benefit": "I can make authenticated API requests without re-entering my credentials"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "extracts `key_id` and `secret` from the API key token, queries the `api_keys` table by `key_id`, and returns HTTP 401 with `\"invalid credentials\"` if no matching row is found (returns `db.ErrNotFound`)",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError` on not found"
+        },
+        {
+          "id": "05-REQ-5.2",
+          "ears_pattern": "state_driven",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"credential revoked\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "state": "`revoked_at` is not NULL in the matched `api_keys` row"
+        },
+        {
+          "id": "05-REQ-5.3",
+          "ears_pattern": "complex_event",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"credential expired\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "trigger": "the current time is past `expires_at`",
+          "condition": "`expires_at` is not NULL in the matched `api_keys` row"
+        },
+        {
+          "id": "05-REQ-5.4",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "computes the SHA-256 hash of the `secret` portion using `hashToken` and compares it via `crypto/subtle.ConstantTimeCompare` against `secret_hash` from the `api_keys` row; returns HTTP 401 with `\"invalid credentials\"` on mismatch",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError` on mismatch"
+        },
+        {
+          "id": "05-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "queries the `users` table by `user_id` from the API key row and checks the user's `status`; returns HTTP 403 with `\"user is blocked\"` if `status` is `\"blocked\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError` if blocked"
+        },
+        {
+          "id": "05-REQ-5.6",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "injects `AuthInfo{CredentialType: \"api_key\", UserID: <uuid>, Role: <role>, KeyID: <key_id>}` into the request context and calls the next handler",
+          "return_contract": "next handler is invoked with populated context",
+          "trigger": "API key passes all validation checks and the user is not blocked"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "logs the error and returns HTTP 500 with `\"internal server error\"`",
+          "return_contract": "HTTP 500 JSON error envelope via `APIError`",
+          "error_condition": "database query for `api_keys` fails with a non-`db.ErrNotFound` error"
+        },
+        {
+          "id": "05-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "logs the error and returns HTTP 500 with `\"internal server error\"`",
+          "return_contract": "HTTP 500 JSON error envelope via `APIError`",
+          "error_condition": "database query for `users` fails after successful API key lookup"
+        },
+        {
+          "id": "05-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with `\"unrecognized token format\"` without performing a database lookup",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "API key token cannot be split into exactly two components (`key_id` and `secret`)"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-6",
+      "title": "PAT Validation",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "use a personal access token with fine-grained permissions to access specific resources",
+        "benefit": "I can delegate scoped access to applications without granting full account access"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "extracts `token_id` and `secret` from the PAT, queries the `pats` table by `token_id`, and returns HTTP 401 with `\"invalid credentials\"` if no matching row is found (returns `db.ErrNotFound`)",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError` on not found"
+        },
+        {
+          "id": "05-REQ-6.2",
+          "ears_pattern": "state_driven",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"credential revoked\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "state": "`revoked_at` is not NULL in the matched `pats` row"
+        },
+        {
+          "id": "05-REQ-6.3",
+          "ears_pattern": "complex_event",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with message `\"credential expired\"`",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "trigger": "the current time is past `expires_at`",
+          "condition": "`expires_at` is not NULL in the matched `pats` row"
+        },
+        {
+          "id": "05-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "computes the SHA-256 hash of the `secret` portion using `hashToken` and compares it via `crypto/subtle.ConstantTimeCompare` against `secret_hash` from the `pats` row; returns HTTP 401 with `\"invalid credentials\"` on mismatch",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError` on mismatch"
+        },
+        {
+          "id": "05-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "queries the `users` table by `user_id` from the PAT row and checks the user's `status`; returns HTTP 403 with `\"user is blocked\"` if `status` is `\"blocked\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError` if blocked"
+        },
+        {
+          "id": "05-REQ-6.6",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "injects `AuthInfo{CredentialType: \"pat\", UserID: <uuid>, Role: <role>, TokenID: <token_id>, Permissions: <[]string>}` into the request context and calls the next handler",
+          "return_contract": "next handler is invoked with populated context",
+          "trigger": "PAT passes all validation checks and the user is not blocked"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "logs the error and returns HTTP 500 with `\"internal server error\"`",
+          "return_contract": "HTTP 500 JSON error envelope via `APIError`",
+          "error_condition": "database query for `pats` fails with a non-`db.ErrNotFound` error"
+        },
+        {
+          "id": "05-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "logs the error and returns HTTP 500 with `\"internal server error\"`",
+          "return_contract": "HTTP 500 JSON error envelope via `APIError`",
+          "error_condition": "database query for `users` fails after successful PAT lookup"
+        },
+        {
+          "id": "05-REQ-6.E3",
+          "ears_pattern": "unwanted",
+          "system": "auth middleware",
+          "action": "returns HTTP 401 with `\"unrecognized token format\"` without performing a database lookup",
+          "return_contract": "HTTP 401 JSON error envelope via `APIError`",
+          "error_condition": "PAT token cannot be split into exactly two components (`token_id` and `secret`) after removing the `pat_` infix"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-7",
+      "title": "Role-Based Access Control Helpers",
+      "user_story": {
+        "role": "handler developer",
+        "goal": "call a single helper function to enforce access control",
+        "benefit": "authorization logic is consistent and not duplicated across handlers"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "RequireAdmin",
+          "action": "returns nil, allowing the handler to proceed",
+          "return_contract": "returns `nil`",
+          "trigger": "called from a handler when the authenticated credential is an admin token or an admin-role API key"
+        },
+        {
+          "id": "05-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "RequireAdmin",
+          "action": "returns HTTP 403 with message `\"forbidden\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError`",
+          "trigger": "called from a handler when the authenticated credential is a regular-user API key or a PAT"
+        },
+        {
+          "id": "05-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "RequireOwnerOrAdmin",
+          "action": "returns nil, allowing the handler to proceed",
+          "return_contract": "returns `nil`",
+          "trigger": "called with a `resourceOwnerID` that matches the authenticated user's UUID or when the credential is admin-level"
+        },
+        {
+          "id": "05-REQ-7.4",
+          "ears_pattern": "event_driven",
+          "system": "RequireOwnerOrAdmin",
+          "action": "returns HTTP 403 with message `\"forbidden\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError`",
+          "trigger": "called with a `resourceOwnerID` that does not match the authenticated user's UUID and the credential is not admin-level"
+        },
+        {
+          "id": "05-REQ-7.5",
+          "ears_pattern": "event_driven",
+          "system": "RequirePermission",
+          "action": "returns nil without checking PAT permissions, because these credential types carry implicit full permissions for their access level",
+          "return_contract": "returns `nil`",
+          "trigger": "called when the authenticated credential is an admin token or any API key (admin or user role)"
+        },
+        {
+          "id": "05-REQ-7.6",
+          "ears_pattern": "event_driven",
+          "system": "RequirePermission",
+          "action": "returns nil, allowing the handler to proceed",
+          "return_contract": "returns `nil`",
+          "trigger": "called when the authenticated credential is a PAT that includes the requested `resource_type:action` in its Permissions list"
+        },
+        {
+          "id": "05-REQ-7.7",
+          "ears_pattern": "event_driven",
+          "system": "RequirePermission",
+          "action": "returns HTTP 403 with message `\"insufficient permissions\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError`",
+          "trigger": "called when the authenticated credential is a PAT that does not include the requested `resource_type:action` in its Permissions list"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "RequireAdmin",
+          "action": "treats the request as unauthenticated and returns HTTP 403 with `\"forbidden\"`",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError`",
+          "error_condition": "no `AuthInfo` is present in the request context (GetAuthInfo returns nil)"
+        },
+        {
+          "id": "05-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "RequireOwnerOrAdmin",
+          "action": "treats the comparison as non-matching (empty string does not equal any valid UUID) and falls through to the admin check",
+          "return_contract": "HTTP 403 if not admin, `nil` if admin",
+          "error_condition": "`resourceOwnerID` argument is an empty string"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-8",
+      "title": "Blocked User Rejection",
+      "user_story": {
+        "role": "system administrator",
+        "goal": "block a user account and have that block immediately enforced on all requests",
+        "benefit": "compromised or policy-violating accounts cannot use any credential to access the API"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-8.1",
+          "ears_pattern": "state_driven",
+          "system": "auth middleware",
+          "action": "returns HTTP 403 with message `\"user is blocked\"` after credential validation succeeds but before injecting context or calling the next handler",
+          "return_contract": "HTTP 403 JSON error envelope via `APIError`",
+          "state": "the `users` table records `status = \"blocked\"` for the credential's owning user"
+        },
+        {
+          "id": "05-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "applies the blocked user check to both API key and PAT credential types; admin tokens are not subject to this check because they are not associated with a user",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-8.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "performs the blocked user check after validating the credential secret hash, so a blocked user with an invalid secret still receives `\"invalid credentials\"` rather than `\"user is blocked\"`, preventing credential probing via different error responses",
+          "return_contract": "HTTP 401 for invalid credentials regardless of block status"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-9",
+      "title": "Permission Registry",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "register custom resource types and actions in the permission registry at startup",
+        "benefit": "PAT permission validation works for my application's domain-specific operations without modifying apikit"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "NewPermissionRegistry",
+          "action": "creates and returns a `*PermissionRegistry` pre-populated with the 6 built-in permissions: `users:read`, `orgs:read`, `keys:read`, `keys:manage`, `tokens:read`, `tokens:manage`",
+          "return_contract": "returns `*PermissionRegistry` with 6 entries; `List()` returns all 6 in sorted order"
+        },
+        {
+          "id": "05-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "PermissionRegistry.Register",
+          "action": "adds the `resource_type:action` pair to the registry and returns nil",
+          "return_contract": "returns `nil`",
+          "trigger": "called with a valid `resource_type` and `action` (non-empty, lowercase letters/digits/underscores only) that has not been registered before"
+        },
+        {
+          "id": "05-REQ-9.3",
+          "ears_pattern": "unwanted",
+          "system": "PermissionRegistry.Register",
+          "action": "returns a non-nil error indicating a duplicate registration programming error",
+          "return_contract": "returns non-nil `error`",
+          "error_condition": "the same `resource_type:action` pair is registered a second time"
+        },
+        {
+          "id": "05-REQ-9.4",
+          "ears_pattern": "event_driven",
+          "system": "PermissionRegistry.IsValid",
+          "action": "returns true if the pair is registered, false otherwise",
+          "return_contract": "returns `bool`",
+          "trigger": "queried with a `resource_type:action` pair"
+        },
+        {
+          "id": "05-REQ-9.5",
+          "ears_pattern": "ubiquitous",
+          "system": "PermissionRegistry.List",
+          "action": "returns all registered `resource_type:action` strings as a sorted slice in ascending lexicographic order",
+          "return_contract": "returns `[]string` sorted ascending"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "PermissionRegistry.Register",
+          "action": "returns a non-nil error describing the validation failure without modifying the registry",
+          "return_contract": "returns non-nil `error`",
+          "error_condition": "`resource_type` or `action` is an empty string or contains characters other than lowercase letters, digits, and underscores"
+        },
+        {
+          "id": "05-REQ-9.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "PermissionRegistry",
+          "action": "is safe for concurrent use; `Register`, `IsValid`, and `List` may be called from multiple goroutines without data races",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-10",
+      "title": "Request Context Injection and Access Helpers",
+      "user_story": {
+        "role": "handler developer",
+        "goal": "read authenticated identity information from the request context without re-validating credentials",
+        "benefit": "handlers stay focused on business logic without duplicating authentication concerns"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "auth middleware",
+          "action": "stores a fully-populated `AuthInfo` struct into the Echo request context under the unexported `authInfoKey` context key",
+          "return_contract": null,
+          "trigger": "authentication succeeds for any credential type"
+        },
+        {
+          "id": "05-REQ-10.2",
+          "ears_pattern": "event_driven",
+          "system": "GetAuthInfo",
+          "action": "returns a pointer to the `AuthInfo` struct",
+          "return_contract": "returns `*AuthInfo` (non-nil)",
+          "trigger": "called on a context that contains an `AuthInfo` injected by the middleware"
+        },
+        {
+          "id": "05-REQ-10.3",
+          "ears_pattern": "event_driven",
+          "system": "GetAuthInfo",
+          "action": "returns nil without panicking",
+          "return_contract": "returns `nil`",
+          "trigger": "called on a context that does not contain `AuthInfo` (e.g., in a test without the middleware)"
+        },
+        {
+          "id": "05-REQ-10.4",
+          "ears_pattern": "ubiquitous",
+          "system": "GetUserID",
+          "action": "returns the authenticated user's UUID string from the context `AuthInfo`, or an empty string if `AuthInfo` is nil or `UserID` is empty (admin token case)",
+          "return_contract": "returns `string` (possibly empty)"
+        },
+        {
+          "id": "05-REQ-10.5",
+          "ears_pattern": "ubiquitous",
+          "system": "IsAdmin",
+          "action": "returns true if `AuthInfo` is non-nil and `Role` equals `\"admin\"` or `CredentialType` equals `\"admin_token\"`; returns false otherwise",
+          "return_contract": "returns `bool`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-10.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "uses the unexported `contextKey` type for the context key so that external packages cannot accidentally overwrite or read the `AuthInfo` with a plain string key",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-11",
+      "title": "Constant-Time Hash Comparison",
+      "user_story": {
+        "role": "security engineer",
+        "goal": "ensure that hash comparison cannot leak information about stored secrets via timing differences",
+        "benefit": "the system is resistant to timing side-channel attacks"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "uses `crypto/subtle.ConstantTimeCompare` for every hash comparison — admin token hash, API key `secret_hash`, and PAT `secret_hash` — and never uses `==` or `bytes.Equal` for hash comparison",
+          "return_contract": null
+        },
+        {
+          "id": "05-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "hashToken",
+          "action": "computes `sha256.Sum256` of the input bytes and returns the result as a lowercase hex-encoded string using `encoding/hex`",
+          "return_contract": "returns a 64-character lowercase hex string"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-11.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "converts both the computed hash and the stored hash to the same representation (both as hex-encoded byte slices) before passing them to `crypto/subtle.ConstantTimeCompare` to ensure the comparison is valid and length-safe",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-12",
+      "title": "Error Response Format",
+      "user_story": {
+        "role": "API client developer",
+        "goal": "receive consistent, parseable error responses when authentication fails",
+        "benefit": "my client code can reliably handle auth errors without special-casing different response shapes"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "produces all authentication and authorization error responses using the `APIError` helper from Server Core, resulting in the standard JSON envelope `{\"error\": {\"code\": <status>, \"message\": <message>}}`",
+          "return_contract": "JSON object with `error.code` (integer) and `error.message` (string) fields"
+        },
+        {
+          "id": "05-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "auth middleware",
+          "action": "uses only the approved error messages: `\"missing authorization header\"`, `\"invalid authorization header format\"`, `\"missing token\"`, `\"unrecognized token format\"`, `\"invalid credentials\"`, `\"credential revoked\"`, `\"credential expired\"`, `\"user is blocked\"`, `\"forbidden\"`, `\"insufficient permissions\"`, `\"internal server error\"` — no other messages are exposed to clients",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "05-PROP-1",
+      "title": "Detection order prevents misclassification",
+      "for_any": "token string that begins with `<TokenPrefix>_pat_`",
+      "invariant": "`parseToken` always returns credential type `\"pat\"` and never returns `\"api_key\"` for such a token, regardless of content after the infix",
+      "validates": [
+        "05-REQ-3.1",
+        "05-REQ-3.3",
+        "05-REQ-3.E3"
+      ]
+    },
+    {
+      "id": "05-PROP-2",
+      "title": "Constant-time comparison for all hash checks",
+      "for_any": "credential validation request",
+      "invariant": "every hash comparison in the auth middleware uses `crypto/subtle.ConstantTimeCompare`; no hash comparison is performed with `==` or `bytes.Equal`",
+      "validates": [
+        "05-REQ-11.1",
+        "05-REQ-4.2",
+        "05-REQ-5.4",
+        "05-REQ-6.4"
+      ]
+    },
+    {
+      "id": "05-PROP-3",
+      "title": "Blocked user always receives 403 after valid credential",
+      "for_any": "request carrying a non-revoked, non-expired API key or PAT whose owning user has `status = \"blocked\"`",
+      "invariant": "the auth middleware returns HTTP 403 with `\"user is blocked\"` and never calls the next handler, regardless of credential type or access level",
+      "validates": [
+        "05-REQ-8.1",
+        "05-REQ-5.5",
+        "05-REQ-6.5"
+      ]
+    },
+    {
+      "id": "05-PROP-4",
+      "title": "Admin token carries no user identity",
+      "for_any": "request authenticated with an admin token",
+      "invariant": "`AuthInfo.UserID` is always an empty string and `AuthInfo.Role` is always `\"admin\"`; `GetUserID` returns an empty string",
+      "validates": [
+        "05-REQ-4.3",
+        "05-REQ-10.4"
+      ]
+    },
+    {
+      "id": "05-PROP-5",
+      "title": "Permission registry is append-only after construction",
+      "for_any": "call to `PermissionRegistry.Register` with a valid, non-duplicate permission",
+      "invariant": "`IsValid` returns true for that permission immediately after registration, and `List` includes it in sorted position; no previously registered permission is removed",
+      "validates": [
+        "05-REQ-9.2",
+        "05-REQ-9.4",
+        "05-REQ-9.5"
+      ]
+    },
+    {
+      "id": "05-PROP-6",
+      "title": "PAT permission check is bypassed for non-PAT credentials",
+      "for_any": "call to `RequirePermission` when `AuthInfo.CredentialType` is `\"admin_token\"` or `\"api_key\"`",
+      "invariant": "`RequirePermission` always returns nil without inspecting the permissions list",
+      "validates": [
+        "05-REQ-7.5"
+      ]
+    },
+    {
+      "id": "05-PROP-7",
+      "title": "No handler is invoked without successful authentication",
+      "for_any": "request to any route on the `APIGroup` that fails token extraction, parsing, or validation",
+      "invariant": "the auth middleware returns an error response and does not call the next handler function; `AuthInfo` is never injected into the context on failure",
+      "validates": [
+        "05-REQ-2.1",
+        "05-REQ-2.2",
+        "05-REQ-2.3",
+        "05-REQ-3.5",
+        "05-REQ-4.5",
+        "05-REQ-5.1",
+        "05-REQ-6.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "05-PATH-1",
+      "title": "Successful API key authentication and context injection",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends HTTP request with `Authorization: Bearer <TokenPrefix>_<key_id>_<secret>` to a protected endpoint on `APIGroup`"
+        },
+        {
+          "actor": "Echo router",
+          "action": "routes the request through the middleware chain; auth middleware intercepts before the handler"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "reads the `Authorization` header and extracts the token string after `Bearer `"
+        },
+        {
+          "actor": "parseToken",
+          "action": "identifies the token as `\"api_key\"` and returns `key_id` and `secret` components"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `api_keys` table by `key_id`; record found, `revoked_at` is NULL, `expires_at` is NULL or in the future"
+        },
+        {
+          "actor": "hashToken",
+          "action": "computes SHA-256 of `secret`; `crypto/subtle.ConstantTimeCompare` confirms it matches `secret_hash`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `users` table by `user_id`; user `status` is not `\"blocked\"`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "injects `AuthInfo{CredentialType: \"api_key\", UserID: <uuid>, Role: <role>, KeyID: <key_id>}` into the Echo request context"
+        },
+        {
+          "actor": "Handler",
+          "action": "calls `GetAuthInfo(c)` to read the injected `AuthInfo` and processes the request"
+        },
+        {
+          "actor": "Echo framework",
+          "action": "returns HTTP 200 with handler response to the client"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-2",
+      "title": "PAT authentication with permission check",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends HTTP request with `Authorization: Bearer <TokenPrefix>_pat_<token_id>_<secret>` to a resource endpoint"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "extracts and passes token to `parseToken`; receives `\"pat\"` type with `token_id` and `secret`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `pats` table by `token_id`; checks `revoked_at` (NULL) and `expires_at` (not expired)"
+        },
+        {
+          "actor": "hashToken",
+          "action": "computes SHA-256 of `secret`; `crypto/subtle.ConstantTimeCompare` confirms match against `secret_hash`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `users` table; user is not blocked; injects `AuthInfo` with `Permissions` list into context"
+        },
+        {
+          "actor": "Handler",
+          "action": "calls `RequirePermission(c, resourceType, action)` to verify the PAT has the needed permission"
+        },
+        {
+          "actor": "RequirePermission",
+          "action": "finds the permission in `AuthInfo.Permissions`; returns nil"
+        },
+        {
+          "actor": "Handler",
+          "action": "processes the request and returns HTTP 200"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-3",
+      "title": "Admin token break-glass authentication",
+      "steps": [
+        {
+          "actor": "Infrastructure operator",
+          "action": "sends HTTP request with `Authorization: Bearer <TokenPrefix>_admin_<64 hex chars>` to an admin-only endpoint"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "extracts token; `parseToken` identifies it as `\"admin_token\"`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "validates hex suffix is exactly 64 valid hex characters"
+        },
+        {
+          "actor": "hashToken",
+          "action": "computes SHA-256 of the full token string"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `admin_config` table for row where `key = 'admin_token_hash'`; uses `crypto/subtle.ConstantTimeCompare` to verify hash match"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "injects `AuthInfo{CredentialType: \"admin_token\", UserID: \"\", Role: \"admin\"}` into context"
+        },
+        {
+          "actor": "Handler",
+          "action": "calls `RequireAdmin(c)`; `IsAdmin` returns true; handler proceeds"
+        },
+        {
+          "actor": "Echo framework",
+          "action": "returns HTTP 200 with admin response to operator"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-4",
+      "title": "Missing Authorization header rejection",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends HTTP request to a protected endpoint with no `Authorization` header"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "reads the `Authorization` header; finds it missing or empty"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "calls `APIError` with HTTP 401 and message `\"missing authorization header\"`"
+        },
+        {
+          "actor": "Echo framework",
+          "action": "returns HTTP 401 JSON error envelope to the client; handler is never invoked"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-5",
+      "title": "Blocked user rejection after valid credential",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends HTTP request with a valid (non-expired, non-revoked) API key belonging to a blocked user"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "extracts and parses the API key token; queries `api_keys` and validates secret hash successfully"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "queries `users` table by `user_id`; finds `status = \"blocked\"`"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "calls `APIError` with HTTP 403 and message `\"user is blocked\"` before calling next handler"
+        },
+        {
+          "actor": "Echo framework",
+          "action": "returns HTTP 403 JSON error envelope to the client"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-6",
+      "title": "Consuming project registers custom permission and PAT uses it",
+      "steps": [
+        {
+          "actor": "Consuming project startup code",
+          "action": "calls `NewPermissionRegistry()` to obtain a pre-populated registry, then calls `registry.Register(\"widgets\", \"export\")` to add a custom permission"
+        },
+        {
+          "actor": "Consuming project startup code",
+          "action": "calls `NewAuthMiddleware(db, registry)` and registers the returned middleware on the Echo `APIGroup`"
+        },
+        {
+          "actor": "Client",
+          "action": "sends request with a PAT that has `widgets:export` in its permissions list"
+        },
+        {
+          "actor": "Auth middleware",
+          "action": "validates the PAT and injects `AuthInfo` with `Permissions: [\"widgets:export\"]` into context"
+        },
+        {
+          "actor": "Handler",
+          "action": "calls `RequirePermission(c, \"widgets\", \"export\")`; permission is found; handler proceeds"
+        },
+        {
+          "actor": "Echo framework",
+          "action": "returns HTTP 200 with handler response"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "05-ERR-1",
+      "condition": "Missing or empty `Authorization` header",
+      "behavior": "auth middleware returns HTTP 401 with JSON error body `{\"error\":{\"code\":401,\"message\":\"missing authorization header\"}}`",
+      "requirement_id": "05-REQ-2.1"
+    },
+    {
+      "id": "05-ERR-2",
+      "condition": "`Authorization` header present but does not start with exact string `Bearer ` (case-sensitive, one space)",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid authorization header format\"`",
+      "requirement_id": "05-REQ-2.2"
+    },
+    {
+      "id": "05-ERR-3",
+      "condition": "`Authorization` header is exactly `Bearer ` with no token following",
+      "behavior": "auth middleware returns HTTP 401 with message `\"missing token\"`",
+      "requirement_id": "05-REQ-2.3"
+    },
+    {
+      "id": "05-ERR-4",
+      "condition": "Token string does not match any of the three recognized credential patterns",
+      "behavior": "auth middleware returns HTTP 401 with message `\"unrecognized token format\"`",
+      "requirement_id": "05-REQ-3.5"
+    },
+    {
+      "id": "05-ERR-5",
+      "condition": "Admin token hash does not match stored `admin_token_hash`, or `admin_token_hash` row absent from `admin_config`",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"`",
+      "requirement_id": "05-REQ-4.5"
+    },
+    {
+      "id": "05-ERR-6",
+      "condition": "API key `key_id` not found in `api_keys` table (returns `db.ErrNotFound`)",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"`",
+      "requirement_id": "05-REQ-5.1"
+    },
+    {
+      "id": "05-ERR-7",
+      "condition": "API key secret hash does not match `secret_hash` in `api_keys`",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"`",
+      "requirement_id": "05-REQ-5.4"
+    },
+    {
+      "id": "05-ERR-8",
+      "condition": "PAT `token_id` not found in `pats` table (returns `db.ErrNotFound`)",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"`",
+      "requirement_id": "05-REQ-6.1"
+    },
+    {
+      "id": "05-ERR-9",
+      "condition": "PAT secret hash does not match `secret_hash` in `pats`",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"`",
+      "requirement_id": "05-REQ-6.4"
+    },
+    {
+      "id": "05-ERR-10",
+      "condition": "`revoked_at` is not NULL for an API key or PAT",
+      "behavior": "auth middleware returns HTTP 401 with message `\"credential revoked\"`",
+      "requirement_id": "05-REQ-5.2"
+    },
+    {
+      "id": "05-ERR-11",
+      "condition": "`expires_at` is not NULL and current time is past `expires_at` for an API key or PAT",
+      "behavior": "auth middleware returns HTTP 401 with message `\"credential expired\"`",
+      "requirement_id": "05-REQ-5.3"
+    },
+    {
+      "id": "05-ERR-12",
+      "condition": "Authenticated user's `status` in `users` table is `\"blocked\"`",
+      "behavior": "auth middleware returns HTTP 403 with message `\"user is blocked\"`",
+      "requirement_id": "05-REQ-8.1"
+    },
+    {
+      "id": "05-ERR-13",
+      "condition": "Non-admin credential attempts to call an admin-only endpoint guarded by `RequireAdmin`",
+      "behavior": "`RequireAdmin` returns HTTP 403 with message `\"forbidden\"`",
+      "requirement_id": "05-REQ-7.2"
+    },
+    {
+      "id": "05-ERR-14",
+      "condition": "Authenticated user is neither the resource owner nor an admin when `RequireOwnerOrAdmin` is called",
+      "behavior": "`RequireOwnerOrAdmin` returns HTTP 403 with message `\"forbidden\"`",
+      "requirement_id": "05-REQ-7.4"
+    },
+    {
+      "id": "05-ERR-15",
+      "condition": "PAT credential lacks the required `resource_type:action` permission when `RequirePermission` is called",
+      "behavior": "`RequirePermission` returns HTTP 403 with message `\"insufficient permissions\"`",
+      "requirement_id": "05-REQ-7.7"
+    },
+    {
+      "id": "05-ERR-16",
+      "condition": "Database error (not `db.ErrNotFound`) occurs during `api_keys`, `pats`, `admin_config`, or `users` lookup",
+      "behavior": "auth middleware logs the error and returns HTTP 500 with message `\"internal server error\"`",
+      "requirement_id": "05-REQ-5.E1"
+    },
+    {
+      "id": "05-ERR-17",
+      "condition": "`NewAuthMiddleware` is called with a nil `*db.DB` or nil `*PermissionRegistry`",
+      "behavior": "`NewAuthMiddleware` panics immediately with a descriptive message",
+      "requirement_id": "05-REQ-1.E1"
+    },
+    {
+      "id": "05-ERR-18",
+      "condition": "`PermissionRegistry.Register` is called with empty `resource_type` or `action`, or either contains invalid characters",
+      "behavior": "`Register` returns a non-nil error describing the validation failure without modifying the registry",
+      "requirement_id": "05-REQ-9.E1"
+    },
+    {
+      "id": "05-ERR-19",
+      "condition": "`PermissionRegistry.Register` is called with a `resource_type:action` pair already present in the registry",
+      "behavior": "`Register` returns a non-nil error indicating duplicate registration",
+      "requirement_id": "05-REQ-9.3"
+    },
+    {
+      "id": "05-ERR-20",
+      "condition": "Admin token hex suffix is not exactly 64 valid hexadecimal characters",
+      "behavior": "auth middleware returns HTTP 401 with message `\"invalid credentials\"` without performing a database lookup",
+      "requirement_id": "05-REQ-4.E2"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4.x",
+      "symbols": [
+        {
+          "name": "MiddlewareFunc",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type MiddlewareFunc func(HandlerFunc) HandlerFunc",
+          "notes": "Return type of NewAuthMiddleware; wraps the next handler with authentication logic."
+        },
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface { ... }",
+          "notes": "Passed to handler functions and RBAC helpers; AuthInfo is stored in and retrieved from this context."
+        }
+      ]
+    },
+    {
+      "package": "crypto/subtle",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "ConstantTimeCompare",
+          "import_path": "crypto/subtle",
+          "signature": "func ConstantTimeCompare(x, y []byte) int",
+          "notes": "Used for all hash comparisons. Returns 1 if slices are equal, 0 otherwise. Both inputs must be the same length for meaningful constant-time behavior."
+        }
+      ]
+    },
+    {
+      "package": "crypto/sha256",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "Sum256",
+          "import_path": "crypto/sha256",
+          "signature": "func Sum256(data []byte) [32]byte",
+          "notes": "Used by hashToken to compute the SHA-256 digest of token strings and secrets."
+        }
+      ]
+    },
+    {
+      "package": "encoding/hex",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "EncodeToString",
+          "import_path": "encoding/hex",
+          "signature": "func EncodeToString(src []byte) string",
+          "notes": "Used by hashToken to produce lowercase hex-encoded hash strings."
+        }
+      ]
+    }
+  ]
+}

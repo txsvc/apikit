@@ -1,0 +1,87 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `oauth_provider_registry` PRD is exceptionally well-crafted and comprehensive. It clearly defines intent, measurable goals, explicit non-goals, dependencies, functional requirements, error handling, testing strategy, design decisions, and a glossary. All four required spec sections (Intent, Goals, Non-Goals, Background/context) are present and well-articulated. The spec correctly declares upstream dependencies on `server_core` and `database_layer`. The `auth_middleware` spec is noted as a separate concern and properly excluded via Non-Goals. No blocking overlaps with active specs were found \u2014 the PRD deliberately scopes out auth middleware, admin bootstrap, and PAT management with explicit non-goal references. One minor gap exists: the spec references `admin_email` from `admin_bootstrap` but does not list it as a formal dependency. This is a low-severity observation that does not block readiness. The PRD is ready to proceed to artifact generation.",
+      "gaps": [
+        "The spec reads `admin_email` from the `admin_config` table (written by the `admin_bootstrap` spec) but does not declare `admin_bootstrap` as a formal upstream dependency in the Dependencies table. This is a runtime dependency that should be acknowledged.",
+        "The `GET /auth/providers` response includes a pre-populated `authorize_url` with `client_id` and scope, but the scope value(s) requested from GitHub (e.g. `user:email`) are not explicitly specified or made configurable in the config schema. The scope is implied by the URL example but never formally defined.",
+        "The spec does not address how concurrent callback requests for the same user are handled (e.g. two simultaneous logins racing on the upsert + key revocation transaction). The database `UNIQUE(provider, provider_id)` constraint provides some protection, but the behavior under contention is unspecified.",
+        "The `openapi_specification` active spec is listed as the single source of truth for the API contract, but the OAuth endpoints (`GET /auth/providers`, `POST /auth/callback`) defined here are not explicitly called out as needing to be reflected in that spec. A dependency or cross-reference to `openapi_specification` is absent."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should `admin_bootstrap` be added as a formal upstream dependency in the Dependencies table, given that this spec reads `admin_email` from the `admin_config` table that `admin_bootstrap` owns?",
+          "context": "The spec currently reads from `admin_config` but does not list `admin_bootstrap` as a dependency. This could cause ordering issues if the dependency graph is used to sequence artifact generation or deployment.",
+          "options": [
+            "Yes, add admin_bootstrap as an upstream dependency",
+            "No, the database_layer dependency is sufficient since it covers the table access",
+            "Document it as a soft/runtime dependency with a note"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What OAuth scope(s) should the GitHub provider request when constructing the authorization URL (e.g. `user:email`, `read:user`)?",
+          "context": "The `GET /auth/providers` response example shows `scope=user:email` in the authorize_url, but the scope is never formally defined in the config schema or functional requirements. It is also not clear whether scope should be configurable per-provider or hardcoded per provider type.",
+          "options": [
+            "Hardcode `user:email` for GitHub (sufficient for email retrieval)",
+            "Hardcode `read:user` for GitHub (broader profile access)",
+            "Make scope a configurable field in ProviderConfig (e.g. `scope = \"user:email\"`)",
+            "Hardcode `user:email read:user` to cover both email and profile"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should `GET /auth/providers` and `POST /auth/callback` be explicitly referenced in the `openapi_specification` spec as endpoints that must appear in `api/openapi.yaml`?",
+          "context": "The `openapi_specification` active spec is the single source of truth for the API contract. These two public OAuth endpoints are defined here but there is no cross-reference or dependency declared toward the OpenAPI spec, which may result in the endpoints being omitted from the generated API contract.",
+          "options": [
+            "Yes, add openapi_specification as a downstream dependency or cross-reference",
+            "No, the OpenAPI spec will be updated separately when endpoints are implemented",
+            "The openapi_specification spec already covers this implicitly"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "How should concurrent callback requests for the same user (race condition on upsert + key revocation) be handled?",
+          "context": "If two simultaneous OAuth logins occur for the same user, both transactions will attempt to revoke the existing key and insert a new one. The UNIQUE(provider, provider_id) constraint may cause one to fail. The desired behavior (e.g. last-write-wins, serializable isolation, application-level locking) is not specified.",
+          "options": [
+            "Last-write-wins via database transaction serialization (rely on DB locking)",
+            "Return an error to the second concurrent request",
+            "This is an acceptable edge case; document it as undefined behavior for v1"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The `oauth_provider_registry` PRD is now fully resolved and ready for artifact generation. All four previously identified gaps have been addressed: (1) the `admin_bootstrap` runtime-only dependency is explicitly rationalized in the Dependencies table, a clarifying note, the Non-Goals, the Design Decisions, and the Glossary; (2) the GitHub OAuth scope is formally defined as the hardcoded `user:email` with a dedicated subsection, rationale in Design Decisions, and updates to the `GET /auth/providers` response description and test cases; (3) the concurrent callback behavior is now specified in a dedicated section (last-write-wins via SQLite single-connection serialization), reflected in Design Decisions, Non-Goals, and a new integration test case; (4) the OpenAPI cross-reference omission is acknowledged in Non-Goals with an explicit rationale. The PRD is comprehensive, internally consistent, and requires no further clarification.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "No, the database_layer dependency is sufficient since it covers the table access. The admin_config table is part of the database schema created by database_layer. This spec only reads from it; the admin_bootstrap spec writes to it. There is no build-time or import-time dependency \u2014 only a runtime data dependency that flows through the shared database.",
+        "q2": "Hardcode `user:email` for GitHub. This is sufficient to retrieve the user's email address, which is the only required field. The `login` and `id` fields are always available on the GitHub /user endpoint without additional scopes. Making scope configurable adds complexity without value in the first iteration \u2014 a provider implementation already owns its URL construction and can add scopes internally if needed for a future provider.",
+        "q3": "No, the OpenAPI spec will be updated separately when endpoints are implemented. The openapi_specification spec already lists all built-in endpoints from the master PRD. There is no circular dependency \u2014 the OpenAPI spec is maintained independently and reflects the implemented endpoints.",
+        "q4": "Last-write-wins via database transaction serialization. SQLite with SetMaxOpenConns(1) serializes all transactions through a single connection. Concurrent callback requests for the same user will be serialized by the database \u2014 the second transaction will see the state left by the first (including its new key) and proceed normally, revoking the first transaction's key and creating yet another new one. The user ends up with whichever key was created last. This is acceptable behavior for a single-user interactive login flow where concurrent logins are not a realistic scenario."
+      },
+      "timestamp": "2026-07-17T10:46:44.122655+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

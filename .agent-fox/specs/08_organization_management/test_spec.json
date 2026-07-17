@@ -1,0 +1,1347 @@
+{
+  "$schema": null,
+  "spec_id": "08",
+  "spec_name": "organization_management",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-08-1",
+      "requirement_id": "08-REQ-1.1",
+      "kind": "unit",
+      "description": "RegisterOrgHandlers mounts all ten organization routes on the Echo group and each route is reachable.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An Echo instance is created with APIGroup() returning a *echo.Group"
+      ],
+      "input": "Call RegisterOrgHandlers(g, db) where g is a valid *echo.Group and db is a valid *sql.DB",
+      "expected": "The Echo router recognises POST /orgs, GET /orgs, GET /orgs/:id, PATCH /orgs/:id, DELETE /orgs/:id, POST /orgs/:id/block, POST /orgs/:id/unblock, GET /orgs/:id/members, PUT /orgs/:id/members/:user_id, DELETE /orgs/:id/members/:user_id; each route returns a non-405 status when called with a valid authenticated request",
+      "assertion_pseudocode": "routes := echo.Routes()\nfor each expected_route in [\"POST /orgs\", \"GET /orgs\", \"GET /orgs/:id\", \"PATCH /orgs/:id\", \"DELETE /orgs/:id\", \"POST /orgs/:id/block\", \"POST /orgs/:id/unblock\", \"GET /orgs/:id/members\", \"PUT /orgs/:id/members/:user_id\", \"DELETE /orgs/:id/members/:user_id\"]:\n  assert route_exists(routes, expected_route)"
+    },
+    {
+      "id": "TS-08-2",
+      "requirement_id": "08-REQ-1.2",
+      "kind": "unit",
+      "description": "Every org endpoint response carries the Cache-Control: no-store header inherited from the APIGroup middleware.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "RegisterOrgHandlers called with a valid group and db",
+        "An admin credential is available"
+      ],
+      "input": "Send authenticated GET /orgs request",
+      "expected": "The HTTP response includes a Cache-Control header with value 'no-store'",
+      "assertion_pseudocode": "resp := httptest_GET(\"/orgs\", admin_token)\nassert resp.Header.Get(\"Cache-Control\") == \"no-store\""
+    },
+    {
+      "id": "TS-08-3",
+      "requirement_id": "08-REQ-2.1",
+      "kind": "unit",
+      "description": "A valid POST /orgs request from an admin creates the organization and returns HTTP 201 with a correct OrgResponse.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available",
+        "No organization named 'Acme Corp' or slug 'acme-corp' exists"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Acme Corp\", \"slug\": \"acme-corp\", \"url\": \"https://acme.example.com\"} and admin auth header",
+      "expected": "HTTP 201; response body contains id (valid UUID v4), name='Acme Corp', slug='acme-corp', url='https://acme.example.com', status='active', created_at equals updated_at, both are RFC 3339 UTC timestamps",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"Acme Corp\", slug:\"acme-corp\", url:\"https://acme.example.com\"}, admin_token)\nassert resp.StatusCode == 201\nbody := parse_json(resp)\nassert is_valid_uuid_v4(body.id)\nassert body.name == \"Acme Corp\"\nassert body.slug == \"acme-corp\"\nassert body.url == \"https://acme.example.com\"\nassert body.status == \"active\"\nassert body.created_at == body.updated_at\nassert is_rfc3339_utc(body.created_at)"
+    },
+    {
+      "id": "TS-08-4",
+      "requirement_id": "08-REQ-2.2",
+      "kind": "unit",
+      "description": "POST /orgs with a missing or whitespace-only name returns HTTP 400 with 'name is required'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"   \", \"slug\": \"acme-corp\"} and admin auth header",
+      "expected": "HTTP 400; response body is {\"error\": {\"code\": 400, \"message\": \"name is required\"}}",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"   \", slug:\"acme-corp\"}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.code == 400\nassert body.error.message == \"name is required\""
+    },
+    {
+      "id": "TS-08-5",
+      "requirement_id": "08-REQ-2.3",
+      "kind": "unit",
+      "description": "POST /orgs with a missing slug returns HTTP 400 with 'slug is required'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Acme Corp\"} (slug omitted) and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'slug is required'",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"Acme Corp\"}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"slug is required\""
+    },
+    {
+      "id": "TS-08-6",
+      "requirement_id": "08-REQ-2.4",
+      "kind": "unit",
+      "description": "POST /orgs with a slug containing invalid characters returns HTTP 400 with 'invalid slug format'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Acme Corp\", \"slug\": \"Acme Corp!\"} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid slug format'",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"Acme Corp\", slug:\"Acme Corp!\"}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-7",
+      "requirement_id": "08-REQ-2.5",
+      "kind": "unit",
+      "description": "POST /orgs with a name that already exists returns HTTP 409 with 'organization name already exists'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with name 'Acme Corp' and slug 'acme-corp' already exists in the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Acme Corp\", \"slug\": \"different-slug\"} and admin auth header",
+      "expected": "HTTP 409; response body contains error message 'organization name already exists'",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"Acme Corp\", slug:\"different-slug\"}, admin_token)\nassert resp.StatusCode == 409\nbody := parse_json(resp)\nassert body.error.message == \"organization name already exists\""
+    },
+    {
+      "id": "TS-08-8",
+      "requirement_id": "08-REQ-2.6",
+      "kind": "unit",
+      "description": "POST /orgs with a slug that already exists returns HTTP 409 with 'organization slug already exists'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with name 'Existing Corp' and slug 'acme-corp' already exists in the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"New Corp\", \"slug\": \"acme-corp\"} and admin auth header",
+      "expected": "HTTP 409; response body contains error message 'organization slug already exists'",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"New Corp\", slug:\"acme-corp\"}, admin_token)\nassert resp.StatusCode == 409\nbody := parse_json(resp)\nassert body.error.message == \"organization slug already exists\""
+    },
+    {
+      "id": "TS-08-9",
+      "requirement_id": "08-REQ-2.7",
+      "kind": "unit",
+      "description": "POST /orgs from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "A non-admin user credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Acme Corp\", \"slug\": \"acme-corp\"} and non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := POST(\"/orgs\", body={name:\"Acme Corp\", slug:\"acme-corp\"}, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-10",
+      "requirement_id": "08-REQ-3.1",
+      "kind": "unit",
+      "description": "GET /orgs without include_blocked returns only active organizations ordered by name ascending.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Three organizations exist: 'Zebra Corp' (active), 'Alpha Corp' (active), 'Beta Corp' (blocked)",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs with admin auth header and no query parameters",
+      "expected": "HTTP 200; response body is a JSON array containing 'Alpha Corp' and 'Zebra Corp' in that order; 'Beta Corp' is absent",
+      "assertion_pseudocode": "resp := GET(\"/orgs\", admin_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nassert len(body) == 2\nassert body[0].name == \"Alpha Corp\"\nassert body[1].name == \"Zebra Corp\"\nassert none_of(body, lambda o: o.name == \"Beta Corp\")"
+    },
+    {
+      "id": "TS-08-11",
+      "requirement_id": "08-REQ-3.2",
+      "kind": "unit",
+      "description": "GET /orgs?include_blocked=true returns all organizations including blocked ones, ordered by name ascending.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Two organizations exist: 'Alpha Corp' (active), 'Beta Corp' (blocked)",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs?include_blocked=true with admin auth header",
+      "expected": "HTTP 200; response body is a JSON array containing both 'Alpha Corp' and 'Beta Corp'",
+      "assertion_pseudocode": "resp := GET(\"/orgs?include_blocked=true\", admin_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nnames := map(body, lambda o: o.name)\nassert \"Alpha Corp\" in names\nassert \"Beta Corp\" in names"
+    },
+    {
+      "id": "TS-08-12",
+      "requirement_id": "08-REQ-3.3",
+      "kind": "unit",
+      "description": "GET /orgs returns an empty JSON array when no organizations exist.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs with admin auth header",
+      "expected": "HTTP 200; response body is exactly []",
+      "assertion_pseudocode": "resp := GET(\"/orgs\", admin_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nassert len(body) == 0"
+    },
+    {
+      "id": "TS-08-13",
+      "requirement_id": "08-REQ-3.4",
+      "kind": "unit",
+      "description": "GET /orgs from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "A non-admin user credential is available"
+      ],
+      "input": "GET /orgs with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := GET(\"/orgs\", non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-14",
+      "requirement_id": "08-REQ-4.1",
+      "kind": "unit",
+      "description": "GET /orgs/:id from an admin returns HTTP 200 with OrgResponse and an ETag header.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists in the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{org_id} with admin auth header",
+      "expected": "HTTP 200; response body is OrgResponse with the correct org fields; response includes ETag header",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id, admin_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.id == org_id\nassert resp.Header.Get(\"ETag\") != \"\""
+    },
+    {
+      "id": "TS-08-15",
+      "requirement_id": "08-REQ-4.2",
+      "kind": "unit",
+      "description": "GET /orgs/:id from a non-admin org member returns HTTP 200 with the OrgResponse.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization with a known UUID exists",
+        "A non-admin user exists and has a row in org_members for this org",
+        "Non-admin user credential is available"
+      ],
+      "input": "GET /orgs/{org_id} with non-admin member auth header",
+      "expected": "HTTP 200; response body is OrgResponse matching the org",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id, member_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.id == org_id"
+    },
+    {
+      "id": "TS-08-16",
+      "requirement_id": "08-REQ-4.3",
+      "kind": "unit",
+      "description": "GET /orgs/:id from a non-admin non-member user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization with a known UUID exists",
+        "A non-admin user exists but has no row in org_members for this org",
+        "Non-admin user credential is available"
+      ],
+      "input": "GET /orgs/{org_id} with non-admin non-member auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id, non_member_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-17",
+      "requirement_id": "08-REQ-4.4",
+      "kind": "unit",
+      "description": "GET /orgs/:id for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{random_valid_uuid} with admin auth header where the UUID does not exist in orgs",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + non_existent_uuid, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-18",
+      "requirement_id": "08-REQ-4.5",
+      "kind": "unit",
+      "description": "GET /orgs/:id with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/not-a-uuid with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/not-a-uuid\", admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-19",
+      "requirement_id": "08-REQ-4.6",
+      "kind": "unit",
+      "description": "GET /orgs/:id with an If-None-Match header matching the current ETag returns HTTP 304 with no body.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization exists with a known updated_at timestamp",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{org_id} with admin auth header and If-None-Match header set to the current ETag value derived from updated_at",
+      "expected": "HTTP 304; response body is empty",
+      "assertion_pseudocode": "first_resp := GET(\"/orgs/\" + org_id, admin_token)\netag := first_resp.Header.Get(\"ETag\")\nresp := GET(\"/orgs/\" + org_id, admin_token, headers={\"If-None-Match\": etag})\nassert resp.StatusCode == 304\nassert len(resp.Body) == 0"
+    },
+    {
+      "id": "TS-08-20",
+      "requirement_id": "08-REQ-5.1",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with a valid name update returns HTTP 200 with updated OrgResponse and an incremented updated_at.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists with name 'Acme Corp'",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {\"name\": \"Acme Corporation\"} and admin auth header",
+      "expected": "HTTP 200; response body has name='Acme Corporation', slug unchanged, updated_at >= original updated_at",
+      "assertion_pseudocode": "original := GET(\"/orgs/\" + org_id, admin_token).body\nresp := PATCH(\"/orgs/\" + org_id, body={name:\"Acme Corporation\"}, admin_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.name == \"Acme Corporation\"\nassert body.slug == original.slug\nassert parse_time(body.updated_at) >= parse_time(original.updated_at)"
+    },
+    {
+      "id": "TS-08-21",
+      "requirement_id": "08-REQ-5.2",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with a slug field in the body silently ignores it and keeps the original slug.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with slug 'original-slug' exists",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {\"name\": \"New Name\", \"slug\": \"new-slug\"} and admin auth header",
+      "expected": "HTTP 200; response body has name='New Name' but slug remains 'original-slug'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + org_id, body={name:\"New Name\", slug:\"new-slug\"}, admin_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.name == \"New Name\"\nassert body.slug == \"original-slug\""
+    },
+    {
+      "id": "TS-08-22",
+      "requirement_id": "08-REQ-5.3",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with a body containing no recognized fields returns HTTP 400 with 'no fields to update'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'no fields to update'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + org_id, body={}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"no fields to update\""
+    },
+    {
+      "id": "TS-08-23",
+      "requirement_id": "08-REQ-5.4",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with a name that conflicts with another org returns HTTP 409 with 'organization name already exists'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Two organizations exist: target org and 'Taken Name Corp'",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{target_org_id} with JSON body {\"name\": \"Taken Name Corp\"} and admin auth header",
+      "expected": "HTTP 409; response body contains error message 'organization name already exists'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + target_org_id, body={name:\"Taken Name Corp\"}, admin_token)\nassert resp.StatusCode == 409\nbody := parse_json(resp)\nassert body.error.message == \"organization name already exists\""
+    },
+    {
+      "id": "TS-08-24",
+      "requirement_id": "08-REQ-5.5",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{non_existent_uuid} with JSON body {\"name\": \"New Name\"} and admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + non_existent_uuid, body={name:\"New Name\"}, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-25",
+      "requirement_id": "08-REQ-5.6",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/not-a-uuid with JSON body {\"name\": \"New Name\"} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/not-a-uuid\", body={name:\"New Name\"}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-26",
+      "requirement_id": "08-REQ-5.7",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "A non-admin user credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {\"name\": \"New Name\"} and non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + org_id, body={name:\"New Name\"}, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-27",
+      "requirement_id": "08-REQ-6.1",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id from an admin deletes the org, cascades member deletion, and returns HTTP 204.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization with a known UUID exists with one member row in org_members",
+        "A user account exists in users",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id} with admin auth header",
+      "expected": "HTTP 204 with no body; the org row is absent from orgs; the org_members row is absent; the user row in users still exists",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + org_id, admin_token)\nassert resp.StatusCode == 204\nassert len(resp.Body) == 0\nassert db_query_count(\"SELECT * FROM orgs WHERE id=?\", org_id) == 0\nassert db_query_count(\"SELECT * FROM org_members WHERE org_id=?\", org_id) == 0\nassert db_query_count(\"SELECT * FROM users WHERE id=?\", user_id) == 1"
+    },
+    {
+      "id": "TS-08-28",
+      "requirement_id": "08-REQ-6.2",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{non_existent_uuid} with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + non_existent_uuid, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-29",
+      "requirement_id": "08-REQ-6.3",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/not-a-uuid with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/not-a-uuid\", admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-30",
+      "requirement_id": "08-REQ-6.4",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "A non-admin user credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id} with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + org_id, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-31",
+      "requirement_id": "08-REQ-7.1",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block on an active org returns HTTP 200 with status='blocked' and an updated updated_at.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An active organization with a known UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/block with admin auth header",
+      "expected": "HTTP 200; response body has status='blocked'; updated_at is >= the original updated_at",
+      "assertion_pseudocode": "original := GET(\"/orgs/\" + org_id, admin_token).body\nresp := POST(\"/orgs/\" + org_id + \"/block\", nil, admin_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.status == \"blocked\"\nassert parse_time(body.updated_at) >= parse_time(original.updated_at)"
+    },
+    {
+      "id": "TS-08-32",
+      "requirement_id": "08-REQ-7.2",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block on an already-blocked org is idempotent and returns HTTP 200 with the unchanged org.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with status='blocked' exists with a known UUID",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/block with admin auth header (org is already blocked)",
+      "expected": "HTTP 200; response body has status='blocked'; updated_at is the same as before the second call",
+      "assertion_pseudocode": "first_resp := POST(\"/orgs/\" + org_id + \"/block\", nil, admin_token)\nfirst_body := parse_json(first_resp)\nsecond_resp := POST(\"/orgs/\" + org_id + \"/block\", nil, admin_token)\nsecond_body := parse_json(second_resp)\nassert second_resp.StatusCode == 200\nassert second_body.status == \"blocked\"\nassert second_body.updated_at == first_body.updated_at"
+    },
+    {
+      "id": "TS-08-33",
+      "requirement_id": "08-REQ-7.3",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{non_existent_uuid}/block with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/\" + non_existent_uuid + \"/block\", nil, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-34",
+      "requirement_id": "08-REQ-7.4",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/not-a-uuid/block with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/not-a-uuid/block\", nil, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-35",
+      "requirement_id": "08-REQ-7.5",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "A non-admin user credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/block with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/\" + org_id + \"/block\", nil, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-36",
+      "requirement_id": "08-REQ-8.1",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock on a blocked org returns HTTP 200 with status='active' and an updated updated_at.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with status='blocked' exists with a known UUID",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/unblock with admin auth header",
+      "expected": "HTTP 200; response body has status='active'; updated_at is >= the blocked updated_at",
+      "assertion_pseudocode": "blocked := GET(\"/orgs/\" + org_id, admin_token).body\nresp := POST(\"/orgs/\" + org_id + \"/unblock\", nil, admin_token)\nassert resp.StatusCode == 200\nbody := parse_json(resp)\nassert body.status == \"active\"\nassert parse_time(body.updated_at) >= parse_time(blocked.updated_at)"
+    },
+    {
+      "id": "TS-08-37",
+      "requirement_id": "08-REQ-8.2",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock on an already-active org is idempotent and returns HTTP 200 with the unchanged org.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An active organization with a known UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/unblock with admin auth header (org is already active)",
+      "expected": "HTTP 200; response body has status='active'; updated_at is unchanged from before the call",
+      "assertion_pseudocode": "original := GET(\"/orgs/\" + org_id, admin_token).body\nresp := POST(\"/orgs/\" + org_id + \"/unblock\", nil, admin_token)\nbody := parse_json(resp)\nassert resp.StatusCode == 200\nassert body.status == \"active\"\nassert body.updated_at == original.updated_at"
+    },
+    {
+      "id": "TS-08-38",
+      "requirement_id": "08-REQ-8.3",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{non_existent_uuid}/unblock with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/\" + non_existent_uuid + \"/unblock\", nil, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-39",
+      "requirement_id": "08-REQ-8.4",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/not-a-uuid/unblock with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/not-a-uuid/unblock\", nil, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-40",
+      "requirement_id": "08-REQ-8.5",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "A non-admin user credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/unblock with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := POST(\"/orgs/\" + org_id + \"/unblock\", nil, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-41",
+      "requirement_id": "08-REQ-9.1",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members from an admin returns HTTP 200 with all member details ordered by username.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization exists with two members: user 'bob' and user 'alice'",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{org_id}/members with admin auth header",
+      "expected": "HTTP 200; response body is a JSON array of OrgMemberResponse objects ordered alphabetically by username; first element is 'alice', second is 'bob'; each contains user_id, username, email, role, joined_at",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id + \"/members\", admin_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nassert len(body) == 2\nassert body[0].username == \"alice\"\nassert body[1].username == \"bob\"\nfor m in body:\n  assert m.user_id != \"\"\n  assert m.username != \"\"\n  assert m.email != \"\"\n  assert m.role in [\"admin\", \"user\"]\n  assert is_rfc3339_utc(m.joined_at)"
+    },
+    {
+      "id": "TS-08-42",
+      "requirement_id": "08-REQ-9.2",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members from a non-admin org member returns HTTP 200 with the member list.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization exists with the requesting user as a member",
+        "Non-admin member credential is available"
+      ],
+      "input": "GET /orgs/{org_id}/members with non-admin member auth header",
+      "expected": "HTTP 200; response body is a JSON array of OrgMemberResponse objects",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id + \"/members\", member_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nassert type(body) == list"
+    },
+    {
+      "id": "TS-08-43",
+      "requirement_id": "08-REQ-9.3",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members from a non-admin non-member returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization exists; the requesting user is not a member",
+        "Non-admin non-member credential is available"
+      ],
+      "input": "GET /orgs/{org_id}/members with non-admin non-member auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id + \"/members\", non_member_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-44",
+      "requirement_id": "08-REQ-9.4",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members for a non-existent organization returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty orgs table",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{non_existent_uuid}/members with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + non_existent_uuid + \"/members\", admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-45",
+      "requirement_id": "08-REQ-9.5",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members for an org with no members returns HTTP 200 with an empty array.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and org_members tables",
+        "An organization exists with no rows in org_members",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{org_id}/members with admin auth header",
+      "expected": "HTTP 200; response body is exactly []",
+      "assertion_pseudocode": "resp := GET(\"/orgs/\" + org_id + \"/members\", admin_token)\nassert resp.StatusCode == 200\nbody := parse_json_array(resp)\nassert len(body) == 0"
+    },
+    {
+      "id": "TS-08-46",
+      "requirement_id": "08-REQ-9.6",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members with an invalid UUID path parameter returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/not-a-uuid/members with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := GET(\"/orgs/not-a-uuid/members\", admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-47",
+      "requirement_id": "08-REQ-10.1",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id from an admin adds the user to the org and returns HTTP 204.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization and a user exist with known UUIDs; the user is not yet a member",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{org_id}/members/{user_id} with admin auth header",
+      "expected": "HTTP 204 with no body; a row with (org_id, user_id) exists in org_members with a valid created_at timestamp",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/\" + org_id + \"/members/\" + user_id, nil, admin_token)\nassert resp.StatusCode == 204\nassert len(resp.Body) == 0\nassert db_query_count(\"SELECT * FROM org_members WHERE org_id=? AND user_id=?\", org_id, user_id) == 1"
+    },
+    {
+      "id": "TS-08-48",
+      "requirement_id": "08-REQ-10.2",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id for an already-existing member is idempotent and returns HTTP 204.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "The user is already a member of the org (row exists in org_members)",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{org_id}/members/{user_id} with admin auth header (user already a member)",
+      "expected": "HTTP 204 with no body; exactly one row exists in org_members for (org_id, user_id)",
+      "assertion_pseudocode": "first_resp := PUT(\"/orgs/\" + org_id + \"/members/\" + user_id, nil, admin_token)\nassert first_resp.StatusCode == 204\nsecond_resp := PUT(\"/orgs/\" + org_id + \"/members/\" + user_id, nil, admin_token)\nassert second_resp.StatusCode == 204\nassert db_query_count(\"SELECT * FROM org_members WHERE org_id=? AND user_id=?\", org_id, user_id) == 1"
+    },
+    {
+      "id": "TS-08-49",
+      "requirement_id": "08-REQ-10.3",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id with a non-existent org returns HTTP 404 with 'organization not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and users tables",
+        "A user with a known UUID exists; no org with the given UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{non_existent_org_uuid}/members/{user_id} with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'organization not found'",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/\" + non_existent_org_uuid + \"/members/\" + user_id, nil, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"organization not found\""
+    },
+    {
+      "id": "TS-08-50",
+      "requirement_id": "08-REQ-10.4",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id with a non-existent user returns HTTP 404 with 'user not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and users tables",
+        "An organization with a known UUID exists; no user with the given UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{org_id}/members/{non_existent_user_uuid} with admin auth header",
+      "expected": "HTTP 404; response body contains error message 'user not found'",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/\" + org_id + \"/members/\" + non_existent_user_uuid, nil, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"user not found\""
+    },
+    {
+      "id": "TS-08-51",
+      "requirement_id": "08-REQ-10.5",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id with an invalid org UUID returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/not-a-uuid/members/{valid_user_uuid} with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/not-a-uuid/members/\" + valid_user_uuid, nil, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-52",
+      "requirement_id": "08-REQ-10.6",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id with an invalid user UUID returns HTTP 400 with 'invalid user id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{valid_org_uuid}/members/not-a-uuid with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid user id'",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/\" + valid_org_uuid + \"/members/not-a-uuid\", nil, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid user id\""
+    },
+    {
+      "id": "TS-08-53",
+      "requirement_id": "08-REQ-10.7",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and users tables",
+        "An organization and a user exist",
+        "A non-admin user credential is available"
+      ],
+      "input": "PUT /orgs/{org_id}/members/{user_id} with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := PUT(\"/orgs/\" + org_id + \"/members/\" + user_id, nil, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-54",
+      "requirement_id": "08-REQ-11.1",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id from an admin removes the member and returns HTTP 204; user account is preserved.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs, org_members, and users tables",
+        "An organization exists with a member; the org_members row exists",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id}/members/{user_id} with admin auth header",
+      "expected": "HTTP 204 with no body; the org_members row is removed; the user row in users still exists",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + org_id + \"/members/\" + user_id, admin_token)\nassert resp.StatusCode == 204\nassert len(resp.Body) == 0\nassert db_query_count(\"SELECT * FROM org_members WHERE org_id=? AND user_id=?\", org_id, user_id) == 0\nassert db_query_count(\"SELECT * FROM users WHERE id=?\", user_id) == 1"
+    },
+    {
+      "id": "TS-08-55",
+      "requirement_id": "08-REQ-11.2",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id where membership doesn't exist returns HTTP 404 with 'membership not found'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and users tables",
+        "An org and user exist but no org_members row for them",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id}/members/{user_id} with admin auth header (no membership exists)",
+      "expected": "HTTP 404; response body contains error message 'membership not found'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + org_id + \"/members/\" + user_id, admin_token)\nassert resp.StatusCode == 404\nbody := parse_json(resp)\nassert body.error.message == \"membership not found\""
+    },
+    {
+      "id": "TS-08-56",
+      "requirement_id": "08-REQ-11.3",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id with an invalid org UUID returns HTTP 400 with 'invalid organization id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/not-a-uuid/members/{valid_user_uuid} with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid organization id'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/not-a-uuid/members/\" + valid_user_uuid, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid organization id\""
+    },
+    {
+      "id": "TS-08-57",
+      "requirement_id": "08-REQ-11.4",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id with an invalid user UUID returns HTTP 400 with 'invalid user id'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{valid_org_uuid}/members/not-a-uuid with admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid user id'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + valid_org_uuid + \"/members/not-a-uuid\", admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid user id\""
+    },
+    {
+      "id": "TS-08-58",
+      "requirement_id": "08-REQ-11.5",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id from a non-admin user returns HTTP 403 with 'forbidden'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs and org_members tables",
+        "An organization and a membership row exist",
+        "A non-admin user credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id}/members/{user_id} with non-admin auth header",
+      "expected": "HTTP 403; response body contains error message 'forbidden'",
+      "assertion_pseudocode": "resp := DELETE(\"/orgs/\" + org_id + \"/members/\" + user_id, non_admin_token)\nassert resp.StatusCode == 403\nbody := parse_json(resp)\nassert body.error.message == \"forbidden\""
+    },
+    {
+      "id": "TS-08-59",
+      "requirement_id": "08-REQ-12.1",
+      "kind": "unit",
+      "description": "A slug consisting of valid lowercase alphanumeric characters, hyphens, and underscores passes slug validation.",
+      "preconditions": [
+        "Slug validator function is accessible"
+      ],
+      "input": "slug = 'my-valid_slug123' (length 16, all valid chars, no leading/trailing hyphen or underscore)",
+      "expected": "Validation passes with no error",
+      "assertion_pseudocode": "err := validateSlug(\"my-valid_slug123\")\nassert err == nil"
+    },
+    {
+      "id": "TS-08-60",
+      "requirement_id": "08-REQ-12.2",
+      "kind": "unit",
+      "description": "A slug containing uppercase letters is rejected with 'invalid slug format'.",
+      "preconditions": [
+        "Slug validator function is accessible"
+      ],
+      "input": "slug = 'MySlug'",
+      "expected": "Validation returns error 'invalid slug format'",
+      "assertion_pseudocode": "err := validateSlug(\"MySlug\")\nassert err != nil\nassert err.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-61",
+      "requirement_id": "08-REQ-12.3",
+      "kind": "unit",
+      "description": "A slug starting with a hyphen or underscore is rejected with 'invalid slug format'.",
+      "preconditions": [
+        "Slug validator function is accessible"
+      ],
+      "input": "slug = '-bad-start'",
+      "expected": "Validation returns error 'invalid slug format'",
+      "assertion_pseudocode": "for slug in [\"-bad-start\", \"_bad-start\"]:\n  err := validateSlug(slug)\n  assert err != nil\n  assert err.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-62",
+      "requirement_id": "08-REQ-12.4",
+      "kind": "unit",
+      "description": "A slug ending with a hyphen or underscore is rejected with 'invalid slug format'.",
+      "preconditions": [
+        "Slug validator function is accessible"
+      ],
+      "input": "slug = 'bad-end-'",
+      "expected": "Validation returns error 'invalid slug format'",
+      "assertion_pseudocode": "for slug in [\"bad-end-\", \"bad-end_\"]:\n  err := validateSlug(slug)\n  assert err != nil\n  assert err.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-63",
+      "requirement_id": "08-REQ-12.5",
+      "kind": "unit",
+      "description": "A slug longer than 128 characters is rejected with 'invalid slug format'.",
+      "preconditions": [
+        "Slug validator function is accessible"
+      ],
+      "input": "slug = string of 129 'a' characters",
+      "expected": "Validation returns error 'invalid slug format'",
+      "assertion_pseudocode": "slug := repeat('a', 129)\nerr := validateSlug(slug)\nassert err != nil\nassert err.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-64",
+      "requirement_id": "08-REQ-13.1",
+      "kind": "unit",
+      "description": "isOrgMember returns (true, nil) when a matching row exists in org_members.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the org_members table",
+        "A row with (org_id='org-uuid', user_id='user-uuid') exists in org_members"
+      ],
+      "input": "Call isOrgMember(db, 'org-uuid', 'user-uuid')",
+      "expected": "Returns (true, nil)",
+      "assertion_pseudocode": "result, err := isOrgMember(db, org_uuid, user_uuid)\nassert err == nil\nassert result == true"
+    },
+    {
+      "id": "TS-08-65",
+      "requirement_id": "08-REQ-13.2",
+      "kind": "unit",
+      "description": "isOrgMember returns (false, nil) when no matching row exists in org_members.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with an empty org_members table"
+      ],
+      "input": "Call isOrgMember(db, 'org-uuid', 'user-uuid') where no such row exists",
+      "expected": "Returns (false, nil)",
+      "assertion_pseudocode": "result, err := isOrgMember(db, org_uuid, user_uuid)\nassert err == nil\nassert result == false"
+    },
+    {
+      "id": "TS-08-66",
+      "requirement_id": "08-REQ-14.1",
+      "kind": "unit",
+      "description": "All org endpoints return HTTP 401 when accessed without a valid authentication credential.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised",
+        "RegisterOrgHandlers called with a valid Echo group and db",
+        "Auth middleware is attached to the APIGroup"
+      ],
+      "input": "Send requests to POST /orgs, GET /orgs, GET /orgs/{uuid}, PATCH /orgs/{uuid}, DELETE /orgs/{uuid}, POST /orgs/{uuid}/block, POST /orgs/{uuid}/unblock, GET /orgs/{uuid}/members, PUT /orgs/{uuid}/members/{uuid}, DELETE /orgs/{uuid}/members/{uuid} — all without auth headers",
+      "expected": "All ten requests return HTTP 401",
+      "assertion_pseudocode": "endpoints := [(\"POST\",\"/orgs\"), (\"GET\",\"/orgs\"), (\"GET\",\"/orgs/\"+uuid), ...]\nfor method, path in endpoints:\n  resp := http_request(method, path, no_auth)\n  assert resp.StatusCode == 401"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-08-P1",
+      "property_id": "08-PROP-1",
+      "validates": [
+        "08-REQ-5.1",
+        "08-REQ-5.2"
+      ],
+      "description": "Slug immutability: for any organization, updateOrg, blockOrg, and unblockOrg never change the slug value set at creation.",
+      "for_any_strategy": "Generate an arbitrary valid org (name, slug, url). Apply any combination of updateOrg (with name/url changes), blockOrg, and unblockOrg operations.",
+      "invariant_check": "After each mutating operation, assert that org.slug equals the slug provided at creation time."
+    },
+    {
+      "id": "TS-08-P2",
+      "property_id": "08-PROP-2",
+      "validates": [
+        "08-REQ-5.1",
+        "08-REQ-7.1",
+        "08-REQ-8.1"
+      ],
+      "description": "updated_at monotonicity: after any mutating operation (update, block, unblock) on an org, the updated_at timestamp is >= the previous updated_at.",
+      "for_any_strategy": "Generate an arbitrary valid org. Apply a random sequence of updateOrg, blockOrg, unblockOrg operations, recording the updated_at value before and after each.",
+      "invariant_check": "For each operation in the sequence, assert parse_time(new_updated_at) >= parse_time(old_updated_at). The sequence is bounded to at most 20 operations."
+    },
+    {
+      "id": "TS-08-P3",
+      "property_id": "08-PROP-3",
+      "validates": [
+        "08-REQ-3.1",
+        "08-REQ-3.2"
+      ],
+      "description": "Blocked org listing exclusion: GET /orgs without include_blocked=true never returns orgs with status='blocked'.",
+      "for_any_strategy": "Generate an arbitrary set of organizations (mix of active and blocked). Call GET /orgs without include_blocked.",
+      "invariant_check": "Assert that none of the returned orgs have status='blocked'. Repeat for any subset of blocked organizations."
+    },
+    {
+      "id": "TS-08-P4",
+      "property_id": "08-PROP-4",
+      "validates": [
+        "08-REQ-6.1"
+      ],
+      "description": "Cascade delete completeness: after deleteOrg, no org_members rows with the deleted org's id remain; user rows are unaffected.",
+      "for_any_strategy": "Generate an org with an arbitrary number (0 to 10) of members. Delete the org via deleteOrg.",
+      "invariant_check": "After deletion, assert db_query_count('SELECT * FROM org_members WHERE org_id=?', org_id) == 0. Assert db_query_count('SELECT * FROM users WHERE id IN (?)', member_user_ids) == original_user_count."
+    },
+    {
+      "id": "TS-08-P5",
+      "property_id": "08-PROP-5",
+      "validates": [
+        "08-REQ-7.2"
+      ],
+      "description": "Idempotent block: calling blockOrg N times produces the same org state as calling it once; subsequent calls do not change updated_at beyond the first block.",
+      "for_any_strategy": "Generate an arbitrary active org. Call blockOrg N times (N randomly chosen from 1 to 5), recording the response after each call.",
+      "invariant_check": "All calls return HTTP 200 with status='blocked'. The updated_at from the second and subsequent calls equals the updated_at from the first block call. The loop always terminates after at most 5 iterations."
+    },
+    {
+      "id": "TS-08-P6",
+      "property_id": "08-PROP-6",
+      "validates": [
+        "08-REQ-8.2"
+      ],
+      "description": "Idempotent unblock: calling unblockOrg N times produces the same org state as calling it once; subsequent calls do not change updated_at.",
+      "for_any_strategy": "Generate an arbitrary blocked org. Call unblockOrg N times (N randomly chosen from 1 to 5), recording the response after each call.",
+      "invariant_check": "All calls return HTTP 200 with status='active'. The updated_at from the second and subsequent calls equals the updated_at from the first unblock call. The loop always terminates after at most 5 iterations."
+    },
+    {
+      "id": "TS-08-P7",
+      "property_id": "08-PROP-7",
+      "validates": [
+        "08-REQ-10.2"
+      ],
+      "description": "Idempotent add member: calling addOrgMember with the same (org_id, user_id) pair any number of times results in exactly one row in org_members and always returns HTTP 204.",
+      "for_any_strategy": "Generate a valid org and user pair. Call addOrgMember with the same pair N times (N randomly chosen from 1 to 5).",
+      "invariant_check": "All N calls return HTTP 204. After all calls, db_query_count('SELECT * FROM org_members WHERE org_id=? AND user_id=?', org_id, user_id) == 1. Loop terminates after at most 5 iterations."
+    },
+    {
+      "id": "TS-08-P8",
+      "property_id": "08-PROP-8",
+      "validates": [
+        "08-REQ-2.5",
+        "08-REQ-2.6",
+        "08-REQ-5.4"
+      ],
+      "description": "Unique name and slug: no two distinct organizations share the same name, and no two share the same slug.",
+      "for_any_strategy": "Generate an arbitrary set of orgs with distinct names and slugs. Attempt to create a duplicate by reusing an existing name or slug.",
+      "invariant_check": "For any attempt to create an org with a name or slug matching an existing org, assert the response is HTTP 409. Query the orgs table and assert all name values are distinct and all slug values are distinct."
+    },
+    {
+      "id": "TS-08-P9",
+      "property_id": "08-PROP-9",
+      "validates": [
+        "08-REQ-14.1"
+      ],
+      "description": "No unauthenticated access: any request to any org endpoint without a valid credential returns HTTP 401 and no org data.",
+      "for_any_strategy": "Generate an arbitrary valid org endpoint (method + path) from the ten registered routes. Send the request without an authentication header.",
+      "invariant_check": "Assert resp.StatusCode == 401. Assert that no org fields (id, name, slug, status) appear in the response body."
+    },
+    {
+      "id": "TS-08-P10",
+      "property_id": "08-PROP-10",
+      "validates": [
+        "08-REQ-1.2"
+      ],
+      "description": "Cache-Control no-store on all org responses: every response from any org handler includes Cache-Control: no-store.",
+      "for_any_strategy": "For each of the ten org routes, send a valid authenticated request (as admin).",
+      "invariant_check": "Assert resp.Header.Get('Cache-Control') contains 'no-store' for every response."
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-08-E1",
+      "requirement_id": "08-REQ-1.E1",
+      "kind": "unit",
+      "description": "RegisterOrgHandlers panics immediately when passed a nil *sql.DB before any routes are registered.",
+      "preconditions": [
+        "An Echo instance is created with a valid *echo.Group"
+      ],
+      "input": "Call RegisterOrgHandlers(g, nil) where g is a valid *echo.Group and db is nil",
+      "expected": "A panic is raised with a descriptive message; no routes are registered on the group",
+      "assertion_pseudocode": "assert_panics(func() {\n  RegisterOrgHandlers(g, nil)\n})"
+    },
+    {
+      "id": "TS-08-E2",
+      "requirement_id": "08-REQ-2.E1",
+      "kind": "unit",
+      "description": "POST /orgs with a slug exactly 129 characters long returns HTTP 400 with 'invalid slug format'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Test Org\", \"slug\": \"a\" * 129} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid slug format'",
+      "assertion_pseudocode": "slug := repeat('a', 129)\nresp := POST(\"/orgs\", body={name:\"Test Org\", slug:slug}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-E3",
+      "requirement_id": "08-REQ-2.E2",
+      "kind": "unit",
+      "description": "POST /orgs with a slug starting with a hyphen returns HTTP 400 with 'invalid slug format'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with JSON body {\"name\": \"Test Org\", \"slug\": \"-invalid\"} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'invalid slug format'",
+      "assertion_pseudocode": "for slug in [\"-invalid\", \"invalid-\", \"_invalid\", \"invalid_\"]:\n  resp := POST(\"/orgs\", body={name:\"Test Org\", slug:slug}, admin_token)\n  assert resp.StatusCode == 400\n  body := parse_json(resp)\n  assert body.error.message == \"invalid slug format\""
+    },
+    {
+      "id": "TS-08-E4",
+      "requirement_id": "08-REQ-2.E3",
+      "kind": "unit",
+      "description": "POST /orgs that fails with a non-UNIQUE database error returns HTTP 500 with 'internal server error' without leaking raw SQL.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB that returns a generic database error (not UNIQUE constraint) on INSERT",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with valid JSON body {\"name\": \"Test Org\", \"slug\": \"test-org\"} and admin auth header; DB INSERT returns a generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'; no raw SQL error text in response body",
+      "assertion_pseudocode": "mock_db.on_insert_return(generic_db_error)\nresp := POST(\"/orgs\", body={name:\"Test Org\", slug:\"test-org\"}, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\"\nassert \"SQL\" not in resp.raw_body\nassert \"sqlite\" not in resp.raw_body.lower()"
+    },
+    {
+      "id": "TS-08-E5",
+      "requirement_id": "08-REQ-2.E4",
+      "kind": "unit",
+      "description": "POST /orgs with a malformed JSON body returns HTTP 400 with a descriptive error.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs with body 'not valid json' and Content-Type: application/json and admin auth header",
+      "expected": "HTTP 400; response body contains an error message",
+      "assertion_pseudocode": "resp := POST_raw(\"/orgs\", body=\"not valid json\", content_type=\"application/json\", admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.code == 400\nassert body.error.message != \"\""
+    },
+    {
+      "id": "TS-08-E6",
+      "requirement_id": "08-REQ-3.E1",
+      "kind": "unit",
+      "description": "GET /orgs when the database query fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB that returns a generic database error on SELECT",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs with admin auth header; DB SELECT returns a generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_select_return(generic_db_error)\nresp := GET(\"/orgs\", admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E7",
+      "requirement_id": "08-REQ-4.E1",
+      "kind": "unit",
+      "description": "GET /orgs/:id when the isOrgMember query fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org lookup succeeds but org_members SELECT returns a generic error",
+        "A non-admin user credential is available",
+        "An organization with a known UUID exists"
+      ],
+      "input": "GET /orgs/{org_id} with non-admin auth header; org_members query fails with a database error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'; org data is not returned",
+      "assertion_pseudocode": "mock_db.on_org_members_query_return(generic_db_error)\nresp := GET(\"/orgs/\" + org_id, non_admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E8",
+      "requirement_id": "08-REQ-5.E1",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id with a name that is empty after whitespace trimming returns HTTP 400 with 'name is required'.",
+      "preconditions": [
+        "An in-memory SQLite database is initialised with the orgs table",
+        "An organization with a known UUID exists",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {\"name\": \"   \"} and admin auth header",
+      "expected": "HTTP 400; response body contains error message 'name is required'",
+      "assertion_pseudocode": "resp := PATCH(\"/orgs/\" + org_id, body={name:\"   \"}, admin_token)\nassert resp.StatusCode == 400\nbody := parse_json(resp)\nassert body.error.message == \"name is required\""
+    },
+    {
+      "id": "TS-08-E9",
+      "requirement_id": "08-REQ-5.E2",
+      "kind": "unit",
+      "description": "PATCH /orgs/:id when the DB UPDATE fails with a non-UNIQUE error returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org lookup succeeds but UPDATE returns a generic database error",
+        "Admin credential is available"
+      ],
+      "input": "PATCH /orgs/{org_id} with JSON body {\"name\": \"New Name\"} and admin auth header; DB UPDATE fails with generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_update_return(generic_db_error)\nresp := PATCH(\"/orgs/\" + org_id, body={name:\"New Name\"}, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E10",
+      "requirement_id": "08-REQ-6.E1",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id when the DB DELETE fails with a database error returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where the DELETE statement returns a generic error",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id} with admin auth header; DB DELETE fails with generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'; HTTP 204 is not returned",
+      "assertion_pseudocode": "mock_db.on_delete_return(generic_db_error)\nresp := DELETE(\"/orgs/\" + org_id, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E11",
+      "requirement_id": "08-REQ-7.E1",
+      "kind": "unit",
+      "description": "POST /orgs/:id/block when the DB UPDATE fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org lookup succeeds but UPDATE returns a generic error",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/block with admin auth header; DB UPDATE fails with generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_update_return(generic_db_error)\nresp := POST(\"/orgs/\" + org_id + \"/block\", nil, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E12",
+      "requirement_id": "08-REQ-8.E1",
+      "kind": "unit",
+      "description": "POST /orgs/:id/unblock when the DB UPDATE fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org lookup succeeds but UPDATE returns a generic error",
+        "Admin credential is available"
+      ],
+      "input": "POST /orgs/{org_id}/unblock with admin auth header; DB UPDATE fails with generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_update_return(generic_db_error)\nresp := POST(\"/orgs/\" + org_id + \"/unblock\", nil, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E13",
+      "requirement_id": "08-REQ-9.E1",
+      "kind": "unit",
+      "description": "GET /orgs/:id/members when the join query fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org lookup succeeds but the org_members JOIN users query fails",
+        "Admin credential is available"
+      ],
+      "input": "GET /orgs/{org_id}/members with admin auth header; join query returns a generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_member_join_query_return(generic_db_error)\nresp := GET(\"/orgs/\" + org_id + \"/members\", admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E14",
+      "requirement_id": "08-REQ-10.E1",
+      "kind": "unit",
+      "description": "PUT /orgs/:id/members/:user_id when the org_members INSERT fails with a non-PK-conflict error returns HTTP 500.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where org and user lookups succeed but INSERT returns a generic error",
+        "Admin credential is available"
+      ],
+      "input": "PUT /orgs/{org_id}/members/{user_id} with admin auth header; INSERT fails with generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_insert_return(generic_db_error)\nresp := PUT(\"/orgs/\" + org_id + \"/members/\" + user_id, nil, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E15",
+      "requirement_id": "08-REQ-11.E1",
+      "kind": "unit",
+      "description": "DELETE /orgs/:id/members/:user_id when the org_members DELETE fails returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where the DELETE on org_members returns a generic error",
+        "Admin credential is available"
+      ],
+      "input": "DELETE /orgs/{org_id}/members/{user_id} with admin auth header; DELETE returns a generic error",
+      "expected": "HTTP 500; response body contains error message 'internal server error'",
+      "assertion_pseudocode": "mock_db.on_delete_return(generic_db_error)\nresp := DELETE(\"/orgs/\" + org_id + \"/members/\" + user_id, admin_token)\nassert resp.StatusCode == 500\nbody := parse_json(resp)\nassert body.error.message == \"internal server error\""
+    },
+    {
+      "id": "TS-08-E16",
+      "requirement_id": "08-REQ-13.E1",
+      "kind": "unit",
+      "description": "isOrgMember returns (false, error) when the org_members query fails with a database error.",
+      "preconditions": [
+        "A mock or instrumented *sql.DB where the org_members query returns a generic error"
+      ],
+      "input": "Call isOrgMember(mock_db, 'org-uuid', 'user-uuid') where the query returns a generic database error",
+      "expected": "Returns (false, non-nil error); does not panic",
+      "assertion_pseudocode": "mock_db.on_query_return(generic_db_error)\nresult, err := isOrgMember(mock_db, org_uuid, user_uuid)\nassert result == false\nassert err != nil"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-08-SMOKE-1",
+      "execution_path_id": "08-PATH-1",
+      "description": "Admin creates an organization end-to-end through the full request pipeline including auth middleware and database insertion.",
+      "trigger": "POST /orgs with JSON body {\"name\": \"Smoke Corp\", \"slug\": \"smoke-corp\", \"url\": \"https://smoke.example.com\"} and a valid admin credential",
+      "real_components": [
+        "createOrg handler",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 201 response with OrgResponse body",
+        "Response body id is a valid UUID v4",
+        "Response body status is 'active'",
+        "Response body created_at equals updated_at",
+        "A row exists in the orgs SQLite table with the given name and slug",
+        "Cache-Control: no-store header is present on the response"
+      ]
+    },
+    {
+      "id": "TS-08-SMOKE-2",
+      "execution_path_id": "08-PATH-2",
+      "description": "An org member views their organization through the full request pipeline with the access control path (non-admin member allowed, non-member rejected).",
+      "trigger": "GET /orgs/{org_id} with a valid non-admin credential for a user who is a member of the org",
+      "real_components": [
+        "getOrg handler",
+        "isOrgMember helper",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response with OrgResponse body matching the org",
+        "ETag response header is present and non-empty",
+        "A subsequent request with If-None-Match matching the ETag returns HTTP 304"
+      ]
+    },
+    {
+      "id": "TS-08-SMOKE-3",
+      "execution_path_id": "08-PATH-3",
+      "description": "Admin blocks and unblocks an organization through the complete handler pipeline, verifying status transitions.",
+      "trigger": "POST /orgs/{org_id}/block followed by POST /orgs/{org_id}/unblock with valid admin credentials",
+      "real_components": [
+        "blockOrg handler",
+        "unblockOrg handler",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "First POST /block returns HTTP 200 with status='blocked'",
+        "GET /orgs without include_blocked does not include the blocked org",
+        "Second POST /unblock returns HTTP 200 with status='active'",
+        "GET /orgs without include_blocked again includes the org"
+      ]
+    },
+    {
+      "id": "TS-08-SMOKE-4",
+      "execution_path_id": "08-PATH-4",
+      "description": "Admin adds a member, lists members to verify appearance, then removes the member through the complete handler pipeline.",
+      "trigger": "PUT /orgs/{org_id}/members/{user_id}, then GET /orgs/{org_id}/members, then DELETE /orgs/{org_id}/members/{user_id} with valid admin credentials",
+      "real_components": [
+        "addOrgMember handler",
+        "listOrgMembers handler",
+        "removeOrgMember handler",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "PUT returns HTTP 204",
+        "GET returns HTTP 200 with an array containing the added user's details (user_id, username, email, role, joined_at)",
+        "DELETE returns HTTP 204",
+        "Subsequent GET returns HTTP 200 with an array that no longer contains the removed user"
+      ]
+    },
+    {
+      "id": "TS-08-SMOKE-5",
+      "execution_path_id": "08-PATH-5",
+      "description": "Full organization lifecycle: create org, add member, update name, verify via GET, delete org, verify cascade and 404.",
+      "trigger": "Sequence: POST /orgs → PUT /orgs/{id}/members/{uid} → PATCH /orgs/{id} → GET /orgs/{id} → DELETE /orgs/{id} → GET /orgs/{id}",
+      "real_components": [
+        "createOrg handler",
+        "addOrgMember handler",
+        "updateOrg handler",
+        "getOrg handler",
+        "deleteOrg handler",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "POST /orgs returns HTTP 201",
+        "PUT member returns HTTP 204",
+        "PATCH returns HTTP 200 with updated name and updated_at > created_at",
+        "GET after PATCH returns HTTP 200 with the new name",
+        "DELETE returns HTTP 204",
+        "GET after DELETE returns HTTP 404 with 'organization not found'",
+        "No rows remain in org_members for the deleted org_id",
+        "User rows in users table are unaffected"
+      ]
+    },
+    {
+      "id": "TS-08-SMOKE-6",
+      "execution_path_id": "08-PATH-6",
+      "description": "Admin lists organizations with blocked filter: verify blocked org exclusion and inclusion via include_blocked param.",
+      "trigger": "GET /orgs → POST /orgs/{id}/block → GET /orgs → GET /orgs?include_blocked=true with valid admin credentials",
+      "real_components": [
+        "listOrgs handler",
+        "blockOrg handler",
+        "Auth middleware (spec 05)",
+        "SQLite database via internal/db"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Initial GET /orgs returns the org in the array",
+        "POST /block returns HTTP 200 with status='blocked'",
+        "GET /orgs (no param) returns HTTP 200 without the blocked org",
+        "GET /orgs?include_blocked=true returns HTTP 200 containing both active and blocked orgs"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

@@ -1,0 +1,1319 @@
+{
+  "$schema": null,
+  "spec_id": "06",
+  "spec_name": "oauth_provider_registry",
+  "schema_version": 1,
+  "introduction": "The OAuth Provider Registry provides a pluggable identity provider abstraction for apikit-based services, enabling users to authenticate via OAuth providers (initially GitHub) through two public endpoints: `GET /auth/providers` and `POST /auth/callback`. Note: requirements referencing `db.WithTx`, `db.WrapError`, `db.FormatTime`, `APIError`, `CacheMiddleware`, `CachePublic`, `FormatUTC`, `NowUTC`, and `APIGroup` APIs are based on upstream spec interfaces described in the PRD and should be cross-checked against spec `01_server_core` and spec `02_database_layer` implementations before coding.",
+  "glossary": {
+    "APIError": "The function from spec `01_server_core` that constructs a standard error response envelope.",
+    "APIGroup": "The function from spec `01_server_core` that returns the Echo router group on which API handlers are registered.",
+    "CacheMiddleware": "The Echo middleware from spec `01_server_core` that sets `Cache-Control` headers on responses.",
+    "CachePublic": "A constant passed to `CacheMiddleware` that sets `Cache-Control: public, max-age=300` on the response.",
+    "FormatUTC": "The function from spec `01_server_core` that formats a UTC timestamp as an RFC 3339 string.",
+    "NowUTC": "The function from spec `01_server_core` that returns the current time in UTC.",
+    "OAuthConfig": "The Go struct holding the parsed `[[oauth.providers]]` TOML configuration section.",
+    "Provider": "An OAuth identity provider (e.g. GitHub) that implements the `Provider` interface for authentication.",
+    "Provider interface": "The Go interface (`Provider`) defining `Name()`, `AuthorizeURL()`, `Exchange()`, and `UserInfo()` methods.",
+    "ProviderConfig": "The Go struct representing a single provider entry in the `[[oauth.providers]]` TOML configuration array.",
+    "Registry": "The `oauth.Registry` type that holds all configured providers, keyed by name.",
+    "TokenPrefix": "The build-time configurable prefix string prepended to API keys, e.g. `ak` producing keys of the form `ak_<key_id>_<secret>`.",
+    "UserInfo": "The struct returned by `Provider.UserInfo()` containing `Username`, `Email`, and `ProviderID` fields.",
+    "admin_config": "A database table populated at runtime by the `admin_bootstrap` spec that stores the designated admin email address.",
+    "admin_email": "The email address stored in `admin_config` that designates which user becomes the first admin on initial OAuth login.",
+    "api_keys": "The database table storing API key records including `key_id`, `secret_hash`, `expires_at`, and `revoked_at` columns.",
+    "authorize_url": "The URL the user's browser is redirected to for OAuth authorization. GitHub default: `https://github.com/login/oauth/authorize`.",
+    "db.FormatTime": "Database layer function from spec `02_database_layer` that formats a time value for storage.",
+    "db.WithTx": "Database layer function from spec `02_database_layer` that runs a function within a database transaction.",
+    "db.WrapError": "Database layer function from spec `02_database_layer` that maps SQLite error codes to sentinel errors.",
+    "external_url": "The public-facing URL of the apikit server, configured in `config.toml`, used to validate production redirect URIs.",
+    "httptest.Server": "A Go standard library test helper that runs a local HTTP server for testing HTTP client code.",
+    "key_id": "The random 8-character alphanumeric identifier portion of an API key, stored in plaintext in the `api_keys` table.",
+    "last-write-wins": "The concurrency resolution strategy for simultaneous OAuth logins: SQLite's single-connection serialization ensures transactions execute sequentially; the final transaction's key is the one the user retains.",
+    "provider_id": "The identity provider's own numeric or string identifier for a user (e.g. GitHub's numeric user ID converted to string), stored in the `users` table.",
+    "redirect_uri": "The URL the identity provider redirects back to after authorization. Must match the configured allowlist.",
+    "revoked_at": "A timestamp column in the `api_keys` table indicating when a key was revoked. Null means the key is still active.",
+    "scope": "The OAuth permission scope(s) requested from the identity provider during authorization. The GitHub provider hardcodes `user:email`.",
+    "secret": "The random 32-character alphanumeric portion of an API key, stored only as a SHA-256 hash. The plaintext is returned once at creation.",
+    "secret_hash": "The SHA-256 hash of the API key secret stored in the `api_keys` table. The plaintext secret is never stored.",
+    "token_url": "The URL used server-to-server to exchange an authorization code for an access token. GitHub default: `https://github.com/login/oauth/access_token`.",
+    "upsert": "A database operation that inserts a new row if no match exists, or updates the existing row if a match is found. Used for user records matched by `(provider, provider_id)`.",
+    "userinfo_url": "The URL used server-to-server to retrieve user identity information using the access token. GitHub default: `https://api.github.com/user`.",
+    "users": "The database table storing user records with columns including `id`, `username`, `email`, `status`, `role`, `provider`, `provider_id`, `created_at`, and `updated_at`.",
+    "well-known URLs": "The standard OAuth endpoint URLs for a provider (authorize, token, userinfo) that are built into the provider implementation as defaults.",
+    "Name() string": "Provider interface method that returns the provider's identifier string (e.g. `\"github\"`).",
+    "AuthorizeURL(state, redirectURI string) string": "Provider interface method that constructs and returns the full OAuth authorization URL with state and redirect URI parameters.",
+    "AuthorizeURL(state, redirectURI string)": "Provider interface method signature for constructing the OAuth authorization URL.",
+    "UserInfo(ctx context.Context, accessToken string) (*UserInfo, error)": "Provider interface method that retrieves user identity information from the identity provider using the given access token.",
+    "Exchange(ctx context.Context, code, redirectURI string) (string, error)": "Provider interface method that exchanges an authorization code for an access token from the identity provider.",
+    "ProviderID string": "Field in the `UserInfo` struct holding the provider-specific user identifier (e.g. GitHub numeric ID as string).",
+    "Email string": "Field in the `UserInfo` struct holding the user's email address (required; empty triggers login failure).",
+    "Username string": "Field in the `UserInfo` struct holding the provider's username / login.",
+    "type UserInfo = oauth.UserInfo": "Go type alias re-exporting `oauth.UserInfo` through the root `apikit` package.",
+    "type Provider = oauth.Provider": "Go type alias re-exporting `oauth.Provider` through the root `apikit` package.",
+    "internal/oauth": "Internal Go package (`github.com/txsvc/apikit/internal/oauth`) implementing the OAuth provider registry and handlers.",
+    "*Registry": "Pointer to the `Registry` type that holds all configured OAuth providers.",
+    "NewRegistry()": "Constructor function that creates an empty `Registry`.",
+    "p.Name()": "Call to the `Name()` method on a `Provider` instance, returning its identifier string.",
+    "Register(p Provider)": "Registry method that adds a provider to the registry, returning an error if the name is already registered.",
+    "nil": "Go's zero value for pointers, interfaces, maps, slices, channels, and function types.",
+    "Get(name string)": "Registry method that retrieves a provider by name, returning `nil` if not found.",
+    "Get(name)": "Short-form call to the Registry's `Get` method.",
+    "List()": "Registry method that returns all registered provider names in alphabetical order.",
+    "https://github.com/login/oauth/authorize": "GitHub's default OAuth authorization URL.",
+    "https://github.com/login/oauth/access_token": "GitHub's default OAuth token exchange URL.",
+    "https://api.github.com/user": "GitHub's default user info API URL.",
+    "Accept: application/json": "HTTP header requesting JSON response format, set on GitHub token exchange requests.",
+    "Authorization: Bearer <accessToken>": "HTTP header carrying the OAuth access token for user info retrieval.",
+    "login": "GitHub API field name for the user's username.",
+    "id": "GitHub API field name for the numeric user identifier.",
+    "email": "GitHub API field name or general term for the user's email address.",
+    "access_token": "The OAuth access token returned by the identity provider's token endpoint.",
+    "error": "JSON field name in the identity provider's error response, or the API error envelope key.",
+    "name == \"github\"": "Condition matching the GitHub provider name during config-driven registration.",
+    "Register()": "Short-form reference to the `Register(p Provider)` method on the Registry.",
+    "(nil, error)": "Go return pattern indicating failure: nil value and non-nil error.",
+    "[[oauth.providers]]": "TOML array-of-tables syntax for configuring multiple OAuth providers in `config.toml`.",
+    "OAuth OAuthConfig": "Config struct field holding the OAuth configuration, tagged with `toml:\"oauth\"`.",
+    "Providers []ProviderConfig": "OAuthConfig struct field holding the slice of provider configurations.",
+    "ClientID": "Field in `ProviderConfig` holding the OAuth client ID.",
+    "ClientSecret": "Field in `ProviderConfig` holding the OAuth client secret.",
+    "AuthorizeURL": "Field in `ProviderConfig` for the optional authorize URL override, or the Provider interface method name.",
+    "TokenURL": "Field in `ProviderConfig` for the optional token URL override.",
+    "UserinfoURL": "Field in `ProviderConfig` for the optional user info URL override.",
+    "Name": "Field in `ProviderConfig` holding the provider name, or the Provider interface method.",
+    "name": "The provider name field in the config or request body.",
+    "client_id": "The OAuth client ID field in the TOML config.",
+    "client_secret": "The OAuth client secret field in the TOML config.",
+    "config.toml": "The TOML-format server configuration file.",
+    "toml:\"oauth\"": "Go struct tag binding the `OAuth` field to the `[oauth]` TOML section.",
+    "toml:\"providers\"": "Go struct tag binding the `Providers` field to the `[[oauth.providers]]` TOML array.",
+    "GET /auth/providers": "Public endpoint that lists configured OAuth providers (name and authorize URL).",
+    "POST /auth/callback": "Public endpoint that exchanges an authorization code for a user record and API key.",
+    "{mount_point}/auth/providers": "Full path for the provider list endpoint, prefixed with the configurable mount point.",
+    "CacheMiddleware(CachePublic)": "Echo middleware call applying `Cache-Control: public, max-age=300` to the route.",
+    "Cache-Control: public, max-age=300": "HTTP cache header value for static discovery endpoints (5-minute public cache).",
+    "Cache-Control: no-store": "HTTP cache header value for mutable resources (no caching).",
+    "Registry.Get(name).AuthorizeURL(\"\", \"\")": "Call chain retrieving a provider and constructing its authorize URL (used in the providers endpoint).",
+    "Registry.List()": "Call to `List()` on the `Registry` instance.",
+    "scope=user:email": "GitHub OAuth scope parameter requesting access to the user's email address.",
+    "state": "A cryptographically random parameter included in OAuth authorization URLs for CSRF protection.",
+    "provider": "The provider name field in the callback request body.",
+    "code": "The authorization code field in the callback request body.",
+    "expires": "The API key expiry field in the callback request body (0, 30, 60, or 90 days).",
+    "0": "Expiry value meaning no expiration (indefinite).",
+    "30": "Expiry value meaning 30 days.",
+    "60": "Expiry value meaning 60 days.",
+    "90": "Default expiry value meaning 90 days.",
+    "user": "The user object in the callback response, or the JSON key for user data.",
+    "api_key": "The API key object in the callback response containing `key`, `key_id`, and `expires_at`.",
+    "role": "The user's role field (`admin` or `user`).",
+    "status": "The user's status field (`active` or `blocked`).",
+    "username": "The user's display name field.",
+    "updated_at": "RFC 3339 UTC timestamp indicating when a resource was last modified.",
+    "api_key.expires_at": "The API key's expiration timestamp (RFC 3339 UTC or null for non-expiring keys).",
+    "\"provider is required\"": "Error message returned when the `provider` field is missing from the callback request.",
+    "\"code is required\"": "Error message returned when the `code` field is missing from the callback request.",
+    "\"redirect_uri is required\"": "Error message returned when the `redirect_uri` field is missing from the callback request.",
+    "\"expires must be 0, 30, 60, or 90\"": "Error message returned when the `expires` field has an invalid value.",
+    "\"unknown provider: <name>\"": "Error message returned when the provider name doesn't match any registered provider.",
+    "\"redirect_uri is not allowed\"": "Error message returned when the redirect URI doesn't match the configured allowlist.",
+    "\"authorization code exchange failed\"": "Error message returned when the code exchange with the identity provider fails.",
+    "\"failed to retrieve user info from provider\"": "Error message returned when the user info API call to the identity provider fails.",
+    "\"provider returned empty email; email is required\"": "Error message returned when the identity provider returns a null or empty email.",
+    "\"user is blocked\"": "Error message returned when a blocked user attempts to authenticate via OAuth.",
+    "\"internal server error\"": "Error message returned for database or other internal failures during the callback flow.",
+    "APIError()": "Helper function from spec `01_server_core` that writes a standard JSON error envelope.",
+    "APIGroup()": "Server method from spec `01_server_core` that returns the Echo route group at the configured mount point.",
+    "http://localhost:*": "Wildcard pattern matching any localhost URL with any port (development redirect URI).",
+    "http://localhost:<port>/*": "URL pattern matching localhost with any valid port and path (development redirect URI allowlist).",
+    "<port>": "A valid TCP port number in the redirect URI.",
+    "https://localhost:3000/callback": "Example localhost redirect URI.",
+    "Exchange(ctx, code, redirectURI)": "Short-form call to the `Exchange` method on a `Provider` instance.",
+    "provider.Exchange(ctx, code, redirectURI)": "Call to the provider's `Exchange` method with context, authorization code, and redirect URI.",
+    "provider.Exchange()": "Short-form reference to calling the `Exchange` method on a provider.",
+    "accessToken": "The OAuth access token obtained from the identity provider's token endpoint.",
+    "provider.UserInfo(ctx, accessToken)": "Call to the provider's `UserInfo` method with context and access token.",
+    "provider.UserInfo()": "Short-form reference to calling the `UserInfo` method on a provider.",
+    "*UserInfo": "Pointer to the `UserInfo` struct returned by the provider's `UserInfo` method.",
+    "UserInfo.Email": "The `Email` field on the `UserInfo` struct.",
+    "UserInfo.Username": "The `Username` field on the `UserInfo` struct.",
+    "UserInfo.ProviderID": "The `ProviderID` field on the `UserInfo` struct.",
+    "Email": "The email field on the `UserInfo` struct (required; empty triggers login failure).",
+    "Exchange": "The `Exchange` method on the `Provider` interface.",
+    "(provider, provider_id)": "The composite unique key on the `users` table used to match existing users during OAuth upsert.",
+    "status = 'active'": "SQL value indicating the user account is active.",
+    "role = 'admin'": "SQL value indicating the user has the admin role.",
+    "role = 'user'": "SQL value indicating the user has the default user role.",
+    "NowUTC()": "Utility function from spec `01_server_core` that returns the current time as RFC 3339 UTC with Z suffix.",
+    "FormatUTC()": "Utility function from spec `01_server_core` that formats a `time.Time` as RFC 3339 UTC with Z suffix.",
+    "NowUTC() + (expires * 24h)": "Formula for computing `expires_at`: current UTC time plus the expiry duration in days.",
+    "expires == 0": "Condition where the API key has no expiration (indefinite).",
+    "expires_at": "Nullable timestamp field for API key expiration (null when `expires` is 0).",
+    "revoked_at = NowUTC()": "Setting the `revoked_at` field to the current UTC timestamp when revoking a key.",
+    "blocked": "User status value indicating the account is blocked.",
+    "null": "JSON null value (used for nullable fields like `expires_at` when expires is 0).",
+    "crypto/rand": "Go standard library package used for cryptographically secure random number generation.",
+    "math/rand": "Go standard library package for pseudo-random numbers; explicitly not used for security-sensitive generation.",
+    "*http.Client": "Go standard library HTTP client type used for identity provider API calls.",
+    "http.DefaultTransport": "Go standard library default HTTP transport with no custom TLS configuration.",
+    "RegisterOAuthHandlers(group *echo.Group, registry *oauth.Registry, database *db.DB, externalURL string)": "Internal function that registers the OAuth endpoints on the Echo group during server bootstrap.",
+    "<TokenPrefix>_<key_id>_<secret>": "API key format: configurable prefix, 8-char random key ID, and 32-char random secret.",
+    "apikit.TokenPrefix": "The build-time configurable token prefix variable (default `ak`) from the root `apikit` package.",
+    "\"ak\"": "Default value of the `apikit.TokenPrefix` build-time variable.",
+    "SetMaxOpenConns(1)": "Go `*sql.DB` method setting the maximum number of open database connections to 1.",
+    "database_layer": "Spec `02_database_layer` providing the SQLite database layer.",
+    "\"gitlab\"": "Example of an unknown provider name that would cause a startup error.",
+    "UserInfo(ctx, accessToken)": "Short-form call to the `UserInfo` method on a `Provider` instance.",
+    "'user'": "String literal for the default user role value.",
+    "'blocked'": "String literal for the blocked user status value.",
+    "status = 'blocked'": "SQL condition matching users with blocked status."
+  },
+  "requirements": [
+    {
+      "id": "06-REQ-1",
+      "title": "Provider Interface Definition",
+      "user_story": {
+        "role": "apikit developer",
+        "goal": "define a common interface for OAuth identity providers",
+        "benefit": "so that new providers can be added without modifying handlers or middleware"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "oauth package",
+          "action": "defines the `Provider` interface with four methods: `Name() string`, `AuthorizeURL(state, redirectURI string) string`, `Exchange(ctx context.Context, code, redirectURI string) (string, error)`, and `UserInfo(ctx context.Context, accessToken string) (*UserInfo, error)`",
+          "return_contract": "Compilation succeeds; any type that implements all four methods satisfies the interface"
+        },
+        {
+          "id": "06-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "oauth package",
+          "action": "defines the `UserInfo` struct with fields `Username string`, `Email string`, and `ProviderID string`",
+          "return_contract": "Struct is exported and usable as the return type of `Provider.UserInfo()`"
+        },
+        {
+          "id": "06-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "root apikit package",
+          "action": "re-exports `Provider` as a type alias `type Provider = oauth.Provider` and `UserInfo` as a type alias `type UserInfo = oauth.UserInfo` so consuming projects can implement custom providers without importing `internal/oauth` directly",
+          "return_contract": "Consuming projects can assign `oauth.Provider` and `apikit.Provider` interchangeably"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "oauth package",
+          "action": "rejects the type at compile time with a missing-method error; no runtime check is needed",
+          "return_contract": "Compilation fails with a Go interface-satisfaction error",
+          "error_condition": "a type implements only a subset of the four `Provider` interface methods"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-2",
+      "title": "Provider Registry",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "maintain a keyed collection of registered OAuth providers",
+        "benefit": "so that handlers can look up the correct provider by name at request time"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Registry`",
+          "action": "is created via `NewRegistry()` returning an empty `*Registry` with no registered providers",
+          "return_contract": "`NewRegistry()` returns a non-nil `*Registry`; `List()` returns an empty slice"
+        },
+        {
+          "id": "06-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "`Registry`",
+          "action": "adds the provider to the internal map keyed by `p.Name()`",
+          "return_contract": "Returns `nil` error; subsequent `Get(p.Name())` returns the registered provider",
+          "trigger": "`Register(p Provider)` is called with a provider whose name is not already in the registry"
+        },
+        {
+          "id": "06-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "`Registry`",
+          "action": "returns the `Provider` registered under that name, or `nil` if no provider with that name exists",
+          "return_contract": "Returns `Provider` or `nil`",
+          "trigger": "`Get(name string)` is called"
+        },
+        {
+          "id": "06-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "`Registry`",
+          "action": "returns all registered provider names sorted in alphabetical order",
+          "return_contract": "Returns `[]string` sorted lexicographically ascending",
+          "trigger": "`List()` is called"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Registry`",
+          "action": "returns a non-nil error describing the duplicate name; the existing provider is not replaced",
+          "return_contract": "Returns `error` with message indicating duplicate provider name; registry state unchanged",
+          "error_condition": "`Register(p Provider)` is called with a provider whose name is already registered"
+        },
+        {
+          "id": "06-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "`Registry`",
+          "action": "returns `nil` because no provider is registered under an empty name",
+          "return_contract": "Returns `nil`",
+          "error_condition": "`Get(name)` is called with an empty string"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-3",
+      "title": "GitHub Provider Implementation",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "authenticate users via GitHub OAuth with built-in well-known URLs and optional URL overrides",
+        "benefit": "so that GitHub is supported out of the box including GitHub Enterprise deployments"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "GitHub provider",
+          "action": "implements the `Provider` interface with default `authorize_url` `https://github.com/login/oauth/authorize`, default `token_url` `https://github.com/login/oauth/access_token`, and default `userinfo_url` `https://api.github.com/user`; when config override fields are non-empty they replace the respective defaults entirely",
+          "return_contract": "`Name()` returns `\"github\"`"
+        },
+        {
+          "id": "06-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "GitHub provider",
+          "action": "constructs and returns the authorization URL by appending `client_id`, `scope=user:email`, `state`, and `redirect_uri` as query parameters to the configured `authorize_url`",
+          "return_contract": "Returns a string URL with all four query parameters present",
+          "trigger": "`AuthorizeURL(state, redirectURI string)` is called"
+        },
+        {
+          "id": "06-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "GitHub provider",
+          "action": "sends a POST request to `token_url` with form-encoded body containing `client_id`, `client_secret`, `code`, and `redirect_uri`; sets `Accept: application/json` header; parses the JSON response to extract `access_token`; uses the shared `*http.Client` with 30-second timeout",
+          "return_contract": "Returns `(accessToken string, nil)` on success",
+          "trigger": "`Exchange(ctx, code, redirectURI)` is called"
+        },
+        {
+          "id": "06-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "GitHub provider",
+          "action": "sends a GET request to `userinfo_url` with `Authorization: Bearer <accessToken>` header; parses JSON response extracting `login` \u2192 `UserInfo.Username`, `email` \u2192 `UserInfo.Email`, and `id` (numeric) \u2192 `UserInfo.ProviderID` (converted to string); uses the shared `*http.Client`",
+          "return_contract": "Returns `(*UserInfo, nil)` on success with all three fields populated",
+          "trigger": "`UserInfo(ctx, accessToken)` is called"
+        },
+        {
+          "id": "06-REQ-3.5",
+          "ears_pattern": "ubiquitous",
+          "system": "GitHub provider",
+          "action": "receives the shared `*http.Client` via constructor injection at creation time and does not create its own HTTP client",
+          "return_contract": "Provider struct holds a reference to the injected `*http.Client`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "GitHub provider",
+          "action": "returns a non-nil error from `Exchange`; the error message includes the provider error value",
+          "return_contract": "Returns `(\"\", error)`",
+          "error_condition": "the token endpoint returns a JSON response containing an `error` field"
+        },
+        {
+          "id": "06-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "GitHub provider",
+          "action": "returns a non-nil error from `Exchange` indicating the token was not returned",
+          "return_contract": "Returns `(\"\", error)`",
+          "error_condition": "the token endpoint returns a JSON response with `access_token` empty or absent"
+        },
+        {
+          "id": "06-REQ-3.E3",
+          "ears_pattern": "unwanted",
+          "system": "GitHub provider",
+          "action": "returns a non-nil error from the respective method; no retry is attempted; the shared `*http.Client` 30-second timeout cancels the pending request and returns a timeout error",
+          "return_contract": "Returns an error; caller receives a wrapped I/O or HTTP error",
+          "error_condition": "the HTTP call to `token_url` or `userinfo_url` times out or returns a non-2xx status"
+        },
+        {
+          "id": "06-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "GitHub provider",
+          "action": "propagates the context cancellation error without hanging; the underlying `*http.Client` respects the context deadline",
+          "return_contract": "Returns `(\"\", ctx.Err())` or `(nil, ctx.Err())`",
+          "error_condition": "the context passed to `Exchange` or `UserInfo` is cancelled before the HTTP call completes"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-4",
+      "title": "Config-Driven Provider Registration at Startup",
+      "user_story": {
+        "role": "apikit server operator",
+        "goal": "configure OAuth providers in TOML and have them automatically registered at startup",
+        "benefit": "so that no code changes are required to add a GitHub provider to a deployment"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Config` struct",
+          "action": "is extended with an `OAuth OAuthConfig` field tagged `toml:\"oauth\"`, where `OAuthConfig` contains `Providers []ProviderConfig` tagged `toml:\"providers\"`, and `ProviderConfig` contains `Name`, `ClientID`, `ClientSecret`, `AuthorizeURL`, `TokenURL`, and `UserinfoURL` string fields with corresponding TOML tags",
+          "return_contract": "TOML config with `[[oauth.providers]]` blocks unmarshals correctly into `Config.OAuth.Providers`"
+        },
+        {
+          "id": "06-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` describing the missing field; the server does not start",
+          "return_contract": "Returns `(nil, error)` with a descriptive message",
+          "trigger": "a `[[oauth.providers]]` entry has an empty `name`, `client_id`, or `client_secret`"
+        },
+        {
+          "id": "06-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` indicating the duplicate provider name",
+          "return_contract": "Returns `(nil, error)`",
+          "trigger": "two or more `[[oauth.providers]]` entries share the same `name`"
+        },
+        {
+          "id": "06-REQ-4.4",
+          "ears_pattern": "event_driven",
+          "system": "server bootstrap",
+          "action": "iterates each `ProviderConfig`; for `name == \"github\"` creates a GitHub provider with the config's `ClientID`, `ClientSecret`, and optional URL overrides; registers each provider in a new `Registry`; for unknown provider names returns a startup error",
+          "return_contract": "Registry is populated; server proceeds to start. For unknown names, startup fails with an error",
+          "trigger": "server starts up with a valid config containing `[[oauth.providers]]` entries"
+        },
+        {
+          "id": "06-REQ-4.5",
+          "ears_pattern": "state_driven",
+          "system": "`LoadConfig()`",
+          "action": "accepts the configuration as valid and the server starts normally; the registry contains no providers",
+          "return_contract": "Returns `(*Config, nil)`; `Registry.List()` returns `[]`",
+          "state": "the `[[oauth.providers]]` array is empty or absent in the config"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "server bootstrap",
+          "action": "returns a startup error naming the unsupported provider; the server does not start; no partial registry is exposed",
+          "return_contract": "Startup returns error; process exits or returns error to caller without starting HTTP listener",
+          "error_condition": "an unknown `name` value appears in `[[oauth.providers]]` (e.g. `\"gitlab\"`)"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-5",
+      "title": "GET /auth/providers Endpoint",
+      "user_story": {
+        "role": "CLI client",
+        "goal": "retrieve the list of configured OAuth providers and their authorization URLs",
+        "benefit": "so that the CLI can present available login options and redirect the user to the correct authorization URL"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "GET /auth/providers handler",
+          "action": "calls `Registry.List()` to get provider names in alphabetical order, then for each name calls `Registry.Get(name).AuthorizeURL(\"\", \"\")` to obtain a base authorization URL with `client_id` and `scope` pre-populated but without `state` or `redirect_uri`, and returns a JSON array of objects each containing `name` and `authorize_url`",
+          "return_contract": "HTTP 200 with `Content-Type: application/json`; body is a JSON array, e.g. `[{\"name\":\"github\",\"authorize_url\":\"https://github.com/login/oauth/authorize?client_id=...&scope=user:email\"}]`",
+          "trigger": "a GET request is received at `{mount_point}/auth/providers`"
+        },
+        {
+          "id": "06-REQ-5.2",
+          "ears_pattern": "state_driven",
+          "system": "GET /auth/providers handler",
+          "action": "returns an empty JSON array",
+          "return_contract": "HTTP 200; body is `[]`",
+          "state": "no providers are registered in the `Registry`"
+        },
+        {
+          "id": "06-REQ-5.3",
+          "ears_pattern": "ubiquitous",
+          "system": "GET /auth/providers handler",
+          "action": "is registered with `CacheMiddleware(CachePublic)` so that responses carry `Cache-Control: public, max-age=300`",
+          "return_contract": "Response includes `Cache-Control: public, max-age=300` header"
+        },
+        {
+          "id": "06-REQ-5.4",
+          "ears_pattern": "ubiquitous",
+          "system": "GET /auth/providers handler",
+          "action": "never includes `client_secret`, `token_url`, or `userinfo_url` in the response body",
+          "return_contract": "Response JSON objects contain only `name` and `authorize_url` fields"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "06-REQ-6",
+      "title": "POST /auth/callback Request Validation",
+      "user_story": {
+        "role": "CLI client",
+        "goal": "receive clear validation errors when the callback request is malformed",
+        "benefit": "so that integration bugs are surfaced immediately with actionable messages"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "proceeds to provider lookup without returning a validation error",
+          "return_contract": "No 400 error from validation; processing continues",
+          "trigger": "a POST request body is received with `provider`, `code`, and `redirect_uri` all non-empty and `expires` absent or one of `0`, `30`, `60`, `90`"
+        },
+        {
+          "id": "06-REQ-6.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns an error response using `APIError()` with HTTP 400 and message `\"provider is required\"`",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"provider is required\"}}`",
+          "trigger": "`provider` field is missing or empty in the request body"
+        },
+        {
+          "id": "06-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns an error response using `APIError()` with HTTP 400 and message `\"code is required\"`",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"code is required\"}}`",
+          "trigger": "`code` field is missing or empty in the request body"
+        },
+        {
+          "id": "06-REQ-6.4",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns an error response using `APIError()` with HTTP 400 and message `\"redirect_uri is required\"`",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"redirect_uri is required\"}}`",
+          "trigger": "`redirect_uri` field is missing or empty in the request body"
+        },
+        {
+          "id": "06-REQ-6.5",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns an error response using `APIError()` with HTTP 400 and message `\"expires must be 0, 30, 60, or 90\"`",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"expires must be 0, 30, 60, or 90\"}}`",
+          "trigger": "`expires` field is present in the request body but not one of `0`, `30`, `60`, `90`"
+        },
+        {
+          "id": "06-REQ-6.6",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "defaults `expires` to `90`",
+          "return_contract": "Processing continues with `expires = 90`",
+          "trigger": "`expires` field is absent from the request body"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 400 using `APIError()` with a message indicating invalid JSON or bad request",
+          "return_contract": "HTTP 400; error response body",
+          "error_condition": "the request body is not valid JSON"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-7",
+      "title": "Redirect URI Validation",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "validate the `redirect_uri` against a configured allowlist before exchanging the authorization code",
+        "benefit": "so that open-redirect attacks are prevented"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "redirect URI validator",
+          "action": "accepts any `redirect_uri` matching `http://localhost:<port>/*` where `<port>` is any valid port number (1\u201365535), regardless of path",
+          "return_contract": "Returns allowed (no error)"
+        },
+        {
+          "id": "06-REQ-7.2",
+          "ears_pattern": "state_driven",
+          "system": "redirect URI validator",
+          "action": "accepts any `redirect_uri` whose scheme and host match the `external_url`'s scheme and host; the path may extend beyond the `external_url`'s path",
+          "return_contract": "Returns allowed (no error)",
+          "state": "`external_url` is configured (non-empty) in `config.toml`"
+        },
+        {
+          "id": "06-REQ-7.3",
+          "ears_pattern": "state_driven",
+          "system": "redirect URI validator",
+          "action": "accepts only localhost URIs; non-localhost URIs are rejected",
+          "return_contract": "Returns error for non-localhost URIs",
+          "state": "`external_url` is not configured (empty string)"
+        },
+        {
+          "id": "06-REQ-7.4",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 400 using `APIError()` with message `\"redirect_uri is not allowed\"` without proceeding to code exchange",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"redirect_uri is not allowed\"}}`",
+          "trigger": "the `redirect_uri` does not match any entry in the allowlist"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "redirect URI validator",
+          "action": "rejects the URI because only `http://localhost:*` is in the allowlist; HTTPS localhost is not accepted",
+          "return_contract": "Returns error; HTTP 400 from handler",
+          "error_condition": "`redirect_uri` uses HTTPS on localhost (e.g. `https://localhost:3000/callback`)"
+        },
+        {
+          "id": "06-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "redirect URI validator",
+          "action": "rejects the URI",
+          "return_contract": "Returns error; HTTP 400 from handler",
+          "error_condition": "`redirect_uri` is a non-localhost HTTP URI when `external_url` is configured but the scheme or host does not match `external_url`"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-8",
+      "title": "Authorization Code Exchange",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "exchange the authorization code for an access token from the identity provider",
+        "benefit": "so that the server can retrieve user identity without persisting IdP tokens"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "calls `provider.Exchange(ctx, code, redirectURI)` to obtain an access token from the identity provider",
+          "return_contract": "On success, `accessToken` is a non-empty string; processing continues to `UserInfo`",
+          "trigger": "provider lookup and redirect URI validation both succeed"
+        },
+        {
+          "id": "06-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 401 using `APIError()` with message `\"authorization code exchange failed\"`",
+          "return_contract": "HTTP 401; `{\"error\":{\"code\":401,\"message\":\"authorization code exchange failed\"}}`",
+          "trigger": "`provider.Exchange()` returns an error"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "the context cancellation propagates into `Exchange`; the method returns an error; the handler returns HTTP 401 without hanging",
+          "return_contract": "HTTP 401; no goroutine leak",
+          "error_condition": "the request context is cancelled while `provider.Exchange()` is in flight"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-9",
+      "title": "User Info Retrieval from Provider",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "retrieve user identity fields from the OAuth provider after code exchange",
+        "benefit": "so that the user record can be created or updated with current identity information"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "calls `provider.UserInfo(ctx, accessToken)` to retrieve the user's identity",
+          "return_contract": "On success, returns a non-nil `*UserInfo` with at least `Username` and `ProviderID` populated",
+          "trigger": "code exchange succeeds and returns a non-empty `accessToken`"
+        },
+        {
+          "id": "06-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 502 using `APIError()` with message `\"failed to retrieve user info from provider\"`",
+          "return_contract": "HTTP 502; `{\"error\":{\"code\":502,\"message\":\"failed to retrieve user info from provider\"}}`",
+          "trigger": "`provider.UserInfo()` returns an error"
+        },
+        {
+          "id": "06-REQ-9.3",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 400 using `APIError()` with message `\"provider returned empty email; email is required\"`",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"provider returned empty email; email is required\"}}`",
+          "trigger": "`provider.UserInfo()` returns a `*UserInfo` with an empty `Email` field"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "`provider.UserInfo()` returns a non-nil error; the handler returns HTTP 502 without retrying",
+          "return_contract": "HTTP 502",
+          "error_condition": "the identity provider's user info API returns HTTP 401 or 403 (token invalid or insufficient scope)"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-10",
+      "title": "User Upsert on OAuth Callback",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "create or update the user record in the database based on the identity provider's response",
+        "benefit": "so that new users are onboarded and returning users have their profile kept current"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "opens a database transaction via `db.WithTx` and queries the `users` table for an existing record matching `(provider, provider_id)`",
+          "return_contract": "Transaction is open; query executes without error",
+          "trigger": "user info is retrieved successfully and email is non-empty"
+        },
+        {
+          "id": "06-REQ-10.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "generates a new UUID for the user ID; checks `admin_config` for `admin_email`; if the user's email matches `admin_email` and no user with `role = 'admin'` exists in `users`, sets `role = 'admin'`; otherwise sets `role = 'user'`; inserts the new user into `users` with `status = 'active'` and timestamps from `NowUTC()`",
+          "return_contract": "New row inserted in `users`; `id`, `username`, `email`, `provider`, `provider_id`, `role`, `status`, `created_at`, `updated_at` all populated",
+          "trigger": "no existing user matches `(provider, provider_id)` in the `users` table"
+        },
+        {
+          "id": "06-REQ-10.3",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "updates the existing user's `username`, `email`, and `updated_at` columns in `users`",
+          "return_contract": "`users` row updated; other fields (`id`, `role`, `status`, `created_at`) unchanged",
+          "trigger": "an existing user matches `(provider, provider_id)` in the `users` table and their `status` is not `blocked`"
+        },
+        {
+          "id": "06-REQ-10.4",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "rolls back the transaction and returns HTTP 403 using `APIError()` with message `\"user is blocked\"`; does not update the user record or issue a new key",
+          "return_contract": "HTTP 403; `{\"error\":{\"code\":403,\"message\":\"user is blocked\"}}`; database unchanged",
+          "trigger": "an existing user matches `(provider, provider_id)` and their `status` is `blocked`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "`db.WithTx` rolls back the transaction automatically; the handler maps the error via `db.WrapError` and returns HTTP 500 using `APIError()` with message `\"internal server error\"`",
+          "return_contract": "HTTP 500; transaction rolled back; no partial state in `users` or `api_keys`",
+          "error_condition": "the database query or insert within `db.WithTx` returns an error"
+        },
+        {
+          "id": "06-REQ-10.E2",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "treats the condition as no admin email configured; sets new user's role to `'user'` and continues without error",
+          "return_contract": "New user created with `role = 'user'`; no HTTP error",
+          "error_condition": "`admin_email` does not exist in `admin_config` (table empty or row missing)"
+        },
+        {
+          "id": "06-REQ-10.E3",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "sets the new user's role to `'user'` (admin auto-grant only fires once, when no admin exists yet)",
+          "return_contract": "New user created with `role = 'user'`",
+          "error_condition": "a user with `role = 'admin'` already exists in `users` when a new user with a matching `admin_email` logs in for the first time"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-11",
+      "title": "API Key Generation and Revocation on Callback",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "generate a fresh cryptographically secure API key for the user on each login and revoke any previously active key",
+        "benefit": "so that each login session has a unique credential and stale keys are invalidated"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "sets `revoked_at = NowUTC()` on all active (non-revoked, non-expired) API keys for the user in `api_keys`",
+          "return_contract": "Previous active keys in `api_keys` have `revoked_at` set; no keys deleted",
+          "trigger": "user upsert succeeds inside the `db.WithTx` transaction"
+        },
+        {
+          "id": "06-REQ-11.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "generates a new `key_id` (random 8-character alphanumeric string via `crypto/rand`) and a new `secret` (random 32-character alphanumeric string via `crypto/rand`); computes SHA-256 hash of `secret`; calculates `expires_at` as `null` when `expires == 0`, or `NowUTC() + (expires * 24h)` otherwise; inserts the new key record into `api_keys` with `key_id`, `secret_hash`, `expires_at`, and the user's ID",
+          "return_contract": "New row in `api_keys` with correct fields; plaintext `secret` available in memory only",
+          "trigger": "previous key revocation succeeds"
+        },
+        {
+          "id": "06-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "POST /auth/callback handler",
+          "action": "uses `crypto/rand` (not `math/rand`) for all random generation of `key_id` and `secret` to ensure cryptographic security",
+          "return_contract": "Key material is generated from a cryptographically secure random source"
+        },
+        {
+          "id": "06-REQ-11.4",
+          "ears_pattern": "ubiquitous",
+          "system": "POST /auth/callback handler",
+          "action": "returns the full API key in the response as `<TokenPrefix>_<key_id>_<secret>` where `TokenPrefix` is `apikit.TokenPrefix` (default `\"ak\"`); the plaintext `secret` is included exactly once in this response and is never stored",
+          "return_contract": "Response `api_key.key` matches pattern `ak_<8chars>_<32chars>`; `api_key.key_id` matches the 8-char segment; `api_key.expires_at` is RFC 3339 or null"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "06-REQ-11.E1",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "returns an error from the key generation function; `db.WithTx` rolls back the transaction; handler returns HTTP 500",
+          "return_contract": "HTTP 500; transaction rolled back; no key inserted in `api_keys`",
+          "error_condition": "`crypto/rand` returns an error during `key_id` or `secret` generation"
+        },
+        {
+          "id": "06-REQ-11.E2",
+          "ears_pattern": "unwanted",
+          "system": "POST /auth/callback handler",
+          "action": "the revocation step is a no-op (zero rows updated); processing continues normally to key generation",
+          "return_contract": "No error; new key inserted; HTTP 200",
+          "error_condition": "the user has no active keys in `api_keys` at login time (e.g. first login)"
+        }
+      ]
+    },
+    {
+      "id": "06-REQ-12",
+      "title": "Callback Success Response",
+      "user_story": {
+        "role": "CLI client",
+        "goal": "receive the full user object and new API key in a single response after successful authentication",
+        "benefit": "so that the CLI can store the API key and display the user's identity without additional requests"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-12.1",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 200 with a JSON body containing a `user` object and an `api_key` object",
+          "return_contract": "HTTP 200; `Content-Type: application/json`; body matches schema `{\"user\":{\"id\":\"<uuid>\",\"username\":\"<string>\",\"email\":\"<string>\",\"full_name\":\"<string>\",\"status\":\"active\",\"role\":\"<string>\",\"provider\":\"<string>\",\"provider_id\":\"<string>\",\"created_at\":\"<RFC3339>\",\"updated_at\":\"<RFC3339>\"},\"api_key\":{\"key\":\"<prefix>_<key_id>_<secret>\",\"key_id\":\"<key_id>\",\"expires_at\":\"<RFC3339 or null>\"}}`",
+          "trigger": "all processing steps (validation, exchange, user info, upsert, key generation) complete successfully and the transaction is committed"
+        },
+        {
+          "id": "06-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "POST /auth/callback handler",
+          "action": "includes the `role` field in the `user` object of the response",
+          "return_contract": "`user.role` is either `\"admin\"` or `\"user\"`"
+        },
+        {
+          "id": "06-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "POST /auth/callback handler",
+          "action": "formats all timestamps in the response using `FormatUTC()` producing RFC 3339 strings; `api_key.expires_at` is `null` (JSON null) when `expires == 0`",
+          "return_contract": "Timestamps are valid RFC 3339 strings or JSON null"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "06-REQ-13",
+      "title": "Handler Registration and HTTP Client Configuration",
+      "user_story": {
+        "role": "apikit server bootstrap",
+        "goal": "register OAuth handlers on the Echo group and configure a shared HTTP client for providers",
+        "benefit": "so that the endpoints are live and providers share a single connection pool with a bounded timeout"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "server bootstrap",
+          "action": "calls `RegisterOAuthHandlers(group *echo.Group, registry *oauth.Registry, database *db.DB, externalURL string)` to mount `GET /auth/providers` with `CacheMiddleware(CachePublic)` and `POST /auth/callback` (inheriting the group's default `Cache-Control: no-store`) on the Echo group returned by `APIGroup()`",
+          "return_contract": "Both routes are reachable; `GET /auth/providers` responds with `Cache-Control: public, max-age=300`; `POST /auth/callback` has no public caching"
+        },
+        {
+          "id": "06-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "server bootstrap",
+          "action": "creates a single `*http.Client` with a 30-second timeout using `http.DefaultTransport` and injects it into all provider instances at construction time; providers do not create their own HTTP clients",
+          "return_contract": "All provider HTTP calls use the shared `*http.Client`; timeout is 30 seconds"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "06-REQ-14",
+      "title": "Concurrent Callback Serialization",
+      "user_story": {
+        "role": "apikit server",
+        "goal": "handle concurrent OAuth callback requests for the same user without data corruption",
+        "benefit": "so that simultaneous logins do not leave the user with multiple active keys or inconsistent state"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "POST /auth/callback handler",
+          "action": "relies on SQLite's single-connection serialization (enforced by `SetMaxOpenConns(1)` in the `database_layer`) to serialize concurrent transactions; no application-level locks or serializable isolation hints are used",
+          "return_contract": "Concurrent requests execute sequentially at the database layer; no deadlock or data corruption"
+        },
+        {
+          "id": "06-REQ-14.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "the second transaction observes the first transaction's new key and revokes it before issuing yet another key; the user ends up with exactly one active key after both transactions complete",
+          "return_contract": "After both transactions, exactly one active (non-revoked) key exists for the user in `api_keys`",
+          "trigger": "two sequential transactions process OAuth callbacks for the same user"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "06-REQ-15",
+      "title": "Provider Removal Non-Destructive Behavior",
+      "user_story": {
+        "role": "apikit server operator",
+        "goal": "remove an OAuth provider from config without affecting existing user credentials",
+        "benefit": "so that removing a provider does not break active user sessions or audit trails"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "06-REQ-15.1",
+          "ears_pattern": "state_driven",
+          "system": "apikit server",
+          "action": "retains all existing user records in `users` with their original `provider` and `provider_id` values; no database cleanup is performed; existing API keys remain valid until they expire or are revoked",
+          "return_contract": "No rows deleted from `users` or `api_keys`; existing credentials continue to authenticate",
+          "state": "a provider has been removed from the `[[oauth.providers]]` config and the server restarted"
+        },
+        {
+          "id": "06-REQ-15.2",
+          "ears_pattern": "event_driven",
+          "system": "POST /auth/callback handler",
+          "action": "returns HTTP 400 with message `\"unknown provider: <name>\"` because the provider is no longer in the registry",
+          "return_contract": "HTTP 400; `{\"error\":{\"code\":400,\"message\":\"unknown provider: <name>\"}}`",
+          "trigger": "a callback request references a provider name that was removed from config"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "06-PROP-1",
+      "title": "API Key Uniqueness and Revocation Atomicity",
+      "for_any": "successful POST /auth/callback response",
+      "invariant": "there is exactly one active (non-revoked, non-expired) key in `api_keys` for the user after the transaction commits; all previously active keys have `revoked_at` set",
+      "validates": [
+        "06-REQ-11.1",
+        "06-REQ-11.2",
+        "06-REQ-14.2"
+      ]
+    },
+    {
+      "id": "06-PROP-2",
+      "title": "Blocked User Status Immutability",
+      "for_any": "POST /auth/callback request for a user with `status = 'blocked'` in `users`",
+      "invariant": "the user's `status` remains `'blocked'` after the request; no new key is created in `api_keys`; HTTP 403 is returned",
+      "validates": [
+        "06-REQ-10.4"
+      ]
+    },
+    {
+      "id": "06-PROP-3",
+      "title": "Secret Non-Persistence",
+      "for_any": "new API key inserted into `api_keys`",
+      "invariant": "the plaintext `secret` is never written to the database; only the SHA-256 hash is stored in `secret_hash`; the plaintext appears exactly once in the HTTP 200 response",
+      "validates": [
+        "06-REQ-11.2",
+        "06-REQ-11.4"
+      ]
+    },
+    {
+      "id": "06-PROP-4",
+      "title": "Admin Auto-Grant Fires At Most Once",
+      "for_any": "any number of OAuth callback requests from a user whose email matches `admin_email`",
+      "invariant": "the `role = 'admin'` grant is applied at most once \u2014 only when no user with `role = 'admin'` exists in `users` at insert time; subsequent logins do not change the role of any existing user",
+      "validates": [
+        "06-REQ-10.2",
+        "06-REQ-10.3",
+        "06-REQ-10.E3"
+      ]
+    },
+    {
+      "id": "06-PROP-5",
+      "title": "Provider Registry Name Uniqueness",
+      "for_any": "any sequence of `Register()` calls on a `Registry`",
+      "invariant": "no two providers with the same name can coexist in the `Registry`; `Register()` returns a non-nil error for duplicates without replacing the existing provider",
+      "validates": [
+        "06-REQ-2.2",
+        "06-REQ-2.E1"
+      ]
+    },
+    {
+      "id": "06-PROP-6",
+      "title": "No Secrets in Provider List Response",
+      "for_any": "GET /auth/providers response",
+      "invariant": "the response body contains only `name` and `authorize_url` fields per provider entry; `client_secret`, `token_url`, and `userinfo_url` are never included",
+      "validates": [
+        "06-REQ-5.1",
+        "06-REQ-5.4"
+      ]
+    },
+    {
+      "id": "06-PROP-7",
+      "title": "Redirect URI Allowlist Enforcement",
+      "for_any": "POST /auth/callback request",
+      "invariant": "`provider.Exchange()` is never called when `redirect_uri` fails allowlist validation; the request is rejected with HTTP 400 before any identity provider communication occurs",
+      "validates": [
+        "06-REQ-7.4",
+        "06-REQ-8.1"
+      ]
+    },
+    {
+      "id": "06-PROP-8",
+      "title": "Transaction Atomicity for User Upsert and Key Creation",
+      "for_any": "POST /auth/callback request that progresses to the database phase",
+      "invariant": "the user upsert and key creation (including old key revocation) are executed within a single `db.WithTx` transaction; if any step fails, the entire transaction is rolled back and neither partial user updates nor partial key records are visible",
+      "validates": [
+        "06-REQ-10.1",
+        "06-REQ-10.E1",
+        "06-REQ-11.1",
+        "06-REQ-11.2"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "06-PATH-1",
+      "title": "Full OAuth Callback Flow \u2014 New User Happy Path",
+      "steps": [
+        {
+          "actor": "CLI client",
+          "action": "sends POST to `{mount_point}/auth/callback` with JSON body containing `provider`, `code`, `redirect_uri`, and optional `expires`"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "parses and validates request body; rejects with HTTP 400 if any required field is missing or `expires` is invalid"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "looks up provider by name in the `Registry`; rejects with HTTP 400 if not found"
+        },
+        {
+          "actor": "redirect URI validator",
+          "action": "checks `redirect_uri` against localhost allowlist and `external_url`; rejects with HTTP 400 if not allowed"
+        },
+        {
+          "actor": "GitHub provider",
+          "action": "calls `Exchange(ctx, code, redirectURI)` which POSTs to `token_url` with credentials and returns an access token; rejects with HTTP 401 on failure"
+        },
+        {
+          "actor": "GitHub provider",
+          "action": "calls `UserInfo(ctx, accessToken)` which GETs `userinfo_url` and returns a `*UserInfo` with `Username`, `Email`, and `ProviderID`; rejects with HTTP 502 on failure"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "validates that `UserInfo.Email` is non-empty; rejects with HTTP 400 if empty"
+        },
+        {
+          "actor": "database_layer (db.WithTx)",
+          "action": "opens a transaction; queries `users` by `(provider, provider_id)`; finds no match; checks `admin_config` for `admin_email`; inserts new user into `users` with appropriate `role`"
+        },
+        {
+          "actor": "database_layer (db.WithTx)",
+          "action": "revokes all active keys in `api_keys` for the user (no-op for new user); generates new `key_id` and `secret` via `crypto/rand`; computes SHA-256 hash; inserts new row in `api_keys`; commits transaction"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "returns HTTP 200 with JSON body containing the full `user` object and `api_key` including plaintext secret"
+        },
+        {
+          "actor": "CLI client",
+          "action": "receives HTTP 200 response; stores the API key for subsequent authenticated requests"
+        }
+      ]
+    },
+    {
+      "id": "06-PATH-2",
+      "title": "Full OAuth Callback Flow \u2014 Returning User Re-Login",
+      "steps": [
+        {
+          "actor": "CLI client",
+          "action": "sends POST to `{mount_point}/auth/callback` with valid `provider`, `code`, `redirect_uri`"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "validates request, looks up provider in `Registry`, validates `redirect_uri`"
+        },
+        {
+          "actor": "GitHub provider",
+          "action": "exchanges code for access token via `Exchange()`; retrieves user info via `UserInfo()`"
+        },
+        {
+          "actor": "database_layer (db.WithTx)",
+          "action": "opens transaction; queries `users` by `(provider, provider_id)`; finds existing user with `status = 'active'`; updates `username`, `email`, `updated_at`"
+        },
+        {
+          "actor": "database_layer (db.WithTx)",
+          "action": "sets `revoked_at = NowUTC()` on the user's existing active key in `api_keys`; generates new `key_id` and `secret`; inserts new key record; commits transaction"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "returns HTTP 200 with updated `user` object and new `api_key`; previous key is now revoked"
+        }
+      ]
+    },
+    {
+      "id": "06-PATH-3",
+      "title": "GET /auth/providers \u2014 Provider Discovery",
+      "steps": [
+        {
+          "actor": "CLI client",
+          "action": "sends GET to `{mount_point}/auth/providers` with no authentication"
+        },
+        {
+          "actor": "CacheMiddleware(CachePublic)",
+          "action": "sets `Cache-Control: public, max-age=300` on the response"
+        },
+        {
+          "actor": "GET /auth/providers handler",
+          "action": "calls `Registry.List()` to get alphabetically ordered provider names; for each name calls `Registry.Get(name).AuthorizeURL(\"\", \"\")` to build the base authorization URL"
+        },
+        {
+          "actor": "GET /auth/providers handler",
+          "action": "returns HTTP 200 with JSON array of `{name, authorize_url}` objects; no secrets included"
+        },
+        {
+          "actor": "CLI client",
+          "action": "receives list of providers; selects a provider; appends `state` and `redirect_uri` to `authorize_url`; opens browser to the constructed URL"
+        }
+      ]
+    },
+    {
+      "id": "06-PATH-4",
+      "title": "Blocked User Rejection on OAuth Callback",
+      "steps": [
+        {
+          "actor": "CLI client",
+          "action": "sends POST to `{mount_point}/auth/callback` with valid credentials for a blocked user"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "validates request, looks up provider, validates `redirect_uri`, exchanges code, retrieves user info"
+        },
+        {
+          "actor": "database_layer (db.WithTx)",
+          "action": "opens transaction; queries `users` by `(provider, provider_id)`; finds existing user with `status = 'blocked'`; rolls back transaction"
+        },
+        {
+          "actor": "POST /auth/callback handler",
+          "action": "returns HTTP 403 using `APIError()` with message `\"user is blocked\"`; no key is generated or revoked"
+        },
+        {
+          "actor": "CLI client",
+          "action": "receives HTTP 403 response; displays error to user"
+        }
+      ]
+    },
+    {
+      "id": "06-PATH-5",
+      "title": "Server Startup \u2014 Config-Driven Provider Registration",
+      "steps": [
+        {
+          "actor": "server bootstrap",
+          "action": "calls `LoadConfig()` from spec `01_server_core` which reads and validates `[[oauth.providers]]` TOML entries including non-empty `name`, `client_id`, `client_secret`, and uniqueness; fails fast with error if any validation fails"
+        },
+        {
+          "actor": "server bootstrap",
+          "action": "creates a new `Registry` via `NewRegistry()`; iterates `Config.OAuth.Providers`; for each entry with `name == \"github\"` creates a GitHub provider with `ClientID`, `ClientSecret`, and optional URL overrides; injects the shared 30-second-timeout `*http.Client`"
+        },
+        {
+          "actor": "server bootstrap",
+          "action": "calls `Registry.Register(provider)` for each provider; returns startup error for unknown provider names"
+        },
+        {
+          "actor": "server bootstrap",
+          "action": "calls `RegisterOAuthHandlers(APIGroup(), registry, db, externalURL)` to mount `GET /auth/providers` and `POST /auth/callback` on the Echo group"
+        },
+        {
+          "actor": "Echo HTTP server",
+          "action": "begins serving traffic; both OAuth endpoints are reachable; `GET /auth/providers` returns the configured provider list"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "06-ERR-1",
+      "condition": "`provider` field is missing or empty in POST /auth/callback request body",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"provider is required\"`",
+      "requirement_id": "06-REQ-6.2"
+    },
+    {
+      "id": "06-ERR-2",
+      "condition": "`code` field is missing or empty in POST /auth/callback request body",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"code is required\"`",
+      "requirement_id": "06-REQ-6.3"
+    },
+    {
+      "id": "06-ERR-3",
+      "condition": "`redirect_uri` field is missing or empty in POST /auth/callback request body",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"redirect_uri is required\"`",
+      "requirement_id": "06-REQ-6.4"
+    },
+    {
+      "id": "06-ERR-4",
+      "condition": "`expires` field is present but not one of `0`, `30`, `60`, `90`",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"expires must be 0, 30, 60, or 90\"`",
+      "requirement_id": "06-REQ-6.5"
+    },
+    {
+      "id": "06-ERR-5",
+      "condition": "Provider name in request does not match any registered provider in the `Registry`",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"unknown provider: <name>\"`",
+      "requirement_id": "06-REQ-15.2"
+    },
+    {
+      "id": "06-ERR-6",
+      "condition": "`redirect_uri` does not match localhost allowlist or `external_url`",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"redirect_uri is not allowed\"` before calling `Exchange()`",
+      "requirement_id": "06-REQ-7.4"
+    },
+    {
+      "id": "06-ERR-7",
+      "condition": "`provider.Exchange()` returns an error (e.g. invalid code, network failure, timeout)",
+      "behavior": "Handler returns HTTP 401 via `APIError()` with message `\"authorization code exchange failed\"`",
+      "requirement_id": "06-REQ-8.2"
+    },
+    {
+      "id": "06-ERR-8",
+      "condition": "`provider.UserInfo()` returns an error (e.g. network failure, identity provider API error)",
+      "behavior": "Handler returns HTTP 502 via `APIError()` with message `\"failed to retrieve user info from provider\"`",
+      "requirement_id": "06-REQ-9.2"
+    },
+    {
+      "id": "06-ERR-9",
+      "condition": "`UserInfo.Email` is empty after successful user info retrieval",
+      "behavior": "Handler returns HTTP 400 via `APIError()` with message `\"provider returned empty email; email is required\"`",
+      "requirement_id": "06-REQ-9.3"
+    },
+    {
+      "id": "06-ERR-10",
+      "condition": "Matched user in `users` table has `status = 'blocked'`",
+      "behavior": "Transaction is rolled back; handler returns HTTP 403 via `APIError()` with message `\"user is blocked\"`; user status is not changed",
+      "requirement_id": "06-REQ-10.4"
+    },
+    {
+      "id": "06-ERR-11",
+      "condition": "Database error occurs during user upsert or key creation within `db.WithTx`",
+      "behavior": "`db.WithTx` rolls back the transaction; handler maps error via `db.WrapError` and returns HTTP 500 via `APIError()` with message `\"internal server error\"`",
+      "requirement_id": "06-REQ-10.E1"
+    },
+    {
+      "id": "06-ERR-12",
+      "condition": "`crypto/rand` returns an error during key material generation",
+      "behavior": "Key generation function returns error; `db.WithTx` rolls back the transaction; handler returns HTTP 500",
+      "requirement_id": "06-REQ-11.E1"
+    },
+    {
+      "id": "06-ERR-13",
+      "condition": "A `[[oauth.providers]]` entry in config is missing `name`, `client_id`, or `client_secret`",
+      "behavior": "`LoadConfig()` returns `(nil, error)` describing the missing field; server does not start",
+      "requirement_id": "06-REQ-4.2"
+    },
+    {
+      "id": "06-ERR-14",
+      "condition": "Two `[[oauth.providers]]` entries share the same `name`",
+      "behavior": "`LoadConfig()` returns `(nil, error)` indicating the duplicate; server does not start",
+      "requirement_id": "06-REQ-4.3"
+    },
+    {
+      "id": "06-ERR-15",
+      "condition": "An unknown provider `name` (e.g. `\"gitlab\"`) appears in `[[oauth.providers]]`",
+      "behavior": "Server bootstrap returns a startup error naming the unsupported provider; server does not start; no partial registry is exposed",
+      "requirement_id": "06-REQ-4.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4",
+      "symbols": [
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct",
+          "notes": "Echo router group used for mounting OAuth handlers via RegisterOAuthHandlers"
+        }
+      ]
+    },
+    {
+      "package": "github.com/google/uuid",
+      "version": "v1",
+      "symbols": [
+        {
+          "name": "New",
+          "import_path": "github.com/google/uuid",
+          "signature": "func New() UUID",
+          "notes": "Generates a new random UUID for new user IDs"
+        }
+      ]
+    },
+    {
+      "package": "crypto/sha256",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Sum256",
+          "import_path": "crypto/sha256",
+          "signature": "func Sum256(data []byte) [32]byte",
+          "notes": "Computes SHA-256 hash of API key secret before storage in `secret_hash`"
+        }
+      ]
+    },
+    {
+      "package": "crypto/rand",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Read",
+          "import_path": "crypto/rand",
+          "signature": "func Read(b []byte) (n int, err error)",
+          "notes": "Cryptographically secure random bytes source used to generate `key_id` and `secret`"
+        }
+      ]
+    },
+    {
+      "package": "net/http",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Client",
+          "import_path": "net/http",
+          "signature": "type Client struct { Transport RoundTripper; Timeout time.Duration; ... }",
+          "notes": "Shared HTTP client with 30-second timeout injected into provider instances"
+        },
+        {
+          "name": "DefaultTransport",
+          "import_path": "net/http",
+          "signature": "var DefaultTransport RoundTripper",
+          "notes": "Used as the transport for the shared HTTP client"
+        }
+      ]
+    }
+  ]
+}

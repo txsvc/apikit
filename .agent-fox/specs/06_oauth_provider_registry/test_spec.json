@@ -1,0 +1,1115 @@
+{
+  "$schema": null,
+  "spec_id": "06",
+  "spec_name": "oauth_provider_registry",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-06-1",
+      "requirement_id": "06-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify that the oauth package defines the Provider interface with the four required methods and that a compliant struct satisfies the interface.",
+      "preconditions": [
+        "internal/oauth package is compilable",
+        "A mock struct implementing all four methods (Name, AuthorizeURL, Exchange, UserInfo) is defined in the test"
+      ],
+      "input": "A struct that implements Name() string, AuthorizeURL(state, redirectURI string) string, Exchange(ctx, code, redirectURI string) (string, error), UserInfo(ctx, accessToken string) (*UserInfo, error)",
+      "expected": "The struct can be assigned to a variable of type oauth.Provider without a compile error; all four methods are callable via the interface",
+      "assertion_pseudocode": "var _ Provider = &mockProvider{} // compile-time assertion; assert no compilation error"
+    },
+    {
+      "id": "TS-06-2",
+      "requirement_id": "06-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify that UserInfo struct is exported with the three required fields Username, Email, and ProviderID of type string.",
+      "preconditions": [
+        "internal/oauth package is compiled"
+      ],
+      "input": "Instantiate oauth.UserInfo with all fields set",
+      "expected": "UserInfo{Username: \"user\", Email: \"user@example.com\", ProviderID: \"12345\"} compiles and fields are accessible",
+      "assertion_pseudocode": "ui := UserInfo{Username: \"octocat\", Email: \"octocat@github.com\", ProviderID: \"1\"}\nassert ui.Username == \"octocat\"\nassert ui.Email == \"octocat@github.com\"\nassert ui.ProviderID == \"1\""
+    },
+    {
+      "id": "TS-06-3",
+      "requirement_id": "06-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that the root apikit package re-exports Provider and UserInfo as type aliases interchangeable with oauth.Provider and oauth.UserInfo.",
+      "preconditions": [
+        "root apikit package compiles and imports internal/oauth"
+      ],
+      "input": "A value of type oauth.Provider assigned to apikit.Provider variable and vice versa",
+      "expected": "Both assignments compile without error; values are interchangeable",
+      "assertion_pseudocode": "var p apikit.Provider = &mockProvider{} // compile-time check\nvar q oauth.Provider = p // also valid\nassert p == q"
+    },
+    {
+      "id": "TS-06-4",
+      "requirement_id": "06-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify that NewRegistry returns a non-nil empty Registry with no providers.",
+      "preconditions": [
+        "internal/oauth package compiled"
+      ],
+      "input": "Call NewRegistry()",
+      "expected": "Returns non-nil *Registry; List() returns empty slice []string{}",
+      "assertion_pseudocode": "r := NewRegistry()\nassert r != nil\nassert len(r.List()) == 0"
+    },
+    {
+      "id": "TS-06-5",
+      "requirement_id": "06-REQ-2.2",
+      "kind": "unit",
+      "description": "Verify that Register adds a provider and subsequent Get by the same name returns that provider.",
+      "preconditions": [
+        "Registry created via NewRegistry()",
+        "A mock provider with Name() returning \"testprovider\" is available"
+      ],
+      "input": "Register(mockProvider)",
+      "expected": "Register returns nil error; Get(\"testprovider\") returns the same provider instance",
+      "assertion_pseudocode": "r := NewRegistry()\np := &mockProvider{name: \"testprovider\"}\nerr := r.Register(p)\nassert err == nil\nassert r.Get(\"testprovider\") == p"
+    },
+    {
+      "id": "TS-06-6",
+      "requirement_id": "06-REQ-2.3",
+      "kind": "unit",
+      "description": "Verify that Get returns the registered provider for a known name and nil for an unknown name.",
+      "preconditions": [
+        "Registry with one provider named \"github\" registered"
+      ],
+      "input": "Get(\"github\") and Get(\"unknown\")",
+      "expected": "Get(\"github\") returns the provider; Get(\"unknown\") returns nil",
+      "assertion_pseudocode": "r := NewRegistry()\nr.Register(&mockProvider{name: \"github\"})\nassert r.Get(\"github\") != nil\nassert r.Get(\"unknown\") == nil"
+    },
+    {
+      "id": "TS-06-7",
+      "requirement_id": "06-REQ-2.4",
+      "kind": "unit",
+      "description": "Verify that List returns all provider names in alphabetical order.",
+      "preconditions": [
+        "Registry with providers \"zebra\", \"alpha\", and \"mango\" registered in that order"
+      ],
+      "input": "List() called on registry",
+      "expected": "Returns [\"alpha\", \"mango\", \"zebra\"]",
+      "assertion_pseudocode": "r := NewRegistry()\nr.Register(&mockProvider{name: \"zebra\"})\nr.Register(&mockProvider{name: \"alpha\"})\nr.Register(&mockProvider{name: \"mango\"})\nnames := r.List()\nassert names == [\"alpha\", \"mango\", \"zebra\"]"
+    },
+    {
+      "id": "TS-06-8",
+      "requirement_id": "06-REQ-3.1",
+      "kind": "unit",
+      "description": "Verify GitHub provider implements Provider interface, Name() returns 'github', and default URLs are used when config overrides are empty.",
+      "preconditions": [
+        "GitHub provider constructed with clientID=\"cid\", clientSecret=\"secret\", empty URL overrides, and shared http.Client"
+      ],
+      "input": "Call Name() on the GitHub provider",
+      "expected": "Name() returns \"github\"; provider satisfies oauth.Provider interface at compile time",
+      "assertion_pseudocode": "var _ Provider = &GitHubProvider{} // compile-time\np := NewGitHubProvider(\"cid\", \"secret\", \"\", \"\", \"\", httpClient)\nassert p.Name() == \"github\""
+    },
+    {
+      "id": "TS-06-9",
+      "requirement_id": "06-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify AuthorizeURL constructs a correct URL with client_id, scope=user:email, state, and redirect_uri query parameters.",
+      "preconditions": [
+        "GitHub provider constructed with clientID=\"myclient\", default authorize_url"
+      ],
+      "input": "AuthorizeURL(\"mystate\", \"http://localhost:9000/cb\")",
+      "expected": "Returned URL has base https://github.com/login/oauth/authorize with query params client_id=myclient, scope=user:email, state=mystate, redirect_uri=http://localhost:9000/cb",
+      "assertion_pseudocode": "p := NewGitHubProvider(\"myclient\", \"secret\", \"\", \"\", \"\", httpClient)\nurl := p.AuthorizeURL(\"mystate\", \"http://localhost:9000/cb\")\nparsed := parseURL(url)\nassert parsed.host == \"github.com\"\nassert parsed.path == \"/login/oauth/authorize\"\nassert parsed.query[\"client_id\"] == \"myclient\"\nassert parsed.query[\"scope\"] == \"user:email\"\nassert parsed.query[\"state\"] == \"mystate\"\nassert parsed.query[\"redirect_uri\"] == \"http://localhost:9000/cb\""
+    },
+    {
+      "id": "TS-06-10",
+      "requirement_id": "06-REQ-3.3",
+      "kind": "unit",
+      "description": "Verify Exchange sends correct POST request to token_url with required fields and Accept header, and returns access_token from JSON response.",
+      "preconditions": [
+        "httptest.Server configured to respond with {\"access_token\": \"tok123\"} on POST to /token",
+        "GitHub provider constructed with token_url pointing to httptest.Server"
+      ],
+      "input": "Exchange(ctx, \"authcode\", \"http://localhost:9000/cb\")",
+      "expected": "POST sent to token_url with form body containing client_id, client_secret, code, redirect_uri; Accept: application/json header present; returns (\"tok123\", nil)",
+      "assertion_pseudocode": "server := httptest.NewServer(handler that captures request and responds with {\"access_token\":\"tok123\"})\np := NewGitHubProvider(\"cid\", \"csec\", \"\", server.URL+\"/token\", \"\", httpClient)\ntok, err := p.Exchange(ctx, \"authcode\", \"http://localhost:9000/cb\")\nassert err == nil\nassert tok == \"tok123\"\nassert capturedRequest.method == \"POST\"\nassert capturedRequest.header[\"Accept\"] == \"application/json\"\nassert capturedRequest.formBody[\"client_id\"] == \"cid\"\nassert capturedRequest.formBody[\"code\"] == \"authcode\"\nassert capturedRequest.formBody[\"redirect_uri\"] == \"http://localhost:9000/cb\""
+    },
+    {
+      "id": "TS-06-11",
+      "requirement_id": "06-REQ-3.4",
+      "kind": "unit",
+      "description": "Verify UserInfo sends GET with Bearer auth header and parses login, email, and id fields into UserInfo struct.",
+      "preconditions": [
+        "httptest.Server configured to return {\"login\":\"octocat\",\"email\":\"cat@github.com\",\"id\":42} on GET /user",
+        "GitHub provider with userinfo_url pointing to httptest.Server"
+      ],
+      "input": "UserInfo(ctx, \"mytoken\")",
+      "expected": "GET request to userinfo_url with Authorization: Bearer mytoken; returns *UserInfo{Username: \"octocat\", Email: \"cat@github.com\", ProviderID: \"42\"}, nil",
+      "assertion_pseudocode": "server := httptest.NewServer(handler returning {\"login\":\"octocat\",\"email\":\"cat@github.com\",\"id\":42})\np := NewGitHubProvider(\"cid\", \"csec\", \"\", \"\", server.URL+\"/user\", httpClient)\nui, err := p.UserInfo(ctx, \"mytoken\")\nassert err == nil\nassert ui.Username == \"octocat\"\nassert ui.Email == \"cat@github.com\"\nassert ui.ProviderID == \"42\"\nassert capturedRequest.header[\"Authorization\"] == \"Bearer mytoken\""
+    },
+    {
+      "id": "TS-06-12",
+      "requirement_id": "06-REQ-3.5",
+      "kind": "unit",
+      "description": "Verify GitHub provider stores the injected http.Client and does not create its own client.",
+      "preconditions": [
+        "A specific *http.Client instance created for injection"
+      ],
+      "input": "NewGitHubProvider(\"cid\", \"secret\", \"\", \"\", \"\", customClient)",
+      "expected": "The provider struct's internal client field equals the injected customClient pointer",
+      "assertion_pseudocode": "customClient := &http.Client{Timeout: 30 * time.Second}\np := NewGitHubProvider(\"cid\", \"secret\", \"\", \"\", \"\", customClient)\nassert p.httpClient == customClient"
+    },
+    {
+      "id": "TS-06-13",
+      "requirement_id": "06-REQ-4.1",
+      "kind": "unit",
+      "description": "Verify Config struct correctly unmarshals [[oauth.providers]] TOML into OAuthConfig.Providers slice.",
+      "preconditions": [
+        "TOML string with [[oauth.providers]] entry containing name, client_id, client_secret, and optional URL overrides"
+      ],
+      "input": "TOML: '[[oauth.providers]]\\nname=\"github\"\\nclient_id=\"cid\"\\nclient_secret=\"csec\"\\nauthorize_url=\"https://custom.example.com/auth\"'",
+      "expected": "Config.OAuth.Providers[0].Name == \"github\", ClientID == \"cid\", ClientSecret == \"csec\", AuthorizeURL == \"https://custom.example.com/auth\"",
+      "assertion_pseudocode": "cfg := loadConfigFromString(tomlString)\nassert cfg.OAuth.Providers[0].Name == \"github\"\nassert cfg.OAuth.Providers[0].ClientID == \"cid\"\nassert cfg.OAuth.Providers[0].ClientSecret == \"csec\"\nassert cfg.OAuth.Providers[0].AuthorizeURL == \"https://custom.example.com/auth\""
+    },
+    {
+      "id": "TS-06-14",
+      "requirement_id": "06-REQ-4.2",
+      "kind": "unit",
+      "description": "Verify LoadConfig returns (nil, error) when a provider entry is missing client_id.",
+      "preconditions": [
+        "TOML config with [[oauth.providers]] entry that has name and client_secret but no client_id"
+      ],
+      "input": "TOML with provider entry missing client_id",
+      "expected": "LoadConfig returns (nil, non-nil error) describing the missing client_id field",
+      "assertion_pseudocode": "cfg, err := LoadConfig(tomlMissingClientID)\nassert cfg == nil\nassert err != nil\nassert errorContains(err, \"client_id\")"
+    },
+    {
+      "id": "TS-06-15",
+      "requirement_id": "06-REQ-4.3",
+      "kind": "unit",
+      "description": "Verify LoadConfig returns (nil, error) when two provider entries share the same name.",
+      "preconditions": [
+        "TOML config with two [[oauth.providers]] entries both having name=\"github\""
+      ],
+      "input": "TOML with two providers named \"github\"",
+      "expected": "LoadConfig returns (nil, non-nil error) indicating duplicate provider name",
+      "assertion_pseudocode": "cfg, err := LoadConfig(tomlDuplicateNames)\nassert cfg == nil\nassert err != nil\nassert errorContains(err, \"duplicate\") or errorContains(err, \"github\")"
+    },
+    {
+      "id": "TS-06-16",
+      "requirement_id": "06-REQ-4.4",
+      "kind": "unit",
+      "description": "Verify server bootstrap creates GitHub provider from config and registers it; returns startup error for unknown provider names.",
+      "preconditions": [
+        "Valid config with one github provider entry",
+        "NewRegistry available"
+      ],
+      "input": "Config.OAuth.Providers = [{Name: \"github\", ClientID: \"cid\", ClientSecret: \"csec\"}]",
+      "expected": "Registry contains provider named \"github\"; Get(\"github\") is non-nil; for name \"gitlab\" bootstrap returns non-nil error",
+      "assertion_pseudocode": "registry, err := BuildRegistryFromConfig(config, httpClient)\nassert err == nil\nassert registry.Get(\"github\") != nil\n\nconfig2 := configWithProvider(\"gitlab\")\n_, err2 := BuildRegistryFromConfig(config2, httpClient)\nassert err2 != nil"
+    },
+    {
+      "id": "TS-06-17",
+      "requirement_id": "06-REQ-4.5",
+      "kind": "unit",
+      "description": "Verify LoadConfig accepts empty [[oauth.providers]] array as valid and registry has no providers.",
+      "preconditions": [
+        "TOML config with empty or absent [[oauth.providers]] section"
+      ],
+      "input": "TOML with no [[oauth.providers]] entries",
+      "expected": "LoadConfig returns (*Config, nil); resulting registry List() returns empty slice",
+      "assertion_pseudocode": "cfg, err := LoadConfig(tomlNoProviders)\nassert err == nil\nassert cfg != nil\nassert len(cfg.OAuth.Providers) == 0\nregistry := NewRegistry()\nassert len(registry.List()) == 0"
+    },
+    {
+      "id": "TS-06-18",
+      "requirement_id": "06-REQ-5.1",
+      "kind": "integration",
+      "description": "Verify GET /auth/providers returns HTTP 200 with JSON array containing name and authorize_url for each registered provider.",
+      "preconditions": [
+        "Echo server started with RegisterOAuthHandlers called",
+        "Registry has one github provider registered with clientID=\"cid\""
+      ],
+      "input": "GET {mount_point}/auth/providers",
+      "expected": "HTTP 200; Content-Type: application/json; body is [{\"name\":\"github\",\"authorize_url\":\"https://github.com/login/oauth/authorize?client_id=cid&scope=user%3Aemail\"}]",
+      "assertion_pseudocode": "resp := httpGet(\"/auth/providers\")\nassert resp.statusCode == 200\nassert resp.contentType == \"application/json\"\nbody := parseJSON(resp.body)\nassert len(body) == 1\nassert body[0][\"name\"] == \"github\"\nassert contains(body[0][\"authorize_url\"], \"client_id=cid\")\nassert contains(body[0][\"authorize_url\"], \"scope=user%3Aemail\")"
+    },
+    {
+      "id": "TS-06-19",
+      "requirement_id": "06-REQ-5.2",
+      "kind": "integration",
+      "description": "Verify GET /auth/providers returns HTTP 200 with empty JSON array when no providers are registered.",
+      "preconditions": [
+        "Echo server started with RegisterOAuthHandlers called",
+        "Registry is empty (no providers registered)"
+      ],
+      "input": "GET {mount_point}/auth/providers",
+      "expected": "HTTP 200; body is []",
+      "assertion_pseudocode": "resp := httpGet(\"/auth/providers\")\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nassert body is empty array"
+    },
+    {
+      "id": "TS-06-20",
+      "requirement_id": "06-REQ-5.3",
+      "kind": "integration",
+      "description": "Verify GET /auth/providers response includes Cache-Control: public, max-age=300 header.",
+      "preconditions": [
+        "Echo server started with CacheMiddleware(CachePublic) applied to GET /auth/providers route"
+      ],
+      "input": "GET {mount_point}/auth/providers",
+      "expected": "Response header Cache-Control equals \"public, max-age=300\"",
+      "assertion_pseudocode": "resp := httpGet(\"/auth/providers\")\nassert resp.headers[\"Cache-Control\"] == \"public, max-age=300\""
+    },
+    {
+      "id": "TS-06-21",
+      "requirement_id": "06-REQ-5.4",
+      "kind": "integration",
+      "description": "Verify GET /auth/providers response does not include client_secret, token_url, or userinfo_url fields.",
+      "preconditions": [
+        "Echo server started with github provider registered with clientSecret=\"supersecret\", token_url, and userinfo_url configured"
+      ],
+      "input": "GET {mount_point}/auth/providers",
+      "expected": "Response body JSON objects contain only 'name' and 'authorize_url' fields; no client_secret, token_url, or userinfo_url",
+      "assertion_pseudocode": "resp := httpGet(\"/auth/providers\")\nbody := parseJSON(resp.body)\nfor each entry in body:\n  assert keys(entry) == [\"name\", \"authorize_url\"]\n  assert \"client_secret\" not in entry\n  assert \"token_url\" not in entry\n  assert \"userinfo_url\" not in entry"
+    },
+    {
+      "id": "TS-06-22",
+      "requirement_id": "06-REQ-6.1",
+      "kind": "unit",
+      "description": "Verify callback handler proceeds without validation error when provider, code, and redirect_uri are all non-empty and expires is a valid value.",
+      "preconditions": [
+        "Echo server with handler mounted",
+        "Registry has \"github\" provider registered",
+        "Mock provider Exchange returns success"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\",\"expires\":30}",
+      "expected": "No HTTP 400 returned from validation phase; handler proceeds to provider lookup",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\", expires:30})\nassert resp.statusCode != 400 or resp body does not contain validation error messages"
+    },
+    {
+      "id": "TS-06-23",
+      "requirement_id": "06-REQ-6.2",
+      "kind": "unit",
+      "description": "Verify callback handler returns HTTP 400 with message 'provider is required' when provider field is missing.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted"
+      ],
+      "input": "POST /auth/callback with body {\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\"}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"provider is required\"}}",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {code:\"abc\", redirect_uri:\"http://localhost:9000/cb\"})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"code\"] == 400\nassert body[\"error\"][\"message\"] == \"provider is required\""
+    },
+    {
+      "id": "TS-06-24",
+      "requirement_id": "06-REQ-6.3",
+      "kind": "unit",
+      "description": "Verify callback handler returns HTTP 400 with message 'code is required' when code field is missing.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"redirect_uri\":\"http://localhost:9000/cb\"}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"code is required\"}}",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", redirect_uri:\"http://localhost:9000/cb\"})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"code is required\""
+    },
+    {
+      "id": "TS-06-25",
+      "requirement_id": "06-REQ-6.4",
+      "kind": "unit",
+      "description": "Verify callback handler returns HTTP 400 with message 'redirect_uri is required' when redirect_uri field is missing.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\"}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"redirect_uri is required\"}}",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\"})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"redirect_uri is required\""
+    },
+    {
+      "id": "TS-06-26",
+      "requirement_id": "06-REQ-6.5",
+      "kind": "unit",
+      "description": "Verify callback handler returns HTTP 400 with message 'expires must be 0, 30, 60, or 90' when expires has an invalid value.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\",\"expires\":45}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"expires must be 0, 30, 60, or 90\"}}",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\", expires:45})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"expires must be 0, 30, 60, or 90\""
+    },
+    {
+      "id": "TS-06-27",
+      "requirement_id": "06-REQ-6.6",
+      "kind": "unit",
+      "description": "Verify callback handler defaults expires to 90 when the expires field is absent from the request body.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted",
+        "Mock provider and mock DB that capture the expires value used in key generation"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\"} (no expires field)",
+      "expected": "Handler internally uses expires=90; the resulting api_key.expires_at is set to now+90 days",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\"})\n// If full flow completes:\nif resp.statusCode == 200:\n  body := parseJSON(resp.body)\n  expiresAt := parseRFC3339(body[\"api_key\"][\"expires_at\"])\n  diff := expiresAt - now()\n  assert diff >= 89*24h and diff <= 91*24h"
+    },
+    {
+      "id": "TS-06-28",
+      "requirement_id": "06-REQ-7.1",
+      "kind": "unit",
+      "description": "Verify redirect URI validator accepts http://localhost:<port>/path for various valid port numbers.",
+      "preconditions": [
+        "Redirect URI validator function available"
+      ],
+      "input": "redirect_uri values: \"http://localhost:9000/cb\", \"http://localhost:1/cb\", \"http://localhost:65535/cb\", \"http://localhost:54321/callback/foo\"",
+      "expected": "All four URIs are accepted (no error returned)",
+      "assertion_pseudocode": "for each uri in [\"http://localhost:9000/cb\", \"http://localhost:1/cb\", \"http://localhost:65535/cb\", \"http://localhost:54321/callback/foo\"]:\n  err := ValidateRedirectURI(uri, externalURL=\"\")\n  assert err == nil"
+    },
+    {
+      "id": "TS-06-29",
+      "requirement_id": "06-REQ-7.2",
+      "kind": "unit",
+      "description": "Verify redirect URI validator accepts URIs whose scheme and host match external_url when external_url is configured.",
+      "preconditions": [
+        "external_url configured as \"https://api.example.com\""
+      ],
+      "input": "redirect_uri values: \"https://api.example.com/callback\", \"https://api.example.com/auth/callback/extra\"",
+      "expected": "Both URIs accepted (no error)",
+      "assertion_pseudocode": "for each uri in [\"https://api.example.com/callback\", \"https://api.example.com/auth/callback/extra\"]:\n  err := ValidateRedirectURI(uri, externalURL=\"https://api.example.com\")\n  assert err == nil"
+    },
+    {
+      "id": "TS-06-30",
+      "requirement_id": "06-REQ-7.3",
+      "kind": "unit",
+      "description": "Verify redirect URI validator accepts only localhost URIs when external_url is empty, rejecting non-localhost URIs.",
+      "preconditions": [
+        "external_url is empty string"
+      ],
+      "input": "redirect_uri values: \"http://localhost:9000/cb\" (accepted) and \"https://example.com/cb\" (rejected)",
+      "expected": "Localhost URI returns nil error; non-localhost URI returns non-nil error",
+      "assertion_pseudocode": "err1 := ValidateRedirectURI(\"http://localhost:9000/cb\", externalURL=\"\")\nassert err1 == nil\nerr2 := ValidateRedirectURI(\"https://example.com/cb\", externalURL=\"\")\nassert err2 != nil"
+    },
+    {
+      "id": "TS-06-31",
+      "requirement_id": "06-REQ-7.4",
+      "kind": "integration",
+      "description": "Verify POST /auth/callback returns HTTP 400 with 'redirect_uri is not allowed' when redirect_uri fails allowlist validation.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted",
+        "Registry has \"github\" provider",
+        "external_url not configured (empty)"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"https://evil.example.com/steal\"}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"redirect_uri is not allowed\"}}; provider.Exchange is never called",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"https://evil.example.com/steal\"})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"redirect_uri is not allowed\"\nassert exchangeCallCount == 0 // Exchange was never invoked"
+    },
+    {
+      "id": "TS-06-32",
+      "requirement_id": "06-REQ-8.1",
+      "kind": "integration",
+      "description": "Verify callback handler calls provider.Exchange after successful provider lookup and redirect URI validation.",
+      "preconditions": [
+        "Echo server with handler mounted",
+        "Registry has \"github\" provider (mock that tracks Exchange calls)",
+        "redirect_uri is valid localhost URI"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"mycode\",\"redirect_uri\":\"http://localhost:9000/cb\"}",
+      "expected": "provider.Exchange is called with (ctx, \"mycode\", \"http://localhost:9000/cb\"); returns non-empty access token",
+      "assertion_pseudocode": "exchangeCalled := false\nmockProvider.Exchange = func(ctx, code, redirectURI) {\n  exchangeCalled = true\n  assert code == \"mycode\"\n  assert redirectURI == \"http://localhost:9000/cb\"\n  return \"token123\", nil\n}\nhttpPost(\"/auth/callback\", {provider:\"github\", code:\"mycode\", redirect_uri:\"http://localhost:9000/cb\"})\nassert exchangeCalled == true"
+    },
+    {
+      "id": "TS-06-33",
+      "requirement_id": "06-REQ-8.2",
+      "kind": "integration",
+      "description": "Verify callback handler returns HTTP 401 with 'authorization code exchange failed' when Exchange returns an error.",
+      "preconditions": [
+        "Echo server with handler mounted",
+        "Mock provider Exchange returns (\"\" , error(\"bad code\"))"
+      ],
+      "input": "POST /auth/callback with valid body; mock Exchange returns error",
+      "expected": "HTTP 401; body {\"error\":{\"code\":401,\"message\":\"authorization code exchange failed\"}}",
+      "assertion_pseudocode": "mockProvider.Exchange = func() { return \"\", errors.New(\"bad code\") }\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 401\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"authorization code exchange failed\""
+    },
+    {
+      "id": "TS-06-34",
+      "requirement_id": "06-REQ-9.1",
+      "kind": "integration",
+      "description": "Verify callback handler calls provider.UserInfo with the access token after successful Exchange.",
+      "preconditions": [
+        "Mock provider Exchange returns \"tok123\"",
+        "Mock provider UserInfo tracks calls and returns valid *UserInfo"
+      ],
+      "input": "POST /auth/callback with valid body",
+      "expected": "UserInfo is called with (ctx, \"tok123\"); returns non-nil *UserInfo with Username and ProviderID populated",
+      "assertion_pseudocode": "userInfoCalled := false\nmockProvider.UserInfo = func(ctx, accessToken) {\n  userInfoCalled = true\n  assert accessToken == \"tok123\"\n  return &UserInfo{Username:\"octocat\", Email:\"cat@github.com\", ProviderID:\"1\"}, nil\n}\nhttpPost(\"/auth/callback\", validBody)\nassert userInfoCalled == true"
+    },
+    {
+      "id": "TS-06-35",
+      "requirement_id": "06-REQ-9.2",
+      "kind": "integration",
+      "description": "Verify callback handler returns HTTP 502 with correct message when UserInfo returns an error.",
+      "preconditions": [
+        "Mock provider Exchange returns success",
+        "Mock provider UserInfo returns (nil, error(\"upstream failed\"))"
+      ],
+      "input": "POST /auth/callback with valid body",
+      "expected": "HTTP 502; body {\"error\":{\"code\":502,\"message\":\"failed to retrieve user info from provider\"}}",
+      "assertion_pseudocode": "mockProvider.UserInfo = func() { return nil, errors.New(\"upstream failed\") }\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 502\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"failed to retrieve user info from provider\""
+    },
+    {
+      "id": "TS-06-36",
+      "requirement_id": "06-REQ-9.3",
+      "kind": "integration",
+      "description": "Verify callback handler returns HTTP 400 with 'provider returned empty email; email is required' when UserInfo returns empty Email.",
+      "preconditions": [
+        "Mock provider Exchange returns success",
+        "Mock provider UserInfo returns &UserInfo{Username:\"octocat\", Email:\"\", ProviderID:\"1\"}"
+      ],
+      "input": "POST /auth/callback with valid body",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"provider returned empty email; email is required\"}}",
+      "assertion_pseudocode": "mockProvider.UserInfo = func() { return &UserInfo{Username:\"octocat\", Email:\"\", ProviderID:\"1\"}, nil }\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"provider returned empty email; email is required\""
+    },
+    {
+      "id": "TS-06-37",
+      "requirement_id": "06-REQ-10.1",
+      "kind": "integration",
+      "description": "Verify callback handler opens a database transaction and queries users table by (provider, provider_id) after successful user info retrieval.",
+      "preconditions": [
+        "SQLite database initialised with users and api_keys tables",
+        "Mock provider returns valid UserInfo with ProviderID=\"99\"",
+        "No user with (provider=\"github\", provider_id=\"99\") exists in users table"
+      ],
+      "input": "POST /auth/callback with valid body for github provider",
+      "expected": "db.WithTx is called; SELECT from users WHERE provider='github' AND provider_id='99' executes without error",
+      "assertion_pseudocode": "// Use real SQLite DB\nresp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\"})\nassert resp.statusCode == 200\n// Verify user exists in DB (it was created)\nrow := db.QueryRow(\"SELECT id FROM users WHERE provider='github' AND provider_id='99'\")\nassert row != nil"
+    },
+    {
+      "id": "TS-06-38",
+      "requirement_id": "06-REQ-10.2",
+      "kind": "integration",
+      "description": "Verify a new user is inserted with correct fields including admin role when email matches admin_email and no admin exists.",
+      "preconditions": [
+        "SQLite database with admin_config row setting admin_email='admin@example.com'",
+        "No user with role='admin' exists in users table",
+        "Mock provider returns UserInfo{Username:\"newadmin\", Email:\"admin@example.com\", ProviderID:\"55\"}"
+      ],
+      "input": "POST /auth/callback for github provider with code for admin@example.com",
+      "expected": "New user row in users table with role='admin', status='active', provider='github', provider_id='55'",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 200\nuser := db.QueryRow(\"SELECT role, status FROM users WHERE provider_id='55'\")\nassert user.role == \"admin\"\nassert user.status == \"active\""
+    },
+    {
+      "id": "TS-06-39",
+      "requirement_id": "06-REQ-10.3",
+      "kind": "integration",
+      "description": "Verify an existing active user's username, email, and updated_at are updated on re-login, while other fields remain unchanged.",
+      "preconditions": [
+        "SQLite database with existing user row: provider='github', provider_id='77', username='oldname', email='old@example.com', role='user', status='active'"
+      ],
+      "input": "POST /auth/callback with mock UserInfo{Username:\"newname\", Email:\"new@example.com\", ProviderID:\"77\"}",
+      "expected": "users row for provider_id='77' has username='newname', email='new@example.com', updated_at changed; id, role, status, created_at unchanged",
+      "assertion_pseudocode": "originalID := db.QueryRow(\"SELECT id FROM users WHERE provider_id='77'\").id\noriginalCreatedAt := db.QueryRow(\"SELECT created_at FROM users WHERE provider_id='77'\").created_at\nhttpPost(\"/auth/callback\", validBody)\nuser := db.QueryRow(\"SELECT * FROM users WHERE provider_id='77'\")\nassert user.username == \"newname\"\nassert user.email == \"new@example.com\"\nassert user.id == originalID\nassert user.created_at == originalCreatedAt\nassert user.status == \"active\""
+    },
+    {
+      "id": "TS-06-40",
+      "requirement_id": "06-REQ-10.4",
+      "kind": "integration",
+      "description": "Verify callback handler returns HTTP 403 and does not update user or create key when existing user is blocked.",
+      "preconditions": [
+        "SQLite database with user row: provider='github', provider_id='88', status='blocked'",
+        "Mock provider returns UserInfo{ProviderID:\"88\", Email:\"blocked@example.com\"}"
+      ],
+      "input": "POST /auth/callback for the blocked user",
+      "expected": "HTTP 403; body {\"error\":{\"code\":403,\"message\":\"user is blocked\"}}; users row unchanged; no new row in api_keys for this user",
+      "assertion_pseudocode": "keyCountBefore := db.QueryRow(\"SELECT COUNT(*) FROM api_keys WHERE user_id=(SELECT id FROM users WHERE provider_id='88')\").count\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 403\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"user is blocked\"\nkeyCountAfter := db.QueryRow(\"SELECT COUNT(*) FROM api_keys WHERE user_id=(SELECT id FROM users WHERE provider_id='88')\").count\nassert keyCountAfter == keyCountBefore\nuser := db.QueryRow(\"SELECT status FROM users WHERE provider_id='88'\")\nassert user.status == \"blocked\""
+    },
+    {
+      "id": "TS-06-41",
+      "requirement_id": "06-REQ-11.1",
+      "kind": "integration",
+      "description": "Verify that all previously active API keys for the user are revoked (revoked_at set) when a new key is generated on login.",
+      "preconditions": [
+        "SQLite database with existing user and one active api_key row (revoked_at IS NULL) for that user"
+      ],
+      "input": "POST /auth/callback for the user who already has an active key",
+      "expected": "Old api_key row has revoked_at set to non-null timestamp; new api_key row created with revoked_at NULL",
+      "assertion_pseudocode": "oldKeyID := db.QueryRow(\"SELECT key_id FROM api_keys WHERE user_id=? AND revoked_at IS NULL\", userID).key_id\nhttpPost(\"/auth/callback\", validBody)\noldKey := db.QueryRow(\"SELECT revoked_at FROM api_keys WHERE key_id=?\", oldKeyID)\nassert oldKey.revoked_at IS NOT NULL\nnewActiveKeys := db.Query(\"SELECT * FROM api_keys WHERE user_id=? AND revoked_at IS NULL\", userID)\nassert len(newActiveKeys) == 1"
+    },
+    {
+      "id": "TS-06-42",
+      "requirement_id": "06-REQ-11.2",
+      "kind": "integration",
+      "description": "Verify new API key is generated with correct key_id length, secret length, SHA-256 hash stored, and expires_at calculated correctly.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock provider returns valid UserInfo",
+        "Request body has expires=30"
+      ],
+      "input": "POST /auth/callback with expires=30",
+      "expected": "api_keys row has key_id of length 8, secret_hash = SHA256(plaintext_secret), expires_at approximately now+30days; response api_key.key matches format ak_<8chars>_<32chars>",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\", expires:30})\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nkeyStr := body[\"api_key\"][\"key\"]\nparts := split(keyStr, \"_\")\nassert len(parts) == 3\nassert parts[0] == \"ak\"\nassert len(parts[1]) == 8\nassert len(parts[2]) == 32\nexpectedHash := sha256(parts[2])\ndbKey := db.QueryRow(\"SELECT secret_hash, expires_at, key_id FROM api_keys WHERE revoked_at IS NULL\")\nassert dbKey.secret_hash == hex(expectedHash)\nassert dbKey.key_id == parts[1]\ndiff := parseTime(dbKey.expires_at) - now()\nassert diff >= 29*24h and diff <= 31*24h"
+    },
+    {
+      "id": "TS-06-43",
+      "requirement_id": "06-REQ-11.3",
+      "kind": "unit",
+      "description": "Verify key generation function uses crypto/rand (not math/rand) for both key_id and secret generation.",
+      "preconditions": [
+        "Key generation function is implemented in internal/oauth",
+        "Code review or static analysis available"
+      ],
+      "input": "Inspect key generation implementation source",
+      "expected": "crypto/rand is imported and used; math/rand is not imported in key generation code path",
+      "assertion_pseudocode": "// Static check: grep -r \"math/rand\" internal/oauth/ returns no results\n// Functional check:\nfor i in range(1000):\n  keyID1 := generateKeyID()\n  keyID2 := generateKeyID()\n  assert keyID1 != keyID2 // extremely unlikely if truly random\n// Verify entropy: collect 100 key_ids, assert no duplicates\nids := set()\nfor i in range(100):\n  ids.add(generateKeyID())\nassert len(ids) == 100"
+    },
+    {
+      "id": "TS-06-44",
+      "requirement_id": "06-REQ-11.4",
+      "kind": "integration",
+      "description": "Verify callback response api_key.key follows format <TokenPrefix>_<key_id>_<secret> and plaintext secret is not stored in the database.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock provider returns valid UserInfo"
+      ],
+      "input": "POST /auth/callback with valid body",
+      "expected": "Response api_key.key matches \"ak_<8alnum>_<32alnum>\"; api_keys.secret_hash != plaintext secret; SHA256(plaintext)==secret_hash",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", validBody)\nbody := parseJSON(resp.body)\nkey := body[\"api_key\"][\"key\"]\nassert matchesRegex(key, \"^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$\")\nparts := split(key, \"_\")\nplainSecret := parts[2]\ndbRow := db.QueryRow(\"SELECT secret_hash FROM api_keys WHERE revoked_at IS NULL ORDER BY rowid DESC LIMIT 1\")\nassert dbRow.secret_hash != plainSecret\nassert dbRow.secret_hash == hex(sha256(plainSecret))"
+    },
+    {
+      "id": "TS-06-45",
+      "requirement_id": "06-REQ-12.1",
+      "kind": "integration",
+      "description": "Verify callback returns HTTP 200 with correct user object and api_key object structure on full successful flow.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock GitHub provider httptest.Server returns valid token and user info",
+        "Registry has github provider"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\",\"expires\":90}",
+      "expected": "HTTP 200; body has user.id (UUID), user.username, user.email, user.full_name, user.status='active', user.role, user.provider='github', user.provider_id, user.created_at (RFC3339), user.updated_at (RFC3339), api_key.key (ak_<8>_<32>), api_key.key_id (8 chars), api_key.expires_at (RFC3339 ~90 days out)",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nuser := body[\"user\"]\nassert isUUID(user[\"id\"])\nassert user[\"status\"] == \"active\"\nassert user[\"provider\"] == \"github\"\nassert isRFC3339(user[\"created_at\"])\nassert isRFC3339(user[\"updated_at\"])\napiKey := body[\"api_key\"]\nassert matchesRegex(apiKey[\"key\"], \"^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$\")\nassert len(apiKey[\"key_id\"]) == 8\nassert isRFC3339(apiKey[\"expires_at\"])"
+    },
+    {
+      "id": "TS-06-46",
+      "requirement_id": "06-REQ-12.2",
+      "kind": "integration",
+      "description": "Verify the callback response user object includes the role field set to either 'admin' or 'user'.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock provider returns valid UserInfo with a non-admin email"
+      ],
+      "input": "POST /auth/callback for a new regular user",
+      "expected": "Response body user.role is \"user\"",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", validBody)\nbody := parseJSON(resp.body)\nassert body[\"user\"][\"role\"] == \"user\" or body[\"user\"][\"role\"] == \"admin\"\n// For non-admin email:\nassert body[\"user\"][\"role\"] == \"user\""
+    },
+    {
+      "id": "TS-06-47",
+      "requirement_id": "06-REQ-12.3",
+      "kind": "integration",
+      "description": "Verify all timestamps in the response are valid RFC 3339 strings and api_key.expires_at is null when expires=0.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock provider returns valid UserInfo"
+      ],
+      "input": "POST /auth/callback with expires=0",
+      "expected": "user.created_at and user.updated_at are valid RFC 3339 strings; api_key.expires_at is JSON null",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\", expires:0})\nbody := parseJSON(resp.body)\nassert isRFC3339(body[\"user\"][\"created_at\"])\nassert isRFC3339(body[\"user\"][\"updated_at\"])\nassert body[\"api_key\"][\"expires_at\"] == null"
+    },
+    {
+      "id": "TS-06-48",
+      "requirement_id": "06-REQ-13.1",
+      "kind": "integration",
+      "description": "Verify RegisterOAuthHandlers mounts GET /auth/providers with CachePublic middleware and POST /auth/callback on the Echo group.",
+      "preconditions": [
+        "Echo server with APIGroup() configured",
+        "RegisterOAuthHandlers called with registry, db, externalURL"
+      ],
+      "input": "GET /auth/providers and POST /auth/callback requests",
+      "expected": "GET /auth/providers returns 200 with Cache-Control: public, max-age=300; POST /auth/callback returns 400 (validation) not 404",
+      "assertion_pseudocode": "RegisterOAuthHandlers(group, registry, db, \"\")\nresp1 := httpGet(\"/auth/providers\")\nassert resp1.statusCode == 200\nassert resp1.headers[\"Cache-Control\"] == \"public, max-age=300\"\nresp2 := httpPost(\"/auth/callback\", {})\nassert resp2.statusCode == 400 // validation error, not 404"
+    },
+    {
+      "id": "TS-06-49",
+      "requirement_id": "06-REQ-13.2",
+      "kind": "unit",
+      "description": "Verify server bootstrap creates a single shared http.Client with 30-second timeout using DefaultTransport and injects it into all providers.",
+      "preconditions": [
+        "Server bootstrap function available"
+      ],
+      "input": "Bootstrap call that creates github provider",
+      "expected": "The http.Client has Timeout=30s; the provider's internal httpClient pointer equals the shared client",
+      "assertion_pseudocode": "client, registry := bootstrapOAuthProviders(config)\nassert client.Timeout == 30 * time.Second\nassert client.Transport == http.DefaultTransport\ngithubProvider := registry.Get(\"github\")\nassert githubProvider.httpClient == client"
+    },
+    {
+      "id": "TS-06-50",
+      "requirement_id": "06-REQ-14.1",
+      "kind": "integration",
+      "description": "Verify concurrent POST /auth/callback requests for the same user are handled without data corruption, relying on SQLite single-connection serialization.",
+      "preconditions": [
+        "SQLite database with SetMaxOpenConns(1) as configured by database_layer",
+        "Mock provider returns valid UserInfo for ProviderID=\"concurrent-user\""
+      ],
+      "input": "Two goroutines simultaneously POST /auth/callback for the same user (provider_id=\"concurrent-user\")",
+      "expected": "Both requests complete without deadlock or error; no data corruption in users or api_keys tables",
+      "assertion_pseudocode": "wg := WaitGroup\nerrs := []error\nfor i in [1, 2]:\n  go func():\n    resp := httpPost(\"/auth/callback\", validBody)\n    if resp.statusCode != 200: errs.append(error)\n    wg.Done()\nwg.Wait()\nassert len(errs) == 0\n// No panic, no deadlock"
+    },
+    {
+      "id": "TS-06-51",
+      "requirement_id": "06-REQ-14.2",
+      "kind": "integration",
+      "description": "Verify that after two sequential callback transactions for the same user, exactly one active key remains in api_keys.",
+      "preconditions": [
+        "SQLite database initialised",
+        "Mock provider returns consistent UserInfo for ProviderID=\"serial-user\""
+      ],
+      "input": "Two sequential POST /auth/callback requests for the same user",
+      "expected": "After both requests, exactly one api_keys row with revoked_at IS NULL exists for the user; previous keys are revoked",
+      "assertion_pseudocode": "httpPost(\"/auth/callback\", validBody) // first login\nhttpPost(\"/auth/callback\", validBody) // second login\nactiveKeys := db.Query(\"SELECT * FROM api_keys WHERE user_id=? AND revoked_at IS NULL\", userID)\nassert len(activeKeys) == 1\nrevokedKeys := db.Query(\"SELECT * FROM api_keys WHERE user_id=? AND revoked_at IS NOT NULL\", userID)\nassert len(revokedKeys) == 1"
+    },
+    {
+      "id": "TS-06-52",
+      "requirement_id": "06-REQ-15.1",
+      "kind": "integration",
+      "description": "Verify removing a provider from config does not delete existing user records or api_keys, and credentials remain valid.",
+      "preconditions": [
+        "SQLite database with user row where provider='github'",
+        "Active api_key for that user",
+        "Server restarted with [[oauth.providers]] section empty"
+      ],
+      "input": "Check users and api_keys tables after server restart with empty provider config",
+      "expected": "Users row still exists with original provider and provider_id; api_keys row still exists and is active",
+      "assertion_pseudocode": "// Before restart:\noriginalUser := db.QueryRow(\"SELECT * FROM users WHERE provider='github'\")\noriginalKey := db.QueryRow(\"SELECT * FROM api_keys WHERE revoked_at IS NULL\")\n// Restart server with empty providers config\nrestartServerWithConfig(emptyProvidersConfig)\n// After restart:\nuserAfter := db.QueryRow(\"SELECT * FROM users WHERE provider='github'\")\nassert userAfter != nil\nassert userAfter.provider_id == originalUser.provider_id\nkeyAfter := db.QueryRow(\"SELECT * FROM api_keys WHERE key_id=?\", originalKey.key_id)\nassert keyAfter != nil\nassert keyAfter.revoked_at IS NULL"
+    },
+    {
+      "id": "TS-06-53",
+      "requirement_id": "06-REQ-15.2",
+      "kind": "integration",
+      "description": "Verify POST /auth/callback returns HTTP 400 with 'unknown provider: github' after github is removed from config.",
+      "preconditions": [
+        "Server running with empty providers registry (github removed from config)"
+      ],
+      "input": "POST /auth/callback with body {\"provider\":\"github\",\"code\":\"abc\",\"redirect_uri\":\"http://localhost:9000/cb\"}",
+      "expected": "HTTP 400; body {\"error\":{\"code\":400,\"message\":\"unknown provider: github\"}}",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", {provider:\"github\", code:\"abc\", redirect_uri:\"http://localhost:9000/cb\"})\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"unknown provider: github\""
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-06-P1",
+      "property_id": "06-PROP-1",
+      "validates": [
+        "06-REQ-11.1",
+        "06-REQ-11.2",
+        "06-REQ-14.2"
+      ],
+      "description": "For any successful POST /auth/callback response, exactly one active (non-revoked, non-expired) key exists for the user in api_keys after the transaction commits.",
+      "for_any_strategy": "Generate random valid OAuth callback requests for the same user repeated N times (N between 1 and 10); each request uses a fresh mock provider returning the same ProviderID",
+      "invariant_check": "After each successful callback response, query api_keys WHERE user_id=<id> AND revoked_at IS NULL; assert count == 1. Count of revoked keys must equal (N-1) after N logins."
+    },
+    {
+      "id": "TS-06-P2",
+      "property_id": "06-PROP-2",
+      "validates": [
+        "06-REQ-10.4"
+      ],
+      "description": "For any POST /auth/callback request for a blocked user, the user status remains 'blocked', no new key is created, and HTTP 403 is returned.",
+      "for_any_strategy": "Generate any combination of valid provider, code, and redirect_uri for a user whose status='blocked' in the database; run M iterations (M between 1 and 5)",
+      "invariant_check": "After each request: resp.statusCode == 403; db.users WHERE provider_id=<id> has status='blocked'; db.api_keys WHERE user_id=<id> count is unchanged from before request"
+    },
+    {
+      "id": "TS-06-P3",
+      "property_id": "06-PROP-3",
+      "validates": [
+        "06-REQ-11.2",
+        "06-REQ-11.4"
+      ],
+      "description": "For any new API key inserted into api_keys, the plaintext secret is never written to the database; only the SHA-256 hash is stored.",
+      "for_any_strategy": "Generate N successful callback responses (N between 1 and 20); collect the plaintext secret from each response body and the secret_hash from api_keys",
+      "invariant_check": "For each (plaintext_secret, secret_hash) pair: secret_hash == hex(sha256(plaintext_secret)); api_keys.secret_hash != plaintext_secret; no other column in api_keys contains plaintext_secret"
+    },
+    {
+      "id": "TS-06-P4",
+      "property_id": "06-PROP-4",
+      "validates": [
+        "06-REQ-10.2",
+        "06-REQ-10.3",
+        "06-REQ-10.E3"
+      ],
+      "description": "Admin auto-grant fires at most once across any number of OAuth callback requests from users whose email matches admin_email.",
+      "for_any_strategy": "Generate K callback requests (K between 2 and 10) from different provider_ids but all with email matching admin_email; vary order of requests",
+      "invariant_check": "After all K requests: db.users WHERE role='admin' count == 1; only the first user to create when no admin existed gets role='admin'; all subsequent users with matching email get role='user'"
+    },
+    {
+      "id": "TS-06-P5",
+      "property_id": "06-PROP-5",
+      "validates": [
+        "06-REQ-2.2",
+        "06-REQ-2.E1"
+      ],
+      "description": "No two providers with the same name can coexist in the Registry for any sequence of Register() calls.",
+      "for_any_strategy": "Generate random sequences of Register() calls with provider names chosen from a small alphabet (e.g. 'a', 'b', 'c'); include duplicate names in the sequence",
+      "invariant_check": "After each sequence: for any name n, exactly 0 or 1 provider exists under n; duplicate Register() returns non-nil error; total registered providers == count of unique names in the sequence"
+    },
+    {
+      "id": "TS-06-P6",
+      "property_id": "06-PROP-6",
+      "validates": [
+        "06-REQ-5.1",
+        "06-REQ-5.4"
+      ],
+      "description": "For any GET /auth/providers response, the body contains only 'name' and 'authorize_url' fields per entry, never secrets.",
+      "for_any_strategy": "Register N providers (N between 0 and 5) with random client_ids and client_secrets; call GET /auth/providers",
+      "invariant_check": "For each JSON object in the response array: keys(object) == {\"name\", \"authorize_url\"}; 'client_secret' not present; 'token_url' not present; 'userinfo_url' not present"
+    },
+    {
+      "id": "TS-06-P7",
+      "property_id": "06-PROP-7",
+      "validates": [
+        "06-REQ-7.4",
+        "06-REQ-8.1"
+      ],
+      "description": "provider.Exchange() is never called when redirect_uri fails allowlist validation, for any disallowed redirect_uri input.",
+      "for_any_strategy": "Generate random redirect_uri strings that do not match localhost pattern or external_url (e.g. ftp://, https://attacker.com, file:///etc/passwd, empty string); set external_url to 'https://api.example.com'",
+      "invariant_check": "For each invalid redirect_uri: resp.statusCode == 400; exchangeCallCount == 0 (Exchange was never invoked); resp body error message == 'redirect_uri is not allowed'"
+    },
+    {
+      "id": "TS-06-P8",
+      "property_id": "06-PROP-8",
+      "validates": [
+        "06-REQ-10.1",
+        "06-REQ-10.E1",
+        "06-REQ-11.1",
+        "06-REQ-11.2"
+      ],
+      "description": "User upsert and key creation are atomic: if any database step fails, no partial user updates or partial key records are visible.",
+      "for_any_strategy": "Inject faults at random points in the db.WithTx callback (e.g. fail after user insert but before key insert, fail after revoke but before new key insert); attempt N requests with injected faults",
+      "invariant_check": "After each fault-injected request: response is HTTP 500; db.users count for the new provider_id == 0 (if insert was first step that failed) or unchanged from before; db.api_keys count for the user unchanged from before the request; no partial rows visible"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-06-E1",
+      "requirement_id": "06-REQ-1.E1",
+      "kind": "unit",
+      "description": "Verify compile-time rejection when a type implements only a subset of the Provider interface methods.",
+      "preconditions": [
+        "Test file with a struct that implements only Name() and AuthorizeURL() but not Exchange() or UserInfo()"
+      ],
+      "input": "var _ oauth.Provider = &incompleteProvider{} in a test file",
+      "expected": "Compilation fails with a missing-method error listing Exchange and UserInfo",
+      "assertion_pseudocode": "// This is a compile-time check; include in a build-tag-guarded file:\n// //go:build ignore\ntype incompleteProvider struct{}\nfunc (p *incompleteProvider) Name() string { return \"incomplete\" }\nfunc (p *incompleteProvider) AuthorizeURL(s, r string) string { return \"\" }\n// Missing Exchange and UserInfo\nvar _ Provider = &incompleteProvider{} // must NOT compile"
+    },
+    {
+      "id": "TS-06-E2",
+      "requirement_id": "06-REQ-2.E1",
+      "kind": "unit",
+      "description": "Verify Registry.Register returns a non-nil error for a duplicate provider name without replacing the existing provider.",
+      "preconditions": [
+        "Registry with provider named \"github\" already registered"
+      ],
+      "input": "Register(&mockProvider{name: \"github\"}) a second time",
+      "expected": "Returns non-nil error; registry still returns original provider from Get(\"github\")",
+      "assertion_pseudocode": "r := NewRegistry()\noriginal := &mockProvider{name: \"github\", id: 1}\nduplicate := &mockProvider{name: \"github\", id: 2}\nr.Register(original)\nerr := r.Register(duplicate)\nassert err != nil\nassert r.Get(\"github\") == original // original not replaced"
+    },
+    {
+      "id": "TS-06-E3",
+      "requirement_id": "06-REQ-2.E2",
+      "kind": "unit",
+      "description": "Verify Registry.Get returns nil when called with an empty string.",
+      "preconditions": [
+        "Registry with one provider named \"github\" registered"
+      ],
+      "input": "Get(\"\")",
+      "expected": "Returns nil",
+      "assertion_pseudocode": "r := NewRegistry()\nr.Register(&mockProvider{name: \"github\"})\nresult := r.Get(\"\")\nassert result == nil"
+    },
+    {
+      "id": "TS-06-E4",
+      "requirement_id": "06-REQ-3.E1",
+      "kind": "unit",
+      "description": "Verify GitHub provider Exchange returns an error when token endpoint responds with an error field in JSON.",
+      "preconditions": [
+        "httptest.Server configured to return {\"error\":\"bad_verification_code\",\"error_description\":\"The code passed is incorrect\"}"
+      ],
+      "input": "Exchange(ctx, \"badcode\", \"http://localhost:9000/cb\")",
+      "expected": "Returns (\"\", non-nil error); error message contains the provider error value",
+      "assertion_pseudocode": "server := httptest.NewServer(handler returning {\"error\":\"bad_verification_code\",\"error_description\":\"The code passed is incorrect\"})\np := NewGitHubProvider(\"cid\", \"csec\", \"\", server.URL, \"\", httpClient)\ntok, err := p.Exchange(ctx, \"badcode\", \"http://localhost:9000/cb\")\nassert tok == \"\"\nassert err != nil\nassert contains(err.Error(), \"bad_verification_code\")"
+    },
+    {
+      "id": "TS-06-E5",
+      "requirement_id": "06-REQ-3.E2",
+      "kind": "unit",
+      "description": "Verify GitHub provider Exchange returns an error when the token endpoint response has an empty or absent access_token.",
+      "preconditions": [
+        "httptest.Server configured to return {\"token_type\":\"bearer\"} (no access_token field)"
+      ],
+      "input": "Exchange(ctx, \"code\", \"http://localhost:9000/cb\")",
+      "expected": "Returns (\"\", non-nil error) indicating token was not returned",
+      "assertion_pseudocode": "server := httptest.NewServer(handler returning {\"token_type\":\"bearer\"})\np := NewGitHubProvider(\"cid\", \"csec\", \"\", server.URL, \"\", httpClient)\ntok, err := p.Exchange(ctx, \"code\", \"http://localhost:9000/cb\")\nassert tok == \"\"\nassert err != nil"
+    },
+    {
+      "id": "TS-06-E6",
+      "requirement_id": "06-REQ-3.E3",
+      "kind": "unit",
+      "description": "Verify GitHub provider Exchange and UserInfo return errors without retry when HTTP call times out or returns non-2xx status.",
+      "preconditions": [
+        "httptest.Server that returns HTTP 500 for token endpoint",
+        "GitHub provider with token_url pointing to that server"
+      ],
+      "input": "Exchange(ctx, \"code\", \"http://localhost:9000/cb\")",
+      "expected": "Returns (\"\", non-nil error) wrapping the HTTP error; no retry attempt",
+      "assertion_pseudocode": "server := httptest.NewServer(handler returning HTTP 500)\np := NewGitHubProvider(\"cid\", \"csec\", \"\", server.URL, \"\", httpClient)\nstart := now()\ntok, err := p.Exchange(ctx, \"code\", \"http://localhost:9000/cb\")\nend := now()\nassert tok == \"\"\nassert err != nil\nassert (end - start) < 2 * time.Second // no retry delay"
+    },
+    {
+      "id": "TS-06-E7",
+      "requirement_id": "06-REQ-3.E4",
+      "kind": "unit",
+      "description": "Verify GitHub provider Exchange and UserInfo propagate context cancellation without hanging.",
+      "preconditions": [
+        "httptest.Server that delays response by 5 seconds",
+        "Context with 100ms deadline"
+      ],
+      "input": "Exchange(cancelledCtx, \"code\", \"http://localhost:9000/cb\")",
+      "expected": "Returns error within ~100ms; error wraps context.DeadlineExceeded or context.Canceled; no goroutine leak",
+      "assertion_pseudocode": "ctx, cancel := contextWithTimeout(100 * time.Millisecond)\ndefer cancel()\nserver := httptest.NewServer(handler that sleeps 5 seconds)\np := NewGitHubProvider(\"cid\", \"csec\", \"\", server.URL, \"\", httpClient)\nstart := now()\ntok, err := p.Exchange(ctx, \"code\", \"http://localhost:9000/cb\")\nend := now()\nassert tok == \"\" or tok == nil\nassert err != nil\nassert (end - start) < 500 * time.Millisecond"
+    },
+    {
+      "id": "TS-06-E8",
+      "requirement_id": "06-REQ-4.E1",
+      "kind": "unit",
+      "description": "Verify server bootstrap returns a startup error when config contains a provider with unknown name (e.g. 'gitlab').",
+      "preconditions": [
+        "Config with [[oauth.providers]] entry name='gitlab', client_id='id', client_secret='secret'"
+      ],
+      "input": "BuildRegistryFromConfig(configWithGitlab, httpClient)",
+      "expected": "Returns non-nil error naming the unsupported provider 'gitlab'; no partial registry is exposed; server does not start",
+      "assertion_pseudocode": "config := Config{OAuth: {Providers: [{Name:\"gitlab\", ClientID:\"id\", ClientSecret:\"sec\"}]}}\nregistry, err := BuildRegistryFromConfig(config, httpClient)\nassert err != nil\nassert contains(err.Error(), \"gitlab\")\nassert registry == nil"
+    },
+    {
+      "id": "TS-06-E9",
+      "requirement_id": "06-REQ-6.E1",
+      "kind": "unit",
+      "description": "Verify POST /auth/callback returns HTTP 400 when the request body is not valid JSON.",
+      "preconditions": [
+        "Echo server with POST /auth/callback handler mounted"
+      ],
+      "input": "POST /auth/callback with body \"not-json-{{\"",
+      "expected": "HTTP 400; error response body indicating invalid JSON",
+      "assertion_pseudocode": "resp := httpPostRaw(\"/auth/callback\", \"not-json-{{\")\nassert resp.statusCode == 400\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"code\"] == 400"
+    },
+    {
+      "id": "TS-06-E10",
+      "requirement_id": "06-REQ-7.E1",
+      "kind": "unit",
+      "description": "Verify redirect URI validator rejects https://localhost URIs (HTTPS on localhost is not accepted).",
+      "preconditions": [
+        "Redirect URI validator function"
+      ],
+      "input": "redirect_uri = \"https://localhost:3000/callback\"",
+      "expected": "Validator returns non-nil error; handler would return HTTP 400",
+      "assertion_pseudocode": "err := ValidateRedirectURI(\"https://localhost:3000/callback\", externalURL=\"\")\nassert err != nil"
+    },
+    {
+      "id": "TS-06-E11",
+      "requirement_id": "06-REQ-7.E2",
+      "kind": "unit",
+      "description": "Verify redirect URI validator rejects a non-localhost URI when external_url is configured but scheme or host does not match.",
+      "preconditions": [
+        "external_url configured as \"https://api.example.com\""
+      ],
+      "input": "redirect_uri = \"https://evil.example.com/callback\"",
+      "expected": "Validator returns non-nil error; HTTP 400 from handler",
+      "assertion_pseudocode": "err := ValidateRedirectURI(\"https://evil.example.com/callback\", externalURL=\"https://api.example.com\")\nassert err != nil"
+    },
+    {
+      "id": "TS-06-E12",
+      "requirement_id": "06-REQ-8.E1",
+      "kind": "integration",
+      "description": "Verify HTTP 401 is returned without goroutine leak when request context is cancelled while Exchange is in flight.",
+      "preconditions": [
+        "Mock provider Exchange that blocks until context is cancelled",
+        "Request context cancelled after 50ms"
+      ],
+      "input": "POST /auth/callback where context is cancelled mid-Exchange",
+      "expected": "HTTP 401 or 499 (connection closed); no goroutine leak; Exchange returns promptly after cancellation",
+      "assertion_pseudocode": "mockProvider.Exchange = func(ctx, code, redirectURI) {\n  <-ctx.Done()\n  return \"\", ctx.Err()\n}\nctx, cancel := contextWithTimeout(50 * time.Millisecond)\nresp := httpPostWithContext(ctx, \"/auth/callback\", validBody)\ncancel()\n// verify no goroutine leak via runtime.NumGoroutine() before and after"
+    },
+    {
+      "id": "TS-06-E13",
+      "requirement_id": "06-REQ-9.E1",
+      "kind": "integration",
+      "description": "Verify HTTP 502 is returned without retry when identity provider UserInfo API returns HTTP 401 or 403.",
+      "preconditions": [
+        "httptest.Server standing in as GitHub userinfo endpoint returning HTTP 401"
+      ],
+      "input": "POST /auth/callback where mock provider UserInfo returns error from HTTP 401 upstream",
+      "expected": "HTTP 502; body {\"error\":{\"code\":502,\"message\":\"failed to retrieve user info from provider\"}}; no retry",
+      "assertion_pseudocode": "mockProvider.UserInfo = func() { return nil, errors.New(\"401 Unauthorized\") }\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 502\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"message\"] == \"failed to retrieve user info from provider\""
+    },
+    {
+      "id": "TS-06-E14",
+      "requirement_id": "06-REQ-10.E1",
+      "kind": "integration",
+      "description": "Verify HTTP 500 is returned and transaction is rolled back when a database error occurs during user upsert.",
+      "preconditions": [
+        "SQLite database where users table is intentionally broken (e.g. dropped column) to cause insert failure",
+        "Mock provider returns valid UserInfo"
+      ],
+      "input": "POST /auth/callback with valid body; DB insert will fail",
+      "expected": "HTTP 500; no partial rows in users or api_keys; transaction rolled back",
+      "assertion_pseudocode": "// Simulate DB failure by dropping a required column before the request\ndb.Exec(\"ALTER TABLE users RENAME COLUMN email TO email_old\")\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 500\nbody := parseJSON(resp.body)\nassert body[\"error\"][\"code\"] == 500\n// Verify no partial data\nuserCount := db.QueryRow(\"SELECT COUNT(*) FROM users WHERE provider_id=?\", testProviderID).count\nassert userCount == 0"
+    },
+    {
+      "id": "TS-06-E15",
+      "requirement_id": "06-REQ-10.E2",
+      "kind": "integration",
+      "description": "Verify new user gets role='user' when admin_config table is empty (no admin_email configured).",
+      "preconditions": [
+        "SQLite database with empty admin_config table",
+        "Mock provider returns UserInfo{Email:\"user@example.com\", ProviderID:\"101\"}"
+      ],
+      "input": "POST /auth/callback for a new user",
+      "expected": "New user created with role='user'; HTTP 200 response",
+      "assertion_pseudocode": "db.Exec(\"DELETE FROM admin_config\")\nresp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nassert body[\"user\"][\"role\"] == \"user\""
+    },
+    {
+      "id": "TS-06-E16",
+      "requirement_id": "06-REQ-10.E3",
+      "kind": "integration",
+      "description": "Verify new user matching admin_email gets role='user' (not admin) when an admin user already exists.",
+      "preconditions": [
+        "SQLite database with admin_config row admin_email='admin@example.com'",
+        "Existing user with role='admin' already in users table",
+        "Mock provider returns UserInfo{Email:\"admin@example.com\", ProviderID:\"202\"}"
+      ],
+      "input": "POST /auth/callback for user whose email matches admin_email but admin already exists",
+      "expected": "New user created with role='user'; HTTP 200 response",
+      "assertion_pseudocode": "// existing admin already in DB\nresp := httpPost(\"/auth/callback\", validBodyForAdminEmail)\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nassert body[\"user\"][\"role\"] == \"user\""
+    },
+    {
+      "id": "TS-06-E17",
+      "requirement_id": "06-REQ-11.E1",
+      "kind": "unit",
+      "description": "Verify key generation function returns an error (causing HTTP 500 and transaction rollback) when crypto/rand fails.",
+      "preconditions": [
+        "Key generation function injectable with a mock rand reader that returns an error"
+      ],
+      "input": "generateAPIKey() called with mock rand that returns error",
+      "expected": "Returns (nil, non-nil error); no key inserted in api_keys; HTTP 500 from handler",
+      "assertion_pseudocode": "mockRand := readerThatReturnsError()\nkeyID, secret, err := generateAPIKey(mockRand)\nassert keyID == \"\"\nassert secret == \"\"\nassert err != nil"
+    },
+    {
+      "id": "TS-06-E18",
+      "requirement_id": "06-REQ-11.E2",
+      "kind": "integration",
+      "description": "Verify key revocation is a no-op and processing continues normally when user has no active keys (first login).",
+      "preconditions": [
+        "SQLite database with no api_keys rows for the user",
+        "Mock provider returns valid UserInfo for a new user"
+      ],
+      "input": "POST /auth/callback for a new user (first login, no existing keys)",
+      "expected": "HTTP 200; new api_key inserted in api_keys; no error from revocation step",
+      "assertion_pseudocode": "resp := httpPost(\"/auth/callback\", validBody)\nassert resp.statusCode == 200\nbody := parseJSON(resp.body)\nassert body[\"api_key\"][\"key\"] != \"\"\nnewKey := db.QueryRow(\"SELECT * FROM api_keys WHERE revoked_at IS NULL\")\nassert newKey != nil"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-06-SMOKE-1",
+      "execution_path_id": "06-PATH-1",
+      "description": "Full OAuth callback flow for a new user: valid POST /auth/callback results in HTTP 200 with user and api_key, user created in DB, api_key inserted with correct hash.",
+      "trigger": "POST {mount_point}/auth/callback with {\"provider\":\"github\",\"code\":\"validcode\",\"redirect_uri\":\"http://localhost:9000/cb\",\"expires\":90}",
+      "real_components": [
+        "internal/oauth callback handler",
+        "SQLite database (users and api_keys tables)",
+        "internal/oauth registry"
+      ],
+      "mockable": [
+        "GitHub token endpoint (httptest.Server returning access_token)",
+        "GitHub userinfo endpoint (httptest.Server returning login/email/id JSON)"
+      ],
+      "expected_effects": [
+        "HTTP 200 response with Content-Type: application/json",
+        "Response body contains user.id (UUID), user.username, user.email, user.status='active', user.role, user.provider='github'",
+        "Response body contains api_key.key matching regex ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$",
+        "Response body api_key.expires_at is RFC 3339 timestamp approximately 90 days from now",
+        "SQLite users table contains new row with matching provider='github' and provider_id",
+        "SQLite api_keys table contains new row with secret_hash == SHA256(plaintext_secret) and revoked_at IS NULL"
+      ]
+    },
+    {
+      "id": "TS-06-SMOKE-2",
+      "execution_path_id": "06-PATH-2",
+      "description": "Returning user re-login: existing user's username and email are updated, previous API key is revoked, new API key is issued.",
+      "trigger": "POST {mount_point}/auth/callback for a user whose (provider, provider_id) already exists in the users table with status='active'",
+      "real_components": [
+        "internal/oauth callback handler",
+        "SQLite database (users and api_keys tables)",
+        "internal/oauth registry"
+      ],
+      "mockable": [
+        "GitHub token endpoint (httptest.Server)",
+        "GitHub userinfo endpoint (httptest.Server returning updated username and email)"
+      ],
+      "expected_effects": [
+        "HTTP 200 response",
+        "users row updated with new username and email; id, role, status, created_at unchanged",
+        "Previous api_keys row has revoked_at set to non-null",
+        "New api_keys row inserted with revoked_at IS NULL",
+        "Response api_key.key is a new key different from the previous one"
+      ]
+    },
+    {
+      "id": "TS-06-SMOKE-3",
+      "execution_path_id": "06-PATH-3",
+      "description": "GET /auth/providers returns provider list with names and authorize URLs, Cache-Control header set, no secrets exposed.",
+      "trigger": "GET {mount_point}/auth/providers with no authentication",
+      "real_components": [
+        "internal/oauth providers handler",
+        "internal/oauth registry with github provider",
+        "CacheMiddleware(CachePublic)"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response",
+        "Response header Cache-Control: public, max-age=300",
+        "Response body is JSON array with one entry: {\"name\":\"github\",\"authorize_url\":\"...\"}",
+        "authorize_url contains client_id and scope=user:email query params",
+        "Response body does not contain client_secret, token_url, or userinfo_url"
+      ]
+    },
+    {
+      "id": "TS-06-SMOKE-4",
+      "execution_path_id": "06-PATH-4",
+      "description": "Blocked user OAuth callback is rejected with HTTP 403, user status unchanged, no key created.",
+      "trigger": "POST {mount_point}/auth/callback with valid credentials for a user with status='blocked' in the users table",
+      "real_components": [
+        "internal/oauth callback handler",
+        "SQLite database (users and api_keys tables)",
+        "internal/oauth registry"
+      ],
+      "mockable": [
+        "GitHub token endpoint (httptest.Server)",
+        "GitHub userinfo endpoint (httptest.Server)"
+      ],
+      "expected_effects": [
+        "HTTP 403 response",
+        "Response body {\"error\":{\"code\":403,\"message\":\"user is blocked\"}}",
+        "users row status remains 'blocked'",
+        "api_keys table unchanged (no new row, no revocation)"
+      ]
+    },
+    {
+      "id": "TS-06-SMOKE-5",
+      "execution_path_id": "06-PATH-5",
+      "description": "Server startup with valid TOML config registers github provider in registry and makes both OAuth endpoints reachable.",
+      "trigger": "Server bootstrap with config containing one [[oauth.providers]] entry for github; call RegisterOAuthHandlers",
+      "real_components": [
+        "server bootstrap (BuildRegistryFromConfig)",
+        "internal/oauth registry",
+        "internal/oauth.NewGitHubProvider",
+        "RegisterOAuthHandlers",
+        "Echo HTTP server"
+      ],
+      "mockable": [
+        "LoadConfig (use in-memory config struct)"
+      ],
+      "expected_effects": [
+        "Registry.Get(\"github\") returns non-nil GitHub provider",
+        "Registry.List() returns [\"github\"]",
+        "GET /auth/providers returns HTTP 200 with [{\"name\":\"github\",\"authorize_url\":\"...\"}]",
+        "POST /auth/callback returns HTTP 400 (validation error) not 404",
+        "No startup error returned"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

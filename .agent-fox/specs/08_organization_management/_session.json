@@ -1,0 +1,70 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The Organization Management PRD is exceptionally thorough and well-structured. All four required sections (Intent, Goals, Non-Goals, Background/context) are present and of high quality. The spec provides exhaustive functional requirements for every endpoint, precise error handling tables, complete Go type definitions, a detailed testing strategy with named test cases, and clear design decision rationale. Dependencies on active specs (server_core, database_layer, auth_middleware) are explicitly declared and correctly mapped. No active-spec overlaps or conflicts were detected. The spec is ready to proceed to artifact generation.",
+      "gaps": [
+        "Background section: The PRD lacks an explicit '## Background' section. Context and motivation are partially embedded in design decisions and the glossary, but a dedicated background section explaining the business motivation for organizations, the relationship to future RBAC work, and prior art would improve traceability.",
+        "Slug maximum length validation message: The error table does not include a specific error message for the slug-too-long (>128 characters) case, though the validation rule is defined in the Slug Validation Rules section.",
+        "Blocked org direct-ID lookup behavior: The spec states blocked orgs are 'still accessible via direct ID lookup' in the glossary, but GET /orgs/:id does not explicitly specify whether a blocked org should be returned to an admin vs. an org member \u2014 the auth check comes before any status consideration, so this is an implicit decision that could benefit from a brief explicit statement.",
+        "URL field validation: The spec states the URL field is 'stored as-is' with no validation (e.g. format, length). It is unclear whether an arbitrary string, an empty string, or a malformed URL is acceptable. An explicit statement about URL validation (or the deliberate lack thereof) would remove ambiguity.",
+        "OpenAPI alignment: The spec references the openapi_specification active spec as a source of truth for the API contract, but does not declare a dependency on it or indicate whether the organization endpoints are already covered in api/openapi.yaml."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should a dependency on the `openapi_specification` spec be declared in the Dependencies table, given that `api/openapi.yaml` is the API contract source of truth and the organization endpoints presumably need to be represented there?",
+          "context": "The openapi_specification active spec defines the single source of truth for the API contract. If organization endpoints are not yet covered there, this spec should declare a dependency or explicitly state that adding these endpoints to the OpenAPI document is in scope.",
+          "options": [
+            "Yes \u2014 add openapi_specification as a dependency; org endpoints must be reflected in api/openapi.yaml",
+            "No \u2014 the OpenAPI spec update is handled separately outside this spec's scope",
+            "The org endpoints are already included in api/openapi.yaml"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What is the expected behavior of GET /orgs/:id when the organization is blocked and the requester is a non-admin org member \u2014 should a blocked org still be visible to its members via direct ID lookup?",
+          "context": "The glossary states blocked orgs are 'still accessible via direct ID lookup', but the endpoint spec only describes the admin/member auth check. It is ambiguous whether a blocked org should be hidden from non-admin members (similar to how blocked orgs are excluded from listings) or always returned when accessed by ID.",
+          "options": [
+            "Blocked orgs are always returned to both admins and members on direct ID lookup (status is informational only)",
+            "Blocked orgs are returned to admins but return 404 (or 403) to non-admin members",
+            "Blocked orgs are returned to admins but return the org with its 'blocked' status to non-admin members"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the `url` field be validated for format (e.g. must be a valid HTTP/HTTPS URL), or is any non-empty string acceptable?",
+          "context": "The current spec stores the URL 'as-is' with no format validation. If an arbitrary string is stored without validation, clients may receive unexpected data. Clarifying this prevents implementation ambiguity.",
+          "options": [
+            "No validation \u2014 any string (including empty) is accepted and stored as-is",
+            "Validate that if provided, the value is a well-formed HTTP or HTTPS URL; return 400 otherwise",
+            "Validate format but only emit a warning, not an error"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What error message and HTTP status should be returned when a slug exceeds 128 characters (the slug-too-long case)?",
+          "context": "The Slug Validation Rules section specifies a 128-character maximum, and TestCreateOrg_SlugTooLong is listed as a test case, but the Error Handling table does not include a corresponding row with the expected message string.",
+          "options": [
+            "HTTP 400 with message \"invalid slug format\" (same as other slug validation failures)",
+            "HTTP 400 with a distinct message such as \"slug must be 128 characters or fewer\"",
+            "HTTP 422 with a validation error envelope"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

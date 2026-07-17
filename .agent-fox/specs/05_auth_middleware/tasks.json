@@ -1,0 +1,1717 @@
+{
+  "$schema": null,
+  "spec_id": "05",
+  "spec_name": "auth_middleware",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/auth/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./internal/auth/..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 2,
+      "to_group": 1,
+      "relationship": "uses APIError helper and TokenPrefix from server_core",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 2,
+      "to_group": 1,
+      "relationship": "uses *db.DB, db.ErrNotFound, db.FormatTime, db.ParseTime from database_layer",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Token Extraction, Parsing, and Hash Utility",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for Bearer token extraction (REQ-2)",
+          "details": [
+            "Create internal/auth/auth_test.go with test functions for all extraction scenarios.",
+            "TestMiddleware_MissingAuthHeader: no Authorization header → HTTP 401 'missing authorization header'.",
+            "TestMiddleware_InvalidAuthFormat: 'Basic ...' scheme → HTTP 401 'invalid authorization header format'.",
+            "TestMiddleware_BearerNoSpace: 'Bearer' with no space → HTTP 401 'invalid authorization header format'.",
+            "TestMiddleware_EmptyBearer: 'Bearer ' with no token → HTTP 401 'missing token'.",
+            "TestMiddleware_WellFormedHeader: 'Bearer <token>' proceeds past extraction (no extraction error)."
+          ],
+          "test_spec_refs": [
+            "TS-05-4",
+            "TS-05-5",
+            "TS-05-6",
+            "TS-05-7",
+            "TS-05-E2"
+          ],
+          "requirement_refs": [
+            "05-REQ-2.1",
+            "05-REQ-2.2",
+            "05-REQ-2.3",
+            "05-REQ-2.4",
+            "05-REQ-2.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for parseToken credential type detection (REQ-3)",
+          "details": [
+            "TestParseToken_AdminToken: valid admin token → ('admin_token', [fullToken], nil).",
+            "TestParseToken_APIKey: valid API key → ('api_key', [keyID, secret], nil).",
+            "TestParseToken_PAT: valid PAT → ('pat', [tokenID, secret], nil).",
+            "TestParseToken_DetectionOrder: '<prefix>_pat_...' returns 'pat', not 'api_key'.",
+            "TestParseToken_UnrecognizedFormat: garbage input → non-nil error.",
+            "TestParseToken_EmptyString: empty string → non-nil error.",
+            "TestParseToken_WrongPrefix: wrong prefix → non-nil error.",
+            "TestParseToken_AdminBeforePAT: admin pattern checked first."
+          ],
+          "test_spec_refs": [
+            "TS-05-8",
+            "TS-05-9",
+            "TS-05-10",
+            "TS-05-11",
+            "TS-05-12",
+            "TS-05-E3",
+            "TS-05-E4",
+            "TS-05-E5"
+          ],
+          "requirement_refs": [
+            "05-REQ-3.1",
+            "05-REQ-3.2",
+            "05-REQ-3.3",
+            "05-REQ-3.4",
+            "05-REQ-3.5",
+            "05-REQ-3.E1",
+            "05-REQ-3.E2",
+            "05-REQ-3.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for hashToken and constant-time comparison (REQ-11)",
+          "details": [
+            "TestHashToken: hashToken('hello') == '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'; length == 64; all lowercase.",
+            "TestHashToken_EmptyString: hashToken('') returns valid 64-char hex.",
+            "TestConstantTimeComparison: code inspection via grep confirms subtle.ConstantTimeCompare usage; no '==' on hash values.",
+            "TestHashRepresentation: both computed and stored hashes are converted to []byte before ConstantTimeCompare.",
+            "Use go vet and static analysis to confirm no bytes.Equal on hash values."
+          ],
+          "test_spec_refs": [
+            "TS-05-49",
+            "TS-05-50",
+            "TS-05-E20"
+          ],
+          "requirement_refs": [
+            "05-REQ-11.1",
+            "05-REQ-11.2",
+            "05-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test functions in group 1 compile without errors: go build ./internal/auth/...",
+          "Tests in this group are correctly skipped (pending implementation stubs): go test ./internal/auth/... -run 'TestParseToken|TestHashToken|TestMiddleware_Missing|TestMiddleware_Invalid|TestMiddleware_Empty|TestMiddleware_WellFormed' -count=1 -v",
+          "No linter warnings in test file: go vet ./internal/auth/...",
+          "Test file follows Go conventions: table-driven tests where applicable, use of testing.T helpers"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: Admin Token and API Key Validation",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for admin token validation (REQ-4)",
+          "details": [
+            "TestMiddleware_ValidAdminToken: hash matches → HTTP 200, AuthInfo{CredentialType:'admin_token', UserID:'', Role:'admin'}.",
+            "TestMiddleware_InvalidAdminToken: hash mismatch → HTTP 401 'invalid credentials'.",
+            "TestMiddleware_AdminTokenMissingHash: no admin_token_hash row → HTTP 401 'invalid credentials'.",
+            "TestMiddleware_AdminTokenShortHex: hex suffix < 64 chars → HTTP 401 'invalid credentials', no DB query.",
+            "TestMiddleware_AdminTokenLongHex: hex suffix > 64 chars → HTTP 401 'invalid credentials', no DB query.",
+            "TestMiddleware_AdminConfigDBError: DB returns non-ErrNotFound → HTTP 500 'internal server error'."
+          ],
+          "test_spec_refs": [
+            "TS-05-13",
+            "TS-05-14",
+            "TS-05-15",
+            "TS-05-16",
+            "TS-05-17",
+            "TS-05-E6",
+            "TS-05-E7"
+          ],
+          "requirement_refs": [
+            "05-REQ-4.1",
+            "05-REQ-4.2",
+            "05-REQ-4.3",
+            "05-REQ-4.4",
+            "05-REQ-4.5",
+            "05-REQ-4.E1",
+            "05-REQ-4.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write unit tests for API key validation — happy path and revocation/expiry (REQ-5)",
+          "details": [
+            "TestMiddleware_ValidAPIKey: all checks pass → HTTP 200, AuthInfo{CredentialType:'api_key', UserID, Role, KeyID} populated.",
+            "TestMiddleware_APIKeyNotFound: key_id not in table → HTTP 401 'invalid credentials'.",
+            "TestMiddleware_RevokedAPIKey: revoked_at non-NULL → HTTP 401 'credential revoked'.",
+            "TestMiddleware_ExpiredAPIKey: expires_at in past → HTTP 401 'credential expired'.",
+            "TestMiddleware_InvalidAPIKeySecret: wrong secret → HTTP 401 'invalid credentials'."
+          ],
+          "test_spec_refs": [
+            "TS-05-18",
+            "TS-05-19",
+            "TS-05-20",
+            "TS-05-21",
+            "TS-05-23"
+          ],
+          "requirement_refs": [
+            "05-REQ-5.1",
+            "05-REQ-5.2",
+            "05-REQ-5.3",
+            "05-REQ-5.4",
+            "05-REQ-5.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write unit tests for API key validation — user checks and DB errors (REQ-5 edge cases)",
+          "details": [
+            "TestMiddleware_BlockedUser_APIKey: valid key, user blocked → HTTP 403 'user is blocked'.",
+            "TestMiddleware_APIKeyDBError: api_keys query fails (non-ErrNotFound) → HTTP 500 'internal server error'.",
+            "TestMiddleware_UsersDBError_AfterAPIKey: users query fails → HTTP 500 'internal server error'.",
+            "TestMiddleware_APIKeyMalformedToken: token has no underscore separator for key/secret → HTTP 401 'unrecognized token format'.",
+            "Use DB stubs/test doubles to simulate error conditions."
+          ],
+          "test_spec_refs": [
+            "TS-05-22",
+            "TS-05-E8",
+            "TS-05-E9",
+            "TS-05-E10"
+          ],
+          "requirement_refs": [
+            "05-REQ-5.5",
+            "05-REQ-5.E1",
+            "05-REQ-5.E2",
+            "05-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test functions in group 2 compile: go build ./internal/auth/...",
+          "Admin token and API key test cases are defined and runnable: go test ./internal/auth/... -run 'TestMiddleware_.*Admin|TestMiddleware_.*APIKey|TestMiddleware_Blocked.*APIKey' -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-4.1 through 05-REQ-4.5, 05-REQ-5.1 through 05-REQ-5.6 have test coverage"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: PAT Validation and RBAC Helpers",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write unit tests for PAT validation — happy path and revocation/expiry (REQ-6)",
+          "details": [
+            "TestMiddleware_ValidPAT: all checks pass → HTTP 200, AuthInfo{CredentialType:'pat', UserID, Role, TokenID, Permissions} populated.",
+            "TestMiddleware_PATNotFound: token_id not in table → HTTP 401 'invalid credentials'.",
+            "TestMiddleware_RevokedPAT: revoked_at non-NULL → HTTP 401 'credential revoked'.",
+            "TestMiddleware_ExpiredPAT: expires_at in past → HTTP 401 'credential expired'.",
+            "TestMiddleware_InvalidPATSecret: wrong secret → HTTP 401 'invalid credentials'."
+          ],
+          "test_spec_refs": [
+            "TS-05-24",
+            "TS-05-25",
+            "TS-05-26",
+            "TS-05-27",
+            "TS-05-29"
+          ],
+          "requirement_refs": [
+            "05-REQ-6.1",
+            "05-REQ-6.2",
+            "05-REQ-6.3",
+            "05-REQ-6.4",
+            "05-REQ-6.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write unit tests for PAT validation — user checks and DB errors (REQ-6 edge cases)",
+          "details": [
+            "TestMiddleware_BlockedUser_PAT: valid PAT, user blocked → HTTP 403 'user is blocked'.",
+            "TestMiddleware_PATDBError: pats query fails (non-ErrNotFound) → HTTP 500 'internal server error'.",
+            "TestMiddleware_UsersDBError_AfterPAT: users query fails → HTTP 500 'internal server error'.",
+            "TestMiddleware_PATMalformedToken: token has no underscore separator after pat_ infix → HTTP 401 'unrecognized token format'."
+          ],
+          "test_spec_refs": [
+            "TS-05-28",
+            "TS-05-E11",
+            "TS-05-E12",
+            "TS-05-E13"
+          ],
+          "requirement_refs": [
+            "05-REQ-6.5",
+            "05-REQ-6.E1",
+            "05-REQ-6.E2",
+            "05-REQ-6.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write unit tests for RequireAdmin and RequireOwnerOrAdmin (REQ-7)",
+          "details": [
+            "TestRequireAdmin_AdminToken: CredentialType='admin_token' → nil.",
+            "TestRequireAdmin_AdminAPIKey: CredentialType='api_key', Role='admin' → nil.",
+            "TestRequireAdmin_RegularAPIKey: Role='user' → HTTP 403 'forbidden'.",
+            "TestRequireAdmin_PAT: CredentialType='pat' → HTTP 403 'forbidden'.",
+            "TestRequireAdmin_NoAuthInfo: nil AuthInfo → HTTP 403 'forbidden'.",
+            "TestRequireOwnerOrAdmin_Owner: UserID matches → nil.",
+            "TestRequireOwnerOrAdmin_Admin: admin credential → nil.",
+            "TestRequireOwnerOrAdmin_Forbidden: not owner, not admin → HTTP 403 'forbidden'.",
+            "TestRequireOwnerOrAdmin_EmptyOwnerID: empty resourceOwnerID, non-admin → HTTP 403; admin → nil."
+          ],
+          "test_spec_refs": [
+            "TS-05-30",
+            "TS-05-31",
+            "TS-05-32",
+            "TS-05-33",
+            "TS-05-E14",
+            "TS-05-E15"
+          ],
+          "requirement_refs": [
+            "05-REQ-7.1",
+            "05-REQ-7.2",
+            "05-REQ-7.3",
+            "05-REQ-7.4",
+            "05-REQ-7.E1",
+            "05-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write unit tests for RequirePermission (REQ-7)",
+          "details": [
+            "TestRequirePermission_AdminToken: CredentialType='admin_token' → nil (bypass).",
+            "TestRequirePermission_APIKey: CredentialType='api_key' → nil (bypass regardless of Permissions).",
+            "TestRequirePermission_PAT_Granted: PAT has 'keys:read' in Permissions → nil.",
+            "TestRequirePermission_PAT_Denied: PAT lacks 'keys:manage' → HTTP 403 'insufficient permissions'.",
+            "Test with empty Permissions list on PAT → HTTP 403 for any permission request."
+          ],
+          "test_spec_refs": [
+            "TS-05-34",
+            "TS-05-35",
+            "TS-05-36"
+          ],
+          "requirement_refs": [
+            "05-REQ-7.5",
+            "05-REQ-7.6",
+            "05-REQ-7.7"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All test functions in group 3 compile: go build ./internal/auth/...",
+          "PAT and RBAC helper tests are runnable: go test ./internal/auth/... -run 'TestMiddleware_.*PAT|TestRequireAdmin|TestRequireOwner|TestRequirePermission' -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-6.1 through 05-REQ-6.6, 05-REQ-7.1 through 05-REQ-7.7 have test coverage"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: Blocked User, Permission Registry, Context Helpers, and Error Format",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write unit tests for blocked user enforcement (REQ-8)",
+          "details": [
+            "TestBlockedUser_APIKey_HandlerNotCalled: blocked user API key → HTTP 403, handler never invoked, no AuthInfo injected.",
+            "TestBlockedUser_PAT_HandlerNotCalled: blocked user PAT → HTTP 403, handler never invoked.",
+            "TestAdminToken_Exempt_FromBlockedCheck: valid admin token → HTTP 200 (no user to check).",
+            "TestBlockedUser_InvalidSecret: blocked user + wrong secret → HTTP 401 'invalid credentials' (not 403), validating check ordering."
+          ],
+          "test_spec_refs": [
+            "TS-05-37",
+            "TS-05-38",
+            "TS-05-E16"
+          ],
+          "requirement_refs": [
+            "05-REQ-8.1",
+            "05-REQ-8.2",
+            "05-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write unit tests for PermissionRegistry (REQ-9)",
+          "details": [
+            "TestPermissionRegistry_BuiltIns: NewPermissionRegistry().List() returns exactly 6 built-in permissions sorted.",
+            "TestPermissionRegistry_Register: valid new permission added, IsValid returns true, List includes it.",
+            "TestPermissionRegistry_DuplicateRegister: second registration returns non-nil error.",
+            "TestPermissionRegistry_InvalidFormat: empty/uppercase/hyphenated resource_type or action returns error, registry unchanged.",
+            "TestPermissionRegistry_IsValid: true for registered, false for unregistered.",
+            "TestPermissionRegistry_List: returns sorted ascending slice.",
+            "TestPermissionRegistry_Concurrent: run with -race flag, 10 goroutines calling Register/IsValid/List simultaneously."
+          ],
+          "test_spec_refs": [
+            "TS-05-39",
+            "TS-05-40",
+            "TS-05-41",
+            "TS-05-42",
+            "TS-05-43",
+            "TS-05-E17",
+            "TS-05-E18"
+          ],
+          "requirement_refs": [
+            "05-REQ-9.1",
+            "05-REQ-9.2",
+            "05-REQ-9.3",
+            "05-REQ-9.4",
+            "05-REQ-9.5",
+            "05-REQ-9.E1",
+            "05-REQ-9.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write unit tests for request context injection and helpers (REQ-10)",
+          "details": [
+            "TestGetAuthInfo_Set: context with AuthInfo injected → GetAuthInfo returns non-nil with correct fields.",
+            "TestGetAuthInfo_NotSet: context without AuthInfo → GetAuthInfo returns nil without panic.",
+            "TestGetUserID: returns UUID for API key/PAT auth; empty string for admin token or nil AuthInfo.",
+            "TestIsAdmin: true for admin_token and api_key+admin role; false for user role api_key, PAT, nil AuthInfo.",
+            "TestContextKey_Unexported: plain string 'auth_info' key cannot retrieve AuthInfo from context (unexported type isolation)."
+          ],
+          "test_spec_refs": [
+            "TS-05-44",
+            "TS-05-45",
+            "TS-05-46",
+            "TS-05-47",
+            "TS-05-48",
+            "TS-05-E19"
+          ],
+          "requirement_refs": [
+            "05-REQ-10.1",
+            "05-REQ-10.2",
+            "05-REQ-10.3",
+            "05-REQ-10.4",
+            "05-REQ-10.5",
+            "05-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write unit tests for error response format and middleware registration (REQ-1, REQ-12)",
+          "details": [
+            "TestNewAuthMiddleware_Valid: non-nil db and registry → returns non-nil MiddlewareFunc without panic.",
+            "TestNewAuthMiddleware_NilDB: nil db → panics with descriptive message.",
+            "TestNewAuthMiddleware_NilRegistry: nil registry → panics with descriptive message.",
+            "TestMiddleware_AppliedToAPIGroup: protected route without header → HTTP 401 (middleware fires).",
+            "TestUnprotectedPaths: /healthz, /readyz, /version, /auth/providers, /auth/callback → never return 401 from auth middleware.",
+            "TestErrorFormat_JSONEnvelope: error responses have {error:{code,message}} JSON structure with correct Content-Type.",
+            "TestApprovedErrorMessages: all error responses use only the 11 approved message strings."
+          ],
+          "test_spec_refs": [
+            "TS-05-1",
+            "TS-05-2",
+            "TS-05-3",
+            "TS-05-51",
+            "TS-05-52",
+            "TS-05-E1"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.1",
+            "05-REQ-1.2",
+            "05-REQ-1.3",
+            "05-REQ-1.E1",
+            "05-REQ-12.1",
+            "05-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All group 4 tests compile: go build ./internal/auth/...",
+          "Blocked user, registry, context, and error format tests runnable: go test ./internal/auth/... -run 'TestBlocked|TestPermission|TestGetAuth|TestGetUser|TestIsAdmin|TestNewAuth|TestUnprotected|TestErrorFormat|TestApproved' -count=1 -v",
+          "Race detector clean for concurrent registry test: go test ./internal/auth/... -race -run TestPermissionRegistry_Concurrent -count=1",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-1, 05-REQ-8, 05-REQ-9, 05-REQ-10, 05-REQ-12 have test coverage"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write Tests: Property Tests and Smoke Tests",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write property tests for detection order and constant-time comparison (PROP-1, PROP-2)",
+          "details": [
+            "TestProperty_DetectionOrder: using testing/quick, generate random 'ak_pat_<alphanumeric>_<alphanumeric>' tokens; assert parseToken always returns 'pat' or error, never 'api_key'.",
+            "TestProperty_ConstantTimeComparison: instrument credential validation code; verify subtle.ConstantTimeCompare is called at least once per validation path and no plain == comparison is used on hash byte slices.",
+            "Use go test -count=100 or testing/quick.Check for fuzz-like coverage."
+          ],
+          "test_spec_refs": [
+            "TS-05-P1",
+            "TS-05-P2"
+          ],
+          "requirement_refs": [
+            "05-REQ-3.1",
+            "05-REQ-3.3",
+            "05-REQ-3.E3",
+            "05-REQ-11.1",
+            "05-REQ-4.2",
+            "05-REQ-5.4",
+            "05-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write property tests for blocked user, admin token identity, and registry append-only (PROP-3, PROP-4, PROP-5)",
+          "details": [
+            "TestProperty_BlockedUser: generate random key_id/secret/user_id combos; insert with user blocked; assert HTTP 403 and handler never called.",
+            "TestProperty_AdminTokenNoUserID: generate random 64-char hex; store hash; validate → assert AuthInfo.UserID=='', Role=='admin', GetUserID==''.",
+            "TestProperty_RegistryAppendOnly: Register valid non-duplicate permissions sequentially; after each, assert IsValid true, List sorted, no previous entry removed."
+          ],
+          "test_spec_refs": [
+            "TS-05-P3",
+            "TS-05-P4",
+            "TS-05-P5"
+          ],
+          "requirement_refs": [
+            "05-REQ-8.1",
+            "05-REQ-5.5",
+            "05-REQ-6.5",
+            "05-REQ-4.3",
+            "05-REQ-10.4",
+            "05-REQ-9.2",
+            "05-REQ-9.4",
+            "05-REQ-9.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write property tests for RequirePermission bypass and no-handler-on-failure (PROP-6, PROP-7)",
+          "details": [
+            "TestProperty_RequirePermissionBypass: for CredentialType in ['admin_token','api_key'] with any Permissions slice, RequirePermission always returns nil.",
+            "TestProperty_NoHandlerOnFailure: across all error-triggering scenarios (missing header, bad format, unrecognized token, wrong credentials, expired, revoked, blocked), assert handler_invoked==false and GetAuthInfo(ctx)==nil."
+          ],
+          "test_spec_refs": [
+            "TS-05-P6",
+            "TS-05-P7"
+          ],
+          "requirement_refs": [
+            "05-REQ-7.5",
+            "05-REQ-2.1",
+            "05-REQ-2.2",
+            "05-REQ-2.3",
+            "05-REQ-3.5",
+            "05-REQ-4.5",
+            "05-REQ-5.1",
+            "05-REQ-6.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Write smoke tests for all six execution paths (PATH-1 through PATH-6)",
+          "details": [
+            "TestSMOKE_APIKeyAuth: full end-to-end API key path → HTTP 200, AuthInfo correctly populated, handler invoked once.",
+            "TestSMOKE_PATAuthWithPermission: PAT validates, RequirePermission passes → HTTP 200.",
+            "TestSMOKE_AdminTokenBreakGlass: admin token hashed full string matches admin_config → HTTP 200, IsAdmin true.",
+            "TestSMOKE_MissingHeader: no header → HTTP 401, handler never called, no DB queries.",
+            "TestSMOKE_BlockedUser: valid API key, blocked user → HTTP 403, handler never called.",
+            "TestSMOKE_CustomPermission: register 'widgets:export', PAT with that permission passes RequirePermission."
+          ],
+          "test_spec_refs": [
+            "TS-05-SMOKE-1",
+            "TS-05-SMOKE-2",
+            "TS-05-SMOKE-3",
+            "TS-05-SMOKE-4",
+            "TS-05-SMOKE-5",
+            "TS-05-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.2",
+            "05-REQ-4.3",
+            "05-REQ-5.6",
+            "05-REQ-6.6",
+            "05-REQ-7.1",
+            "05-REQ-7.5",
+            "05-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All property and smoke test functions compile: go build ./internal/auth/...",
+          "Property tests runnable: go test ./internal/auth/... -run 'TestProperty_' -count=1 -v",
+          "Smoke tests runnable: go test ./internal/auth/... -run 'TestSMOKE_' -count=1 -v",
+          "Race detector clean: go test ./internal/auth/... -race -run 'TestProperty_|TestSMOKE_' -count=1",
+          "No linter warnings: go vet ./internal/auth/..."
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement Permission Registry and Context Types",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement PermissionRegistry with built-in permissions",
+          "details": [
+            "Create internal/auth/permissions.go.",
+            "Define PermissionRegistry struct with a sync.RWMutex and map[string]struct{} for registered permissions.",
+            "Implement NewPermissionRegistry() pre-populating users:read, orgs:read, keys:read, keys:manage, tokens:read, tokens:manage.",
+            "Implement Register(resourceType, action string) error: validate non-empty, lowercase letters/digits/underscores only; return error on duplicate; add to map under rwmutex write lock.",
+            "Implement IsValid(resourceType, action string) bool: lookup under read lock.",
+            "Implement List() []string: collect all keys, sort ascending, return under read lock.",
+            "Validate resource_type and action with regexp `^[a-z0-9_]+$`."
+          ],
+          "test_spec_refs": [
+            "TS-05-39",
+            "TS-05-40",
+            "TS-05-41",
+            "TS-05-42",
+            "TS-05-43",
+            "TS-05-E17",
+            "TS-05-E18"
+          ],
+          "requirement_refs": [
+            "05-REQ-9.1",
+            "05-REQ-9.2",
+            "05-REQ-9.3",
+            "05-REQ-9.4",
+            "05-REQ-9.5",
+            "05-REQ-9.E1",
+            "05-REQ-9.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement AuthInfo struct and request context helpers",
+          "details": [
+            "Create internal/auth/context.go.",
+            "Define unexported type `type contextKey string` and `const authInfoKey contextKey = \"auth_info\"`.",
+            "Define AuthInfo struct with fields: CredentialType, UserID, Role, KeyID, TokenID string; Permissions []string.",
+            "Implement GetAuthInfo(c echo.Context) *AuthInfo: retrieve from context using authInfoKey, type-assert, return nil if absent.",
+            "Implement GetUserID(c echo.Context) string: call GetAuthInfo; return UserID or empty string if nil.",
+            "Implement IsAdmin(c echo.Context) bool: return true if AuthInfo non-nil and (Role==\"admin\" || CredentialType==\"admin_token\").",
+            "Store AuthInfo in context via c.Set(string(authInfoKey), &authInfo)."
+          ],
+          "test_spec_refs": [
+            "TS-05-44",
+            "TS-05-45",
+            "TS-05-46",
+            "TS-05-47",
+            "TS-05-48",
+            "TS-05-E19"
+          ],
+          "requirement_refs": [
+            "05-REQ-10.1",
+            "05-REQ-10.2",
+            "05-REQ-10.3",
+            "05-REQ-10.4",
+            "05-REQ-10.5",
+            "05-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement hashToken utility function",
+          "details": [
+            "In internal/auth/auth.go (or a dedicated util file), implement hashToken(input string) string.",
+            "Use sha256.Sum256([]byte(input)) and hex.EncodeToString(hash[:]) to produce a 64-char lowercase hex string.",
+            "Function is package-private (unexported); used by all credential validation functions.",
+            "Document that both computed and stored hashes must be converted to []byte before subtle.ConstantTimeCompare."
+          ],
+          "test_spec_refs": [
+            "TS-05-50",
+            "TS-05-E20"
+          ],
+          "requirement_refs": [
+            "05-REQ-11.2",
+            "05-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "PermissionRegistry tests pass: go test ./internal/auth/... -run 'TestPermissionRegistry' -count=1 -v",
+          "Context helper tests pass: go test ./internal/auth/... -run 'TestGetAuth|TestGetUser|TestIsAdmin' -count=1 -v",
+          "hashToken test passes: go test ./internal/auth/... -run 'TestHashToken' -count=1 -v",
+          "Race detector clean for registry: go test ./internal/auth/... -race -run 'TestPermissionRegistry_Concurrent' -count=1",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-9.1–05-REQ-9.5, 05-REQ-10.1–05-REQ-10.5, 05-REQ-11.2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement Token Parsing and Extraction Logic",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement parseToken function with detection-order precedence",
+          "details": [
+            "Create/extend internal/auth/auth.go with parseToken(token string) (credType string, components []string, err error).",
+            "Use apikit.TokenPrefix as the prefix variable for all pattern matching.",
+            "Check admin pattern first: strings.HasPrefix(token, prefix+\"_admin_\"); validate hex suffix is exactly 64 chars using hex.DecodeString.",
+            "Check PAT pattern second: strings.HasPrefix(token, prefix+\"_pat_\"); split remainder on '_' expecting exactly 2 parts.",
+            "Fall back to API key: split token after prefix+'_' on '_' expecting exactly 2 parts (key_id, secret).",
+            "Return error with descriptive internal message for unrecognized format; caller maps to HTTP 401 'unrecognized token format'."
+          ],
+          "test_spec_refs": [
+            "TS-05-8",
+            "TS-05-9",
+            "TS-05-10",
+            "TS-05-11",
+            "TS-05-12",
+            "TS-05-E3",
+            "TS-05-E4",
+            "TS-05-E5"
+          ],
+          "requirement_refs": [
+            "05-REQ-3.1",
+            "05-REQ-3.2",
+            "05-REQ-3.3",
+            "05-REQ-3.4",
+            "05-REQ-3.5",
+            "05-REQ-3.E1",
+            "05-REQ-3.E2",
+            "05-REQ-3.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement Bearer token extraction in middleware entry point",
+          "details": [
+            "In NewAuthMiddleware's returned MiddlewareFunc, read c.Request().Header.Get(\"Authorization\").",
+            "If empty → return APIError(401, \"missing authorization header\").",
+            "If not strings.HasPrefix(header, \"Bearer \") → return APIError(401, \"invalid authorization header format\").",
+            "Extract token = header[len(\"Bearer \"):].",
+            "If token == \"\" → return APIError(401, \"missing token\").",
+            "Pass token to parseToken; if error → return APIError(401, \"unrecognized token format\").",
+            "Dispatch to credential-type-specific validation based on credType."
+          ],
+          "test_spec_refs": [
+            "TS-05-4",
+            "TS-05-5",
+            "TS-05-6",
+            "TS-05-7",
+            "TS-05-E2"
+          ],
+          "requirement_refs": [
+            "05-REQ-2.1",
+            "05-REQ-2.2",
+            "05-REQ-2.3",
+            "05-REQ-2.4",
+            "05-REQ-2.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Extraction and parsing unit tests pass: go test ./internal/auth/... -run 'TestParseToken|TestMiddleware_Missing|TestMiddleware_Invalid|TestMiddleware_Empty|TestMiddleware_Bearer|TestMiddleware_Unrecognized' -count=1 -v",
+          "Detection order property test passes: go test ./internal/auth/... -run 'TestProperty_DetectionOrder' -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-2.1–05-REQ-2.4, 05-REQ-3.1–05-REQ-3.5 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement Admin Token and API Key Credential Validation",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement admin token validation with SHA-256 hash and constant-time comparison",
+          "details": [
+            "Create internal/auth/credentials.go with validateAdminToken(ctx context.Context, db *db.DB, fullToken string) (*AuthInfo, error).",
+            "Validate hex suffix is exactly 64 chars: extract suffix after '<prefix>_admin_', call hex.DecodeString; if fails/wrong length → return 401 'invalid credentials' without DB query.",
+            "Compute hash = hashToken(fullToken) (hashes full token string including prefix).",
+            "Query admin_config table for key='admin_token_hash'; if db.ErrNotFound → return 401 'invalid credentials'; other error → log and return 500 'internal server error'.",
+            "Use subtle.ConstantTimeCompare([]byte(hash), []byte(storedHash)); if != 1 → return 401 'invalid credentials'.",
+            "On success, return &AuthInfo{CredentialType: \"admin_token\", UserID: \"\", Role: \"admin\"}."
+          ],
+          "test_spec_refs": [
+            "TS-05-13",
+            "TS-05-14",
+            "TS-05-15",
+            "TS-05-16",
+            "TS-05-17",
+            "TS-05-E6",
+            "TS-05-E7"
+          ],
+          "requirement_refs": [
+            "05-REQ-4.1",
+            "05-REQ-4.2",
+            "05-REQ-4.3",
+            "05-REQ-4.4",
+            "05-REQ-4.5",
+            "05-REQ-4.E1",
+            "05-REQ-4.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement API key validation with lookup, expiry, revocation, and user status checks",
+          "details": [
+            "Implement validateAPIKey(ctx context.Context, db *db.DB, keyID, secret string) (*AuthInfo, error).",
+            "Query api_keys by key_id; if db.ErrNotFound → 401 'invalid credentials'; other error → 500.",
+            "Check revoked_at: if non-NULL → 401 'credential revoked'.",
+            "Check expires_at: if non-NULL and time.Now().After(expiresAt) → 401 'credential expired'.",
+            "Use subtle.ConstantTimeCompare([]byte(hashToken(secret)), []byte(row.SecretHash)); if != 1 → 401 'invalid credentials'.",
+            "Query users by user_id; if error → 500; if status=='blocked' → 403 'user is blocked'.",
+            "Return &AuthInfo{CredentialType: \"api_key\", UserID: user.ID, Role: user.Role, KeyID: keyID}.",
+            "Use db.ParseTime for expires_at/revoked_at timestamp fields."
+          ],
+          "test_spec_refs": [
+            "TS-05-18",
+            "TS-05-19",
+            "TS-05-20",
+            "TS-05-21",
+            "TS-05-22",
+            "TS-05-23",
+            "TS-05-E8",
+            "TS-05-E9",
+            "TS-05-E10"
+          ],
+          "requirement_refs": [
+            "05-REQ-5.1",
+            "05-REQ-5.2",
+            "05-REQ-5.3",
+            "05-REQ-5.4",
+            "05-REQ-5.5",
+            "05-REQ-5.6",
+            "05-REQ-5.E1",
+            "05-REQ-5.E2",
+            "05-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Admin token validation tests pass: go test ./internal/auth/... -run 'TestMiddleware_.*Admin' -count=1 -v",
+          "API key validation tests pass: go test ./internal/auth/... -run 'TestMiddleware_.*APIKey|TestMiddleware_Blocked.*API' -count=1 -v",
+          "Constant-time comparison property test passes: go test ./internal/auth/... -run 'TestProperty_ConstantTime' -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-4.1–05-REQ-4.5, 05-REQ-5.1–05-REQ-5.6 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement PAT Validation and RBAC Authorization Helpers",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement PAT validation with permissions injection",
+          "details": [
+            "Implement validatePAT(ctx context.Context, db *db.DB, tokenID, secret string) (*AuthInfo, error) in credentials.go.",
+            "Query pats by token_id; if db.ErrNotFound → 401 'invalid credentials'; other error → 500.",
+            "Check revoked_at: if non-NULL → 401 'credential revoked'.",
+            "Check expires_at: if non-NULL and past → 401 'credential expired'.",
+            "Use subtle.ConstantTimeCompare([]byte(hashToken(secret)), []byte(row.SecretHash)); if != 1 → 401 'invalid credentials'.",
+            "Query users by user_id; if error → 500; if status=='blocked' → 403 'user is blocked'.",
+            "Deserialize permissions JSON array from pats row into []string.",
+            "Return &AuthInfo{CredentialType: \"pat\", UserID: user.ID, Role: user.Role, TokenID: tokenID, Permissions: permissions}."
+          ],
+          "test_spec_refs": [
+            "TS-05-24",
+            "TS-05-25",
+            "TS-05-26",
+            "TS-05-27",
+            "TS-05-28",
+            "TS-05-29",
+            "TS-05-E11",
+            "TS-05-E12",
+            "TS-05-E13"
+          ],
+          "requirement_refs": [
+            "05-REQ-6.1",
+            "05-REQ-6.2",
+            "05-REQ-6.3",
+            "05-REQ-6.4",
+            "05-REQ-6.5",
+            "05-REQ-6.6",
+            "05-REQ-6.E1",
+            "05-REQ-6.E2",
+            "05-REQ-6.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement RequireAdmin, RequireOwnerOrAdmin, and RequirePermission RBAC helpers",
+          "details": [
+            "Implement RequireAdmin(c echo.Context) error: call IsAdmin(c); if false → return APIError(403, \"forbidden\").",
+            "Implement RequireOwnerOrAdmin(c echo.Context, resourceOwnerID string) error: call GetUserID(c); if matches resourceOwnerID → nil; else call RequireAdmin(c).",
+            "Implement RequirePermission(c echo.Context, resourceType, action string) error: get AuthInfo; if nil or CredentialType != 'pat' → return nil (bypass); iterate Permissions for 'resourceType:action'; if found → nil; else → APIError(403, \"insufficient permissions\").",
+            "Handle nil AuthInfo in RequireAdmin: return APIError(403, \"forbidden\") (per 05-REQ-7.E1).",
+            "Handle empty resourceOwnerID in RequireOwnerOrAdmin: empty string != any valid UUID → falls to admin check (per 05-REQ-7.E2)."
+          ],
+          "test_spec_refs": [
+            "TS-05-30",
+            "TS-05-31",
+            "TS-05-32",
+            "TS-05-33",
+            "TS-05-34",
+            "TS-05-35",
+            "TS-05-36",
+            "TS-05-E14",
+            "TS-05-E15"
+          ],
+          "requirement_refs": [
+            "05-REQ-7.1",
+            "05-REQ-7.2",
+            "05-REQ-7.3",
+            "05-REQ-7.4",
+            "05-REQ-7.5",
+            "05-REQ-7.6",
+            "05-REQ-7.7",
+            "05-REQ-7.E1",
+            "05-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "PAT validation tests pass: go test ./internal/auth/... -run 'TestMiddleware_.*PAT|TestMiddleware_Blocked.*PAT' -count=1 -v",
+          "RBAC helper tests pass: go test ./internal/auth/... -run 'TestRequireAdmin|TestRequireOwner|TestRequirePermission' -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-6.1–05-REQ-6.6, 05-REQ-7.1–05-REQ-7.7 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement NewAuthMiddleware Constructor and Full Integration",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement NewAuthMiddleware constructor with nil guard and dispatch logic",
+          "details": [
+            "In internal/auth/auth.go, implement NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.MiddlewareFunc.",
+            "Panic immediately with descriptive message if database == nil or registry == nil.",
+            "Return an echo.MiddlewareFunc that: extracts token, calls parseToken, dispatches to validateAdminToken/validateAPIKey/validatePAT based on credType.",
+            "On successful validation, call c.Set(string(authInfoKey), authInfo) then return next(c).",
+            "On any validation error, return the appropriate APIError response without calling next.",
+            "All responses use APIError() helper from Server Core for consistent JSON envelope."
+          ],
+          "test_spec_refs": [
+            "TS-05-1",
+            "TS-05-2",
+            "TS-05-3",
+            "TS-05-E1"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.1",
+            "05-REQ-1.2",
+            "05-REQ-1.3",
+            "05-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement blocked user enforcement ordering in middleware dispatch",
+          "details": [
+            "Ensure blocked user check occurs inside validateAPIKey and validatePAT AFTER secret hash comparison passes.",
+            "Admin token path does not query users table at all.",
+            "When user blocked: return immediately with APIError(403, \"user is blocked\") without calling next or setting AuthInfo in context.",
+            "Verify ordering: invalid secret for blocked user → 401 'invalid credentials' (not 403), because hash check runs before user lookup."
+          ],
+          "test_spec_refs": [
+            "TS-05-37",
+            "TS-05-38",
+            "TS-05-E16"
+          ],
+          "requirement_refs": [
+            "05-REQ-8.1",
+            "05-REQ-8.2",
+            "05-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Wire middleware into APIGroup and verify unprotected path exclusion",
+          "details": [
+            "Register NewAuthMiddleware on the Echo APIGroup (not the root router).",
+            "Confirm /healthz, /readyz, /version, /auth/providers, /auth/callback are on a separate unprotected group or root router.",
+            "All error responses from middleware use APIError() with exactly the 11 approved message strings.",
+            "Confirm Content-Type: application/json on all error responses.",
+            "Document wiring location in code comment: 'middleware applied to APIGroup, not root router'."
+          ],
+          "test_spec_refs": [
+            "TS-05-2",
+            "TS-05-3",
+            "TS-05-51",
+            "TS-05-52"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.2",
+            "05-REQ-1.3",
+            "05-REQ-12.1",
+            "05-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Constructor tests pass: go test ./internal/auth/... -run 'TestNewAuth' -count=1 -v",
+          "Integration tests pass (protected routes intercepted, unprotected routes pass through): go test ./internal/auth/... -run 'TestMiddleware_Applied|TestUnprotected' -count=1 -v",
+          "Blocked user ordering tests pass: go test ./internal/auth/... -run 'TestBlocked' -count=1 -v",
+          "All spec tests pass: go test ./internal/auth/... -count=1 -v",
+          "No linter warnings: go vet ./internal/auth/...",
+          "Requirements 05-REQ-1.1–05-REQ-1.3, 05-REQ-8.1–05-REQ-8.2, 05-REQ-12.1–05-REQ-12.2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "checkpoint",
+      "title": "Checkpoint: All Unit and Integration Tests Green",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Run full test suite and confirm all tests pass",
+          "details": [
+            "Run: go test ./internal/auth/... -count=1 -v",
+            "All test functions must pass; no skips on non-stub tests.",
+            "Confirm test output shows PASS for each TestXxx function.",
+            "Confirm no panic('not implemented') or panic stubs remain in production code."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "05-REQ-1.1",
+            "05-REQ-2.1",
+            "05-REQ-3.1",
+            "05-REQ-4.1",
+            "05-REQ-5.1",
+            "05-REQ-6.1",
+            "05-REQ-7.1",
+            "05-REQ-8.1",
+            "05-REQ-9.1",
+            "05-REQ-10.1",
+            "05-REQ-11.1",
+            "05-REQ-12.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Run race detector across all auth tests",
+          "details": [
+            "Run: go test ./internal/auth/... -race -count=1",
+            "No data races reported by the Go race detector.",
+            "Pay particular attention to PermissionRegistry concurrent access and any shared state in middleware."
+          ],
+          "test_spec_refs": [
+            "TS-05-E18",
+            "TS-05-P2"
+          ],
+          "requirement_refs": [
+            "05-REQ-9.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Run linter and verify code quality",
+          "details": [
+            "Run: go vet ./internal/auth/...",
+            "Zero vet warnings.",
+            "Optionally run staticcheck or golangci-lint for additional checks.",
+            "Grep for panic(\"not implemented\") and TODO in internal/auth/*.go to confirm no stubs remain.",
+            "Grep confirms subtle.ConstantTimeCompare is used for all hash comparisons; no raw == on hash strings/bytes."
+          ],
+          "test_spec_refs": [
+            "TS-05-49"
+          ],
+          "requirement_refs": [
+            "05-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "Full test suite green: go test ./internal/auth/... -count=1 exits with code 0",
+          "Race detector clean: go test ./internal/auth/... -race -count=1 exits with code 0 and no 'DATA RACE' in output",
+          "Zero vet warnings: go vet ./internal/auth/... exits with code 0",
+          "No stub markers in production code: grep -rn 'panic(\"not implemented\")\\|// TODO' internal/auth/*.go returns no results in non-test files",
+          "All 12 requirements (05-REQ-1 through 05-REQ-12) have at least one passing test"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Stub Audit",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Trace all execution paths and verify function chain integrity",
+          "details": [
+            "PATH-1 (API key): NewAuthMiddleware → extractToken → parseToken → validateAPIKey → hashToken → subtle.ConstantTimeCompare → user lookup → c.Set(authInfoKey) → next(c). Verify each step calls the next without bypassing.",
+            "PATH-2 (PAT): same chain through validatePAT, then handler calls RequirePermission → checks Permissions slice.",
+            "PATH-3 (admin token): parseToken → validateAdminToken → hashToken(fullToken) → admin_config query → subtle.ConstantTimeCompare → c.Set → next(c).",
+            "PATH-4 (missing header): extractToken → APIError(401) → return (next never called).",
+            "PATH-5 (blocked user): validateAPIKey/validatePAT → secret hash OK → user blocked → APIError(403) → return.",
+            "PATH-6 (custom permission): registry.Register → NewAuthMiddleware → validatePAT → AuthInfo.Permissions → RequirePermission finds permission → nil.",
+            "Confirm return values from each function are consumed by the caller (no dropped errors)."
+          ],
+          "test_spec_refs": [
+            "TS-05-SMOKE-1",
+            "TS-05-SMOKE-2",
+            "TS-05-SMOKE-3"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.1",
+            "05-REQ-1.2",
+            "05-REQ-4.2",
+            "05-REQ-5.4",
+            "05-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Verify return value propagation and no dropped errors",
+          "details": [
+            "Review internal/auth/credentials.go: every db query error is checked; non-ErrNotFound errors are logged and returned as HTTP 500.",
+            "Review internal/auth/auth.go: the return value of validateAdminToken, validateAPIKey, validatePAT is always checked before calling next(c).",
+            "RequireAdmin, RequireOwnerOrAdmin, RequirePermission: callers in handlers must check and return the error.",
+            "Use 'go vet' and errcheck (if available) to confirm no error return values are silently discarded.",
+            "Confirm that the test for DB error paths (TS-05-E6, TS-05-E8, TS-05-E9, TS-05-E11, TS-05-E12) all pass with real middleware."
+          ],
+          "test_spec_refs": [
+            "TS-05-E6",
+            "TS-05-E8",
+            "TS-05-E9",
+            "TS-05-E11",
+            "TS-05-E12"
+          ],
+          "requirement_refs": [
+            "05-REQ-4.E1",
+            "05-REQ-5.E1",
+            "05-REQ-5.E2",
+            "05-REQ-6.E1",
+            "05-REQ-6.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run: go test ./internal/auth/... -run 'TestSMOKE_' -count=1 -v",
+            "All 6 smoke tests pass: API key auth, PAT with permission, admin token, missing header, blocked user, custom permission.",
+            "Each smoke test uses real Echo router, real SQLite db, real auth middleware — no mocked middleware.",
+            "Confirm handler invocation tracking works correctly (handler called/not called as expected).",
+            "Confirm AuthInfo fields are correctly populated in all success paths."
+          ],
+          "test_spec_refs": [
+            "TS-05-SMOKE-1",
+            "TS-05-SMOKE-2",
+            "TS-05-SMOKE-3",
+            "TS-05-SMOKE-4",
+            "TS-05-SMOKE-5",
+            "TS-05-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.2",
+            "05-REQ-4.3",
+            "05-REQ-5.6",
+            "05-REQ-6.6",
+            "05-REQ-8.1",
+            "05-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.4",
+          "title": "Stub and dead-code audit across all auth package files",
+          "details": [
+            "Run: grep -rn 'panic(\"not implemented\")' internal/auth/*.go — must return no results in non-test files.",
+            "Run: grep -rn 'TODO\\|FIXME\\|HACK' internal/auth/*.go — review and resolve any found.",
+            "Confirm no bare 'return nil' in non-trivial error paths (e.g., after a DB call that could fail).",
+            "Confirm all five credential validation steps are fully implemented: extraction, parsing, admin validation, API key validation, PAT validation.",
+            "Verify subtle.ConstantTimeCompare is present in credentials.go at least 3 times (one per credential type)."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "05-REQ-1.1",
+            "05-REQ-4.2",
+            "05-REQ-5.4",
+            "05-REQ-6.4",
+            "05-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.5",
+          "title": "Cross-spec entry point verification with server_core and database_layer",
+          "details": [
+            "Verify APIError() from spec 01 (server_core) is called correctly: signature matches and produces {\"error\":{\"code\":N,\"message\":M}} JSON.",
+            "Verify apikit.TokenPrefix from spec 01 is read at parseToken call time (not hardcoded 'ak').",
+            "Verify *db.DB from spec 02 (database_layer) is used for all four table queries (api_keys, pats, admin_config, users).",
+            "Verify db.ErrNotFound sentinel from spec 02 is used in all 'not found' branches.",
+            "Verify db.ParseTime from spec 02 is used when reading expires_at and revoked_at timestamp columns.",
+            "Confirm NewAuthMiddleware is called from production server setup code (not only from tests) targeting the APIGroup."
+          ],
+          "test_spec_refs": [
+            "TS-05-2",
+            "TS-05-3"
+          ],
+          "requirement_refs": [
+            "05-REQ-1.2",
+            "05-REQ-1.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "All spec tests pass end-to-end: go test ./internal/auth/... -count=1 -v exits with code 0",
+          "All smoke tests pass: go test ./internal/auth/... -run 'TestSMOKE_' -count=1 -v",
+          "Race detector clean: go test ./internal/auth/... -race -count=1 exits with code 0",
+          "No stub markers: grep -rn 'panic(\"not implemented\")' internal/auth/*.go (excluding _test.go) returns empty",
+          "Full project test suite still passes: go test ./... -count=1 exits with code 0",
+          "No linter warnings: go vet ./... exits with code 0",
+          "Cross-spec symbols verified: APIError, TokenPrefix (spec 01), db.ErrNotFound, db.ParseTime (spec 02) are all present and correctly used in internal/auth/"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "05-REQ-1.1",
+      "test_spec_id": "TS-05-1",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-1.2",
+      "test_spec_id": "TS-05-2",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-1.3",
+      "test_spec_id": "TS-05-3",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-1.E1",
+      "test_spec_id": "TS-05-E1",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2.1",
+      "test_spec_id": "TS-05-4",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2.2",
+      "test_spec_id": "TS-05-5",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2.3",
+      "test_spec_id": "TS-05-6",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2.4",
+      "test_spec_id": "TS-05-7",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2.E1",
+      "test_spec_id": "TS-05-E2",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.1",
+      "test_spec_id": "TS-05-8",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.2",
+      "test_spec_id": "TS-05-9",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.3",
+      "test_spec_id": "TS-05-10",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.4",
+      "test_spec_id": "TS-05-11",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.5",
+      "test_spec_id": "TS-05-12",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.E1",
+      "test_spec_id": "TS-05-E3",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.E2",
+      "test_spec_id": "TS-05-E4",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3.E3",
+      "test_spec_id": "TS-05-E5",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.1",
+      "test_spec_id": "TS-05-13",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.2",
+      "test_spec_id": "TS-05-14",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.3",
+      "test_spec_id": "TS-05-15",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.4",
+      "test_spec_id": "TS-05-16",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.5",
+      "test_spec_id": "TS-05-17",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.E1",
+      "test_spec_id": "TS-05-E6",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4.E2",
+      "test_spec_id": "TS-05-E7",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.1",
+      "test_spec_id": "TS-05-18",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.2",
+      "test_spec_id": "TS-05-19",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.3",
+      "test_spec_id": "TS-05-20",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.4",
+      "test_spec_id": "TS-05-21",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.5",
+      "test_spec_id": "TS-05-22",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.6",
+      "test_spec_id": "TS-05-23",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.E1",
+      "test_spec_id": "TS-05-E8",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.E2",
+      "test_spec_id": "TS-05-E9",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5.E3",
+      "test_spec_id": "TS-05-E10",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.1",
+      "test_spec_id": "TS-05-24",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.2",
+      "test_spec_id": "TS-05-25",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.3",
+      "test_spec_id": "TS-05-26",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.4",
+      "test_spec_id": "TS-05-27",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.5",
+      "test_spec_id": "TS-05-28",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.6",
+      "test_spec_id": "TS-05-29",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.E1",
+      "test_spec_id": "TS-05-E11",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.E2",
+      "test_spec_id": "TS-05-E12",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-6.E3",
+      "test_spec_id": "TS-05-E13",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.1",
+      "test_spec_id": "TS-05-30",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.2",
+      "test_spec_id": "TS-05-31",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.3",
+      "test_spec_id": "TS-05-32",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.4",
+      "test_spec_id": "TS-05-33",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.5",
+      "test_spec_id": "TS-05-34",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.6",
+      "test_spec_id": "TS-05-35",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.7",
+      "test_spec_id": "TS-05-36",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.E1",
+      "test_spec_id": "TS-05-E14",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-7.E2",
+      "test_spec_id": "TS-05-E15",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-8.1",
+      "test_spec_id": "TS-05-37",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-8.2",
+      "test_spec_id": "TS-05-38",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-8.E1",
+      "test_spec_id": "TS-05-E16",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.1",
+      "test_spec_id": "TS-05-39",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.2",
+      "test_spec_id": "TS-05-40",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.3",
+      "test_spec_id": "TS-05-41",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.4",
+      "test_spec_id": "TS-05-42",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.5",
+      "test_spec_id": "TS-05-43",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.E1",
+      "test_spec_id": "TS-05-E17",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-9.E2",
+      "test_spec_id": "TS-05-E18",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.1",
+      "test_spec_id": "TS-05-44",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.2",
+      "test_spec_id": "TS-05-45",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.3",
+      "test_spec_id": "TS-05-46",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.4",
+      "test_spec_id": "TS-05-47",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.5",
+      "test_spec_id": "TS-05-48",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-10.E1",
+      "test_spec_id": "TS-05-E19",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-11.1",
+      "test_spec_id": "TS-05-49",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-11.2",
+      "test_spec_id": "TS-05-50",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-11.E1",
+      "test_spec_id": "TS-05-E20",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-12.1",
+      "test_spec_id": "TS-05-51",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-12.2",
+      "test_spec_id": "TS-05-52",
+      "task_id": "10.3",
+      "test_path": null
+    }
+  ]
+}

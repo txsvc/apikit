@@ -1,0 +1,1356 @@
+{
+  "$schema": null,
+  "spec_id": "08",
+  "spec_name": "organization_management",
+  "schema_version": 1,
+  "introduction": "This spec defines the HTTP handlers for organization CRUD, lifecycle management (block/unblock), and membership management in the apikit system. Note: requirements referencing Server Core (spec 01), Database Layer (spec 02), and Auth Middleware (spec 05) APIs are based on PRD dependency descriptions and should be cross-checked against the installed packages before implementation.",
+  "glossary": {
+    "APIError": "Server Core helper that returns a standard JSON error envelope with code and message fields.",
+    "APIGroup": "Server Core function that returns the root Echo group with auth middleware and Cache-Control: no-store applied.",
+    "Admin": "A user with role 'admin' or the holder of an admin token. Required for all org mutations.",
+    "Blocked org": "An organization with status = 'blocked'. Excluded from default listings; still accessible via direct ID lookup.",
+    "CacheMiddleware": "Server Core middleware factory that sets cache-control headers on responses.",
+    "CacheNoStore": "Server Core constant passed to CacheMiddleware to set Cache-Control: no-store.",
+    "Cascade delete": "When an org is deleted, all `org_members` rows referencing that org are automatically deleted by the database's ON DELETE CASCADE constraint.",
+    "CheckETag": "Server Core helper that checks the If-None-Match request header against the current ETag; returns true if the client's cached version is still fresh.",
+    "CreateOrgRequest": "Go struct representing the JSON request body for creating an organization.",
+    "DELETE /orgs/:id": "HTTP endpoint to delete an organization and cascade-delete its memberships. Admin only.",
+    "DELETE /orgs/:id/members/:user_id": "HTTP endpoint to remove a user from an organization. Admin only.",
+    "FormatUTC": "Server Core helper that formats a time.Time value as an RFC 3339 UTC string.",
+    "GET /orgs": "HTTP endpoint to list all organizations. Admin only.",
+    "GET /orgs/:id": "HTTP endpoint to retrieve a single organization by UUID. Admin or org member.",
+    "GET /orgs/:id/members": "HTTP endpoint to list members of an organization. Admin or org member.",
+    "GetAuthInfo": "Auth middleware function that retrieves the full AuthInfo struct from the Echo context.",
+    "GetUserID": "Auth middleware function that retrieves the authenticated user's UUID string from the Echo context.",
+    "IsAdmin": "Auth middleware function that returns true if the authenticated user has admin role.",
+    "NowUTC": "Server Core helper that returns the current time in UTC.",
+    "Org member": "A user associated with an organization via a row in the `org_members` table. Membership grants view access to the org and its member list.",
+    "OrgMemberResponse": "Go struct representing the JSON response shape for an organization membership record.",
+    "OrgResponse": "Go struct representing the JSON response shape for an organization resource.",
+    "Organization": "A grouping entity for users with CRUD, block/unblock lifecycle, and membership management. Has no permission implications in this iteration.",
+    "PATCH /orgs/:id": "HTTP endpoint to update an organization's name and/or URL. Admin only.",
+    "POST /orgs": "HTTP endpoint to create a new organization. Admin only.",
+    "POST /orgs/:id/block": "HTTP endpoint to block an organization. Admin only.",
+    "POST /orgs/:id/unblock": "HTTP endpoint to unblock an organization. Admin only.",
+    "PUT /orgs/:id/members/:user_id": "HTTP endpoint to add a user to an organization. Admin only.",
+    "ParseUTC": "Server Core helper that parses an RFC 3339 UTC string into a time.Time value.",
+    "RegisterOrgHandlers": "Handler registration function that mounts all organization endpoints on the Echo group.",
+    "RequireAdmin": "Auth middleware function that returns an error if the authenticated user is not an admin.",
+    "SetETag": "Server Core helper that sets an ETag response header derived from a resource's updated_at timestamp.",
+    "Slug": "A URL-safe identifier for an organization, consisting of lowercase letters, digits, hyphens, and underscores. Immutable after creation.",
+    "UpdateOrgRequest": "Go struct representing the JSON request body for updating an organization.",
+    "db.ErrNotFound": "Database layer sentinel error returned when a queried row does not exist.",
+    "db.FormatTime": "Database layer helper that formats a time.Time value for storage in SQLite.",
+    "db.ParseTime": "Database layer helper that parses a SQLite timestamp string into a time.Time value.",
+    "db.WrapError": "Database layer helper that wraps a raw SQLite error into a typed error for consistent handling.",
+    "include_blocked": "Query parameter on GET /orgs that, when set to 'true', includes blocked organizations in the result.",
+    "isOrgMember": "Helper function that queries org_members to check whether a given user belongs to a given organization.",
+    "org_members": "Database table storing organization membership as (org_id, user_id) pairs with a created_at timestamp.",
+    "orgs": "Database table storing organization records (id, name, slug, url, status, timestamps).",
+    "users": "Database table storing user account records including username, email, and role."
+  },
+  "requirements": [
+    {
+      "id": "08-REQ-1",
+      "title": "Handler Registration",
+      "user_story": {
+        "role": "server setup process",
+        "goal": "register all organization endpoints on the Echo API group",
+        "benefit": "organization routes are available when the server starts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "RegisterOrgHandlers",
+          "action": "registers POST /orgs, GET /orgs, GET /orgs/:id, PATCH /orgs/:id, DELETE /orgs/:id, POST /orgs/:id/block, POST /orgs/:id/unblock, GET /orgs/:id/members, PUT /orgs/:id/members/:user_id, and DELETE /orgs/:id/members/:user_id on the Echo group returned by APIGroup()",
+          "return_contract": "all ten routes are mounted and reachable; the *sql.DB handle is captured in each handler's closure"
+        },
+        {
+          "id": "08-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "RegisterOrgHandlers",
+          "action": "inherits the CacheMiddleware(CacheNoStore) applied at the APIGroup level so that every org endpoint response carries Cache-Control: no-store",
+          "return_contract": "all org endpoint responses include Cache-Control: no-store header"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "RegisterOrgHandlers",
+          "action": "panics immediately at registration time rather than allowing a nil pointer dereference inside a live request handler",
+          "return_contract": "panic with a descriptive message before any routes are registered",
+          "error_condition": "a nil *sql.DB is passed"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-2",
+      "title": "Create Organization",
+      "user_story": {
+        "role": "admin",
+        "goal": "create a new organization with a unique name and slug",
+        "benefit": "users can be grouped into named organizational units"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "validates the request, generates a UUID v4 org ID, sets status to 'active', sets created_at and updated_at to NowUTC(), inserts the row into the orgs table, and returns the OrgResponse",
+          "return_contract": "HTTP 201 with OrgResponse JSON body; id is a valid UUID v4; status is 'active'; created_at equals updated_at; url defaults to empty string when omitted",
+          "trigger": "a POST /orgs request is received with a valid JSON body containing name and slug"
+        },
+        {
+          "id": "08-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "rejects the request with APIError",
+          "return_contract": "HTTP 400 with error message 'name is required'",
+          "trigger": "POST /orgs is received with a missing or empty name field after whitespace trimming"
+        },
+        {
+          "id": "08-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "rejects the request with APIError",
+          "return_contract": "HTTP 400 with error message 'slug is required'",
+          "trigger": "POST /orgs is received with a missing or empty slug field"
+        },
+        {
+          "id": "08-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "rejects the request with APIError",
+          "return_contract": "HTTP 400 with error message 'invalid slug format'",
+          "trigger": "POST /orgs is received with a slug that fails slug validation rules"
+        },
+        {
+          "id": "08-REQ-2.5",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "returns a conflict error via APIError",
+          "return_contract": "HTTP 409 with error message 'organization name already exists'",
+          "trigger": "POST /orgs insert violates the UNIQUE constraint on the name column of orgs"
+        },
+        {
+          "id": "08-REQ-2.6",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "returns a conflict error via APIError",
+          "return_contract": "HTTP 409 with error message 'organization slug already exists'",
+          "trigger": "POST /orgs insert violates the UNIQUE constraint on the slug column of orgs"
+        },
+        {
+          "id": "08-REQ-2.7",
+          "ears_pattern": "event_driven",
+          "system": "createOrg handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "POST /orgs is received from a non-admin authenticated user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "createOrg handler",
+          "action": "rejects with APIError",
+          "return_contract": "HTTP 400 with error message 'invalid slug format'",
+          "error_condition": "slug is exactly 129 characters long"
+        },
+        {
+          "id": "08-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "createOrg handler",
+          "action": "rejects with APIError",
+          "return_contract": "HTTP 400 with error message 'invalid slug format'",
+          "error_condition": "slug starts or ends with a hyphen or underscore"
+        },
+        {
+          "id": "08-REQ-2.E3",
+          "ears_pattern": "unwanted",
+          "system": "createOrg handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError; does not leak raw SQL errors",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs table INSERT fails due to a database error that is not a UNIQUE constraint violation"
+        },
+        {
+          "id": "08-REQ-2.E4",
+          "ears_pattern": "unwanted",
+          "system": "createOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with a descriptive error message",
+          "error_condition": "request body is not valid JSON"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-3",
+      "title": "List Organizations",
+      "user_story": {
+        "role": "admin",
+        "goal": "list all organizations with optional inclusion of blocked ones",
+        "benefit": "I can see and manage all organizations in the system"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "listOrgs handler",
+          "action": "queries the orgs table filtering by status = 'active', orders results by name ascending, and returns the list",
+          "return_contract": "HTTP 200 with a JSON array of OrgResponse objects; blocked orgs are absent; order is alphabetical by name",
+          "trigger": "GET /orgs is received from an admin without the include_blocked query parameter"
+        },
+        {
+          "id": "08-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "listOrgs handler",
+          "action": "queries the orgs table without status filtering, orders results by name ascending, and returns all orgs",
+          "return_contract": "HTTP 200 with a JSON array of OrgResponse objects including orgs with status 'blocked'",
+          "trigger": "GET /orgs is received with include_blocked=true query parameter"
+        },
+        {
+          "id": "08-REQ-3.3",
+          "ears_pattern": "state_driven",
+          "system": "listOrgs handler",
+          "action": "returns an empty JSON array",
+          "return_contract": "HTTP 200 with body []",
+          "state": "no organizations exist in the orgs table"
+        },
+        {
+          "id": "08-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "listOrgs handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "GET /orgs is received from a non-admin authenticated user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "listOrgs handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs table query fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-4",
+      "title": "Get Organization by ID",
+      "user_story": {
+        "role": "admin or org member",
+        "goal": "retrieve a specific organization by its UUID",
+        "benefit": "I can inspect the current state of an organization I have access to"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "queries the orgs table for the matching row, sets an ETag via SetETag using the org's updated_at, and returns the org",
+          "return_contract": "HTTP 200 with OrgResponse JSON body and ETag response header",
+          "trigger": "GET /orgs/:id is received from an admin with a valid org UUID"
+        },
+        {
+          "id": "08-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "calls IsAdmin (returns false), calls isOrgMember with the org ID and GetUserID(), confirms membership, and returns the org",
+          "return_contract": "HTTP 200 with OrgResponse JSON body",
+          "trigger": "GET /orgs/:id is received from an authenticated non-admin user who is a member of the org"
+        },
+        {
+          "id": "08-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "calls IsAdmin (returns false), calls isOrgMember (returns false), returns a forbidden error via APIError",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "GET /orgs/:id is received from an authenticated non-admin user who is NOT a member of the org"
+        },
+        {
+          "id": "08-REQ-4.4",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "GET /orgs/:id is received but the org does not exist in the orgs table"
+        },
+        {
+          "id": "08-REQ-4.5",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "returns a bad request error via APIError without querying the database",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "GET /orgs/:id is received with a path parameter that is not a valid UUID"
+        },
+        {
+          "id": "08-REQ-4.6",
+          "ears_pattern": "event_driven",
+          "system": "getOrg handler",
+          "action": "calls CheckETag, determines the client's cached version is still valid, and returns not-modified",
+          "return_contract": "HTTP 304 with no body",
+          "trigger": "GET /orgs/:id is received with an If-None-Match header matching the current ETag"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "getOrg handler",
+          "action": "propagates the error via APIError; does not allow access by default",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "isOrgMember query fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-5",
+      "title": "Update Organization",
+      "user_story": {
+        "role": "admin",
+        "goal": "update an organization's name and/or URL",
+        "benefit": "I can keep organization display information current without recreating the org"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "verifies the org exists in orgs, applies the provided field updates, sets updated_at to NowUTC(), persists the changes, and returns the updated org",
+          "return_contract": "HTTP 200 with updated OrgResponse JSON body; updated_at is greater than the previous value; slug is unchanged",
+          "trigger": "PATCH /orgs/:id is received from an admin with a valid UUID and a non-empty UpdateOrgRequest body"
+        },
+        {
+          "id": "08-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "silently ignores the slug field and applies only name and/or url updates",
+          "return_contract": "HTTP 200 with OrgResponse whose slug matches the original value",
+          "trigger": "PATCH /orgs/:id body includes a slug field"
+        },
+        {
+          "id": "08-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'no fields to update'",
+          "trigger": "PATCH /orgs/:id is received with a body that contains no recognized fields (both name and url are nil)"
+        },
+        {
+          "id": "08-REQ-5.4",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "returns a conflict error via APIError",
+          "return_contract": "HTTP 409 with error message 'organization name already exists'",
+          "trigger": "PATCH /orgs/:id update violates the UNIQUE constraint on the name column of orgs"
+        },
+        {
+          "id": "08-REQ-5.5",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "PATCH /orgs/:id is received but the org does not exist in orgs"
+        },
+        {
+          "id": "08-REQ-5.6",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "PATCH /orgs/:id is received with an invalid UUID path parameter"
+        },
+        {
+          "id": "08-REQ-5.7",
+          "ears_pattern": "event_driven",
+          "system": "updateOrg handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "PATCH /orgs/:id is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "updateOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'name is required'",
+          "error_condition": "name is provided but is empty after whitespace trimming"
+        },
+        {
+          "id": "08-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "updateOrg handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs UPDATE fails with a non-UNIQUE database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-6",
+      "title": "Delete Organization",
+      "user_story": {
+        "role": "admin",
+        "goal": "permanently delete an organization",
+        "benefit": "stale or erroneous organizations can be removed without leaving orphaned membership records"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "deleteOrg handler",
+          "action": "deletes the matching row from the orgs table; the database ON DELETE CASCADE removes all referencing org_members rows automatically; user accounts in the users table are not affected",
+          "return_contract": "HTTP 204 with no body",
+          "trigger": "DELETE /orgs/:id is received from an admin with a valid org UUID"
+        },
+        {
+          "id": "08-REQ-6.2",
+          "ears_pattern": "event_driven",
+          "system": "deleteOrg handler",
+          "action": "detects zero rows affected and returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "DELETE /orgs/:id is received but no row in orgs matches the given UUID"
+        },
+        {
+          "id": "08-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "deleteOrg handler",
+          "action": "returns a bad request error via APIError without querying the database",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "DELETE /orgs/:id is received with an invalid UUID path parameter"
+        },
+        {
+          "id": "08-REQ-6.4",
+          "ears_pattern": "event_driven",
+          "system": "deleteOrg handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "DELETE /orgs/:id is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "deleteOrg handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError; does not return 204",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs DELETE statement fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-7",
+      "title": "Block Organization",
+      "user_story": {
+        "role": "admin",
+        "goal": "set an organization's status to blocked",
+        "benefit": "I can deactivate an organization without deleting it, causing it to be excluded from default listings"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "blockOrg handler",
+          "action": "sets status to 'blocked' and updated_at to NowUTC() in the orgs table, then returns the updated org",
+          "return_contract": "HTTP 200 with OrgResponse JSON body where status is 'blocked' and updated_at reflects the block time",
+          "trigger": "POST /orgs/:id/block is received from an admin for an active organization"
+        },
+        {
+          "id": "08-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "blockOrg handler",
+          "action": "performs no database update and returns the current org as-is (idempotent)",
+          "return_contract": "HTTP 200 with OrgResponse JSON body reflecting the unchanged org state",
+          "trigger": "POST /orgs/:id/block is received for an organization that is already blocked"
+        },
+        {
+          "id": "08-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "blockOrg handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "POST /orgs/:id/block is received but no org exists with the given UUID"
+        },
+        {
+          "id": "08-REQ-7.4",
+          "ears_pattern": "event_driven",
+          "system": "blockOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "POST /orgs/:id/block is received with an invalid UUID path parameter"
+        },
+        {
+          "id": "08-REQ-7.5",
+          "ears_pattern": "event_driven",
+          "system": "blockOrg handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "POST /orgs/:id/block is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "blockOrg handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs UPDATE fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-8",
+      "title": "Unblock Organization",
+      "user_story": {
+        "role": "admin",
+        "goal": "restore a blocked organization to active status",
+        "benefit": "I can re-enable an organization that was previously blocked without recreating it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "unblockOrg handler",
+          "action": "sets status to 'active' and updated_at to NowUTC() in the orgs table, then returns the updated org",
+          "return_contract": "HTTP 200 with OrgResponse JSON body where status is 'active' and updated_at reflects the unblock time",
+          "trigger": "POST /orgs/:id/unblock is received from an admin for a blocked organization"
+        },
+        {
+          "id": "08-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "unblockOrg handler",
+          "action": "performs no database update and returns the current org as-is (idempotent)",
+          "return_contract": "HTTP 200 with OrgResponse JSON body reflecting the unchanged org state",
+          "trigger": "POST /orgs/:id/unblock is received for an organization that is already active"
+        },
+        {
+          "id": "08-REQ-8.3",
+          "ears_pattern": "event_driven",
+          "system": "unblockOrg handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "POST /orgs/:id/unblock is received but no org exists with the given UUID"
+        },
+        {
+          "id": "08-REQ-8.4",
+          "ears_pattern": "event_driven",
+          "system": "unblockOrg handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "POST /orgs/:id/unblock is received with an invalid UUID path parameter"
+        },
+        {
+          "id": "08-REQ-8.5",
+          "ears_pattern": "event_driven",
+          "system": "unblockOrg handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "POST /orgs/:id/unblock is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "unblockOrg handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the orgs UPDATE fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-9",
+      "title": "List Organization Members",
+      "user_story": {
+        "role": "admin or org member",
+        "goal": "retrieve the list of members belonging to an organization",
+        "benefit": "I can see who is in an organization without making multiple requests for each user"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "listOrgMembers handler",
+          "action": "verifies the org exists in orgs, queries org_members joined with users for that org, orders results by username ascending, and returns the list",
+          "return_contract": "HTTP 200 with a JSON array of OrgMemberResponse objects ordered alphabetically by username; includes user_id, username, email, role, and joined_at fields",
+          "trigger": "GET /orgs/:id/members is received from an admin with a valid org UUID"
+        },
+        {
+          "id": "08-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "listOrgMembers handler",
+          "action": "calls IsAdmin (returns false), calls isOrgMember (returns true), and returns the member list",
+          "return_contract": "HTTP 200 with JSON array of OrgMemberResponse objects",
+          "trigger": "GET /orgs/:id/members is received from a non-admin user who is a member of the org"
+        },
+        {
+          "id": "08-REQ-9.3",
+          "ears_pattern": "event_driven",
+          "system": "listOrgMembers handler",
+          "action": "calls IsAdmin (returns false), calls isOrgMember (returns false), returns a forbidden error via APIError",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "GET /orgs/:id/members is received from a non-admin user who is NOT a member of the org"
+        },
+        {
+          "id": "08-REQ-9.4",
+          "ears_pattern": "event_driven",
+          "system": "listOrgMembers handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "GET /orgs/:id/members is received but the org does not exist in orgs"
+        },
+        {
+          "id": "08-REQ-9.5",
+          "ears_pattern": "state_driven",
+          "system": "listOrgMembers handler",
+          "action": "returns an empty JSON array",
+          "return_contract": "HTTP 200 with body []",
+          "state": "the org exists but has no rows in org_members"
+        },
+        {
+          "id": "08-REQ-9.6",
+          "ears_pattern": "event_driven",
+          "system": "listOrgMembers handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "GET /orgs/:id/members is received with an invalid UUID path parameter"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "listOrgMembers handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the join query against org_members and users fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-10",
+      "title": "Add Organization Member",
+      "user_story": {
+        "role": "admin",
+        "goal": "add a user to an organization by their user UUID",
+        "benefit": "I can grow organization membership without re-creating anything"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "verifies the org exists in orgs, verifies the user exists in users, inserts a row into org_members with created_at set to NowUTC()",
+          "return_contract": "HTTP 204 with no body",
+          "trigger": "PUT /orgs/:id/members/:user_id is received from an admin with valid UUIDs for both org and user"
+        },
+        {
+          "id": "08-REQ-10.2",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "detects the duplicate (org_id, user_id) primary key and returns 204 without inserting a new row (idempotent)",
+          "return_contract": "HTTP 204 with no body",
+          "trigger": "PUT /orgs/:id/members/:user_id is received for a user who is already a member of the org"
+        },
+        {
+          "id": "08-REQ-10.3",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'organization not found'",
+          "trigger": "PUT /orgs/:id/members/:user_id is received but the org does not exist in orgs"
+        },
+        {
+          "id": "08-REQ-10.4",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'user not found'",
+          "trigger": "PUT /orgs/:id/members/:user_id is received but the user does not exist in users"
+        },
+        {
+          "id": "08-REQ-10.5",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "returns a bad request error via APIError without querying the database",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "PUT /orgs/:id/members/:user_id is received with an invalid UUID for the org path parameter"
+        },
+        {
+          "id": "08-REQ-10.6",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "returns a bad request error via APIError without querying the database",
+          "return_contract": "HTTP 400 with error message 'invalid user id'",
+          "trigger": "PUT /orgs/:id/members/:user_id is received with an invalid UUID for the user_id path parameter"
+        },
+        {
+          "id": "08-REQ-10.7",
+          "ears_pattern": "event_driven",
+          "system": "addOrgMember handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "PUT /orgs/:id/members/:user_id is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "addOrgMember handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the org_members INSERT fails with a database error that is not a primary key conflict"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-11",
+      "title": "Remove Organization Member",
+      "user_story": {
+        "role": "admin",
+        "goal": "remove a user from an organization",
+        "benefit": "I can revoke a user's org membership without deleting the user account"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "removeOrgMember handler",
+          "action": "deletes the org_members row matching (org_id, user_id); the user's account in users is not affected",
+          "return_contract": "HTTP 204 with no body",
+          "trigger": "DELETE /orgs/:id/members/:user_id is received from an admin with valid UUIDs"
+        },
+        {
+          "id": "08-REQ-11.2",
+          "ears_pattern": "event_driven",
+          "system": "removeOrgMember handler",
+          "action": "detects zero rows deleted and returns a not-found error via APIError",
+          "return_contract": "HTTP 404 with error message 'membership not found'",
+          "trigger": "DELETE /orgs/:id/members/:user_id is received but no matching org_members row exists"
+        },
+        {
+          "id": "08-REQ-11.3",
+          "ears_pattern": "event_driven",
+          "system": "removeOrgMember handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid organization id'",
+          "trigger": "DELETE /orgs/:id/members/:user_id is received with an invalid UUID for the org path parameter"
+        },
+        {
+          "id": "08-REQ-11.4",
+          "ears_pattern": "event_driven",
+          "system": "removeOrgMember handler",
+          "action": "returns a bad request error via APIError",
+          "return_contract": "HTTP 400 with error message 'invalid user id'",
+          "trigger": "DELETE /orgs/:id/members/:user_id is received with an invalid UUID for the user_id path parameter"
+        },
+        {
+          "id": "08-REQ-11.5",
+          "ears_pattern": "event_driven",
+          "system": "removeOrgMember handler",
+          "action": "calls RequireAdmin which returns an error; handler propagates it",
+          "return_contract": "HTTP 403 with error message 'forbidden'",
+          "trigger": "DELETE /orgs/:id/members/:user_id is received from a non-admin user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-11.E1",
+          "ears_pattern": "unwanted",
+          "system": "removeOrgMember handler",
+          "action": "wraps the error via db.WrapError and returns an internal error via APIError",
+          "return_contract": "HTTP 500 with error message 'internal server error'",
+          "error_condition": "the org_members DELETE fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-12",
+      "title": "Slug Validation",
+      "user_story": {
+        "role": "admin",
+        "goal": "have slug values enforced to URL-safe format rules at creation time",
+        "benefit": "slugs remain safe to embed in URLs and consistent across the system"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "slug validator",
+          "action": "accepts slugs consisting solely of lowercase ASCII letters (a-z), digits (0-9), hyphens (-), and underscores (_), with length between 1 and 128 characters inclusive, that do not start or end with a hyphen or underscore",
+          "return_contract": "validation passes; no error returned"
+        },
+        {
+          "id": "08-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "slug validator",
+          "action": "rejects slugs containing uppercase letters, spaces, or any character outside [a-z0-9_-]",
+          "return_contract": "returns error 'invalid slug format'"
+        },
+        {
+          "id": "08-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "slug validator",
+          "action": "rejects slugs that start with a hyphen or underscore",
+          "return_contract": "returns error 'invalid slug format'"
+        },
+        {
+          "id": "08-REQ-12.4",
+          "ears_pattern": "ubiquitous",
+          "system": "slug validator",
+          "action": "rejects slugs that end with a hyphen or underscore",
+          "return_contract": "returns error 'invalid slug format'"
+        },
+        {
+          "id": "08-REQ-12.5",
+          "ears_pattern": "ubiquitous",
+          "system": "slug validator",
+          "action": "rejects slugs longer than 128 characters",
+          "return_contract": "returns error 'invalid slug format'"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "08-REQ-13",
+      "title": "isOrgMember Helper",
+      "user_story": {
+        "role": "org handler",
+        "goal": "check whether a user belongs to an organization in a single database query",
+        "benefit": "membership access control can be enforced without duplicating query logic across handlers"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-13.1",
+          "ears_pattern": "event_driven",
+          "system": "isOrgMember",
+          "action": "queries org_members for the (org_id, user_id) row and returns true",
+          "return_contract": "(true, nil)",
+          "trigger": "called with a valid orgID and userID where a matching row exists in org_members"
+        },
+        {
+          "id": "08-REQ-13.2",
+          "ears_pattern": "event_driven",
+          "system": "isOrgMember",
+          "action": "queries org_members, finds no row, and returns false",
+          "return_contract": "(false, nil)",
+          "trigger": "called with a valid orgID and userID where no matching row exists in org_members"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "08-REQ-13.E1",
+          "ears_pattern": "unwanted",
+          "system": "isOrgMember",
+          "action": "returns the error without panicking; the caller receives a non-nil error and must propagate it as HTTP 500",
+          "return_contract": "(false, error)",
+          "error_condition": "the org_members query fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "08-REQ-14",
+      "title": "Authentication Required on All Endpoints",
+      "user_story": {
+        "role": "unauthenticated caller",
+        "goal": "be rejected at all org endpoints",
+        "benefit": "organization data is never exposed without a valid credential"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "08-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "all org handlers",
+          "action": "rely on the auth middleware attached to the APIGroup to reject unauthenticated requests before the handler body executes",
+          "return_contract": "HTTP 401 for all requests missing a valid credential, regardless of endpoint"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "08-PROP-1",
+      "title": "Slug Immutability",
+      "for_any": "organization in orgs",
+      "invariant": "the slug value set at creation time is never modified by updateOrg, blockOrg, or unblockOrg; only the orgs INSERT may set it",
+      "validates": [
+        "08-REQ-5.1",
+        "08-REQ-5.2"
+      ]
+    },
+    {
+      "id": "08-PROP-2",
+      "title": "updated_at Monotonicity",
+      "for_any": "organization in orgs that undergoes a mutating operation (update, block, unblock)",
+      "invariant": "the updated_at value after the operation is greater than or equal to the updated_at value before the operation",
+      "validates": [
+        "08-REQ-5.1",
+        "08-REQ-7.1",
+        "08-REQ-8.1"
+      ]
+    },
+    {
+      "id": "08-PROP-3",
+      "title": "Blocked Org Listing Exclusion",
+      "for_any": "organization in orgs with status='blocked'",
+      "invariant": "listOrgs without include_blocked=true never includes the org in its response array",
+      "validates": [
+        "08-REQ-3.1",
+        "08-REQ-3.2"
+      ]
+    },
+    {
+      "id": "08-PROP-4",
+      "title": "Cascade Delete Completeness",
+      "for_any": "organization in orgs that is deleted via deleteOrg",
+      "invariant": "no rows in org_members with the deleted org's id remain after the DELETE completes; user rows in users are unaffected",
+      "validates": [
+        "08-REQ-6.1"
+      ]
+    },
+    {
+      "id": "08-PROP-5",
+      "title": "Idempotent Block",
+      "for_any": "organization in orgs",
+      "invariant": "calling blockOrg N times produces the same org state as calling it once; subsequent calls return HTTP 200 without changing updated_at beyond the first block",
+      "validates": [
+        "08-REQ-7.2"
+      ]
+    },
+    {
+      "id": "08-PROP-6",
+      "title": "Idempotent Unblock",
+      "for_any": "organization in orgs",
+      "invariant": "calling unblockOrg N times produces the same org state as calling it once; subsequent calls return HTTP 200 without changing updated_at beyond the first unblock",
+      "validates": [
+        "08-REQ-8.2"
+      ]
+    },
+    {
+      "id": "08-PROP-7",
+      "title": "Idempotent Add Member",
+      "for_any": "(org_id, user_id) pair in org_members",
+      "invariant": "calling addOrgMember with the same (org_id, user_id) pair any number of times results in exactly one row in org_members and always returns HTTP 204",
+      "validates": [
+        "08-REQ-10.2"
+      ]
+    },
+    {
+      "id": "08-PROP-8",
+      "title": "Unique Name and Slug Across Organizations",
+      "for_any": "two distinct organizations in orgs",
+      "invariant": "no two rows share the same name value, and no two rows share the same slug value",
+      "validates": [
+        "08-REQ-2.5",
+        "08-REQ-2.6",
+        "08-REQ-5.4"
+      ]
+    },
+    {
+      "id": "08-PROP-9",
+      "title": "No Unauthenticated Access",
+      "for_any": "HTTP request to any org endpoint without a valid credential",
+      "invariant": "the response status is 401 and no org data is included in the response body",
+      "validates": [
+        "08-REQ-14.1"
+      ]
+    },
+    {
+      "id": "08-PROP-10",
+      "title": "Cache-Control No-Store on All Org Responses",
+      "for_any": "HTTP response from any org handler",
+      "invariant": "the Cache-Control response header contains 'no-store'",
+      "validates": [
+        "08-REQ-1.2"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "08-PATH-1",
+      "title": "Admin Creates an Organization",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "Sends POST /orgs with JSON body containing name, slug, and optional url, with a valid admin credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "Validates the credential and injects AuthInfo into the Echo context"
+        },
+        {
+          "actor": "createOrg handler",
+          "action": "Calls RequireAdmin(c); confirms admin access"
+        },
+        {
+          "actor": "createOrg handler",
+          "action": "Binds and validates CreateOrgRequest; checks name non-empty, validates slug format"
+        },
+        {
+          "actor": "createOrg handler",
+          "action": "Generates UUID v4 org ID; calls NowUTC() via Server Core (spec 01) for timestamps"
+        },
+        {
+          "actor": "createOrg handler",
+          "action": "Executes INSERT into orgs table via *sql.DB (spec 02)"
+        },
+        {
+          "actor": "createOrg handler",
+          "action": "Returns HTTP 201 with OrgResponse JSON body"
+        }
+      ]
+    },
+    {
+      "id": "08-PATH-2",
+      "title": "Org Member Views Their Organization",
+      "steps": [
+        {
+          "actor": "Org member client",
+          "action": "Sends GET /orgs/:id with a valid non-admin credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "Validates the credential and injects AuthInfo; marks user as non-admin"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Parses and validates the UUID from :id path parameter"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Queries orgs table for the matching row via *sql.DB"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Calls IsAdmin(c) — returns false"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Calls isOrgMember(db, orgID, GetUserID(c)) — returns true"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Calls SetETag(c, org.UpdatedAt) via Server Core (spec 01)"
+        },
+        {
+          "actor": "getOrg handler",
+          "action": "Returns HTTP 200 with OrgResponse JSON body and ETag header"
+        }
+      ]
+    },
+    {
+      "id": "08-PATH-3",
+      "title": "Admin Blocks and Unblocks an Organization",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "Sends POST /orgs/:id/block with a valid admin credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "Validates credential and injects AuthInfo"
+        },
+        {
+          "actor": "blockOrg handler",
+          "action": "Calls RequireAdmin(c); confirms admin access"
+        },
+        {
+          "actor": "blockOrg handler",
+          "action": "Queries orgs table to fetch current org state"
+        },
+        {
+          "actor": "blockOrg handler",
+          "action": "Detects org is active; sets status='blocked' and updated_at=NowUTC(), executes UPDATE in orgs table"
+        },
+        {
+          "actor": "blockOrg handler",
+          "action": "Returns HTTP 200 with updated OrgResponse where status is 'blocked'"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends POST /orgs/:id/unblock with a valid admin credential"
+        },
+        {
+          "actor": "unblockOrg handler",
+          "action": "Calls RequireAdmin(c); confirms admin access; queries org; detects blocked; sets status='active'; executes UPDATE; returns HTTP 200 with status 'active'"
+        }
+      ]
+    },
+    {
+      "id": "08-PATH-4",
+      "title": "Admin Manages Organization Membership",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "Sends PUT /orgs/:id/members/:user_id with valid admin credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "Validates credential and injects AuthInfo"
+        },
+        {
+          "actor": "addOrgMember handler",
+          "action": "Calls RequireAdmin(c); confirms admin access"
+        },
+        {
+          "actor": "addOrgMember handler",
+          "action": "Validates both UUID path parameters"
+        },
+        {
+          "actor": "addOrgMember handler",
+          "action": "Queries orgs table to verify org exists via *sql.DB (spec 02)"
+        },
+        {
+          "actor": "addOrgMember handler",
+          "action": "Queries users table to verify user exists via *sql.DB (spec 02)"
+        },
+        {
+          "actor": "addOrgMember handler",
+          "action": "Inserts row into org_members with created_at=NowUTC(); returns HTTP 204"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs/:id/members to verify the new member appears in the list"
+        },
+        {
+          "actor": "listOrgMembers handler",
+          "action": "Queries org_members joined with users, orders by username, returns HTTP 200 with array including the new member"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends DELETE /orgs/:id/members/:user_id to remove the member"
+        },
+        {
+          "actor": "removeOrgMember handler",
+          "action": "Deletes the org_members row; returns HTTP 204"
+        }
+      ]
+    },
+    {
+      "id": "08-PATH-5",
+      "title": "Full Organization Lifecycle: Create, Update, Delete with Cascade",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "Sends POST /orgs to create a new org; receives HTTP 201 with OrgResponse"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends PUT /orgs/:id/members/:user_id to add a member; receives HTTP 204"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends PATCH /orgs/:id with updated name; receives HTTP 200 with updated OrgResponse"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs/:id to verify updated name and incremented updated_at; receives HTTP 200"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends DELETE /orgs/:id to delete the org"
+        },
+        {
+          "actor": "deleteOrg handler",
+          "action": "Executes DELETE on orgs table; database ON DELETE CASCADE removes all org_members rows for this org; users table rows are unaffected"
+        },
+        {
+          "actor": "deleteOrg handler",
+          "action": "Returns HTTP 204 with no body"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs/:id to confirm deletion; receives HTTP 404 with 'organization not found'"
+        }
+      ]
+    },
+    {
+      "id": "08-PATH-6",
+      "title": "List Organizations with Blocked Filter",
+      "steps": [
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs; receives HTTP 200 with array of active orgs only"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends POST /orgs/:id/block to block one org; receives HTTP 200"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs again; receives HTTP 200 with array that excludes the blocked org"
+        },
+        {
+          "actor": "Admin client",
+          "action": "Sends GET /orgs?include_blocked=true; receives HTTP 200 with array including both active and blocked orgs"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "08-ERR-1",
+      "condition": "POST /orgs body has missing or empty name field",
+      "behavior": "createOrg returns HTTP 400 via APIError with message 'name is required'",
+      "requirement_id": "08-REQ-2.2"
+    },
+    {
+      "id": "08-ERR-2",
+      "condition": "POST /orgs body has missing or empty slug field",
+      "behavior": "createOrg returns HTTP 400 via APIError with message 'slug is required'",
+      "requirement_id": "08-REQ-2.3"
+    },
+    {
+      "id": "08-ERR-3",
+      "condition": "POST /orgs body has a slug that fails slug validation rules",
+      "behavior": "createOrg returns HTTP 400 via APIError with message 'invalid slug format'",
+      "requirement_id": "08-REQ-2.4"
+    },
+    {
+      "id": "08-ERR-4",
+      "condition": "POST /orgs INSERT violates UNIQUE constraint on orgs.name",
+      "behavior": "createOrg returns HTTP 409 via APIError with message 'organization name already exists'",
+      "requirement_id": "08-REQ-2.5"
+    },
+    {
+      "id": "08-ERR-5",
+      "condition": "POST /orgs INSERT violates UNIQUE constraint on orgs.slug",
+      "behavior": "createOrg returns HTTP 409 via APIError with message 'organization slug already exists'",
+      "requirement_id": "08-REQ-2.6"
+    },
+    {
+      "id": "08-ERR-6",
+      "condition": "Any request to an org endpoint is received without a valid credential",
+      "behavior": "Auth middleware rejects the request with HTTP 401 before the handler executes",
+      "requirement_id": "08-REQ-14.1"
+    },
+    {
+      "id": "08-ERR-7",
+      "condition": "Non-admin user accesses an admin-only org endpoint",
+      "behavior": "RequireAdmin returns an error; handler propagates HTTP 403 via APIError with message 'forbidden'",
+      "requirement_id": "08-REQ-2.7"
+    },
+    {
+      "id": "08-ERR-8",
+      "condition": "Non-member non-admin user sends GET /orgs/:id or GET /orgs/:id/members",
+      "behavior": "getOrg or listOrgMembers returns HTTP 403 via APIError with message 'forbidden'",
+      "requirement_id": "08-REQ-4.3"
+    },
+    {
+      "id": "08-ERR-9",
+      "condition": "UUID path parameter :id is not a valid UUID",
+      "behavior": "Handler returns HTTP 400 via APIError with message 'invalid organization id'",
+      "requirement_id": "08-REQ-4.5"
+    },
+    {
+      "id": "08-ERR-10",
+      "condition": "UUID path parameter :user_id is not a valid UUID",
+      "behavior": "Handler returns HTTP 400 via APIError with message 'invalid user id'",
+      "requirement_id": "08-REQ-10.6"
+    },
+    {
+      "id": "08-ERR-11",
+      "condition": "Org lookup in orgs table returns db.ErrNotFound",
+      "behavior": "Handler returns HTTP 404 via APIError with message 'organization not found'",
+      "requirement_id": "08-REQ-4.4"
+    },
+    {
+      "id": "08-ERR-12",
+      "condition": "User lookup in users table returns db.ErrNotFound on addOrgMember",
+      "behavior": "addOrgMember returns HTTP 404 via APIError with message 'user not found'",
+      "requirement_id": "08-REQ-10.4"
+    },
+    {
+      "id": "08-ERR-13",
+      "condition": "org_members DELETE affects zero rows on removeOrgMember",
+      "behavior": "removeOrgMember returns HTTP 404 via APIError with message 'membership not found'",
+      "requirement_id": "08-REQ-11.2"
+    },
+    {
+      "id": "08-ERR-14",
+      "condition": "PATCH /orgs/:id body contains no recognized fields (both name and url are nil)",
+      "behavior": "updateOrg returns HTTP 400 via APIError with message 'no fields to update'",
+      "requirement_id": "08-REQ-5.3"
+    },
+    {
+      "id": "08-ERR-15",
+      "condition": "PATCH /orgs/:id UPDATE violates UNIQUE constraint on orgs.name",
+      "behavior": "updateOrg returns HTTP 409 via APIError with message 'organization name already exists'",
+      "requirement_id": "08-REQ-5.4"
+    },
+    {
+      "id": "08-ERR-16",
+      "condition": "Any database operation fails with an error that is not a UNIQUE constraint violation or ErrNotFound",
+      "behavior": "Handler wraps the error via db.WrapError and returns HTTP 500 via APIError with message 'internal server error'; raw SQL error details are not exposed in the response",
+      "requirement_id": "08-REQ-2.E3"
+    },
+    {
+      "id": "08-ERR-17",
+      "condition": "isOrgMember query fails with a database error",
+      "behavior": "isOrgMember returns (false, error); the calling handler propagates HTTP 500 via APIError with message 'internal server error'",
+      "requirement_id": "08-REQ-13.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4",
+      "symbols": [
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface",
+          "notes": "Echo request context passed to all handlers; provides Param(), QueryParam(), Bind(), JSON(), etc."
+        },
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct",
+          "notes": "Echo route group on which all org endpoints are registered via RegisterOrgHandlers."
+        }
+      ]
+    },
+    {
+      "package": "github.com/google/uuid",
+      "version": "v1",
+      "symbols": [
+        {
+          "name": "New",
+          "import_path": "github.com/google/uuid",
+          "signature": "func New() UUID",
+          "notes": "Generates a random UUID v4. Used for org ID generation on create."
+        },
+        {
+          "name": "Parse",
+          "import_path": "github.com/google/uuid",
+          "signature": "func Parse(s string) (UUID, error)",
+          "notes": "Parses a UUID string; returns an error if the string is not a valid UUID. Used to validate :id and :user_id path parameters."
+        }
+      ]
+    },
+    {
+      "package": "database/sql",
+      "version": "go1.25",
+      "symbols": [
+        {
+          "name": "DB",
+          "import_path": "database/sql",
+          "signature": "type DB struct",
+          "notes": "Standard Go database handle. Passed to RegisterOrgHandlers and used for all orgs and org_members queries."
+        }
+      ]
+    }
+  ]
+}

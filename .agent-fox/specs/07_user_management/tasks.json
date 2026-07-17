@@ -1,0 +1,1964 @@
+{
+  "$schema": null,
+  "spec_id": "07",
+  "spec_name": "user_management",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/handlers/... -count=1 -v -run 'Test'",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 6,
+      "to_group": 6,
+      "relationship": "RegisterUserHandlers uses apikit.APIError, apikit.SetETag, apikit.CheckETag, apikit.CacheNoStore from server_core and registers on the Echo APIGroup",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 6,
+      "to_group": 6,
+      "relationship": "All handlers query the users, api_keys, pats, orgs, org_members tables via *sql.DB provided by database_layer; uses db.FormatTime and db.ErrNotFound",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "05",
+      "from_group": 7,
+      "to_group": 7,
+      "relationship": "All admin handlers call auth.RequireAdmin; self-service handlers call auth.RequirePermission and auth.GetUserID from auth_middleware",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Route Registration and Create User",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write test: RegisterUserHandlers registers all 15 routes",
+          "details": [
+            "Create internal/handlers/users_test.go with TestRegisterUserHandlers_AllRoutes.",
+            "Instantiate Echo in-memory and call RegisterUserHandlers with a test *sql.DB.",
+            "Assert all 15 expected (method, path) pairs exist in the Echo router table.",
+            "Use httptest and echo.New() for the test setup."
+          ],
+          "test_spec_refs": [
+            "TS-07-1"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write test: handler functions are unexported",
+          "details": [
+            "Add TestHandlerFunctionsUnexported checking that the handlers package exports only RegisterUserHandlers.",
+            "Use go/ast or go/doc to inspect exported symbols in internal/handlers.",
+            "Assert no handler function (createUser, listUsers, etc.) appears in the exported symbol set."
+          ],
+          "test_spec_refs": [
+            "TS-07-2"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests: POST /users success and validation failures",
+          "details": [
+            "Write TestCreateUser_Success: POST valid body, assert 201 + full User JSON with correct defaults (role=user, status=active, full_name='').",
+            "Write TestCreateUser_MissingUsername, TestCreateUser_MissingEmail, TestCreateUser_MissingProvider, TestCreateUser_MissingProviderID: each returns 400 with 'missing required field: <field>'.",
+            "Write TestCreateUser_InvalidJSON: POST non-JSON body, assert 400 with 'invalid request body'.",
+            "Use httptest.NewRecorder and echo context stubs with admin auth helper."
+          ],
+          "test_spec_refs": [
+            "TS-07-3",
+            "TS-07-4",
+            "TS-07-5"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.1",
+            "07-REQ-2.2",
+            "07-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write tests: POST /users conflict and auth errors, plus provider free-form",
+          "details": [
+            "Write TestCreateUser_DuplicateUsername: pre-insert user with same username, assert 409 'username already exists'.",
+            "Write TestCreateUser_DuplicateProviderIdentity: pre-insert user with same (provider, provider_id), assert 409 'provider identity already exists'.",
+            "Write TestCreateUser_NonAdmin: use non-admin auth stub, assert 403 'forbidden'.",
+            "Write TestCreateUser_DBError: inject stub *sql.DB returning generic error on INSERT, assert 500 'internal server error'.",
+            "Write TestCreateUser_FreeFormProvider: POST with provider='future-provider-xyz', assert 201 and provider persisted verbatim."
+          ],
+          "test_spec_refs": [
+            "TS-07-6",
+            "TS-07-7",
+            "TS-07-8",
+            "TS-07-E1",
+            "TS-07-E2"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.4",
+            "07-REQ-2.5",
+            "07-REQ-2.6",
+            "07-REQ-2.E1",
+            "07-REQ-2.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test functions compile without error: go build ./internal/handlers/...",
+          "Tests are skipped/fail with 'not implemented' until implementation: go test ./internal/handlers/... -count=1 -v -run 'TestRegisterUserHandlers|TestHandlerFunctions|TestCreateUser'",
+          "No linter warnings in test file: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-1.1, 07-REQ-1.2, 07-REQ-2.1 through 07-REQ-2.6, 07-REQ-2.E1, 07-REQ-2.E2 acceptance criteria are covered by test stubs"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: List, Get, and Update User",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests: GET /users list behavior",
+          "details": [
+            "Write TestListUsers_ExcludesBlocked: seed 2 active + 1 blocked user; GET /users; assert 200 with 2 users, all status=active.",
+            "Write TestListUsers_IncludeBlocked: GET /users?include_blocked=true; assert 200 with all 3 users.",
+            "Write TestListUsers_NonAdmin: non-admin ctx; assert 403 'forbidden'.",
+            "Write TestListUsers_Empty: empty DB, GET /users; assert 200 with body '[]' (not null).",
+            "Write TestListUsers_DBError: mock DB errors on SELECT; assert 500 'internal server error'."
+          ],
+          "test_spec_refs": [
+            "TS-07-9",
+            "TS-07-10",
+            "TS-07-11",
+            "TS-07-E3",
+            "TS-07-E4"
+          ],
+          "requirement_refs": [
+            "07-REQ-3.1",
+            "07-REQ-3.2",
+            "07-REQ-3.3",
+            "07-REQ-3.E1",
+            "07-REQ-3.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests: GET /users/:id get single user",
+          "details": [
+            "Write TestGetUser_Success: seed user; GET /users/:id; assert 200, correct User JSON, ETag header set.",
+            "Write TestGetUser_NotFound: GET non-existent UUID; assert 404 'user not found'.",
+            "Write TestGetUser_NonAdmin: assert 403 'forbidden'.",
+            "Write TestGetUser_ETag: send If-None-Match matching ETag from updated_at; assert 304 with no body."
+          ],
+          "test_spec_refs": [
+            "TS-07-12",
+            "TS-07-13",
+            "TS-07-14",
+            "TS-07-E5"
+          ],
+          "requirement_refs": [
+            "07-REQ-4.1",
+            "07-REQ-4.2",
+            "07-REQ-4.3",
+            "07-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests: PATCH /users/:id update full_name",
+          "details": [
+            "Write TestUpdateUser_Success: PATCH /users/:id with {full_name:'Alice Smith'}; assert 200, full_name updated, updated_at refreshed.",
+            "Write TestUpdateUser_MissingField: body {}; assert 400 'missing required field: full_name'.",
+            "Write TestUpdateUser_NotFound: assert 404 'user not found'.",
+            "Write TestUpdateUser_NonAdmin: assert 403 'forbidden'.",
+            "Write TestUpdateUser_ClearFullName: PATCH with full_name=''; assert 200 and full_name='' in DB.",
+            "Write TestUpdateUser_PointerDistinction: verify UpdateUserRequest.FullName is *string; missing key triggers 400."
+          ],
+          "test_spec_refs": [
+            "TS-07-15",
+            "TS-07-16",
+            "TS-07-17",
+            "TS-07-18",
+            "TS-07-E6",
+            "TS-07-E7"
+          ],
+          "requirement_refs": [
+            "07-REQ-5.1",
+            "07-REQ-5.2",
+            "07-REQ-5.3",
+            "07-REQ-5.4",
+            "07-REQ-5.E1",
+            "07-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test functions compile without error: go build ./internal/handlers/...",
+          "Tests for list/get/update user are runnable: go test ./internal/handlers/... -count=1 -v -run 'TestListUsers|TestGetUser|TestUpdateUser'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-3.x, 07-REQ-4.x, 07-REQ-5.x acceptance criteria are covered by test stubs"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: Role and Lifecycle Management",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests: POST /users/:id/promote",
+          "details": [
+            "Write TestPromoteUser_Success: user with role=user; POST /promote; assert 200, role=admin in response and DB.",
+            "Write TestPromoteUser_AlreadyAdmin: user with role=admin; POST /promote; assert 200, updated_at unchanged (idempotent).",
+            "Write TestPromoteUser_NotFound: assert 404 'user not found'.",
+            "Write TestPromoteUser_NonAdmin: assert 403 'forbidden'."
+          ],
+          "test_spec_refs": [
+            "TS-07-19",
+            "TS-07-20",
+            "TS-07-21",
+            "TS-07-22"
+          ],
+          "requirement_refs": [
+            "07-REQ-6.1",
+            "07-REQ-6.2",
+            "07-REQ-6.3",
+            "07-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests: POST /users/:id/demote with last-admin safeguard",
+          "details": [
+            "Write TestDemoteUser_Success: two active admins; POST /demote on target; assert 200, role=user.",
+            "Write TestDemoteUser_AlreadyUser: role=user target; assert 200, updated_at unchanged.",
+            "Write TestDemoteUser_LastAdmin: sole active admin; assert 409 'cannot demote the last admin', DB unchanged.",
+            "Write TestDemoteUser_NotFound: assert 404 'user not found'.",
+            "Write TestDemoteUser_NonAdmin: assert 403 'forbidden'.",
+            "Write TestDemoteUser_DBCountError: mock COUNT query error; assert 500 'internal server error', user record unchanged."
+          ],
+          "test_spec_refs": [
+            "TS-07-23",
+            "TS-07-24",
+            "TS-07-25",
+            "TS-07-26",
+            "TS-07-27",
+            "TS-07-E8"
+          ],
+          "requirement_refs": [
+            "07-REQ-7.1",
+            "07-REQ-7.2",
+            "07-REQ-7.3",
+            "07-REQ-7.4",
+            "07-REQ-7.5",
+            "07-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests: POST /users/:id/block and /unblock",
+          "details": [
+            "Write TestBlockUser_Success: active user; assert 200, status=blocked.",
+            "Write TestBlockUser_AlreadyBlocked: blocked user; assert 200, updated_at unchanged.",
+            "Write TestBlockUser_NotFound: assert 404 'user not found'.",
+            "Write TestBlockUser_NonAdmin: assert 403 'forbidden'.",
+            "Write TestUnblockUser_Success: blocked user; assert 200, status=active.",
+            "Write TestUnblockUser_AlreadyActive: active user; assert 200, updated_at unchanged."
+          ],
+          "test_spec_refs": [
+            "TS-07-28",
+            "TS-07-29",
+            "TS-07-30",
+            "TS-07-31",
+            "TS-07-32",
+            "TS-07-33"
+          ],
+          "requirement_refs": [
+            "07-REQ-8.1",
+            "07-REQ-8.2",
+            "07-REQ-8.3",
+            "07-REQ-8.4",
+            "07-REQ-9.1",
+            "07-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write tests: POST /users/:id/unblock not-found and auth",
+          "details": [
+            "Write TestUnblockUser_NotFound: assert 404 'user not found'.",
+            "Write TestUnblockUser_NonAdmin: assert 403 'forbidden'."
+          ],
+          "test_spec_refs": [
+            "TS-07-34",
+            "TS-07-35"
+          ],
+          "requirement_refs": [
+            "07-REQ-9.3",
+            "07-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All promote/demote/block/unblock test functions compile: go build ./internal/handlers/...",
+          "Tests are runnable: go test ./internal/handlers/... -count=1 -v -run 'TestPromoteUser|TestDemoteUser|TestBlockUser|TestUnblockUser'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-6.x, 07-REQ-7.x, 07-REQ-8.x, 07-REQ-9.x acceptance criteria covered by test stubs"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: Credential Management (Keys and PATs)",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests: GET /users/:id/keys list API keys",
+          "details": [
+            "Write TestListUserKeys_Success: seed user with 2 keys; assert 200, array of APIKeyMeta with correct field set, no secret fields.",
+            "Write TestListUserKeys_UserNotFound: assert 404 'user not found', api_keys not queried.",
+            "Write TestListUserKeys_NonAdmin: assert 403 'forbidden'.",
+            "Write TestListUserKeys_NoSecrets: verify each returned object has exactly {key_id,user_id,created_at,expires_at,revoked_at}."
+          ],
+          "test_spec_refs": [
+            "TS-07-36",
+            "TS-07-37",
+            "TS-07-38",
+            "TS-07-E9"
+          ],
+          "requirement_refs": [
+            "07-REQ-10.1",
+            "07-REQ-10.2",
+            "07-REQ-10.3",
+            "07-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests: DELETE /users/:id/keys/:key_id revoke API key",
+          "details": [
+            "Write TestRevokeUserKey_Success: active key; DELETE; assert 204, no body, revoked_at set in DB.",
+            "Write TestRevokeUserKey_AlreadyRevoked: already-revoked key; assert 204, revoked_at unchanged.",
+            "Write TestRevokeUserKey_NotFound: assert 404 'api key not found'.",
+            "Write TestRevokeUserKey_NonAdmin: assert 403 'forbidden'."
+          ],
+          "test_spec_refs": [
+            "TS-07-39",
+            "TS-07-40",
+            "TS-07-41",
+            "TS-07-42"
+          ],
+          "requirement_refs": [
+            "07-REQ-11.1",
+            "07-REQ-11.2",
+            "07-REQ-11.3",
+            "07-REQ-11.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write tests: GET /users/:id/tokens list PATs",
+          "details": [
+            "Write TestListUserTokens_Success: seed user with 2 PATs; assert 200, array of PATMeta with correct field set, no secret fields.",
+            "Write TestListUserTokens_UserNotFound: assert 404 'user not found', pats not queried.",
+            "Write TestListUserTokens_NonAdmin: assert 403 'forbidden'.",
+            "Write TestListUserTokens_NoSecrets: verify each returned object has exactly {token_id,name,permissions,user_id,created_at,expires_at,revoked_at}."
+          ],
+          "test_spec_refs": [
+            "TS-07-43",
+            "TS-07-44",
+            "TS-07-45",
+            "TS-07-E10"
+          ],
+          "requirement_refs": [
+            "07-REQ-12.1",
+            "07-REQ-12.2",
+            "07-REQ-12.3",
+            "07-REQ-12.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write tests: DELETE /users/:id/tokens/:token_id revoke PAT",
+          "details": [
+            "Write TestRevokeUserToken_Success: active PAT; DELETE; assert 204, no body, revoked_at set in DB.",
+            "Write TestRevokeUserToken_AlreadyRevoked: already-revoked PAT; assert 204, revoked_at unchanged.",
+            "Write TestRevokeUserToken_NotFound: assert 404 'token not found'.",
+            "Write TestRevokeUserToken_NonAdmin: assert 403 'forbidden'."
+          ],
+          "test_spec_refs": [
+            "TS-07-46",
+            "TS-07-47",
+            "TS-07-48",
+            "TS-07-49"
+          ],
+          "requirement_refs": [
+            "07-REQ-13.1",
+            "07-REQ-13.2",
+            "07-REQ-13.3",
+            "07-REQ-13.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All credential management test functions compile: go build ./internal/handlers/...",
+          "Tests are runnable: go test ./internal/handlers/... -count=1 -v -run 'TestListUserKeys|TestRevokeUserKey|TestListUserTokens|TestRevokeUserToken'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-10.x, 07-REQ-11.x, 07-REQ-12.x, 07-REQ-13.x acceptance criteria covered by test stubs"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write Tests: Self-Service Profile and Organization Endpoints",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write tests: GET /user own profile",
+          "details": [
+            "Write TestGetOwnProfile_Success: user with users:read PAT; GET /user; assert 200, User JSON, ETag header.",
+            "Write TestGetOwnProfile_PATWithPermission: PAT with users:read; assert 200.",
+            "Write TestGetOwnProfile_PATWithoutPermission: PAT without users:read; assert 403 'insufficient permissions'.",
+            "Write TestGetOwnProfile_ETag: send If-None-Match matching ETag; assert 304 no body."
+          ],
+          "test_spec_refs": [
+            "TS-07-50",
+            "TS-07-51",
+            "TS-07-E11"
+          ],
+          "requirement_refs": [
+            "07-REQ-14.1",
+            "07-REQ-14.2",
+            "07-REQ-14.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write tests: PATCH /user update own profile",
+          "details": [
+            "Write TestUpdateOwnProfile_Success: PATCH /user with {full_name:'Alice Updated'}; assert 200, field updated.",
+            "Write TestUpdateOwnProfile_MissingField: body {}; assert 400 'missing required field: full_name'.",
+            "Write TestUpdateOwnProfile_PATWithPermission: users:read PAT; assert 200.",
+            "Write TestUpdateOwnProfile_PATWithoutPermission: assert 403 'insufficient permissions'.",
+            "Write TestUpdateOwnProfile_UsesReadPermission: PAT with only users:read (no write scope); assert 200 confirming users:read is sufficient."
+          ],
+          "test_spec_refs": [
+            "TS-07-52",
+            "TS-07-53",
+            "TS-07-54",
+            "TS-07-E12"
+          ],
+          "requirement_refs": [
+            "07-REQ-15.1",
+            "07-REQ-15.2",
+            "07-REQ-15.3",
+            "07-REQ-15.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write tests: GET /user/orgs list own organizations",
+          "details": [
+            "Write TestListOwnOrgs_Success: user member of 2 active orgs + 1 blocked org; assert 200 with 2 orgs, all status=active.",
+            "Write TestListOwnOrgs_PATWithoutPermission: assert 403 'insufficient permissions'.",
+            "Write TestListOwnOrgs_ExcludesBlockedOrgs: only blocked org membership; assert 200 with '[]'.",
+            "Write TestListOwnOrgs_NoMemberships: no memberships; assert 200 with '[]' not null.",
+            "Write TestListOwnOrgs_PATWithPermission: orgs:read PAT; assert 200."
+          ],
+          "test_spec_refs": [
+            "TS-07-55",
+            "TS-07-56",
+            "TS-07-E13",
+            "TS-07-E14"
+          ],
+          "requirement_refs": [
+            "07-REQ-16.1",
+            "07-REQ-16.2",
+            "07-REQ-16.E1",
+            "07-REQ-16.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Write property and smoke test stubs",
+          "details": [
+            "Create property test stubs: TestProp_LastAdminSafeguard (TS-07-P1), TestProp_ActionIdempotency (TS-07-P2), TestProp_CredentialRevocationIdempotency (TS-07-P3), TestProp_NoSecretsInListings (TS-07-P4), TestProp_AdminAuthBeforeDataAccess (TS-07-P5), TestProp_ListEndpointsEmptyArray (TS-07-P6).",
+            "Create smoke test stubs: TestSmoke_CreateUser (TS-07-SMOKE-1), TestSmoke_DemoteWithSafeguard (TS-07-SMOKE-2), TestSmoke_RevokeAPIKey (TS-07-SMOKE-3), TestSmoke_OwnProfile (TS-07-SMOKE-4), TestSmoke_FullEndToEnd (TS-07-SMOKE-5).",
+            "Smoke tests use real SQLite DB (database_layer), real handlers, stub auth middleware only."
+          ],
+          "test_spec_refs": [
+            "TS-07-P1",
+            "TS-07-P2",
+            "TS-07-P3",
+            "TS-07-P4",
+            "TS-07-P5",
+            "TS-07-P6",
+            "TS-07-SMOKE-1",
+            "TS-07-SMOKE-2",
+            "TS-07-SMOKE-3",
+            "TS-07-SMOKE-4",
+            "TS-07-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "07-PROP-1",
+            "07-PROP-2",
+            "07-PROP-3",
+            "07-PROP-4",
+            "07-PROP-5",
+            "07-PROP-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All self-service and smoke test functions compile: go build ./internal/handlers/...",
+          "Tests are runnable: go test ./internal/handlers/... -count=1 -v -run 'TestGetOwnProfile|TestUpdateOwnProfile|TestListOwnOrgs|TestProp_|TestSmoke_'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-14.x, 07-REQ-15.x, 07-REQ-16.x acceptance criteria covered by test stubs"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement File Scaffold and Request/Response Types",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Create internal/handlers/users.go with package declaration and imports",
+          "details": [
+            "Create internal/handlers/users.go.",
+            "Add package declaration: package handlers.",
+            "Import: database/sql, net/http, time, github.com/labstack/echo/v4, github.com/google/uuid, internal/auth, internal/db, apikit.",
+            "Add placeholder for RegisterUserHandlers func signature only (no body yet)."
+          ],
+          "test_spec_refs": [
+            "TS-07-1",
+            "TS-07-2"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Define CreateUserRequest, UpdateUserRequest, User, APIKeyMeta, PATMeta structs",
+          "details": [
+            "Define CreateUserRequest with Username, Email, Provider, ProviderID string fields and json tags.",
+            "Define UpdateUserRequest with FullName *string and json tag (pointer to distinguish absent from empty).",
+            "Define User struct with all 10 fields: ID, Username, Email, FullName, Role, Status, Provider, ProviderID, CreatedAt, UpdatedAt.",
+            "Define APIKeyMeta with KeyID, UserID, CreatedAt string and ExpiresAt, RevokedAt *string.",
+            "Define PATMeta with TokenID, Name string, Permissions []string, UserID, CreatedAt string, ExpiresAt, RevokedAt *string."
+          ],
+          "test_spec_refs": [
+            "TS-07-3",
+            "TS-07-15",
+            "TS-07-36",
+            "TS-07-43"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.1",
+            "07-REQ-5.1",
+            "07-REQ-10.1",
+            "07-REQ-12.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement RegisterUserHandlers with all 15 route registrations",
+          "details": [
+            "Implement RegisterUserHandlers(g *echo.Group, database *sql.DB) storing the db handle in a handler struct or closure.",
+            "Register all 15 routes: POST /users, GET /users, GET /users/:id, PATCH /users/:id, POST /users/:id/promote, POST /users/:id/demote, POST /users/:id/block, POST /users/:id/unblock, GET /users/:id/keys, DELETE /users/:id/keys/:key_id, GET /users/:id/tokens, DELETE /users/:id/tokens/:token_id, GET /user, PATCH /user, GET /user/orgs.",
+            "All handler functions are unexported closures or methods; only RegisterUserHandlers is exported.",
+            "Stub each handler with panic(\"not implemented\") initially."
+          ],
+          "test_spec_refs": [
+            "TS-07-1",
+            "TS-07-2"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Package compiles with all type definitions: go build ./internal/handlers/...",
+          "RegisterUserHandlers signature matches spec: go vet ./internal/handlers/...",
+          "TS-07-1 passes (15 routes registered): go test ./internal/handlers/... -count=1 -v -run TestRegisterUserHandlers",
+          "TS-07-2 passes (handler unexported check): go test ./internal/handlers/... -count=1 -v -run TestHandlerFunctions",
+          "Requirements 07-REQ-1.1, 07-REQ-1.2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement createUser and listUsers Handlers",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement createUser handler with auth, validation, and UUID generation",
+          "details": [
+            "Call auth.RequireAdmin(c); return immediately if it returns an error.",
+            "Bind request body into CreateUserRequest; on bind error return apikit.APIError(c, 400, 'invalid request body').",
+            "Validate all four fields non-empty: for each missing/empty field return apikit.APIError(c, 400, 'missing required field: <field>').",
+            "Generate ID with uuid.New().String(); set role='user', status='active', full_name='', created_at/updated_at = db.FormatTime(time.Now().UTC()).",
+            "INSERT into users table via *sql.DB."
+          ],
+          "test_spec_refs": [
+            "TS-07-3",
+            "TS-07-4",
+            "TS-07-5",
+            "TS-07-8"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.1",
+            "07-REQ-2.2",
+            "07-REQ-2.3",
+            "07-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement createUser conflict detection and 201 response",
+          "details": [
+            "Inspect INSERT error for SQLite unique constraint violations: detect UNIQUE constraint on username -> 409 'username already exists'; detect UNIQUE constraint on (provider, provider_id) -> 409 'provider identity already exists'.",
+            "For unexpected DB errors return apikit.APIError(c, 500, 'internal server error').",
+            "On success build User struct from inserted values and return c.JSON(201, user).",
+            "provider field stored verbatim without any validation."
+          ],
+          "test_spec_refs": [
+            "TS-07-6",
+            "TS-07-7",
+            "TS-07-E1",
+            "TS-07-E2"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.4",
+            "07-REQ-2.5",
+            "07-REQ-2.E1",
+            "07-REQ-2.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement listUsers handler with include_blocked filtering",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Read includeBlocked := c.QueryParam('include_blocked'); build SELECT query with WHERE status='active' unless includeBlocked == 'true'.",
+            "Scan rows into []User; on DB error return 500; if no rows return c.JSON(200, []User{}) (not nil slice).",
+            "Return c.JSON(200, users)."
+          ],
+          "test_spec_refs": [
+            "TS-07-9",
+            "TS-07-10",
+            "TS-07-11",
+            "TS-07-E3",
+            "TS-07-E4"
+          ],
+          "requirement_refs": [
+            "07-REQ-3.1",
+            "07-REQ-3.2",
+            "07-REQ-3.3",
+            "07-REQ-3.E1",
+            "07-REQ-3.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "createUser and listUsers compile: go build ./internal/handlers/...",
+          "Create user tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestCreateUser'",
+          "List users tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestListUsers'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-2.1 through 07-REQ-2.6, 07-REQ-2.E1, 07-REQ-3.1 through 07-REQ-3.3, 07-REQ-3.E1, 07-REQ-3.E2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement getUser and updateUser Handlers",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement getUser handler with ETag support",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Read id := c.Param('id'); query users table by id.",
+            "If db.ErrNotFound is returned, return apikit.APIError(c, 404, 'user not found').",
+            "Call apikit.SetETag(c, user.UpdatedAt).",
+            "Call apikit.CheckETag(c, user.UpdatedAt); if cache hit return c.NoContent(304).",
+            "Return c.JSON(200, user)."
+          ],
+          "test_spec_refs": [
+            "TS-07-12",
+            "TS-07-13",
+            "TS-07-14",
+            "TS-07-E5"
+          ],
+          "requirement_refs": [
+            "07-REQ-4.1",
+            "07-REQ-4.2",
+            "07-REQ-4.3",
+            "07-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement updateUser handler with pointer-based field detection",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Read id := c.Param('id'); bind body into UpdateUserRequest.",
+            "Check req.FullName == nil (pointer absent); return apikit.APIError(c, 400, 'missing required field: full_name') if nil.",
+            "Query user by id; if not found return 404.",
+            "UPDATE users SET full_name=*req.FullName, updated_at=now WHERE id=id.",
+            "Return c.JSON(200, updatedUser)."
+          ],
+          "test_spec_refs": [
+            "TS-07-15",
+            "TS-07-16",
+            "TS-07-17",
+            "TS-07-18",
+            "TS-07-E6",
+            "TS-07-E7"
+          ],
+          "requirement_refs": [
+            "07-REQ-5.1",
+            "07-REQ-5.2",
+            "07-REQ-5.3",
+            "07-REQ-5.4",
+            "07-REQ-5.E1",
+            "07-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "getUser and updateUser compile: go build ./internal/handlers/...",
+          "Get user tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestGetUser'",
+          "Update user tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestUpdateUser'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-4.x and 07-REQ-5.x acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement promoteUser and demoteUser Handlers",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement promoteUser handler with idempotency",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if db.ErrNotFound.",
+            "If user.Role == 'admin' return c.JSON(200, user) immediately (idempotent, no DB write).",
+            "UPDATE users SET role='admin', updated_at=now WHERE id=id.",
+            "Return c.JSON(200, updatedUser)."
+          ],
+          "test_spec_refs": [
+            "TS-07-19",
+            "TS-07-20",
+            "TS-07-21",
+            "TS-07-22"
+          ],
+          "requirement_refs": [
+            "07-REQ-6.1",
+            "07-REQ-6.2",
+            "07-REQ-6.3",
+            "07-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement demoteUser handler with last-admin safeguard",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if not found.",
+            "If user.Role == 'user' return c.JSON(200, user) immediately (idempotent).",
+            "SELECT COUNT(*) FROM users WHERE role='admin' AND status='active'; on error return 500.",
+            "If count == 1 return apikit.APIError(c, 409, 'cannot demote the last admin').",
+            "UPDATE users SET role='user', updated_at=now WHERE id=id; return c.JSON(200, updatedUser)."
+          ],
+          "test_spec_refs": [
+            "TS-07-23",
+            "TS-07-24",
+            "TS-07-25",
+            "TS-07-26",
+            "TS-07-27",
+            "TS-07-E8"
+          ],
+          "requirement_refs": [
+            "07-REQ-7.1",
+            "07-REQ-7.2",
+            "07-REQ-7.3",
+            "07-REQ-7.4",
+            "07-REQ-7.5",
+            "07-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "promoteUser and demoteUser compile: go build ./internal/handlers/...",
+          "Promote tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestPromoteUser'",
+          "Demote tests pass (including last-admin safeguard): go test ./internal/handlers/... -count=1 -v -run 'TestDemoteUser'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-6.x, 07-REQ-7.x acceptance criteria met including 07-PROP-1 invariant"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement blockUser and unblockUser Handlers",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement blockUser handler with idempotency",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if not found.",
+            "If user.Status == 'blocked' return c.JSON(200, user) immediately (idempotent).",
+            "UPDATE users SET status='blocked', updated_at=now WHERE id=id.",
+            "Return c.JSON(200, updatedUser)."
+          ],
+          "test_spec_refs": [
+            "TS-07-28",
+            "TS-07-29",
+            "TS-07-30",
+            "TS-07-31"
+          ],
+          "requirement_refs": [
+            "07-REQ-8.1",
+            "07-REQ-8.2",
+            "07-REQ-8.3",
+            "07-REQ-8.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement unblockUser handler with idempotency",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if not found.",
+            "If user.Status == 'active' return c.JSON(200, user) immediately (idempotent).",
+            "UPDATE users SET status='active', updated_at=now WHERE id=id.",
+            "Return c.JSON(200, updatedUser)."
+          ],
+          "test_spec_refs": [
+            "TS-07-32",
+            "TS-07-33",
+            "TS-07-34",
+            "TS-07-35"
+          ],
+          "requirement_refs": [
+            "07-REQ-9.1",
+            "07-REQ-9.2",
+            "07-REQ-9.3",
+            "07-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "blockUser and unblockUser compile: go build ./internal/handlers/...",
+          "Block tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestBlockUser'",
+          "Unblock tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestUnblockUser'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-8.x, 07-REQ-9.x acceptance criteria met; idempotency property 07-PROP-2 verified for block/unblock"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "checkpoint",
+      "title": "Checkpoint: All Admin User CRUD and Lifecycle Handlers Complete",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Run full admin handler test suite and verify coverage",
+          "details": [
+            "Run go test ./internal/handlers/... -count=1 -v and confirm all CRUD and lifecycle tests pass.",
+            "Verify no panic('not implemented') remains for groups 6-10 handlers.",
+            "Confirm all idempotent action endpoints return 200 with unchanged state on repeat calls.",
+            "Verify last-admin safeguard returns 409 correctly."
+          ],
+          "test_spec_refs": [
+            "TS-07-1",
+            "TS-07-3",
+            "TS-07-9",
+            "TS-07-12",
+            "TS-07-15",
+            "TS-07-19",
+            "TS-07-23",
+            "TS-07-28",
+            "TS-07-32"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-2.1",
+            "07-REQ-3.1",
+            "07-REQ-4.1",
+            "07-REQ-5.1",
+            "07-REQ-6.1",
+            "07-REQ-7.1",
+            "07-REQ-8.1",
+            "07-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Verify property test TS-07-P1 and TS-07-P2 pass",
+          "details": [
+            "Implement TS-07-P1 (last admin safeguard): generate sequences of promote/demote calls; verify active admin count >= 1 after each operation.",
+            "Implement TS-07-P2 (action idempotency): repeated promote/demote/block/unblock calls return 200 with unchanged updated_at after second call.",
+            "Run: go test ./internal/handlers/... -count=1 -v -run 'TestProp_LastAdmin|TestProp_ActionIdempotency'."
+          ],
+          "test_spec_refs": [
+            "TS-07-P1",
+            "TS-07-P2"
+          ],
+          "requirement_refs": [
+            "07-PROP-1",
+            "07-PROP-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "All admin CRUD and lifecycle tests pass: go test ./internal/handlers/... -count=1 -run 'TestCreateUser|TestListUsers|TestGetUser|TestUpdateUser|TestPromoteUser|TestDemoteUser|TestBlockUser|TestUnblockUser'",
+          "Property tests P1 and P2 pass: go test ./internal/handlers/... -count=1 -run 'TestProp_LastAdmin|TestProp_ActionIdempotency'",
+          "No linter issues: go vet ./...",
+          "Full test suite still green: go test ./... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "standard",
+      "title": "Implement listUserKeys and revokeUserKey Handlers",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Implement listUserKeys handler returning metadata only",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if not found (do not query api_keys).",
+            "SELECT key_id, user_id, created_at, expires_at, revoked_at FROM api_keys WHERE user_id=id.",
+            "Scan into []APIKeyMeta; never include secret/key columns.",
+            "Return c.JSON(200, keys) where keys is []APIKeyMeta{} if empty (not nil)."
+          ],
+          "test_spec_refs": [
+            "TS-07-36",
+            "TS-07-37",
+            "TS-07-38",
+            "TS-07-E9"
+          ],
+          "requirement_refs": [
+            "07-REQ-10.1",
+            "07-REQ-10.2",
+            "07-REQ-10.3",
+            "07-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Implement revokeUserKey handler with idempotent 204 response",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Read id and key_id path params; SELECT key from api_keys WHERE key_id=key_id AND user_id=id.",
+            "If not found return apikit.APIError(c, 404, 'api key not found').",
+            "If key.RevokedAt != nil return c.NoContent(204) immediately (idempotent, no write).",
+            "UPDATE api_keys SET revoked_at=now WHERE key_id=key_id.",
+            "Return c.NoContent(204)."
+          ],
+          "test_spec_refs": [
+            "TS-07-39",
+            "TS-07-40",
+            "TS-07-41",
+            "TS-07-42"
+          ],
+          "requirement_refs": [
+            "07-REQ-11.1",
+            "07-REQ-11.2",
+            "07-REQ-11.3",
+            "07-REQ-11.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "listUserKeys and revokeUserKey compile: go build ./internal/handlers/...",
+          "Key listing tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestListUserKeys'",
+          "Key revocation tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestRevokeUserKey'",
+          "No secret fields appear in API key listing response (TS-07-E9 passes)",
+          "No linter warnings: go vet ./internal/handlers/..."
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "standard",
+      "title": "Implement listUserTokens and revokeUserToken Handlers",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Implement listUserTokens handler returning PAT metadata only",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Fetch user by id; return 404 if not found (do not query pats).",
+            "SELECT token_id, name, permissions, user_id, created_at, expires_at, revoked_at FROM pats WHERE user_id=id.",
+            "Scan permissions as JSON array []string; never include secret/token columns.",
+            "Return c.JSON(200, tokens) where tokens is []PATMeta{} if empty."
+          ],
+          "test_spec_refs": [
+            "TS-07-43",
+            "TS-07-44",
+            "TS-07-45",
+            "TS-07-E10"
+          ],
+          "requirement_refs": [
+            "07-REQ-12.1",
+            "07-REQ-12.2",
+            "07-REQ-12.3",
+            "07-REQ-12.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.2",
+          "title": "Implement revokeUserToken handler with idempotent 204 response",
+          "details": [
+            "Call auth.RequireAdmin(c); return if error.",
+            "Read id and token_id path params; SELECT token from pats WHERE token_id=token_id AND user_id=id.",
+            "If not found return apikit.APIError(c, 404, 'token not found').",
+            "If token.RevokedAt != nil return c.NoContent(204) immediately (idempotent, no write).",
+            "UPDATE pats SET revoked_at=now WHERE token_id=token_id.",
+            "Return c.NoContent(204)."
+          ],
+          "test_spec_refs": [
+            "TS-07-46",
+            "TS-07-47",
+            "TS-07-48",
+            "TS-07-49"
+          ],
+          "requirement_refs": [
+            "07-REQ-13.1",
+            "07-REQ-13.2",
+            "07-REQ-13.3",
+            "07-REQ-13.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "listUserTokens and revokeUserToken compile: go build ./internal/handlers/...",
+          "Token listing tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestListUserTokens'",
+          "Token revocation tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestRevokeUserToken'",
+          "No secret fields in PAT listing response (TS-07-E10 passes)",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "07-PROP-3 (revocation idempotency) and 07-PROP-4 (no secrets) invariants met"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "standard",
+      "title": "Implement Self-Service Profile and Organization Handlers",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Implement getOwnProfile handler with permission check and ETag",
+          "details": [
+            "Call auth.RequirePermission(c, 'users', 'read'); return if error (403 insufficient permissions).",
+            "Call userID := auth.GetUserID(c).",
+            "Query users table for userID.",
+            "Call apikit.SetETag(c, user.UpdatedAt).",
+            "Call apikit.CheckETag(c, user.UpdatedAt); if cache hit return c.NoContent(304).",
+            "Return c.JSON(200, user)."
+          ],
+          "test_spec_refs": [
+            "TS-07-50",
+            "TS-07-51",
+            "TS-07-E11"
+          ],
+          "requirement_refs": [
+            "07-REQ-14.1",
+            "07-REQ-14.2",
+            "07-REQ-14.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Implement updateOwnProfile handler with users:read permission",
+          "details": [
+            "Call auth.RequirePermission(c, 'users', 'read'); return if error.",
+            "Call userID := auth.GetUserID(c).",
+            "Bind UpdateUserRequest; check req.FullName == nil -> 400 'missing required field: full_name'.",
+            "Query user by userID; return 404 if not found.",
+            "UPDATE users SET full_name=*req.FullName, updated_at=now WHERE id=userID.",
+            "Return c.JSON(200, updatedUser). Note: uses users:read not users:write per design decision."
+          ],
+          "test_spec_refs": [
+            "TS-07-52",
+            "TS-07-53",
+            "TS-07-54",
+            "TS-07-E12"
+          ],
+          "requirement_refs": [
+            "07-REQ-15.1",
+            "07-REQ-15.2",
+            "07-REQ-15.3",
+            "07-REQ-15.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.3",
+          "title": "Implement listOwnOrgs handler excluding blocked organizations",
+          "details": [
+            "Call auth.RequirePermission(c, 'orgs', 'read'); return if error.",
+            "Call userID := auth.GetUserID(c).",
+            "SELECT o.id, o.name, o.slug, o.url, o.status, o.created_at, o.updated_at FROM orgs o JOIN org_members m ON o.id=m.org_id WHERE m.user_id=userID AND o.status='active'.",
+            "Scan into an org struct slice; return c.JSON(200, orgs) where orgs is an empty slice [] if no results.",
+            "Blocked organizations (status != 'active') are excluded by the WHERE clause."
+          ],
+          "test_spec_refs": [
+            "TS-07-55",
+            "TS-07-56",
+            "TS-07-E13",
+            "TS-07-E14"
+          ],
+          "requirement_refs": [
+            "07-REQ-16.1",
+            "07-REQ-16.2",
+            "07-REQ-16.E1",
+            "07-REQ-16.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "All self-service handlers compile: go build ./internal/handlers/...",
+          "Own profile tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestGetOwnProfile|TestUpdateOwnProfile'",
+          "Own orgs tests pass: go test ./internal/handlers/... -count=1 -v -run 'TestListOwnOrgs'",
+          "No linter warnings: go vet ./internal/handlers/...",
+          "Requirements 07-REQ-14.x, 07-REQ-15.x, 07-REQ-16.x acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "kind": "checkpoint",
+      "title": "Checkpoint: All Handlers Implemented — Full Test Suite Green",
+      "subtasks": [
+        {
+          "id": "15.1",
+          "title": "Run complete unit test suite and verify all tests pass",
+          "details": [
+            "Run go test ./internal/handlers/... -count=1 -v and confirm 0 failures.",
+            "Confirm no panic('not implemented') remains in users.go.",
+            "Verify list endpoints return [] not null for empty results across all handlers."
+          ],
+          "test_spec_refs": [
+            "TS-07-1",
+            "TS-07-3",
+            "TS-07-9",
+            "TS-07-12",
+            "TS-07-15",
+            "TS-07-19",
+            "TS-07-23",
+            "TS-07-28",
+            "TS-07-32",
+            "TS-07-36",
+            "TS-07-39",
+            "TS-07-43",
+            "TS-07-46",
+            "TS-07-50",
+            "TS-07-52"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-2.1",
+            "07-REQ-3.1",
+            "07-REQ-4.1",
+            "07-REQ-5.1",
+            "07-REQ-6.1",
+            "07-REQ-7.1",
+            "07-REQ-8.1",
+            "07-REQ-9.1",
+            "07-REQ-10.1",
+            "07-REQ-11.1",
+            "07-REQ-12.1",
+            "07-REQ-13.1",
+            "07-REQ-14.1",
+            "07-REQ-15.1",
+            "07-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "15.2",
+          "title": "Run all property tests and verify invariants hold",
+          "details": [
+            "Run all property tests: go test ./internal/handlers/... -count=1 -v -run 'TestProp_'.",
+            "Verify TS-07-P3 (revocation idempotency, revoked_at never overwritten).",
+            "Verify TS-07-P4 (no secrets in listings).",
+            "Verify TS-07-P5 (no DB queries before auth.RequireAdmin returns) — use instrumented *sql.DB wrapper.",
+            "Verify TS-07-P6 (list endpoints return [] not null when empty)."
+          ],
+          "test_spec_refs": [
+            "TS-07-P1",
+            "TS-07-P2",
+            "TS-07-P3",
+            "TS-07-P4",
+            "TS-07-P5",
+            "TS-07-P6"
+          ],
+          "requirement_refs": [
+            "07-PROP-1",
+            "07-PROP-2",
+            "07-PROP-3",
+            "07-PROP-4",
+            "07-PROP-5",
+            "07-PROP-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "15.3",
+          "title": "Run edge case tests and confirm all pass",
+          "details": [
+            "Run: go test ./internal/handlers/... -count=1 -v -run 'TS07E|TestProp_|Test.*Empty|Test.*ETag|Test.*Clear'.",
+            "Confirm 304 behavior for ETag on both getUser (TS-07-E5) and getOwnProfile (TS-07-E11).",
+            "Confirm UpdateUserRequest.FullName is *string (TS-07-E7).",
+            "Confirm blocked orgs excluded from /user/orgs (TS-07-E13).",
+            "Confirm empty array not null for all list endpoints (TS-07-E3, TS-07-E14)."
+          ],
+          "test_spec_refs": [
+            "TS-07-E1",
+            "TS-07-E2",
+            "TS-07-E3",
+            "TS-07-E4",
+            "TS-07-E5",
+            "TS-07-E6",
+            "TS-07-E7",
+            "TS-07-E8",
+            "TS-07-E9",
+            "TS-07-E10",
+            "TS-07-E11",
+            "TS-07-E12",
+            "TS-07-E13",
+            "TS-07-E14"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.E1",
+            "07-REQ-2.E2",
+            "07-REQ-3.E1",
+            "07-REQ-4.E1",
+            "07-REQ-5.E1",
+            "07-REQ-7.E1",
+            "07-REQ-10.E1",
+            "07-REQ-12.E1",
+            "07-REQ-14.E1",
+            "07-REQ-15.E1",
+            "07-REQ-16.E1",
+            "07-REQ-16.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "15.V",
+        "checks": [
+          "All unit tests pass: go test ./internal/handlers/... -count=1",
+          "All property tests pass: go test ./internal/handlers/... -count=1 -run 'TestProp_'",
+          "All edge case tests pass: go test ./internal/handlers/... -count=1 -run 'TS07E'",
+          "No linter warnings anywhere: go vet ./...",
+          "Full test suite green: go test ./... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Smoke Tests",
+      "subtasks": [
+        {
+          "id": "16.1",
+          "title": "Verify execution path entry points and call chain continuity",
+          "details": [
+            "Trace 07-PATH-1: confirm Echo router -> createUser -> auth.RequireAdmin -> *sql.DB INSERT -> c.JSON(201) with no stubs in the real path.",
+            "Trace 07-PATH-2: confirm demoteUser -> auth.RequireAdmin -> DB fetch -> COUNT query -> conditional 409/UPDATE -> c.JSON(200).",
+            "Trace 07-PATH-3: confirm revokeUserKey -> auth.RequireAdmin -> DB fetch -> revoked_at check -> conditional UPDATE -> c.NoContent(204).",
+            "Trace 07-PATH-4: confirm getOwnProfile -> auth.RequirePermission -> auth.GetUserID -> DB fetch -> apikit.SetETag/CheckETag -> c.JSON(200).",
+            "Trace 07-PATH-5: confirm createUser -> promoteUser -> listOwnOrgs all chain correctly with real db and auth stubs only.",
+            "Search internal/handlers/users.go for panic(\"not implemented\") — must return 0 results.",
+            "Search for bare `// TODO` markers in handlers file — must return 0 blocking TODOs."
+          ],
+          "test_spec_refs": [
+            "TS-07-SMOKE-1",
+            "TS-07-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.2",
+          "title": "Verify return value propagation across handler chain",
+          "details": [
+            "Confirm createUser returns the full User struct (all 10 fields) as JSON 201 and callers receive it.",
+            "Confirm revokeUserKey propagates the c.NoContent(204) return and no body is sent.",
+            "Confirm getOwnProfile propagates ETag header and 304/200 response correctly.",
+            "Confirm error returns from auth helpers (RequireAdmin, RequirePermission) halt processing — verify no DB calls occur after a 403 is written.",
+            "Confirm db.ErrNotFound sentinel is correctly mapped to 404 in all handlers that query users, api_keys, and pats tables."
+          ],
+          "test_spec_refs": [
+            "TS-07-SMOKE-1",
+            "TS-07-SMOKE-3",
+            "TS-07-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.1",
+            "07-REQ-11.1",
+            "07-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.3",
+          "title": "Run all SMOKE tests with real components",
+          "details": [
+            "Run: go test ./internal/handlers/... -count=1 -v -run 'TestSmoke_'.",
+            "TS-07-SMOKE-1: POST /users with real SQLite DB; verify 201, all 10 User fields present, row in DB.",
+            "TS-07-SMOKE-2: Two-call demote sequence; first returns 200 role=user, second (sole admin) returns 409.",
+            "TS-07-SMOKE-3: Two DELETE /keys calls; first returns 204 + revoked_at set, second returns 204 + revoked_at unchanged.",
+            "TS-07-SMOKE-4: GET /user returns 200+ETag; GET with matching If-None-Match returns 304; PATCH /user returns 200 with updated full_name.",
+            "TS-07-SMOKE-5: Create user (201) -> promote (200, role=admin) -> GET /user/orgs (200, correct org array).",
+            "All smoke tests use real *sql.DB against in-memory SQLite; only auth middleware is stubbed."
+          ],
+          "test_spec_refs": [
+            "TS-07-SMOKE-1",
+            "TS-07-SMOKE-2",
+            "TS-07-SMOKE-3",
+            "TS-07-SMOKE-4",
+            "TS-07-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "07-REQ-2.1",
+            "07-REQ-7.1",
+            "07-REQ-7.3",
+            "07-REQ-11.1",
+            "07-REQ-14.1",
+            "07-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.4",
+          "title": "Cross-spec entry point verification",
+          "details": [
+            "Verify server_core (spec 01) calls RegisterUserHandlers(g, db) from production code — search for the call site in the server initialization path.",
+            "Verify that the *echo.Group passed is the one returned by server.APIGroup() (spec 01 interface).",
+            "Verify that *sql.DB is the live handle provided by database_layer (spec 02) — not a test stub in production code.",
+            "Verify auth.RequireAdmin and auth.RequirePermission resolve to auth_middleware (spec 05) production symbols.",
+            "Verify apikit.SetETag, apikit.CheckETag, apikit.APIError resolve to server_core (spec 01) production symbols.",
+            "Verify db.FormatTime and db.ErrNotFound resolve to database_layer (spec 02) production symbols."
+          ],
+          "test_spec_refs": [
+            "TS-07-1"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.5",
+          "title": "Final stub/dead-code audit and full suite run",
+          "details": [
+            "grep -rn 'panic(\"not implemented\")' internal/handlers/users.go — expect 0 matches.",
+            "grep -rn 'TODO' internal/handlers/users.go — expect 0 blocking items.",
+            "Confirm no handler returns a bare `return nil` in a path that should write a response.",
+            "Run full suite: go test ./... -count=1 — expect 0 failures.",
+            "Run linter: go vet ./... — expect 0 warnings.",
+            "Confirm 07-PROP-5 (auth before data access) holds in production code by code inspection: auth helper call is the first statement in each admin handler."
+          ],
+          "test_spec_refs": [
+            "TS-07-SMOKE-1",
+            "TS-07-SMOKE-2",
+            "TS-07-SMOKE-3",
+            "TS-07-SMOKE-4",
+            "TS-07-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "07-REQ-1.1",
+            "07-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "16.V",
+        "checks": [
+          "All smoke tests pass with real SQLite components: go test ./internal/handlers/... -count=1 -v -run 'TestSmoke_'",
+          "Full test suite passes: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Zero panic('not implemented') or bare TODO stubs in internal/handlers/users.go",
+          "RegisterUserHandlers is called from server production initialization code with real *sql.DB and *echo.Group",
+          "All 5 execution paths (07-PATH-1 through 07-PATH-5) are traceable end-to-end with no stub interruptions",
+          "Requirements 07-REQ-1.1 through 07-REQ-16.2 and all correctness properties 07-PROP-1 through 07-PROP-6 satisfied"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "07-REQ-1.1",
+      "test_spec_id": "TS-07-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-1.2",
+      "test_spec_id": "TS-07-2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.1",
+      "test_spec_id": "TS-07-3",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.2",
+      "test_spec_id": "TS-07-4",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.3",
+      "test_spec_id": "TS-07-5",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.4",
+      "test_spec_id": "TS-07-6",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.5",
+      "test_spec_id": "TS-07-7",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.6",
+      "test_spec_id": "TS-07-8",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.E1",
+      "test_spec_id": "TS-07-E1",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-2.E2",
+      "test_spec_id": "TS-07-E2",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-3.1",
+      "test_spec_id": "TS-07-9",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-3.2",
+      "test_spec_id": "TS-07-10",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-3.3",
+      "test_spec_id": "TS-07-11",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-3.E1",
+      "test_spec_id": "TS-07-E3",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-3.E2",
+      "test_spec_id": "TS-07-E4",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-4.1",
+      "test_spec_id": "TS-07-12",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-4.2",
+      "test_spec_id": "TS-07-13",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-4.3",
+      "test_spec_id": "TS-07-14",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-4.E1",
+      "test_spec_id": "TS-07-E5",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.1",
+      "test_spec_id": "TS-07-15",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.2",
+      "test_spec_id": "TS-07-16",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.3",
+      "test_spec_id": "TS-07-17",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.4",
+      "test_spec_id": "TS-07-18",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.E1",
+      "test_spec_id": "TS-07-E6",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-5.E2",
+      "test_spec_id": "TS-07-E7",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-6.1",
+      "test_spec_id": "TS-07-19",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-6.2",
+      "test_spec_id": "TS-07-20",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-6.3",
+      "test_spec_id": "TS-07-21",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-6.4",
+      "test_spec_id": "TS-07-22",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.1",
+      "test_spec_id": "TS-07-23",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.2",
+      "test_spec_id": "TS-07-24",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.3",
+      "test_spec_id": "TS-07-25",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.4",
+      "test_spec_id": "TS-07-26",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.5",
+      "test_spec_id": "TS-07-27",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-7.E1",
+      "test_spec_id": "TS-07-E8",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-8.1",
+      "test_spec_id": "TS-07-28",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-8.2",
+      "test_spec_id": "TS-07-29",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-8.3",
+      "test_spec_id": "TS-07-30",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-8.4",
+      "test_spec_id": "TS-07-31",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-9.1",
+      "test_spec_id": "TS-07-32",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-9.2",
+      "test_spec_id": "TS-07-33",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-9.3",
+      "test_spec_id": "TS-07-34",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-9.4",
+      "test_spec_id": "TS-07-35",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-10.1",
+      "test_spec_id": "TS-07-36",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-10.2",
+      "test_spec_id": "TS-07-37",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-10.3",
+      "test_spec_id": "TS-07-38",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-10.E1",
+      "test_spec_id": "TS-07-E9",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-11.1",
+      "test_spec_id": "TS-07-39",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-11.2",
+      "test_spec_id": "TS-07-40",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-11.3",
+      "test_spec_id": "TS-07-41",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-11.4",
+      "test_spec_id": "TS-07-42",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-12.1",
+      "test_spec_id": "TS-07-43",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-12.2",
+      "test_spec_id": "TS-07-44",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-12.3",
+      "test_spec_id": "TS-07-45",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-12.E1",
+      "test_spec_id": "TS-07-E10",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-13.1",
+      "test_spec_id": "TS-07-46",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-13.2",
+      "test_spec_id": "TS-07-47",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-13.3",
+      "test_spec_id": "TS-07-48",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-13.4",
+      "test_spec_id": "TS-07-49",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-14.1",
+      "test_spec_id": "TS-07-50",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-14.2",
+      "test_spec_id": "TS-07-51",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-14.E1",
+      "test_spec_id": "TS-07-E11",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-15.1",
+      "test_spec_id": "TS-07-52",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-15.2",
+      "test_spec_id": "TS-07-53",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-15.3",
+      "test_spec_id": "TS-07-54",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-15.E1",
+      "test_spec_id": "TS-07-E12",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-16.1",
+      "test_spec_id": "TS-07-55",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-16.2",
+      "test_spec_id": "TS-07-56",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-16.E1",
+      "test_spec_id": "TS-07-E13",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "07-REQ-16.E2",
+      "test_spec_id": "TS-07-E14",
+      "task_id": "5.3",
+      "test_path": null
+    }
+  ]
+}

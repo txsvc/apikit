@@ -1,0 +1,1810 @@
+{
+  "$schema": null,
+  "spec_id": "08",
+  "spec_name": "organization_management",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/handlers/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Server Core helpers (APIGroup, APIError, NowUTC, FormatUTC, SetETag, CheckETag, CacheMiddleware) used in all handlers and tests",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Database layer (*sql.DB, db.WrapError, db.ErrNotFound, db.FormatTime, db.ParseTime) used in all org and membership queries",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "05",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Auth middleware (GetAuthInfo, GetUserID, IsAdmin, RequireAdmin) used in every handler for access control",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Handler Registration, Types, Slug Validator, and isOrgMember",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for RegisterOrgHandlers route mounting and Cache-Control header",
+          "details": [
+            "Create internal/handlers/orgs_test.go with test helpers: in-memory SQLite setup, admin/non-admin token generation.",
+            "TestRegisterOrgHandlers_Routes: call RegisterOrgHandlers and assert all 10 routes are reachable (non-405).",
+            "TestRegisterOrgHandlers_CacheControl: assert Cache-Control: no-store on GET /orgs response.",
+            "TestRegisterOrgHandlers_NilDB: use assert_panics pattern with recover() to verify panic on nil *sql.DB."
+          ],
+          "test_spec_refs": [
+            "TS-08-1",
+            "TS-08-2",
+            "TS-08-E1"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1",
+            "08-REQ-1.2",
+            "08-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for slug validator function",
+          "details": [
+            "Write TestValidateSlug_Valid: 'my-valid_slug123' passes with nil error.",
+            "Write TestValidateSlug_UpperCase: 'MySlug' returns 'invalid slug format'.",
+            "Write TestValidateSlug_LeadingHyphen and TestValidateSlug_LeadingUnderscore: '-bad' and '_bad' fail.",
+            "Write TestValidateSlug_TrailingHyphen and TestValidateSlug_TrailingUnderscore: 'bad-' and 'bad_' fail.",
+            "Write TestValidateSlug_TooLong: 129 'a' characters returns 'invalid slug format'.",
+            "Write TestValidateSlug_MaxLength: exactly 128 'a' characters passes."
+          ],
+          "test_spec_refs": [
+            "TS-08-59",
+            "TS-08-60",
+            "TS-08-61",
+            "TS-08-62",
+            "TS-08-63"
+          ],
+          "requirement_refs": [
+            "08-REQ-12.1",
+            "08-REQ-12.2",
+            "08-REQ-12.3",
+            "08-REQ-12.4",
+            "08-REQ-12.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for isOrgMember helper",
+          "details": [
+            "Create internal/handlers/org_members_test.go.",
+            "TestIsOrgMember_True: insert row into org_members, call isOrgMember, assert (true, nil).",
+            "TestIsOrgMember_False: empty org_members, call isOrgMember, assert (false, nil).",
+            "TestIsOrgMember_DBError: use mock/instrumented DB returning error, assert (false, non-nil error), no panic."
+          ],
+          "test_spec_refs": [
+            "TS-08-64",
+            "TS-08-65",
+            "TS-08-E16"
+          ],
+          "requirement_refs": [
+            "08-REQ-13.1",
+            "08-REQ-13.2",
+            "08-REQ-13.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestRegisterOrgHandlers|TestValidateSlug|TestIsOrgMember' compiles and all tests fail with 'not implemented' stubs (red phase confirmed)",
+          "go vet ./internal/handlers/... reports no errors on test files",
+          "Test file structure matches internal/handlers/orgs_test.go and internal/handlers/org_members_test.go layout defined in the PRD"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: Create Organization Handler",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write happy-path and validation tests for POST /orgs",
+          "details": [
+            "TestCreateOrg_Success: POST with valid name/slug/url, assert 201, UUID v4 id, status='active', created_at==updated_at, RFC3339 UTC timestamps.",
+            "TestCreateOrg_OptionalURL: POST without url field, assert url=='' in response.",
+            "TestCreateOrg_MissingName: POST with name='   ', assert 400 'name is required'.",
+            "TestCreateOrg_MissingSlug: POST without slug, assert 400 'slug is required'.",
+            "TestCreateOrg_InvalidSlug: POST with slug='Acme Corp!', assert 400 'invalid slug format'."
+          ],
+          "test_spec_refs": [
+            "TS-08-3",
+            "TS-08-4",
+            "TS-08-5",
+            "TS-08-6"
+          ],
+          "requirement_refs": [
+            "08-REQ-2.1",
+            "08-REQ-2.2",
+            "08-REQ-2.3",
+            "08-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write conflict, auth, and error tests for POST /orgs",
+          "details": [
+            "TestCreateOrg_DuplicateName: pre-insert org with same name, assert 409 'organization name already exists'.",
+            "TestCreateOrg_DuplicateSlug: pre-insert org with same slug, assert 409 'organization slug already exists'.",
+            "TestCreateOrg_NonAdmin: POST with non-admin token, assert 403 'forbidden'.",
+            "TestCreateOrg_SlugTooLong: slug of 129 'a' chars, assert 400 'invalid slug format'.",
+            "TestCreateOrg_SlugStartsWithHyphen: slugs '-invalid'/'_invalid'/'invalid-'/'invalid_', assert 400.",
+            "TestCreateOrg_DBError: instrumented DB returns generic error on INSERT, assert 500 'internal server error', no raw SQL in body.",
+            "TestCreateOrg_InvalidJSON: send 'not valid json', assert 400 with error code and message."
+          ],
+          "test_spec_refs": [
+            "TS-08-7",
+            "TS-08-8",
+            "TS-08-9",
+            "TS-08-E2",
+            "TS-08-E3",
+            "TS-08-E4",
+            "TS-08-E5"
+          ],
+          "requirement_refs": [
+            "08-REQ-2.5",
+            "08-REQ-2.6",
+            "08-REQ-2.7",
+            "08-REQ-2.E1",
+            "08-REQ-2.E2",
+            "08-REQ-2.E3",
+            "08-REQ-2.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestCreateOrg' compiles (red phase — stubs not yet implemented)",
+          "go vet ./internal/handlers/... reports no errors",
+          "All acceptance criteria for 08-REQ-2 (including edge cases 08-REQ-2.E1 through 08-REQ-2.E4) have corresponding test cases"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: List and Get Organization Handlers",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for GET /orgs list handler",
+          "details": [
+            "TestListOrgs_ExcludesBlocked: seed 'Alpha Corp' (active), 'Beta Corp' (blocked), assert 200, only Alpha returned, ordered by name.",
+            "TestListOrgs_IncludesBlocked: GET /orgs?include_blocked=true, assert both orgs returned.",
+            "TestListOrgs_Empty: empty orgs table, assert 200 with [].",
+            "TestListOrgs_OrderedByName: seed 'Zebra', 'Alpha', assert returned in Alpha→Zebra order.",
+            "TestListOrgs_NonAdmin: non-admin token, assert 403 'forbidden'.",
+            "TestListOrgs_DBError: instrumented DB returns error on SELECT, assert 500 'internal server error'."
+          ],
+          "test_spec_refs": [
+            "TS-08-10",
+            "TS-08-11",
+            "TS-08-12",
+            "TS-08-13",
+            "TS-08-E6"
+          ],
+          "requirement_refs": [
+            "08-REQ-3.1",
+            "08-REQ-3.2",
+            "08-REQ-3.3",
+            "08-REQ-3.4",
+            "08-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for GET /orgs/:id get handler",
+          "details": [
+            "TestGetOrg_AsAdmin: valid org UUID, admin token, assert 200, correct fields, non-empty ETag header.",
+            "TestGetOrg_AsMember: non-admin user with org_members row, assert 200 with OrgResponse.",
+            "TestGetOrg_NotMember: non-admin user without membership, assert 403 'forbidden'.",
+            "TestGetOrg_NotFound: non-existent UUID, admin token, assert 404 'organization not found'.",
+            "TestGetOrg_InvalidID: path 'not-a-uuid', assert 400 'invalid organization id'.",
+            "TestGetOrg_ETag: GET to get ETag, then GET with If-None-Match matching ETag, assert 304 empty body.",
+            "TestGetOrg_MembershipDBError: org lookup succeeds, org_members query fails for non-admin, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-14",
+            "TS-08-15",
+            "TS-08-16",
+            "TS-08-17",
+            "TS-08-18",
+            "TS-08-19",
+            "TS-08-E7"
+          ],
+          "requirement_refs": [
+            "08-REQ-4.1",
+            "08-REQ-4.2",
+            "08-REQ-4.3",
+            "08-REQ-4.4",
+            "08-REQ-4.5",
+            "08-REQ-4.6",
+            "08-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestListOrgs|TestGetOrg' compiles (red phase)",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-3 and 08-REQ-4 acceptance criteria and edge cases all have corresponding test functions"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: Update and Delete Organization Handlers",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests for PATCH /orgs/:id update handler",
+          "details": [
+            "TestUpdateOrg_Name: PATCH with {name:'Acme Corporation'}, assert 200, new name, slug unchanged, updated_at >= original.",
+            "TestUpdateOrg_URL: PATCH with {url:'https://new.example.com'}, assert 200 with new URL.",
+            "TestUpdateOrg_BothFields: PATCH with name and url, assert both updated.",
+            "TestUpdateOrg_SlugIgnored: PATCH with {name:'New', slug:'new-slug'}, assert slug remains original.",
+            "TestUpdateOrg_EmptyBody: PATCH with {}, assert 400 'no fields to update'.",
+            "TestUpdateOrg_DuplicateName: PATCH to name of existing org, assert 409 'organization name already exists'.",
+            "TestUpdateOrg_NotFound: PATCH non-existent UUID, assert 404.",
+            "TestUpdateOrg_InvalidID: PATCH 'not-a-uuid', assert 400 'invalid organization id'.",
+            "TestUpdateOrg_NonAdmin: non-admin token, assert 403.",
+            "TestUpdateOrg_EmptyName: PATCH with name='   ', assert 400 'name is required'.",
+            "TestUpdateOrg_DBError: instrumented DB UPDATE returns generic error, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-20",
+            "TS-08-21",
+            "TS-08-22",
+            "TS-08-23",
+            "TS-08-24",
+            "TS-08-25",
+            "TS-08-26",
+            "TS-08-E8",
+            "TS-08-E9"
+          ],
+          "requirement_refs": [
+            "08-REQ-5.1",
+            "08-REQ-5.2",
+            "08-REQ-5.3",
+            "08-REQ-5.4",
+            "08-REQ-5.5",
+            "08-REQ-5.6",
+            "08-REQ-5.7",
+            "08-REQ-5.E1",
+            "08-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for DELETE /orgs/:id handler",
+          "details": [
+            "TestDeleteOrg_Success: DELETE org with one member, assert 204, org absent from DB, org_members row absent, user row preserved.",
+            "TestDeleteOrg_CascadesMembers: verify org_members rows removed on delete.",
+            "TestDeleteOrg_UsersPreserved: verify users table row intact after org delete.",
+            "TestDeleteOrg_NotFound: DELETE non-existent UUID, assert 404 'organization not found'.",
+            "TestDeleteOrg_InvalidID: DELETE 'not-a-uuid', assert 400 'invalid organization id'.",
+            "TestDeleteOrg_NonAdmin: non-admin token, assert 403.",
+            "TestDeleteOrg_DBError: instrumented DB DELETE returns generic error, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-27",
+            "TS-08-28",
+            "TS-08-29",
+            "TS-08-30",
+            "TS-08-E10"
+          ],
+          "requirement_refs": [
+            "08-REQ-6.1",
+            "08-REQ-6.2",
+            "08-REQ-6.3",
+            "08-REQ-6.4",
+            "08-REQ-6.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestUpdateOrg|TestDeleteOrg' compiles (red phase)",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-5 and 08-REQ-6 acceptance criteria and edge cases all have corresponding test functions"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write Tests: Block and Unblock Organization Handlers",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write tests for POST /orgs/:id/block handler",
+          "details": [
+            "TestBlockOrg_Success: block active org, assert 200 status='blocked', updated_at >= original.",
+            "TestBlockOrg_Idempotent: block already-blocked org twice, assert second call returns 200, updated_at unchanged.",
+            "TestBlockOrg_NotFound: block non-existent UUID, assert 404 'organization not found'.",
+            "TestBlockOrg_InvalidID: 'not-a-uuid/block', assert 400 'invalid organization id'.",
+            "TestBlockOrg_NonAdmin: non-admin token, assert 403 'forbidden'.",
+            "TestBlockOrg_UpdatesTimestamp: assert updated_at changes on block vs original created_at.",
+            "TestBlockOrg_DBError: instrumented DB UPDATE returns error, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-31",
+            "TS-08-32",
+            "TS-08-33",
+            "TS-08-34",
+            "TS-08-35",
+            "TS-08-E11"
+          ],
+          "requirement_refs": [
+            "08-REQ-7.1",
+            "08-REQ-7.2",
+            "08-REQ-7.3",
+            "08-REQ-7.4",
+            "08-REQ-7.5",
+            "08-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write tests for POST /orgs/:id/unblock handler",
+          "details": [
+            "TestUnblockOrg_Success: unblock blocked org, assert 200 status='active', updated_at >= blocked updated_at.",
+            "TestUnblockOrg_Idempotent: unblock already-active org, assert 200, updated_at unchanged.",
+            "TestUnblockOrg_NotFound: non-existent UUID, assert 404 'organization not found'.",
+            "TestUnblockOrg_InvalidID: 'not-a-uuid/unblock', assert 400 'invalid organization id'.",
+            "TestUnblockOrg_NonAdmin: non-admin token, assert 403 'forbidden'.",
+            "TestUnblockOrg_DBError: instrumented DB UPDATE returns error, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-36",
+            "TS-08-37",
+            "TS-08-38",
+            "TS-08-39",
+            "TS-08-40",
+            "TS-08-E12"
+          ],
+          "requirement_refs": [
+            "08-REQ-8.1",
+            "08-REQ-8.2",
+            "08-REQ-8.3",
+            "08-REQ-8.4",
+            "08-REQ-8.5",
+            "08-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestBlockOrg|TestUnblockOrg' compiles (red phase)",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-7 and 08-REQ-8 acceptance criteria and edge cases all have corresponding test functions"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "tests",
+      "title": "Write Tests: List Members, Add Member, Remove Member, Auth, and Integration",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Write tests for GET /orgs/:id/members list members handler",
+          "details": [
+            "TestListMembers_AsAdmin: org with 'bob' and 'alice', assert 200, ordered alice→bob, all fields present.",
+            "TestListMembers_AsMember: non-admin member, assert 200 with array.",
+            "TestListMembers_NotMember: non-member non-admin, assert 403 'forbidden'.",
+            "TestListMembers_OrgNotFound: non-existent UUID, assert 404.",
+            "TestListMembers_Empty: org exists, no members, assert 200 [].",
+            "TestListMembers_InvalidID: 'not-a-uuid/members', assert 400 'invalid organization id'.",
+            "TestListMembers_IncludesUserDetails: assert each member has user_id, username, email, role, joined_at.",
+            "TestListMembers_DBError: join query fails, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-41",
+            "TS-08-42",
+            "TS-08-43",
+            "TS-08-44",
+            "TS-08-45",
+            "TS-08-46",
+            "TS-08-E13"
+          ],
+          "requirement_refs": [
+            "08-REQ-9.1",
+            "08-REQ-9.2",
+            "08-REQ-9.3",
+            "08-REQ-9.4",
+            "08-REQ-9.5",
+            "08-REQ-9.6",
+            "08-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Write tests for PUT /orgs/:id/members/:user_id add member handler",
+          "details": [
+            "TestAddMember_Success: PUT valid org/user UUIDs, assert 204, row exists in org_members with created_at.",
+            "TestAddMember_Idempotent: PUT same pair twice, assert both 204, exactly one row in org_members.",
+            "TestAddMember_OrgNotFound: non-existent org UUID, assert 404 'organization not found'.",
+            "TestAddMember_UserNotFound: non-existent user UUID, assert 404 'user not found'.",
+            "TestAddMember_InvalidOrgID: 'not-a-uuid/members/uuid', assert 400 'invalid organization id'.",
+            "TestAddMember_InvalidUserID: 'uuid/members/not-a-uuid', assert 400 'invalid user id'.",
+            "TestAddMember_NonAdmin: non-admin token, assert 403.",
+            "TestAddMember_DBError: INSERT fails with generic error, assert 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-47",
+            "TS-08-48",
+            "TS-08-49",
+            "TS-08-50",
+            "TS-08-51",
+            "TS-08-52",
+            "TS-08-53",
+            "TS-08-E14"
+          ],
+          "requirement_refs": [
+            "08-REQ-10.1",
+            "08-REQ-10.2",
+            "08-REQ-10.3",
+            "08-REQ-10.4",
+            "08-REQ-10.5",
+            "08-REQ-10.6",
+            "08-REQ-10.7",
+            "08-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Write tests for DELETE /orgs/:id/members/:user_id, auth requirement, and integration tests",
+          "details": [
+            "TestRemoveMember_Success: DELETE existing membership, assert 204, org_members row gone, user row intact.",
+            "TestRemoveMember_NotFound: no membership row, assert 404 'membership not found'.",
+            "TestRemoveMember_InvalidOrgID: 'not-a-uuid/members/uuid', assert 400 'invalid organization id'.",
+            "TestRemoveMember_InvalidUserID: 'uuid/members/not-a-uuid', assert 400 'invalid user id'.",
+            "TestRemoveMember_NonAdmin: non-admin token, assert 403.",
+            "TestRemoveMember_DBError: DELETE returns generic error, assert 500.",
+            "TestOrgAllEndpointsRequireAuth: all 10 routes called without auth, assert all return 401.",
+            "Add integration test stubs: TestOrgLifecycle, TestOrgBlockUnblockCycle, TestOrgMembershipLifecycle, TestOrgDeleteCascade, TestOrgMemberAccess, TestOrgAdminEndpointsRequireAdmin, TestOrgCacheHeaders, TestOrgConditionalGet."
+          ],
+          "test_spec_refs": [
+            "TS-08-54",
+            "TS-08-55",
+            "TS-08-56",
+            "TS-08-57",
+            "TS-08-58",
+            "TS-08-66",
+            "TS-08-E15"
+          ],
+          "requirement_refs": [
+            "08-REQ-11.1",
+            "08-REQ-11.2",
+            "08-REQ-11.3",
+            "08-REQ-11.4",
+            "08-REQ-11.5",
+            "08-REQ-11.E1",
+            "08-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestListMembers|TestAddMember|TestRemoveMember|TestOrgAll|TestOrgLifecycle|TestOrgBlock|TestOrgMembership|TestOrgDelete|TestOrgMember|TestOrgAdmin|TestOrgCache|TestOrgConditional' compiles (red phase)",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-9, 08-REQ-10, 08-REQ-11, 08-REQ-14 acceptance criteria and edge cases all have corresponding test functions"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement Types, Slug Validator, isOrgMember Helper, and RegisterOrgHandlers",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Define request/response types and OrgResponse/OrgMemberResponse structs",
+          "details": [
+            "In internal/handlers/orgs.go, define CreateOrgRequest, UpdateOrgRequest, OrgResponse, OrgMemberResponse structs with the JSON tags exactly as specified in the PRD interfaces section.",
+            "OrgResponse fields: ID, Name, Slug, URL, Status, CreatedAt, UpdatedAt (all string, JSON keys snake_case).",
+            "OrgMemberResponse fields: UserID, Username, Email, Role, JoinedAt (all string, JSON keys snake_case).",
+            "UpdateOrgRequest fields: Name *string, URL *string with omitempty."
+          ],
+          "test_spec_refs": [
+            "TS-08-3"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement validateSlug function",
+          "details": [
+            "Implement func validateSlug(slug string) error in internal/handlers/orgs.go.",
+            "Use regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,126}[a-z0-9]$|^[a-z0-9]$`) or equivalent logic.",
+            "Check: non-empty, max 128 chars, only [a-z0-9_-], no leading/trailing hyphen or underscore.",
+            "Return fmt.Errorf('invalid slug format') on any violation.",
+            "Export for testing if needed or keep unexported and test via handler."
+          ],
+          "test_spec_refs": [
+            "TS-08-59",
+            "TS-08-60",
+            "TS-08-61",
+            "TS-08-62",
+            "TS-08-63"
+          ],
+          "requirement_refs": [
+            "08-REQ-12.1",
+            "08-REQ-12.2",
+            "08-REQ-12.3",
+            "08-REQ-12.4",
+            "08-REQ-12.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement isOrgMember helper and RegisterOrgHandlers",
+          "details": [
+            "Implement func isOrgMember(db *sql.DB, orgID, userID string) (bool, error) in internal/handlers/org_members.go.",
+            "Query: SELECT 1 FROM org_members WHERE org_id=? AND user_id=? LIMIT 1; use sql.ErrNoRows to return (false, nil).",
+            "Implement func RegisterOrgHandlers(g *echo.Group, database *sql.DB) in internal/handlers/orgs.go.",
+            "Panic with descriptive message if database is nil (08-REQ-1.E1).",
+            "Register all 10 routes using the exact function names from the PRD interfaces section."
+          ],
+          "test_spec_refs": [
+            "TS-08-1",
+            "TS-08-64",
+            "TS-08-65",
+            "TS-08-E1",
+            "TS-08-E16"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1",
+            "08-REQ-1.2",
+            "08-REQ-1.E1",
+            "08-REQ-13.1",
+            "08-REQ-13.2",
+            "08-REQ-13.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestRegisterOrgHandlers|TestValidateSlug|TestIsOrgMember' — all these tests pass",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-1.1, 08-REQ-1.2, 08-REQ-12, 08-REQ-13 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement createOrg and listOrgs Handlers",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement createOrg handler",
+          "details": [
+            "func createOrg(c echo.Context) error: call RequireAdmin(c), bind CreateOrgRequest, trim name, validate slug via validateSlug.",
+            "Generate uuid.New().String() for org ID; call NowUTC() for timestamps; set status='active'.",
+            "Execute INSERT INTO orgs (id, name, slug, url, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?).",
+            "On INSERT error: call db.WrapError; check for UNIQUE constraint violation on name vs slug column; return APIError 409 with correct message or 500.",
+            "On success: return c.JSON(http.StatusCreated, OrgResponse{...}) with all fields populated."
+          ],
+          "test_spec_refs": [
+            "TS-08-3",
+            "TS-08-4",
+            "TS-08-5",
+            "TS-08-6",
+            "TS-08-7",
+            "TS-08-8",
+            "TS-08-9"
+          ],
+          "requirement_refs": [
+            "08-REQ-2.1",
+            "08-REQ-2.2",
+            "08-REQ-2.3",
+            "08-REQ-2.4",
+            "08-REQ-2.5",
+            "08-REQ-2.6",
+            "08-REQ-2.7",
+            "08-REQ-2.E1",
+            "08-REQ-2.E2",
+            "08-REQ-2.E3",
+            "08-REQ-2.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement listOrgs handler",
+          "details": [
+            "func listOrgs(c echo.Context) error: call RequireAdmin(c).",
+            "Read include_blocked := c.QueryParam('include_blocked') == 'true'.",
+            "If not include_blocked: SELECT ... FROM orgs WHERE status='active' ORDER BY name ASC.",
+            "If include_blocked: SELECT ... FROM orgs ORDER BY name ASC.",
+            "Scan rows into []OrgResponse; initialize as empty slice (not nil) to ensure [] JSON output.",
+            "On DB error: call db.WrapError, return APIError 500.",
+            "Return c.JSON(http.StatusOK, orgs)."
+          ],
+          "test_spec_refs": [
+            "TS-08-10",
+            "TS-08-11",
+            "TS-08-12",
+            "TS-08-13",
+            "TS-08-E6"
+          ],
+          "requirement_refs": [
+            "08-REQ-3.1",
+            "08-REQ-3.2",
+            "08-REQ-3.3",
+            "08-REQ-3.4",
+            "08-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestCreateOrg|TestListOrgs' — all tests pass",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-2 and 08-REQ-3 acceptance criteria met including all edge cases"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement getOrg and updateOrg Handlers",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement getOrg handler",
+          "details": [
+            "func getOrg(c echo.Context) error: parse and validate :id via uuid.Parse; return APIError 400 'invalid organization id' on failure.",
+            "SELECT org from orgs WHERE id=?; on db.ErrNotFound return APIError 404 'organization not found'.",
+            "Call IsAdmin(c); if false, call isOrgMember(db, orgID, GetUserID(c)); propagate db error as 500; return 403 'forbidden' if not member.",
+            "Call SetETag(c, org.UpdatedAt) then CheckETag(c); if ETag matches return c.NoContent(http.StatusNotModified).",
+            "Return c.JSON(http.StatusOK, orgResponse)."
+          ],
+          "test_spec_refs": [
+            "TS-08-14",
+            "TS-08-15",
+            "TS-08-16",
+            "TS-08-17",
+            "TS-08-18",
+            "TS-08-19",
+            "TS-08-E7"
+          ],
+          "requirement_refs": [
+            "08-REQ-4.1",
+            "08-REQ-4.2",
+            "08-REQ-4.3",
+            "08-REQ-4.4",
+            "08-REQ-4.5",
+            "08-REQ-4.6",
+            "08-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement updateOrg handler",
+          "details": [
+            "func updateOrg(c echo.Context) error: call RequireAdmin(c); parse :id UUID; bind UpdateOrgRequest.",
+            "If both Name and URL are nil, return APIError 400 'no fields to update'.",
+            "If Name is non-nil, trim whitespace; if empty after trim return APIError 400 'name is required'.",
+            "SELECT org WHERE id=?; on not found return 404.",
+            "Build UPDATE orgs SET ... updated_at=? WHERE id=? with NowUTC(); slug is never in SET clause.",
+            "On UNIQUE violation on name: return APIError 409 'organization name already exists'. On other DB error: 500.",
+            "Re-fetch updated org and return c.JSON(http.StatusOK, orgResponse)."
+          ],
+          "test_spec_refs": [
+            "TS-08-20",
+            "TS-08-21",
+            "TS-08-22",
+            "TS-08-23",
+            "TS-08-24",
+            "TS-08-25",
+            "TS-08-26",
+            "TS-08-E8",
+            "TS-08-E9"
+          ],
+          "requirement_refs": [
+            "08-REQ-5.1",
+            "08-REQ-5.2",
+            "08-REQ-5.3",
+            "08-REQ-5.4",
+            "08-REQ-5.5",
+            "08-REQ-5.6",
+            "08-REQ-5.7",
+            "08-REQ-5.E1",
+            "08-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestGetOrg|TestUpdateOrg' — all tests pass",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-4 and 08-REQ-5 acceptance criteria and edge cases met; slug immutability verified in TestUpdateOrg_SlugIgnored"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement deleteOrg, blockOrg, and unblockOrg Handlers",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement deleteOrg handler",
+          "details": [
+            "func deleteOrg(c echo.Context) error: call RequireAdmin(c); parse :id UUID; return 400 on invalid.",
+            "Execute DELETE FROM orgs WHERE id=?; check rows affected via result.RowsAffected().",
+            "If 0 rows deleted: return APIError 404 'organization not found'.",
+            "ON DELETE CASCADE in DB handles org_members; user rows unaffected.",
+            "On DB error: call db.WrapError, return APIError 500.",
+            "Return c.NoContent(http.StatusNoContent)."
+          ],
+          "test_spec_refs": [
+            "TS-08-27",
+            "TS-08-28",
+            "TS-08-29",
+            "TS-08-30",
+            "TS-08-E10"
+          ],
+          "requirement_refs": [
+            "08-REQ-6.1",
+            "08-REQ-6.2",
+            "08-REQ-6.3",
+            "08-REQ-6.4",
+            "08-REQ-6.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement blockOrg handler",
+          "details": [
+            "func blockOrg(c echo.Context) error: call RequireAdmin(c); parse :id UUID; return 400 on invalid.",
+            "SELECT org WHERE id=?; on not found return 404.",
+            "If org.Status == 'blocked': return c.JSON(200, orgResponse) immediately (idempotent, no UPDATE).",
+            "Execute UPDATE orgs SET status='blocked', updated_at=NowUTC() WHERE id=?.",
+            "On DB error: return APIError 500. Re-fetch and return c.JSON(200, updatedOrgResponse)."
+          ],
+          "test_spec_refs": [
+            "TS-08-31",
+            "TS-08-32",
+            "TS-08-33",
+            "TS-08-34",
+            "TS-08-35",
+            "TS-08-E11"
+          ],
+          "requirement_refs": [
+            "08-REQ-7.1",
+            "08-REQ-7.2",
+            "08-REQ-7.3",
+            "08-REQ-7.4",
+            "08-REQ-7.5",
+            "08-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Implement unblockOrg handler",
+          "details": [
+            "func unblockOrg(c echo.Context) error: call RequireAdmin(c); parse :id UUID; return 400 on invalid.",
+            "SELECT org WHERE id=?; on not found return 404.",
+            "If org.Status == 'active': return c.JSON(200, orgResponse) immediately (idempotent, no UPDATE).",
+            "Execute UPDATE orgs SET status='active', updated_at=NowUTC() WHERE id=?.",
+            "On DB error: return APIError 500. Re-fetch and return c.JSON(200, updatedOrgResponse)."
+          ],
+          "test_spec_refs": [
+            "TS-08-36",
+            "TS-08-37",
+            "TS-08-38",
+            "TS-08-39",
+            "TS-08-40",
+            "TS-08-E12"
+          ],
+          "requirement_refs": [
+            "08-REQ-8.1",
+            "08-REQ-8.2",
+            "08-REQ-8.3",
+            "08-REQ-8.4",
+            "08-REQ-8.5",
+            "08-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestDeleteOrg|TestBlockOrg|TestUnblockOrg' — all tests pass",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-6, 08-REQ-7, 08-REQ-8 acceptance criteria met; idempotency confirmed in TestBlockOrg_Idempotent and TestUnblockOrg_Idempotent"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "standard",
+      "title": "Implement listOrgMembers, addOrgMember, and removeOrgMember Handlers",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Implement listOrgMembers handler",
+          "details": [
+            "func listOrgMembers(c echo.Context) error in internal/handlers/org_members.go.",
+            "Parse :id UUID; return 400 'invalid organization id' on failure.",
+            "SELECT org WHERE id=?; on not found return 404 'organization not found'.",
+            "Check IsAdmin(c); if false call isOrgMember(db, orgID, GetUserID(c)); propagate error as 500; return 403 if not member.",
+            "SELECT om.created_at, u.id, u.username, u.email, u.role FROM org_members om JOIN users u ON u.id=om.user_id WHERE om.org_id=? ORDER BY u.username ASC.",
+            "Scan into []OrgMemberResponse (non-nil empty slice); return c.JSON(200, members). On DB error: 500."
+          ],
+          "test_spec_refs": [
+            "TS-08-41",
+            "TS-08-42",
+            "TS-08-43",
+            "TS-08-44",
+            "TS-08-45",
+            "TS-08-46",
+            "TS-08-E13"
+          ],
+          "requirement_refs": [
+            "08-REQ-9.1",
+            "08-REQ-9.2",
+            "08-REQ-9.3",
+            "08-REQ-9.4",
+            "08-REQ-9.5",
+            "08-REQ-9.6",
+            "08-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Implement addOrgMember handler",
+          "details": [
+            "func addOrgMember(c echo.Context) error: call RequireAdmin(c).",
+            "Parse :id and :user_id via uuid.Parse; return 400 'invalid organization id' or 'invalid user id' respectively.",
+            "SELECT 1 FROM orgs WHERE id=?; on not found return 404 'organization not found'.",
+            "SELECT 1 FROM users WHERE id=?; on not found return 404 'user not found'.",
+            "INSERT INTO org_members (org_id, user_id, created_at) VALUES (?,?,NowUTC()); on PRIMARY KEY conflict (idempotent) return 204.",
+            "On other DB error: return 500. On success: return c.NoContent(204)."
+          ],
+          "test_spec_refs": [
+            "TS-08-47",
+            "TS-08-48",
+            "TS-08-49",
+            "TS-08-50",
+            "TS-08-51",
+            "TS-08-52",
+            "TS-08-53",
+            "TS-08-E14"
+          ],
+          "requirement_refs": [
+            "08-REQ-10.1",
+            "08-REQ-10.2",
+            "08-REQ-10.3",
+            "08-REQ-10.4",
+            "08-REQ-10.5",
+            "08-REQ-10.6",
+            "08-REQ-10.7",
+            "08-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Implement removeOrgMember handler",
+          "details": [
+            "func removeOrgMember(c echo.Context) error: call RequireAdmin(c).",
+            "Parse :id and :user_id; return 400 'invalid organization id' or 'invalid user id' on failure.",
+            "DELETE FROM org_members WHERE org_id=? AND user_id=?; check result.RowsAffected().",
+            "If 0 rows deleted: return APIError 404 'membership not found'.",
+            "On DB error: return APIError 500. User rows in users table are unaffected (no cascade here).",
+            "Return c.NoContent(204)."
+          ],
+          "test_spec_refs": [
+            "TS-08-54",
+            "TS-08-55",
+            "TS-08-56",
+            "TS-08-57",
+            "TS-08-58",
+            "TS-08-E15"
+          ],
+          "requirement_refs": [
+            "08-REQ-11.1",
+            "08-REQ-11.2",
+            "08-REQ-11.3",
+            "08-REQ-11.4",
+            "08-REQ-11.5",
+            "08-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestListMembers|TestAddMember|TestRemoveMember' — all tests pass",
+          "go vet ./internal/handlers/... reports no errors",
+          "08-REQ-9, 08-REQ-10, 08-REQ-11 acceptance criteria met; idempotency confirmed in TestAddMember_Idempotent"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "checkpoint",
+      "title": "Full Unit Test Suite Green and Auth Requirement Verified",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Run full handler unit test suite and confirm all unit tests pass",
+          "details": [
+            "Run go test ./internal/handlers/... -count=1 -v and confirm all unit tests pass with no failures.",
+            "TestOrgAllEndpointsRequireAuth must pass: all 10 endpoints return 401 without auth.",
+            "Confirm no test is being skipped or is in a stub state.",
+            "Check test output for any data races using go test -race ./internal/handlers/..."
+          ],
+          "test_spec_refs": [
+            "TS-08-66"
+          ],
+          "requirement_refs": [
+            "08-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Run property-based tests and confirm invariants hold",
+          "details": [
+            "Implement property test stubs using table-driven tests in Go (go's testing/quick or manual loop-based approach).",
+            "TS-08-P1: slug immutability across update/block/unblock sequences.",
+            "TS-08-P2: updated_at monotonicity across random mutation sequences (bounded to 20 ops).",
+            "TS-08-P3: blocked org never appears in default listing.",
+            "TS-08-P4: cascade delete leaves no org_members rows; user rows intact.",
+            "TS-08-P5–P7: idempotent block/unblock/addMember (N=1..5 repetitions).",
+            "TS-08-P8: duplicate name/slug always returns 409.",
+            "TS-08-P9: unauthenticated requests always 401.",
+            "TS-08-P10: all responses have Cache-Control: no-store."
+          ],
+          "test_spec_refs": [
+            "TS-08-P1",
+            "TS-08-P2",
+            "TS-08-P3",
+            "TS-08-P4",
+            "TS-08-P5",
+            "TS-08-P6",
+            "TS-08-P7",
+            "TS-08-P8",
+            "TS-08-P9",
+            "TS-08-P10"
+          ],
+          "requirement_refs": [
+            "08-PROP-1",
+            "08-PROP-2",
+            "08-PROP-3",
+            "08-PROP-4",
+            "08-PROP-5",
+            "08-PROP-6",
+            "08-PROP-7",
+            "08-PROP-8",
+            "08-PROP-9",
+            "08-PROP-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.3",
+          "title": "Verify linter cleanliness and no regressions in adjacent packages",
+          "details": [
+            "Run go vet ./... — zero warnings or errors.",
+            "Run go test ./... -count=1 — confirm no regressions in packages outside internal/handlers.",
+            "Confirm Cache-Control: no-store header is present on all 10 org endpoints by running TestOrgCacheHeaders integration test stub."
+          ],
+          "test_spec_refs": [
+            "TS-08-2"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 — all unit tests pass, zero failures",
+          "go test -race ./internal/handlers/... -count=1 — no data races detected",
+          "go vet ./... — zero issues",
+          "go test ./... -count=1 — no regressions in any package",
+          "08-REQ-14.1 (auth on all endpoints) confirmed via TestOrgAllEndpointsRequireAuth passing"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "standard",
+      "title": "Implement Integration Tests",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Implement TestOrgLifecycle and TestOrgBlockUnblockCycle integration tests",
+          "details": [
+            "TestOrgLifecycle: POST /orgs → GET /orgs/:id → PATCH /orgs/:id (name update) → GET /orgs/:id (verify new name and updated_at > created_at) → DELETE /orgs/:id (204) → GET /orgs/:id (404).",
+            "Verify during lifecycle: slug immutable across PATCH, updated_at increments, org absent after delete.",
+            "TestOrgBlockUnblockCycle: create org → GET /orgs (visible) → POST /block → GET /orgs (absent) → GET /orgs?include_blocked=true (present) → POST /unblock → GET /orgs (visible again).",
+            "Use a real in-memory SQLite DB and actual Echo server for all integration tests."
+          ],
+          "test_spec_refs": [
+            "TS-08-SMOKE-5",
+            "TS-08-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "08-REQ-2.1",
+            "08-REQ-3.1",
+            "08-REQ-3.2",
+            "08-REQ-4.1",
+            "08-REQ-5.1",
+            "08-REQ-6.1",
+            "08-REQ-7.1",
+            "08-REQ-8.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.2",
+          "title": "Implement TestOrgMembershipLifecycle, TestOrgDeleteCascade, TestOrgMemberAccess integration tests",
+          "details": [
+            "TestOrgMembershipLifecycle: create org → PUT member → GET /members (verify user appears with all fields, ordered) → DELETE member → GET /members (verify user absent).",
+            "TestOrgDeleteCascade: create org → add N members → DELETE /orgs/:id → assert org_members count=0 for org_id → assert users rows still exist.",
+            "TestOrgMemberAccess: create org → add user as member → GET /orgs/:id as member (200) → GET /orgs/:id as non-member (403) → GET /orgs/:id/members as member (200) → GET /orgs/:id/members as non-member (403)."
+          ],
+          "test_spec_refs": [
+            "TS-08-SMOKE-4",
+            "TS-08-SMOKE-2"
+          ],
+          "requirement_refs": [
+            "08-REQ-6.1",
+            "08-REQ-9.1",
+            "08-REQ-10.1",
+            "08-REQ-11.1",
+            "08-REQ-4.2",
+            "08-REQ-4.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.3",
+          "title": "Implement TestOrgAdminEndpointsRequireAdmin, TestOrgCacheHeaders, TestOrgConditionalGet integration tests",
+          "details": [
+            "TestOrgAdminEndpointsRequireAdmin: send POST /orgs, PATCH, DELETE, POST /block, POST /unblock, PUT member, DELETE member with non-admin token → all return 403.",
+            "TestOrgCacheHeaders: for each of the 10 org endpoints with valid admin auth, assert Cache-Control: no-store header present.",
+            "TestOrgConditionalGet: create org → GET (capture ETag) → update org → GET with old ETag → assert 200 (not 304, since ETag changed) → GET with new ETag → assert 304."
+          ],
+          "test_spec_refs": [
+            "TS-08-SMOKE-1",
+            "TS-08-SMOKE-3"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.2",
+            "08-REQ-4.6",
+            "08-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "go test ./internal/handlers/... -count=1 -v -run 'TestOrgLifecycle|TestOrgBlock|TestOrgMembership|TestOrgDelete|TestOrgMember|TestOrgAdmin|TestOrgCache|TestOrgConditional' — all integration tests pass",
+          "go vet ./internal/handlers/... — zero issues",
+          "All 6 execution paths (08-PATH-1 through 08-PATH-6) exercised by integration tests"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Stub Audit",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Trace all execution paths and verify no stubs remain",
+          "details": [
+            "Trace 08-PATH-1 (admin creates org): POST /orgs → RequireAdmin → validateSlug → uuid.New → NowUTC → sql INSERT → JSON 201. Verify each call in production code.",
+            "Trace 08-PATH-2 (member views org): GET /orgs/:id → uuid.Parse → SELECT → IsAdmin → isOrgMember → SetETag → CheckETag → JSON 200.",
+            "Trace 08-PATH-3 (block/unblock): SELECT → status check → UPDATE → JSON 200.",
+            "Trace 08-PATH-4 (membership management): PUT → RequireAdmin → uuid.Parse × 2 → SELECT orgs → SELECT users → INSERT org_members → 204.",
+            "Trace 08-PATH-5 (full lifecycle): POST → PUT member → PATCH → GET → DELETE (cascade) → GET 404.",
+            "Trace 08-PATH-6 (listing with filter): GET → WHERE status='active' → block → GET without blocked → GET with include_blocked=true.",
+            "Search internal/handlers/*.go for panic(\"not implemented\"), // TODO, bare return nil in non-trivial paths — zero instances allowed."
+          ],
+          "test_spec_refs": [
+            "TS-08-SMOKE-1",
+            "TS-08-SMOKE-2",
+            "TS-08-SMOKE-3",
+            "TS-08-SMOKE-4",
+            "TS-08-SMOKE-5",
+            "TS-08-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Verify return value propagation across all handlers",
+          "details": [
+            "Verify RequireAdmin(c) error is always propagated — handlers return the error, not ignore it.",
+            "Verify db.WrapError is called on all SQL errors before APIError is returned.",
+            "Verify isOrgMember error return (false, err) is checked and propagated as HTTP 500 — not silently discarded.",
+            "Verify result.RowsAffected() is checked in deleteOrg and removeOrgMember handlers.",
+            "Verify NowUTC() result is actually used in all SET updated_at= clauses (not time.Now() or zero value).",
+            "Verify uuid.Parse error causes immediate 400 return without any DB query."
+          ],
+          "test_spec_refs": [
+            "TS-08-3",
+            "TS-08-14",
+            "TS-08-27",
+            "TS-08-47",
+            "TS-08-54"
+          ],
+          "requirement_refs": [
+            "08-REQ-2.1",
+            "08-REQ-4.1",
+            "08-REQ-6.1",
+            "08-REQ-10.1",
+            "08-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run TS-08-SMOKE-1: POST /orgs with real auth middleware and SQLite — confirm 201, UUID v4, status='active', Cache-Control: no-store.",
+            "Run TS-08-SMOKE-2: GET /orgs/:id as member — confirm 200, ETag header, 304 on re-request with same ETag.",
+            "Run TS-08-SMOKE-3: block then unblock — confirm status transitions and list inclusion/exclusion.",
+            "Run TS-08-SMOKE-4: add → list → remove member — confirm member appears in list with all fields then disappears.",
+            "Run TS-08-SMOKE-5: full lifecycle — POST → add member → PATCH → GET → DELETE → GET 404; confirm cascade and user preservation.",
+            "Run TS-08-SMOKE-6: list with blocked filter — confirm blocked org excluded by default, included with ?include_blocked=true.",
+            "All smoke tests use real spec 01, 02, 05 components (no mocks)."
+          ],
+          "test_spec_refs": [
+            "TS-08-SMOKE-1",
+            "TS-08-SMOKE-2",
+            "TS-08-SMOKE-3",
+            "TS-08-SMOKE-4",
+            "TS-08-SMOKE-5",
+            "TS-08-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1",
+            "08-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.4",
+          "title": "Cross-spec entry point verification and final full test run",
+          "details": [
+            "Verify RegisterOrgHandlers is called from production server setup code (not only in tests).",
+            "Verify APIGroup() from spec 01 is used as the *echo.Group argument — CacheMiddleware(CacheNoStore) is inherited.",
+            "Verify auth middleware from spec 05 is applied at the group level — confirm all 10 endpoints return 401 without credentials.",
+            "Verify db.WrapError and db.ErrNotFound from spec 02 are imported and used (not redefined).",
+            "Run go test ./... -count=1 — complete test suite passes with zero failures.",
+            "Run go test -race ./... -count=1 — zero data race warnings.",
+            "Run go vet ./... — zero issues."
+          ],
+          "test_spec_refs": [
+            "TS-08-1",
+            "TS-08-2",
+            "TS-08-66"
+          ],
+          "requirement_refs": [
+            "08-REQ-1.1",
+            "08-REQ-1.2",
+            "08-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "go test ./... -count=1 — all tests pass, zero failures across all packages",
+          "go test -race ./... -count=1 — zero data races",
+          "go vet ./... — zero issues",
+          "grep -rn 'panic(\"not implemented\")\\|// TODO\\|// FIXME' internal/handlers/ — zero matches in non-test files",
+          "All 6 smoke tests (TS-08-SMOKE-1 through TS-08-SMOKE-6) pass with real components (no mocks in smoke tests)",
+          "RegisterOrgHandlers is called from production server setup, not only from test helpers",
+          "08-PROP-1 through 08-PROP-10 all confirmed via property test runs"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "08-REQ-1.1",
+      "test_spec_id": "TS-08-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-1.2",
+      "test_spec_id": "TS-08-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-1.E1",
+      "test_spec_id": "TS-08-E1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-12.1",
+      "test_spec_id": "TS-08-59",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-12.2",
+      "test_spec_id": "TS-08-60",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-12.3",
+      "test_spec_id": "TS-08-61",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-12.4",
+      "test_spec_id": "TS-08-62",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-12.5",
+      "test_spec_id": "TS-08-63",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-13.1",
+      "test_spec_id": "TS-08-64",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-13.2",
+      "test_spec_id": "TS-08-65",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-13.E1",
+      "test_spec_id": "TS-08-E16",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.1",
+      "test_spec_id": "TS-08-3",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.2",
+      "test_spec_id": "TS-08-4",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.3",
+      "test_spec_id": "TS-08-5",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.4",
+      "test_spec_id": "TS-08-6",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.5",
+      "test_spec_id": "TS-08-7",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.6",
+      "test_spec_id": "TS-08-8",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.7",
+      "test_spec_id": "TS-08-9",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.E1",
+      "test_spec_id": "TS-08-E2",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.E2",
+      "test_spec_id": "TS-08-E3",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.E3",
+      "test_spec_id": "TS-08-E4",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-2.E4",
+      "test_spec_id": "TS-08-E5",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-3.1",
+      "test_spec_id": "TS-08-10",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-3.2",
+      "test_spec_id": "TS-08-11",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-3.3",
+      "test_spec_id": "TS-08-12",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-3.4",
+      "test_spec_id": "TS-08-13",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-3.E1",
+      "test_spec_id": "TS-08-E6",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.1",
+      "test_spec_id": "TS-08-14",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.2",
+      "test_spec_id": "TS-08-15",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.3",
+      "test_spec_id": "TS-08-16",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.4",
+      "test_spec_id": "TS-08-17",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.5",
+      "test_spec_id": "TS-08-18",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.6",
+      "test_spec_id": "TS-08-19",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-4.E1",
+      "test_spec_id": "TS-08-E7",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.1",
+      "test_spec_id": "TS-08-20",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.2",
+      "test_spec_id": "TS-08-21",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.3",
+      "test_spec_id": "TS-08-22",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.4",
+      "test_spec_id": "TS-08-23",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.5",
+      "test_spec_id": "TS-08-24",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.6",
+      "test_spec_id": "TS-08-25",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.7",
+      "test_spec_id": "TS-08-26",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.E1",
+      "test_spec_id": "TS-08-E8",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-5.E2",
+      "test_spec_id": "TS-08-E9",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-6.1",
+      "test_spec_id": "TS-08-27",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-6.2",
+      "test_spec_id": "TS-08-28",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-6.3",
+      "test_spec_id": "TS-08-29",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-6.4",
+      "test_spec_id": "TS-08-30",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-6.E1",
+      "test_spec_id": "TS-08-E10",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.1",
+      "test_spec_id": "TS-08-31",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.2",
+      "test_spec_id": "TS-08-32",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.3",
+      "test_spec_id": "TS-08-33",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.4",
+      "test_spec_id": "TS-08-34",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.5",
+      "test_spec_id": "TS-08-35",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-7.E1",
+      "test_spec_id": "TS-08-E11",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.1",
+      "test_spec_id": "TS-08-36",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.2",
+      "test_spec_id": "TS-08-37",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.3",
+      "test_spec_id": "TS-08-38",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.4",
+      "test_spec_id": "TS-08-39",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.5",
+      "test_spec_id": "TS-08-40",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-8.E1",
+      "test_spec_id": "TS-08-E12",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.1",
+      "test_spec_id": "TS-08-41",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.2",
+      "test_spec_id": "TS-08-42",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.3",
+      "test_spec_id": "TS-08-43",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.4",
+      "test_spec_id": "TS-08-44",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.5",
+      "test_spec_id": "TS-08-45",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.6",
+      "test_spec_id": "TS-08-46",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-9.E1",
+      "test_spec_id": "TS-08-E13",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.1",
+      "test_spec_id": "TS-08-47",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.2",
+      "test_spec_id": "TS-08-48",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.3",
+      "test_spec_id": "TS-08-49",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.4",
+      "test_spec_id": "TS-08-50",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.5",
+      "test_spec_id": "TS-08-51",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.6",
+      "test_spec_id": "TS-08-52",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.7",
+      "test_spec_id": "TS-08-53",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-10.E1",
+      "test_spec_id": "TS-08-E14",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.1",
+      "test_spec_id": "TS-08-54",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.2",
+      "test_spec_id": "TS-08-55",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.3",
+      "test_spec_id": "TS-08-56",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.4",
+      "test_spec_id": "TS-08-57",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.5",
+      "test_spec_id": "TS-08-58",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-11.E1",
+      "test_spec_id": "TS-08-E15",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "08-REQ-14.1",
+      "test_spec_id": "TS-08-66",
+      "task_id": "6.3",
+      "test_path": null
+    }
+  ]
+}

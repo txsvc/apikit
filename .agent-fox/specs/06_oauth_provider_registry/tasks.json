@@ -1,0 +1,1822 @@
+{
+  "$schema": null,
+  "spec_id": "06",
+  "spec_name": "oauth_provider_registry",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/oauth/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "uses APIGroup, LoadConfig, APIError, CacheMiddleware, CachePublic, FormatUTC, NowUTC from server_core",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "uses db.WithTx, db.WrapError, db.FormatTime, db.DB from database_layer",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Provider Interface, Registry, and Config Validation",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write compile-time and unit tests for Provider interface and UserInfo struct",
+          "details": [
+            "Write TS-06-1: compile-time assertion `var _ oauth.Provider = &mockProvider{}` verifying all four methods required",
+            "Write TS-06-2: instantiate UserInfo struct and assert field accessibility (Username, Email, ProviderID)",
+            "Write TS-06-3: verify apikit package re-exports Provider and UserInfo as interchangeable type aliases",
+            "Write TS-06-E1: build-tag-guarded file confirming incomplete provider struct fails to compile",
+            "Place tests in internal/oauth/provider_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-1",
+            "TS-06-2",
+            "TS-06-3",
+            "TS-06-E1"
+          ],
+          "requirement_refs": [
+            "06-REQ-1.1",
+            "06-REQ-1.2",
+            "06-REQ-1.3",
+            "06-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for Registry (NewRegistry, Register, Get, List, edge cases)",
+          "details": [
+            "Write TS-06-4: NewRegistry returns non-nil *Registry; List() returns empty slice",
+            "Write TS-06-5: Register(p) succeeds; Get(p.Name()) returns same instance; error is nil",
+            "Write TS-06-6: Get known name returns provider; Get unknown name returns nil",
+            "Write TS-06-7: List with 'zebra','alpha','mango' registered returns ['alpha','mango','zebra']",
+            "Write TS-06-E2: registering duplicate name returns non-nil error; original provider unchanged",
+            "Write TS-06-E3: Get(\"\") returns nil even when providers exist",
+            "Place tests in internal/oauth/registry_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-4",
+            "TS-06-5",
+            "TS-06-6",
+            "TS-06-7",
+            "TS-06-E2",
+            "TS-06-E3"
+          ],
+          "requirement_refs": [
+            "06-REQ-2.1",
+            "06-REQ-2.2",
+            "06-REQ-2.3",
+            "06-REQ-2.4",
+            "06-REQ-2.E1",
+            "06-REQ-2.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for config struct unmarshalling and LoadConfig validation",
+          "details": [
+            "Write TS-06-13: TOML with [[oauth.providers]] correctly unmarshals into Config.OAuth.Providers including optional URL overrides",
+            "Write TS-06-14: provider entry missing client_id causes LoadConfig to return (nil, error) mentioning 'client_id'",
+            "Write TS-06-15: two providers sharing the same name causes LoadConfig to return (nil, error) indicating duplicate",
+            "Write TS-06-17: empty [[oauth.providers]] array is accepted; cfg.OAuth.Providers is empty; no error",
+            "Place tests in internal/oauth/config_test.go or alongside LoadConfig in internal/config package"
+          ],
+          "test_spec_refs": [
+            "TS-06-13",
+            "TS-06-14",
+            "TS-06-15",
+            "TS-06-17"
+          ],
+          "requirement_refs": [
+            "06-REQ-4.1",
+            "06-REQ-4.2",
+            "06-REQ-4.3",
+            "06-REQ-4.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write unit tests for server bootstrap registry building",
+          "details": [
+            "Write TS-06-16: BuildRegistryFromConfig with github provider config returns registry with Get('github') non-nil; unknown name returns error",
+            "Write TS-06-E8: config with name='gitlab' causes BuildRegistryFromConfig to return (nil, error) naming 'gitlab'; no partial registry",
+            "Place tests in internal/oauth/registry_test.go or bootstrap_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-16",
+            "TS-06-E8"
+          ],
+          "requirement_refs": [
+            "06-REQ-4.4",
+            "06-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write unit tests for redirect URI validator",
+          "details": [
+            "Write TS-06-28: http://localhost:<port>/path accepted for ports 1, 9000, 65535, 54321",
+            "Write TS-06-29: URIs matching external_url scheme+host accepted; extended path allowed",
+            "Write TS-06-30: when external_url empty, only localhost URIs accepted; non-localhost rejected",
+            "Write TS-06-E10: https://localhost:3000/callback rejected (HTTPS on localhost not accepted)",
+            "Write TS-06-E11: https://evil.example.com/callback rejected when external_url is https://api.example.com",
+            "Place tests in internal/oauth/redirect_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-28",
+            "TS-06-29",
+            "TS-06-30",
+            "TS-06-E10",
+            "TS-06-E11"
+          ],
+          "requirement_refs": [
+            "06-REQ-7.1",
+            "06-REQ-7.2",
+            "06-REQ-7.3",
+            "06-REQ-7.E1",
+            "06-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write unit tests for GitHub provider construction and AuthorizeURL",
+          "details": [
+            "Write TS-06-8: compile-time `var _ Provider = &GitHubProvider{}`; Name() returns 'github'; default URLs used when overrides empty",
+            "Write TS-06-9: AuthorizeURL builds URL with client_id, scope=user:email, state, redirect_uri as query params",
+            "Write TS-06-12: provider struct holds injected *http.Client reference and does not create its own",
+            "Place tests in internal/oauth/github_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-8",
+            "TS-06-9",
+            "TS-06-12"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.1",
+            "06-REQ-3.2",
+            "06-REQ-3.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test files compile without errors: go build ./internal/oauth/...",
+          "All written unit tests pass (some may be skipped pending implementation): go test ./internal/oauth/... -count=1 -v -run 'TestProvider|TestRegistry|TestConfig|TestRedirect|TestGitHub'",
+          "No linter warnings in test files: go vet ./internal/oauth/...",
+          "Requirements 06-REQ-1.1, 06-REQ-1.2, 06-REQ-1.3, 06-REQ-2.1 through 06-REQ-2.4, 06-REQ-4.1 through 06-REQ-4.5, 06-REQ-7.1 through 06-REQ-7.3, 06-REQ-3.1, 06-REQ-3.2, 06-REQ-3.5 have corresponding test stubs"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: GitHub Provider Exchange/UserInfo and Callback Request Validation",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for GitHub Exchange via httptest.Server",
+          "details": [
+            "Write TS-06-10: Exchange sends POST to token_url with form body (client_id, client_secret, code, redirect_uri) and Accept: application/json; returns access_token on success",
+            "Write TS-06-E4: token endpoint returns {\"error\":\"bad_verification_code\"} → Exchange returns non-nil error containing the error value",
+            "Write TS-06-E5: token endpoint returns JSON with no access_token field → Exchange returns non-nil error",
+            "Write TS-06-E6: token endpoint returns HTTP 500 → Exchange returns non-nil error without retry",
+            "Write TS-06-E7: context with 100ms deadline; Exchange returns within 500ms with context error",
+            "Place tests in internal/oauth/github_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-10",
+            "TS-06-E4",
+            "TS-06-E5",
+            "TS-06-E6",
+            "TS-06-E7"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.3",
+            "06-REQ-3.E1",
+            "06-REQ-3.E2",
+            "06-REQ-3.E3",
+            "06-REQ-3.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write unit tests for GitHub UserInfo via httptest.Server",
+          "details": [
+            "Write TS-06-11: UserInfo sends GET to userinfo_url with Authorization: Bearer <token>; parses login→Username, email→Email, id→ProviderID (string)",
+            "Verify numeric id field is correctly converted to string in ProviderID",
+            "Place tests in internal/oauth/github_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-11"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write unit tests for POST /auth/callback request body validation",
+          "details": [
+            "Write TS-06-22: valid body with all fields passes validation without HTTP 400",
+            "Write TS-06-23: missing provider → HTTP 400 with message 'provider is required'",
+            "Write TS-06-24: missing code → HTTP 400 with message 'code is required'",
+            "Write TS-06-25: missing redirect_uri → HTTP 400 with message 'redirect_uri is required'",
+            "Write TS-06-26: expires=45 → HTTP 400 with message 'expires must be 0, 30, 60, or 90'",
+            "Write TS-06-27: absent expires defaults to 90; expires_at ~90 days out on success",
+            "Write TS-06-E9: non-JSON body → HTTP 400 error response",
+            "Use httptest.NewRecorder and Echo test helpers; place in internal/oauth/callback_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-22",
+            "TS-06-23",
+            "TS-06-24",
+            "TS-06-25",
+            "TS-06-26",
+            "TS-06-27",
+            "TS-06-E9"
+          ],
+          "requirement_refs": [
+            "06-REQ-6.1",
+            "06-REQ-6.2",
+            "06-REQ-6.3",
+            "06-REQ-6.4",
+            "06-REQ-6.5",
+            "06-REQ-6.6",
+            "06-REQ-6.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write unit tests for HTTP client injection and bootstrap configuration",
+          "details": [
+            "Write TS-06-48: RegisterOAuthHandlers mounts GET /auth/providers returning 200 with Cache-Control header; POST /auth/callback returns 400 not 404",
+            "Write TS-06-49: bootstrap creates *http.Client with Timeout=30s and http.DefaultTransport; injected into github provider",
+            "Place in internal/oauth/handler_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-48",
+            "TS-06-49"
+          ],
+          "requirement_refs": [
+            "06-REQ-13.1",
+            "06-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write unit tests for key generation security and format",
+          "details": [
+            "Write TS-06-43: verify crypto/rand is used (100 generated key_ids are all unique; math/rand not imported in code path)",
+            "Write TS-06-44: api_key.key matches regex ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$; secret_hash != plaintext; secret_hash == hex(sha256(plaintext))",
+            "Write TS-06-E17: generateAPIKey with mock rand that returns error returns (\"\", \"\", non-nil error)",
+            "Place in internal/oauth/key_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-43",
+            "TS-06-44",
+            "TS-06-E17"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.3",
+            "06-REQ-11.4",
+            "06-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test files compile: go build ./internal/oauth/...",
+          "All written tests pass (pending stubs may be skipped): go test ./internal/oauth/... -count=1 -v -run 'TestGitHub|TestCallback|TestKey|TestHandler'",
+          "No linter warnings: go vet ./internal/oauth/...",
+          "Requirements 06-REQ-3.3, 06-REQ-3.4, 06-REQ-6.1 through 06-REQ-6.6, 06-REQ-11.3, 06-REQ-11.4, 06-REQ-13.1, 06-REQ-13.2 have corresponding test stubs"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: Integration Tests for Callback Flow and Provider Endpoint",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write integration tests for GET /auth/providers endpoint",
+          "details": [
+            "Write TS-06-18: GET /auth/providers returns 200 with [{\"name\":\"github\",\"authorize_url\":\"...\"}] containing client_id and scope=user:email",
+            "Write TS-06-19: GET /auth/providers with empty registry returns 200 with []",
+            "Write TS-06-20: response header Cache-Control equals 'public, max-age=300'",
+            "Write TS-06-21: response JSON objects contain only 'name' and 'authorize_url'; no client_secret, token_url, or userinfo_url",
+            "Set up full Echo test server with RegisterOAuthHandlers; place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-18",
+            "TS-06-19",
+            "TS-06-20",
+            "TS-06-21"
+          ],
+          "requirement_refs": [
+            "06-REQ-5.1",
+            "06-REQ-5.2",
+            "06-REQ-5.3",
+            "06-REQ-5.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write integration tests for redirect URI validation and unknown provider in callback",
+          "details": [
+            "Write TS-06-31: disallowed redirect_uri → HTTP 400 'redirect_uri is not allowed'; Exchange never called",
+            "Write TS-06-32: valid request causes Exchange to be called with (ctx, code, redirect_uri)",
+            "Write TS-06-33: Exchange returns error → HTTP 401 'authorization code exchange failed'",
+            "Write TS-06-E12: request context cancelled during Exchange → HTTP 401 without goroutine leak",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-31",
+            "TS-06-32",
+            "TS-06-33",
+            "TS-06-E12"
+          ],
+          "requirement_refs": [
+            "06-REQ-7.4",
+            "06-REQ-8.1",
+            "06-REQ-8.2",
+            "06-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write integration tests for UserInfo retrieval and email validation in callback",
+          "details": [
+            "Write TS-06-34: successful Exchange triggers UserInfo call with correct access token",
+            "Write TS-06-35: UserInfo returns error → HTTP 502 'failed to retrieve user info from provider'",
+            "Write TS-06-36: UserInfo returns empty Email → HTTP 400 'provider returned empty email; email is required'",
+            "Write TS-06-E13: UserInfo returns error from HTTP 401 upstream → HTTP 502 without retry",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-34",
+            "TS-06-35",
+            "TS-06-36",
+            "TS-06-E13"
+          ],
+          "requirement_refs": [
+            "06-REQ-9.1",
+            "06-REQ-9.2",
+            "06-REQ-9.3",
+            "06-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write integration tests for user upsert: new user, existing user, blocked user",
+          "details": [
+            "Write TS-06-37: transaction opened; new user inserted with correct fields after successful user info retrieval",
+            "Write TS-06-38: new user with email matching admin_email and no existing admin → role='admin'",
+            "Write TS-06-39: existing active user → username, email, updated_at updated; id, role, status, created_at unchanged",
+            "Write TS-06-40: existing blocked user → HTTP 403 'user is blocked'; users row unchanged; no new api_key",
+            "Write TS-06-E14: DB error during insert → HTTP 500; transaction rolled back; no partial rows",
+            "Use SQLite test DB; place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-37",
+            "TS-06-38",
+            "TS-06-39",
+            "TS-06-40",
+            "TS-06-E14"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.1",
+            "06-REQ-10.2",
+            "06-REQ-10.3",
+            "06-REQ-10.4",
+            "06-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write integration tests for admin auto-grant edge cases",
+          "details": [
+            "Write TS-06-E15: admin_config table empty → new user created with role='user'; HTTP 200",
+            "Write TS-06-E16: admin already exists; new user email matches admin_email → new user gets role='user'",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-E15",
+            "TS-06-E16"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.E2",
+            "06-REQ-10.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.6",
+          "title": "Write integration tests for API key generation and revocation",
+          "details": [
+            "Write TS-06-41: existing active key has revoked_at set on re-login; new key inserted with revoked_at IS NULL",
+            "Write TS-06-42: new key has key_id length 8, secret length 32, secret_hash==SHA256(plaintext), expires_at ~30 days when expires=30",
+            "Write TS-06-E18: first login with no prior keys → revocation no-op; HTTP 200; new key inserted",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-41",
+            "TS-06-42",
+            "TS-06-E18"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.1",
+            "06-REQ-11.2",
+            "06-REQ-11.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All integration test files compile: go build ./internal/oauth/...",
+          "Written integration tests that can run with stubs pass: go test ./internal/oauth/... -count=1 -v -run 'TestIntegration'",
+          "No linter warnings: go vet ./internal/oauth/...",
+          "Requirements 06-REQ-5.1 through 06-REQ-5.4, 06-REQ-7.4, 06-REQ-8.1, 06-REQ-8.2, 06-REQ-9.1 through 06-REQ-9.3, 06-REQ-10.1 through 06-REQ-10.4, 06-REQ-11.1, 06-REQ-11.2 have corresponding integration test stubs"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: Callback Response, Concurrency, Provider Removal, and Property Tests",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write integration tests for callback success response format and timestamps",
+          "details": [
+            "Write TS-06-45: HTTP 200 response body has user object with all required fields and api_key object matching schema",
+            "Write TS-06-46: response user.role is 'user' or 'admin' (non-admin email → 'user')",
+            "Write TS-06-47: expires=0 → api_key.expires_at is JSON null; timestamps are valid RFC 3339 strings",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-45",
+            "TS-06-46",
+            "TS-06-47"
+          ],
+          "requirement_refs": [
+            "06-REQ-12.1",
+            "06-REQ-12.2",
+            "06-REQ-12.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write integration tests for concurrent callback and sequential key revocation",
+          "details": [
+            "Write TS-06-50: two goroutines simultaneously POST /auth/callback for same user; no deadlock, no data corruption",
+            "Write TS-06-51: two sequential callbacks for same user → exactly one active key (revoked_at IS NULL) remains; prior key has revoked_at set",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-50",
+            "TS-06-51"
+          ],
+          "requirement_refs": [
+            "06-REQ-14.1",
+            "06-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write integration tests for provider removal non-destructive behavior",
+          "details": [
+            "Write TS-06-52: after server restart with empty providers, existing users and api_keys rows unchanged and credentials valid",
+            "Write TS-06-53: POST /auth/callback with removed provider name → HTTP 400 'unknown provider: github'",
+            "Place in internal/oauth/integration_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-52",
+            "TS-06-53"
+          ],
+          "requirement_refs": [
+            "06-REQ-15.1",
+            "06-REQ-15.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write property-based tests for key uniqueness and secret non-persistence",
+          "details": [
+            "Write TS-06-P1: run N=1..10 callbacks for same user; after each, exactly one active key in api_keys; revoked count equals N-1",
+            "Write TS-06-P3: run N=1..20 successful callbacks; for each pair (plaintext, secret_hash): secret_hash==hex(sha256(plaintext)); plaintext not stored in any column",
+            "Place in internal/oauth/property_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-P1",
+            "TS-06-P3"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.1",
+            "06-REQ-11.2",
+            "06-REQ-11.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Write property-based tests for registry uniqueness and provider list secrets",
+          "details": [
+            "Write TS-06-P5: random sequences of Register() calls with small alphabet; duplicate names always return error; registry has at most one provider per name",
+            "Write TS-06-P6: register N=0..5 providers; GET /auth/providers response objects contain only 'name' and 'authorize_url'; no secrets",
+            "Place in internal/oauth/property_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-P5",
+            "TS-06-P6"
+          ],
+          "requirement_refs": [
+            "06-REQ-2.2",
+            "06-REQ-2.E1",
+            "06-REQ-5.1",
+            "06-REQ-5.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.6",
+          "title": "Write property-based tests for blocked user invariant, admin grant, and redirect allowlist",
+          "details": [
+            "Write TS-06-P2: M=1..5 callbacks for blocked user → always HTTP 403; status remains 'blocked'; api_keys unchanged",
+            "Write TS-06-P4: K=2..10 callbacks from different provider_ids all with admin_email → exactly one admin user created; all others get 'user' role",
+            "Write TS-06-P7: random disallowed redirect_uris → always HTTP 400; Exchange never called",
+            "Write TS-06-P8: fault injection at random db.WithTx steps → HTTP 500; no partial rows visible",
+            "Place in internal/oauth/property_test.go"
+          ],
+          "test_spec_refs": [
+            "TS-06-P2",
+            "TS-06-P4",
+            "TS-06-P7",
+            "TS-06-P8"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.4",
+            "06-REQ-10.2",
+            "06-REQ-10.E3",
+            "06-REQ-7.4",
+            "06-REQ-8.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All property and integration test files compile: go build ./internal/oauth/...",
+          "Written tests pass with stubs: go test ./internal/oauth/... -count=1 -v -run 'TestCallback|TestProperty|TestProviderRemoval|TestConcurrent'",
+          "No linter warnings: go vet ./internal/oauth/...",
+          "Requirements 06-REQ-12.1 through 06-REQ-12.3, 06-REQ-14.1, 06-REQ-14.2, 06-REQ-15.1, 06-REQ-15.2 have corresponding test stubs",
+          "All eight property tests (TS-06-P1 through TS-06-P8) have corresponding test function stubs"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement Provider Interface, UserInfo Struct, and Config Extensions",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Define Provider interface and UserInfo struct in internal/oauth/registry.go",
+          "details": [
+            "Create internal/oauth/registry.go with package declaration `package oauth`",
+            "Define Provider interface with methods: Name() string, AuthorizeURL(state, redirectURI string) string, Exchange(ctx context.Context, code, redirectURI string) (string, error), UserInfo(ctx context.Context, accessToken string) (*UserInfo, error)",
+            "Define UserInfo struct: Username string, Email string, ProviderID string",
+            "Import context package"
+          ],
+          "test_spec_refs": [
+            "TS-06-1",
+            "TS-06-2"
+          ],
+          "requirement_refs": [
+            "06-REQ-1.1",
+            "06-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement Registry type with NewRegistry, Register, Get, and List",
+          "details": [
+            "Add Registry struct with providers map[string]Provider to registry.go",
+            "Implement NewRegistry() *Registry returning &Registry{providers: make(map[string]Provider)}",
+            "Implement Register(p Provider) error: return fmt.Errorf if p.Name() already exists; otherwise store in map",
+            "Implement Get(name string) Provider: return providers[name] (nil if missing)",
+            "Implement List() []string: collect keys, sort with sort.Strings, return",
+            "Import fmt and sort packages"
+          ],
+          "test_spec_refs": [
+            "TS-06-4",
+            "TS-06-5",
+            "TS-06-6",
+            "TS-06-7",
+            "TS-06-E2",
+            "TS-06-E3"
+          ],
+          "requirement_refs": [
+            "06-REQ-2.1",
+            "06-REQ-2.2",
+            "06-REQ-2.3",
+            "06-REQ-2.4",
+            "06-REQ-2.E1",
+            "06-REQ-2.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Extend Config struct with OAuthConfig and ProviderConfig types",
+          "details": [
+            "Add OAuthConfig struct: Providers []ProviderConfig `toml:\"providers\"`",
+            "Add ProviderConfig struct: Name, ClientID, ClientSecret, AuthorizeURL, TokenURL, UserinfoURL string with TOML tags",
+            "Add OAuth OAuthConfig `toml:\"oauth\"` field to existing Config struct in internal/config package",
+            "In LoadConfig(), after unmarshalling: for each ProviderConfig check name/client_id/client_secret non-empty; check for duplicate names using a seen map; return (nil, error) on violations",
+            "Empty Providers slice is valid — skip validation loop"
+          ],
+          "test_spec_refs": [
+            "TS-06-13",
+            "TS-06-14",
+            "TS-06-15",
+            "TS-06-17"
+          ],
+          "requirement_refs": [
+            "06-REQ-4.1",
+            "06-REQ-4.2",
+            "06-REQ-4.3",
+            "06-REQ-4.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Re-export Provider and UserInfo as type aliases in root apikit package",
+          "details": [
+            "In root apikit package (apikit.go or oauth.go): add `type Provider = oauth.Provider` and `type UserInfo = oauth.UserInfo`",
+            "Import internal/oauth package",
+            "Ensure consuming projects can implement apikit.Provider without importing internal/oauth directly"
+          ],
+          "test_spec_refs": [
+            "TS-06-3"
+          ],
+          "requirement_refs": [
+            "06-REQ-1.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Spec tests for interface, registry, and config pass: go test ./internal/oauth/... -count=1 -v -run 'TestProvider|TestRegistry|TestConfig'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 06-REQ-1.1, 06-REQ-1.2, 06-REQ-1.3, 06-REQ-2.1 through 06-REQ-2.4, 06-REQ-4.1, 06-REQ-4.2, 06-REQ-4.3, 06-REQ-4.5 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement GitHub Provider and Redirect URI Validator",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement GitHub provider constructor and AuthorizeURL in internal/oauth/github.go",
+          "details": [
+            "Create internal/oauth/github.go with GitHubProvider struct: clientID, clientSecret, authorizeURL, tokenURL, userinfoURL string, httpClient *http.Client",
+            "Define constants for default URLs: defaultAuthorizeURL, defaultTokenURL, defaultUserinfoURL",
+            "Implement NewGitHubProvider(clientID, clientSecret, authorizeURL, tokenURL, userinfoURL string, httpClient *http.Client) *GitHubProvider; use defaults when override fields are empty",
+            "Implement Name() string returning \"github\"",
+            "Implement AuthorizeURL(state, redirectURI string) string: build URL with url.Values setting client_id, scope=user:email, state, redirect_uri; append to base authorize URL"
+          ],
+          "test_spec_refs": [
+            "TS-06-8",
+            "TS-06-9",
+            "TS-06-12"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.1",
+            "06-REQ-3.2",
+            "06-REQ-3.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement GitHub Exchange method",
+          "details": [
+            "Implement Exchange(ctx context.Context, code, redirectURI string) (string, error)",
+            "Use http.NewRequestWithContext with POST method and form-encoded body (url.Values{client_id, client_secret, code, redirect_uri})",
+            "Set Accept: application/json header",
+            "Use g.httpClient.Do(req) for the call; check for non-2xx status and return error",
+            "Decode JSON response into struct with Error string and AccessToken string fields",
+            "Return error if response.Error is non-empty; return error if AccessToken is empty; otherwise return (accessToken, nil)"
+          ],
+          "test_spec_refs": [
+            "TS-06-10",
+            "TS-06-E4",
+            "TS-06-E5",
+            "TS-06-E6",
+            "TS-06-E7"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.3",
+            "06-REQ-3.E1",
+            "06-REQ-3.E2",
+            "06-REQ-3.E3",
+            "06-REQ-3.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement GitHub UserInfo method",
+          "details": [
+            "Implement UserInfo(ctx context.Context, accessToken string) (*UserInfo, error)",
+            "Use http.NewRequestWithContext with GET method to userinfoURL",
+            "Set Authorization: Bearer <accessToken> header",
+            "Use g.httpClient.Do(req); check non-2xx status",
+            "Decode JSON into struct with Login string, Email string, ID int64 (json:\"id\")",
+            "Map: Login→UserInfo.Username, Email→UserInfo.Email, strconv.FormatInt(ID, 10)→UserInfo.ProviderID",
+            "Return (*UserInfo, nil) on success"
+          ],
+          "test_spec_refs": [
+            "TS-06-11"
+          ],
+          "requirement_refs": [
+            "06-REQ-3.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Implement redirect URI validator in internal/oauth/redirect.go",
+          "details": [
+            "Create internal/oauth/redirect.go",
+            "Implement ValidateRedirectURI(redirectURI, externalURL string) error",
+            "Parse redirectURI with url.Parse; return error on parse failure",
+            "Check localhost: scheme == 'http' AND host matches regexp `^localhost:\\d{1,5}$` with port in range 1-65535 → return nil",
+            "If externalURL non-empty: parse it; check redirectURI scheme+host equals externalURL scheme+host → return nil",
+            "Otherwise return fmt.Errorf('redirect_uri is not allowed')"
+          ],
+          "test_spec_refs": [
+            "TS-06-28",
+            "TS-06-29",
+            "TS-06-30",
+            "TS-06-E10",
+            "TS-06-E11"
+          ],
+          "requirement_refs": [
+            "06-REQ-7.1",
+            "06-REQ-7.2",
+            "06-REQ-7.3",
+            "06-REQ-7.E1",
+            "06-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.5",
+          "title": "Implement server bootstrap: BuildRegistryFromConfig and shared HTTP client",
+          "details": [
+            "Implement BuildRegistryFromConfig(cfg Config, httpClient *http.Client) (*Registry, error)",
+            "Create NewRegistry(); iterate cfg.OAuth.Providers",
+            "For name==\"github\": call NewGitHubProvider with fields and httpClient; call registry.Register(provider)",
+            "For unknown names: return (nil, fmt.Errorf(\"unsupported oauth provider: %s\", name))",
+            "In server bootstrap entry point: create *http.Client{Timeout: 30*time.Second, Transport: http.DefaultTransport} and pass to BuildRegistryFromConfig"
+          ],
+          "test_spec_refs": [
+            "TS-06-16",
+            "TS-06-49",
+            "TS-06-E8"
+          ],
+          "requirement_refs": [
+            "06-REQ-4.4",
+            "06-REQ-4.E1",
+            "06-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "GitHub provider unit tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestGitHub'",
+          "Redirect URI validator tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestRedirect|TestValidate'",
+          "Registry bootstrap tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestBuildRegistry'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 06-REQ-3.1 through 06-REQ-3.5, 06-REQ-7.1 through 06-REQ-7.3, 06-REQ-4.4, 06-REQ-13.2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement GET /auth/providers Handler and API Key Generation",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement GET /auth/providers handler in internal/oauth/providers.go",
+          "details": [
+            "Create internal/oauth/providers.go",
+            "Define providerResponse struct: Name string `json:\"name\"`, AuthorizeURL string `json:\"authorize_url\"`",
+            "Implement handleListProviders(registry *Registry) echo.HandlerFunc",
+            "Call registry.List() to get sorted names; for each name call registry.Get(name).AuthorizeURL(\"\", \"\") to get base URL without state or redirect_uri",
+            "Build []providerResponse slice; return c.JSON(http.StatusOK, slice) — Echo serializes empty slice as [] not null",
+            "Secrets (client_secret, token_url, userinfo_url) must never appear in the response struct"
+          ],
+          "test_spec_refs": [
+            "TS-06-18",
+            "TS-06-19",
+            "TS-06-20",
+            "TS-06-21"
+          ],
+          "requirement_refs": [
+            "06-REQ-5.1",
+            "06-REQ-5.2",
+            "06-REQ-5.3",
+            "06-REQ-5.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement API key generation helper in internal/oauth/callback.go",
+          "details": [
+            "Create internal/oauth/callback.go",
+            "Implement generateAlphanumeric(n int, randReader io.Reader) (string, error) using crypto/rand via randReader; characters from [a-zA-Z0-9]",
+            "Implement generateAPIKey(randReader io.Reader) (keyID, secret string, err error): call generateAlphanumeric(8) for keyID, generateAlphanumeric(32) for secret",
+            "Compute SHA-256 hash: sha256.Sum256([]byte(secret)); format as hex string for storage",
+            "Compute expires_at: nil when expires==0; NowUTC().Add(time.Duration(expires)*24*time.Hour) otherwise",
+            "Format key as apikit.TokenPrefix+\"_\"+keyID+\"_\"+secret",
+            "Do NOT import math/rand; only use crypto/rand"
+          ],
+          "test_spec_refs": [
+            "TS-06-42",
+            "TS-06-43",
+            "TS-06-44",
+            "TS-06-E17"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.2",
+            "06-REQ-11.3",
+            "06-REQ-11.4",
+            "06-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement RegisterOAuthHandlers function",
+          "details": [
+            "Implement RegisterOAuthHandlers(group *echo.Group, registry *Registry, database *db.DB, externalURL string)",
+            "Register GET /auth/providers: group.GET(\"/auth/providers\", handleListProviders(registry), CacheMiddleware(CachePublic))",
+            "Register POST /auth/callback: group.POST(\"/auth/callback\", handleCallback(registry, database, externalURL))",
+            "POST /auth/callback inherits group-level Cache-Control: no-store middleware",
+            "Re-export RegisterOAuthHandlers in root apikit package if needed for bootstrap access"
+          ],
+          "test_spec_refs": [
+            "TS-06-48"
+          ],
+          "requirement_refs": [
+            "06-REQ-13.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "GET /auth/providers integration tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestListProviders|TestProviders'",
+          "Key generation tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestKey|TestGenerate'",
+          "Handler registration tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestRegisterHandlers'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 06-REQ-5.1 through 06-REQ-5.4, 06-REQ-11.2 through 06-REQ-11.4, 06-REQ-13.1 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement POST /auth/callback Handler Core Logic",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement request parsing and validation in handleCallback",
+          "details": [
+            "Define callbackRequest struct: Provider, Code, RedirectURI string; Expires *int (pointer to detect absence)",
+            "In handleCallback: bind JSON body using c.Bind(&req); return APIError(400) on bind failure",
+            "Validate non-empty Provider, Code, RedirectURI — return APIError(400) with specific messages per field",
+            "Default Expires to 90 when nil; validate Expires is one of {0, 30, 60, 90} — return APIError(400) with 'expires must be 0, 30, 60, or 90'",
+            "Look up provider: registry.Get(req.Provider); if nil return APIError(400, fmt.Sprintf('unknown provider: %s', req.Provider))"
+          ],
+          "test_spec_refs": [
+            "TS-06-22",
+            "TS-06-23",
+            "TS-06-24",
+            "TS-06-25",
+            "TS-06-26",
+            "TS-06-27",
+            "TS-06-E9"
+          ],
+          "requirement_refs": [
+            "06-REQ-6.1",
+            "06-REQ-6.2",
+            "06-REQ-6.3",
+            "06-REQ-6.4",
+            "06-REQ-6.5",
+            "06-REQ-6.6",
+            "06-REQ-6.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement redirect URI validation, code exchange, and user info retrieval in handleCallback",
+          "details": [
+            "Call ValidateRedirectURI(req.RedirectURI, externalURL); return APIError(400, 'redirect_uri is not allowed') on error",
+            "Call provider.Exchange(c.Request().Context(), req.Code, req.RedirectURI); return APIError(401, 'authorization code exchange failed') on error",
+            "Call provider.UserInfo(c.Request().Context(), accessToken); return APIError(502, 'failed to retrieve user info from provider') on error",
+            "Check userInfo.Email non-empty; return APIError(400, 'provider returned empty email; email is required') if empty"
+          ],
+          "test_spec_refs": [
+            "TS-06-31",
+            "TS-06-32",
+            "TS-06-33",
+            "TS-06-34",
+            "TS-06-35",
+            "TS-06-36"
+          ],
+          "requirement_refs": [
+            "06-REQ-7.4",
+            "06-REQ-8.1",
+            "06-REQ-8.2",
+            "06-REQ-9.1",
+            "06-REQ-9.2",
+            "06-REQ-9.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement user upsert within db.WithTx transaction",
+          "details": [
+            "Open transaction with db.WithTx; query users WHERE provider=req.Provider AND provider_id=userInfo.ProviderID",
+            "If existing user: check status=='blocked' → return error causing rollback, handler returns APIError(403, 'user is blocked')",
+            "If existing user and not blocked: UPDATE users SET username=?, email=?, updated_at=? WHERE id=?",
+            "If new user: uuid.New() for ID; check admin_config for admin_email; if email matches AND no admin exists → role='admin' else role='user'; INSERT users with status='active', timestamps from NowUTC()",
+            "Handle missing admin_email (empty table) gracefully: treat as no admin_email configured; default to role='user'",
+            "Use db.WrapError on database errors; return HTTP 500 via APIError on wrapped errors"
+          ],
+          "test_spec_refs": [
+            "TS-06-37",
+            "TS-06-38",
+            "TS-06-39",
+            "TS-06-40",
+            "TS-06-E14",
+            "TS-06-E15",
+            "TS-06-E16"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.1",
+            "06-REQ-10.2",
+            "06-REQ-10.3",
+            "06-REQ-10.4",
+            "06-REQ-10.E1",
+            "06-REQ-10.E2",
+            "06-REQ-10.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Implement key revocation and new key insertion within same transaction",
+          "details": [
+            "Within db.WithTx: UPDATE api_keys SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL (no-op if no active keys)",
+            "Call generateAPIKey(crypto/rand.Reader) → (keyID, secret, err); return error on failure (causes rollback → HTTP 500)",
+            "Compute secretHash = hex(sha256.Sum256([]byte(secret)))",
+            "Compute expiresAt: nil if expires==0; NowUTC().Add(duration) otherwise",
+            "INSERT api_keys (id=uuid.New(), user_id, key_id, secret_hash, expires_at, created_at)",
+            "Commit transaction (db.WithTx commits on nil return from callback)"
+          ],
+          "test_spec_refs": [
+            "TS-06-41",
+            "TS-06-E18"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.1",
+            "06-REQ-11.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.5",
+          "title": "Implement callback success response serialization",
+          "details": [
+            "Define callbackResponse struct with nested User and APIKey fields",
+            "User fields: ID, Username, Email, FullName, Status, Role, Provider, ProviderID, CreatedAt, UpdatedAt (all RFC 3339 via FormatUTC())",
+            "APIKey fields: Key (TokenPrefix+_+keyID+_+secret), KeyID, ExpiresAt (*string, nil when expires==0)",
+            "Use FormatUTC() for all timestamps; null JSON for nil ExpiresAt",
+            "Return c.JSON(http.StatusOK, callbackResponse{...}) — plaintext secret appears exactly once here"
+          ],
+          "test_spec_refs": [
+            "TS-06-45",
+            "TS-06-46",
+            "TS-06-47"
+          ],
+          "requirement_refs": [
+            "06-REQ-12.1",
+            "06-REQ-12.2",
+            "06-REQ-12.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Callback validation tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestCallback'",
+          "User upsert and key integration tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestIntegration'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 06-REQ-6.1 through 06-REQ-6.6, 06-REQ-10.1 through 06-REQ-10.4, 06-REQ-11.1, 06-REQ-12.1 through 06-REQ-12.3 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "checkpoint",
+      "title": "Integration Checkpoint: Full Callback Flow and Property Tests",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Run full integration smoke tests for callback happy paths",
+          "details": [
+            "Run TS-06-SMOKE-1: full callback for new user with httptest.Server mocking GitHub endpoints; verify HTTP 200, user in DB, api_key format, secret_hash",
+            "Run TS-06-SMOKE-2: returning user re-login; verify username/email updated, previous key revoked, new key issued",
+            "Ensure SQLite DB is initialised with correct schema (users, api_keys, admin_config tables)"
+          ],
+          "test_spec_refs": [
+            "TS-06-SMOKE-1",
+            "TS-06-SMOKE-2"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.1",
+            "06-REQ-10.2",
+            "06-REQ-11.1",
+            "06-REQ-11.2",
+            "06-REQ-12.1",
+            "06-REQ-12.2",
+            "06-REQ-12.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Run full integration smoke tests for blocked user and provider endpoint",
+          "details": [
+            "Run TS-06-SMOKE-3: GET /auth/providers returns provider list with Cache-Control header; no secrets in response",
+            "Run TS-06-SMOKE-4: POST /auth/callback for blocked user → HTTP 403; DB state unchanged"
+          ],
+          "test_spec_refs": [
+            "TS-06-SMOKE-3",
+            "TS-06-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "06-REQ-5.1",
+            "06-REQ-5.3",
+            "06-REQ-10.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Run property-based tests for key uniqueness and secret non-persistence",
+          "details": [
+            "Run TS-06-P1: N=1..10 sequential logins for same user; verify exactly one active key after each login",
+            "Run TS-06-P3: N=1..20 successful callbacks; verify secret_hash==hex(sha256(plaintext)) for every key"
+          ],
+          "test_spec_refs": [
+            "TS-06-P1",
+            "TS-06-P3"
+          ],
+          "requirement_refs": [
+            "06-REQ-11.1",
+            "06-REQ-11.2",
+            "06-REQ-11.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Run property-based tests for blocked user, admin grant, and redirect allowlist",
+          "details": [
+            "Run TS-06-P2: blocked user always returns HTTP 403; DB unchanged across M iterations",
+            "Run TS-06-P4: K users with admin_email; only first gets admin role when no admin exists",
+            "Run TS-06-P7: disallowed redirect_uris always return HTTP 400; Exchange never called",
+            "Run TS-06-P8: fault injection in db.WithTx; HTTP 500; no partial rows"
+          ],
+          "test_spec_refs": [
+            "TS-06-P2",
+            "TS-06-P4",
+            "TS-06-P7",
+            "TS-06-P8"
+          ],
+          "requirement_refs": [
+            "06-REQ-10.4",
+            "06-REQ-10.2",
+            "06-REQ-10.E3",
+            "06-REQ-7.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.5",
+          "title": "Run concurrency and provider removal tests",
+          "details": [
+            "Run TS-06-50 and TS-06-51: concurrent and sequential callbacks for same user; verify exactly one active key remains",
+            "Run TS-06-52 and TS-06-53: provider removal leaves existing user/key rows intact; removed provider returns HTTP 400 on callback"
+          ],
+          "test_spec_refs": [
+            "TS-06-50",
+            "TS-06-51",
+            "TS-06-52",
+            "TS-06-53"
+          ],
+          "requirement_refs": [
+            "06-REQ-14.1",
+            "06-REQ-14.2",
+            "06-REQ-15.1",
+            "06-REQ-15.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All spec integration tests pass: go test ./internal/oauth/... -count=1 -v",
+          "All property tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestProperty'",
+          "All smoke tests pass: go test ./internal/oauth/... -count=1 -v -run 'TestSmoke'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "All correctness properties 06-PROP-1 through 06-PROP-8 verified via property tests"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End OAuth Flow Integration",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Trace execution paths and verify no stubs remain",
+          "details": [
+            "Run TS-06-SMOKE-5: server startup with config registers github provider in registry; GET /auth/providers returns 200; POST /auth/callback returns 400 not 404",
+            "Trace 06-PATH-1: verify CLI→handler→registry.Get→ValidateRedirectURI→Exchange→UserInfo→db.WithTx→response chain has no nil returns or skipped steps",
+            "Trace 06-PATH-2: verify returning user upsert path updates existing row and revokes old key",
+            "Trace 06-PATH-3: verify GET /auth/providers→registry.List→AuthorizeURL→JSON response chain",
+            "Trace 06-PATH-4: verify blocked user detection within db.WithTx rolls back and returns HTTP 403",
+            "Trace 06-PATH-5: verify LoadConfig→BuildRegistryFromConfig→RegisterOAuthHandlers startup chain",
+            "Search for panic(\"not implemented\"), bare `return nil` in non-trivial paths, and `// TODO` markers: grep -r 'panic(\"not implemented\")\\|// TODO' internal/oauth/ — must return no results"
+          ],
+          "test_spec_refs": [
+            "TS-06-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "06-REQ-13.1",
+            "06-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Verify return value propagation across all handler steps",
+          "details": [
+            "Confirm accessToken from Exchange is passed to UserInfo (not discarded)",
+            "Confirm userInfo.ProviderID is used in both the DB query and the response",
+            "Confirm keyID and plaintext secret from generateAPIKey are used: keyID stored in api_keys AND returned in response; secret only returned in response, never stored",
+            "Confirm expiresAt calculation is used in both api_keys INSERT and response serialization",
+            "Confirm db.WrapError is called on all database errors before returning HTTP 500"
+          ],
+          "test_spec_refs": [
+            "TS-06-32",
+            "TS-06-33",
+            "TS-06-34",
+            "TS-06-35",
+            "TS-06-41",
+            "TS-06-42"
+          ],
+          "requirement_refs": [
+            "06-REQ-8.1",
+            "06-REQ-8.2",
+            "06-REQ-9.1",
+            "06-REQ-9.2",
+            "06-REQ-11.1",
+            "06-REQ-11.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Verify upstream spec entry points are called from production code",
+          "details": [
+            "Confirm APIGroup() from spec 01 is called in production bootstrap before RegisterOAuthHandlers",
+            "Confirm CacheMiddleware(CachePublic) from spec 01 is applied to GET /auth/providers route (not just in tests)",
+            "Confirm db.WithTx from spec 02 is called in the callback handler (not mocked in production code path)",
+            "Confirm db.WrapError from spec 02 is imported and used in error mapping",
+            "Confirm FormatUTC() and NowUTC() from spec 01 are used for all timestamp handling in response serialization",
+            "Run: grep -r 'APIGroup\\|CacheMiddleware\\|db.WithTx\\|db.WrapError\\|FormatUTC\\|NowUTC' internal/oauth/ — all must appear"
+          ],
+          "test_spec_refs": [
+            "TS-06-48",
+            "TS-06-49"
+          ],
+          "requirement_refs": [
+            "06-REQ-13.1",
+            "06-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.4",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run all five smoke tests with real SQLite DB, real Echo server, real oauth registry, and httptest.Server for GitHub endpoints",
+            "TS-06-SMOKE-1: new user created; api_key.key matches ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$; secret_hash==SHA256(plaintext)",
+            "TS-06-SMOKE-2: existing user updated; previous key revoked; new key issued",
+            "TS-06-SMOKE-3: provider list returns no secrets; Cache-Control header correct",
+            "TS-06-SMOKE-4: blocked user returns HTTP 403; DB unchanged",
+            "TS-06-SMOKE-5: startup registers github; both endpoints reachable",
+            "Command: go test ./internal/oauth/... -count=1 -v -run 'TestSmoke'"
+          ],
+          "test_spec_refs": [
+            "TS-06-SMOKE-1",
+            "TS-06-SMOKE-2",
+            "TS-06-SMOKE-3",
+            "TS-06-SMOKE-4",
+            "TS-06-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "06-REQ-5.1",
+            "06-REQ-10.2",
+            "06-REQ-11.4",
+            "06-REQ-12.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.5",
+          "title": "Final dead-code audit and full test suite run",
+          "details": [
+            "Run full test suite: go test ./... -count=1 — all tests must pass",
+            "Run linter: go vet ./... — zero warnings",
+            "Dead-code audit: grep -r 'panic(\"not implemented\")' internal/oauth/ — must return empty",
+            "Verify math/rand is not imported in any file under internal/oauth/: grep -r '\"math/rand\"' internal/oauth/ — must return empty",
+            "Verify crypto/rand is imported in key generation file: grep -r '\"crypto/rand\"' internal/oauth/ — must return at least one result",
+            "Verify all error handling entries 06-ERR-1 through 06-ERR-15 have corresponding handler branches in callback.go"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "06-REQ-1.1",
+            "06-REQ-4.4",
+            "06-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Full test suite passes: go test ./... -count=1",
+          "Zero linter warnings: go vet ./...",
+          "All five smoke tests pass with real components: go test ./internal/oauth/... -count=1 -v -run 'TestSmoke'",
+          "No panic(\"not implemented\") markers in internal/oauth/: grep -r 'panic(\"not implemented\")' internal/oauth/ returns empty",
+          "No math/rand import in internal/oauth/: grep -r '\"math/rand\"' internal/oauth/ returns empty",
+          "All execution paths 06-PATH-1 through 06-PATH-5 verified as fully wired with no stubs",
+          "All correctness properties 06-PROP-1 through 06-PROP-8 validated by passing tests",
+          "All error handling entries 06-ERR-1 through 06-ERR-15 have corresponding production code branches"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "06-REQ-1.1",
+      "test_spec_id": "TS-06-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-1.2",
+      "test_spec_id": "TS-06-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-1.3",
+      "test_spec_id": "TS-06-3",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-1.E1",
+      "test_spec_id": "TS-06-E1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.1",
+      "test_spec_id": "TS-06-4",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.2",
+      "test_spec_id": "TS-06-5",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.3",
+      "test_spec_id": "TS-06-6",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.4",
+      "test_spec_id": "TS-06-7",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.E1",
+      "test_spec_id": "TS-06-E2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-2.E2",
+      "test_spec_id": "TS-06-E3",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.1",
+      "test_spec_id": "TS-06-13",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.2",
+      "test_spec_id": "TS-06-14",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.3",
+      "test_spec_id": "TS-06-15",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.5",
+      "test_spec_id": "TS-06-17",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.4",
+      "test_spec_id": "TS-06-16",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-4.E1",
+      "test_spec_id": "TS-06-E8",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.1",
+      "test_spec_id": "TS-06-28",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.2",
+      "test_spec_id": "TS-06-29",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.3",
+      "test_spec_id": "TS-06-30",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.E1",
+      "test_spec_id": "TS-06-E10",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.E2",
+      "test_spec_id": "TS-06-E11",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.1",
+      "test_spec_id": "TS-06-8",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.2",
+      "test_spec_id": "TS-06-9",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.5",
+      "test_spec_id": "TS-06-12",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.3",
+      "test_spec_id": "TS-06-10",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.E1",
+      "test_spec_id": "TS-06-E4",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.E2",
+      "test_spec_id": "TS-06-E5",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.E3",
+      "test_spec_id": "TS-06-E6",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.E4",
+      "test_spec_id": "TS-06-E7",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-3.4",
+      "test_spec_id": "TS-06-11",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.1",
+      "test_spec_id": "TS-06-22",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.2",
+      "test_spec_id": "TS-06-23",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.3",
+      "test_spec_id": "TS-06-24",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.4",
+      "test_spec_id": "TS-06-25",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.5",
+      "test_spec_id": "TS-06-26",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.6",
+      "test_spec_id": "TS-06-27",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-6.E1",
+      "test_spec_id": "TS-06-E9",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-13.1",
+      "test_spec_id": "TS-06-48",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-13.2",
+      "test_spec_id": "TS-06-49",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.3",
+      "test_spec_id": "TS-06-43",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.4",
+      "test_spec_id": "TS-06-44",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.E1",
+      "test_spec_id": "TS-06-E17",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-5.1",
+      "test_spec_id": "TS-06-18",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-5.2",
+      "test_spec_id": "TS-06-19",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-5.3",
+      "test_spec_id": "TS-06-20",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-5.4",
+      "test_spec_id": "TS-06-21",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-7.4",
+      "test_spec_id": "TS-06-31",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-8.1",
+      "test_spec_id": "TS-06-32",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-8.2",
+      "test_spec_id": "TS-06-33",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-8.E1",
+      "test_spec_id": "TS-06-E12",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-9.1",
+      "test_spec_id": "TS-06-34",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-9.2",
+      "test_spec_id": "TS-06-35",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-9.3",
+      "test_spec_id": "TS-06-36",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-9.E1",
+      "test_spec_id": "TS-06-E13",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.1",
+      "test_spec_id": "TS-06-37",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.2",
+      "test_spec_id": "TS-06-38",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.3",
+      "test_spec_id": "TS-06-39",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.4",
+      "test_spec_id": "TS-06-40",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.E1",
+      "test_spec_id": "TS-06-E14",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.E2",
+      "test_spec_id": "TS-06-E15",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-10.E3",
+      "test_spec_id": "TS-06-E16",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.1",
+      "test_spec_id": "TS-06-41",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.2",
+      "test_spec_id": "TS-06-42",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-11.E2",
+      "test_spec_id": "TS-06-E18",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-12.1",
+      "test_spec_id": "TS-06-45",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-12.2",
+      "test_spec_id": "TS-06-46",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-12.3",
+      "test_spec_id": "TS-06-47",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-14.1",
+      "test_spec_id": "TS-06-50",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-14.2",
+      "test_spec_id": "TS-06-51",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-15.1",
+      "test_spec_id": "TS-06-52",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "06-REQ-15.2",
+      "test_spec_id": "TS-06-53",
+      "task_id": "4.3",
+      "test_path": null
+    }
+  ]
+}

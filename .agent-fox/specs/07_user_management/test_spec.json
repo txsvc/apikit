@@ -1,0 +1,1206 @@
+{
+  "$schema": null,
+  "spec_id": "07",
+  "spec_name": "user_management",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-07-1",
+      "requirement_id": "07-REQ-1.1",
+      "kind": "unit",
+      "description": "Verifies that RegisterUserHandlers registers all 15 expected routes on the Echo group with the correct HTTP methods and paths.",
+      "preconditions": [
+        "An Echo instance is created in-memory",
+        "A *sql.DB handle is open against an in-memory SQLite database initialised by database_layer",
+        "RegisterUserHandlers has been called with the Echo group and db handle"
+      ],
+      "input": "Call RegisterUserHandlers(g, db) and inspect the Echo router's route table",
+      "expected": "The Echo router exposes exactly the 15 routes: POST /users, GET /users, GET /users/:id, PATCH /users/:id, POST /users/:id/promote, POST /users/:id/demote, POST /users/:id/block, POST /users/:id/unblock, GET /users/:id/keys, DELETE /users/:id/keys/:key_id, GET /users/:id/tokens, DELETE /users/:id/tokens/:token_id, GET /user, PATCH /user, GET /user/orgs",
+      "assertion_pseudocode": "routes = echo.Routes(); assert len([r for r in routes if r matches any of the 15 expected (method, path) pairs]) == 15"
+    },
+    {
+      "id": "TS-07-2",
+      "requirement_id": "07-REQ-1.2",
+      "kind": "unit",
+      "description": "Verifies that all handler functions are unexported and only reachable through RegisterUserHandlers.",
+      "preconditions": [
+        "Source file internal/handlers/users.go is available for inspection"
+      ],
+      "input": "Inspect exported symbols in the handlers package",
+      "expected": "No handler function (createUser, listUsers, getUser, updateUser, promoteUser, demoteUser, blockUser, unblockUser, listUserKeys, revokeUserKey, listUserTokens, revokeUserToken, getOwnProfile, updateOwnProfile, listOwnOrgs) is exported; only RegisterUserHandlers is exported",
+      "assertion_pseudocode": "exported_funcs = [sym for sym in package_symbols('internal/handlers') if sym.kind == 'func' and sym.exported]; assert exported_funcs == ['RegisterUserHandlers']"
+    },
+    {
+      "id": "TS-07-3",
+      "requirement_id": "07-REQ-2.1",
+      "kind": "unit",
+      "description": "Verifies that a valid POST /users request from an admin creates a user record and returns HTTP 201 with the full User JSON object.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin (auth.RequireAdmin returns nil)"
+      ],
+      "input": "POST /users with body {\"username\": \"alice\", \"email\": \"alice@example.com\", \"provider\": \"github\", \"provider_id\": \"gh-001\"}",
+      "expected": "HTTP 201; response body is a valid User JSON object with id (UUID), username=alice, email=alice@example.com, role=user, status=active, full_name empty string, provider=github, provider_id=gh-001, created_at and updated_at set to RFC 3339 UTC timestamps",
+      "assertion_pseudocode": "resp = POST('/users', body, admin_ctx); assert resp.status == 201; user = parse_json(resp.body); assert user.username == 'alice'; assert user.role == 'user'; assert user.status == 'active'; assert user.full_name == ''; assert is_uuid(user.id); assert is_rfc3339(user.created_at); assert is_rfc3339(user.updated_at)"
+    },
+    {
+      "id": "TS-07-4",
+      "requirement_id": "07-REQ-2.2",
+      "kind": "unit",
+      "description": "Verifies that POST /users returns HTTP 400 with a message identifying the missing field when any required field is absent or empty.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users with body missing username: {\"email\": \"alice@example.com\", \"provider\": \"github\", \"provider_id\": \"gh-001\"}; repeat for each missing field",
+      "expected": "HTTP 400; response body contains message 'missing required field: username' (or the specific missing field name); no record is inserted into the users table",
+      "assertion_pseudocode": "for field in ['username', 'email', 'provider', 'provider_id']: body = valid_body minus field; resp = POST('/users', body, admin_ctx); assert resp.status == 400; assert parse_json(resp.body).message == 'missing required field: ' + field"
+    },
+    {
+      "id": "TS-07-5",
+      "requirement_id": "07-REQ-2.3",
+      "kind": "unit",
+      "description": "Verifies that POST /users returns HTTP 400 with message 'invalid request body' when the request body is not valid JSON.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users with body 'not-json-at-all'",
+      "expected": "HTTP 400; response body contains message 'invalid request body'",
+      "assertion_pseudocode": "resp = POST('/users', 'not-json-at-all', admin_ctx); assert resp.status == 400; assert parse_json(resp.body).message == 'invalid request body'"
+    },
+    {
+      "id": "TS-07-6",
+      "requirement_id": "07-REQ-2.4",
+      "kind": "unit",
+      "description": "Verifies that POST /users returns HTTP 409 with message 'username already exists' when a duplicate username is submitted.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with username 'alice' already exists in the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users with body {\"username\": \"alice\", \"email\": \"new@example.com\", \"provider\": \"github\", \"provider_id\": \"gh-002\"}",
+      "expected": "HTTP 409; response body contains message 'username already exists'",
+      "assertion_pseudocode": "resp = POST('/users', {username:'alice', email:'new@example.com', provider:'github', provider_id:'gh-002'}, admin_ctx); assert resp.status == 409; assert parse_json(resp.body).message == 'username already exists'"
+    },
+    {
+      "id": "TS-07-7",
+      "requirement_id": "07-REQ-2.5",
+      "kind": "unit",
+      "description": "Verifies that POST /users returns HTTP 409 with message 'provider identity already exists' when the (provider, provider_id) pair is already registered.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with provider='github' and provider_id='gh-001' already exists",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users with body {\"username\": \"bob\", \"email\": \"bob@example.com\", \"provider\": \"github\", \"provider_id\": \"gh-001\"}",
+      "expected": "HTTP 409; response body contains message 'provider identity already exists'",
+      "assertion_pseudocode": "resp = POST('/users', {username:'bob', email:'bob@example.com', provider:'github', provider_id:'gh-001'}, admin_ctx); assert resp.status == 409; assert parse_json(resp.body).message == 'provider identity already exists'"
+    },
+    {
+      "id": "TS-07-8",
+      "requirement_id": "07-REQ-2.6",
+      "kind": "unit",
+      "description": "Verifies that POST /users returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as a regular (non-admin) user; auth.RequireAdmin returns 403"
+      ],
+      "input": "POST /users with a valid body from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'; no database query is executed",
+      "assertion_pseudocode": "resp = POST('/users', valid_body, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-9",
+      "requirement_id": "07-REQ-3.1",
+      "kind": "unit",
+      "description": "Verifies that GET /users without include_blocked returns only active users (HTTP 200, array excludes blocked).",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Two active users and one blocked user exist in the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users (no query parameters)",
+      "expected": "HTTP 200; JSON array contains exactly the two active users; the blocked user is absent",
+      "assertion_pseudocode": "resp = GET('/users', admin_ctx); assert resp.status == 200; users = parse_json(resp.body); assert len(users) == 2; assert all(u.status == 'active' for u in users)"
+    },
+    {
+      "id": "TS-07-10",
+      "requirement_id": "07-REQ-3.2",
+      "kind": "unit",
+      "description": "Verifies that GET /users?include_blocked=true returns all users including blocked ones.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Two active users and one blocked user exist in the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users?include_blocked=true",
+      "expected": "HTTP 200; JSON array contains all three users, including the blocked one",
+      "assertion_pseudocode": "resp = GET('/users?include_blocked=true', admin_ctx); assert resp.status == 200; users = parse_json(resp.body); assert len(users) == 3; assert any(u.status == 'blocked' for u in users)"
+    },
+    {
+      "id": "TS-07-11",
+      "requirement_id": "07-REQ-3.3",
+      "kind": "unit",
+      "description": "Verifies that GET /users returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "GET /users from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = GET('/users', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-12",
+      "requirement_id": "07-REQ-4.1",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id returns HTTP 200 with the correct user object and sets the ETag header.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with a known UUID exists in the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<known-uuid>",
+      "expected": "HTTP 200; response body is the User JSON object matching the UUID; ETag response header is set to a value derived from user.UpdatedAt",
+      "assertion_pseudocode": "resp = GET('/users/'+user_id, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.id == user_id; assert resp.headers['ETag'] != ''"
+    },
+    {
+      "id": "TS-07-13",
+      "requirement_id": "07-REQ-4.2",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id returns HTTP 404 with message 'user not found' for a non-existent user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/00000000-0000-0000-0000-000000000000",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = GET('/users/00000000-0000-0000-0000-000000000000', admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-14",
+      "requirement_id": "07-REQ-4.3",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "GET /users/<any-uuid> from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = GET('/users/some-id', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-15",
+      "requirement_id": "07-REQ-5.1",
+      "kind": "unit",
+      "description": "Verifies that PATCH /users/:id updates full_name and returns HTTP 200 with the updated user object.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with a known UUID exists with full_name=''",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "PATCH /users/<known-uuid> with body {\"full_name\": \"Alice Smith\"}",
+      "expected": "HTTP 200; response body is the updated User object with full_name='Alice Smith' and a refreshed updated_at timestamp",
+      "assertion_pseudocode": "resp = PATCH('/users/'+user_id, {full_name:'Alice Smith'}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.full_name == 'Alice Smith'; assert user.updated_at > original_updated_at"
+    },
+    {
+      "id": "TS-07-16",
+      "requirement_id": "07-REQ-5.2",
+      "kind": "unit",
+      "description": "Verifies that PATCH /users/:id returns HTTP 400 when the full_name field is absent from the request body.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with a known UUID exists",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "PATCH /users/<known-uuid> with body {} (no full_name field)",
+      "expected": "HTTP 400; response body contains message 'missing required field: full_name'",
+      "assertion_pseudocode": "resp = PATCH('/users/'+user_id, {}, admin_ctx); assert resp.status == 400; assert parse_json(resp.body).message == 'missing required field: full_name'"
+    },
+    {
+      "id": "TS-07-17",
+      "requirement_id": "07-REQ-5.3",
+      "kind": "unit",
+      "description": "Verifies that PATCH /users/:id returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "PATCH /users/00000000-0000-0000-0000-000000000000 with body {\"full_name\": \"Alice\"}",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = PATCH('/users/00000000-0000-0000-0000-000000000000', {full_name:'Alice'}, admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-18",
+      "requirement_id": "07-REQ-5.4",
+      "kind": "unit",
+      "description": "Verifies that PATCH /users/:id returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "PATCH /users/<any-uuid> with valid body from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = PATCH('/users/some-id', {full_name:'Alice'}, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-19",
+      "requirement_id": "07-REQ-6.1",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/promote sets the user's role to admin and returns HTTP 200.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with role='user' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/promote",
+      "expected": "HTTP 200; response body is User object with role='admin'; updated_at is refreshed",
+      "assertion_pseudocode": "resp = POST('/users/'+user_id+'/promote', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.role == 'admin'"
+    },
+    {
+      "id": "TS-07-20",
+      "requirement_id": "07-REQ-6.2",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/promote is idempotent: calling it on an already-admin user returns HTTP 200 with unchanged data.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with role='admin' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/promote (user is already admin)",
+      "expected": "HTTP 200; response body is the unchanged User object with role='admin'; no database update occurs (updated_at unchanged)",
+      "assertion_pseudocode": "original = fetch_user(user_id); resp = POST('/users/'+user_id+'/promote', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.role == 'admin'; assert user.updated_at == original.updated_at"
+    },
+    {
+      "id": "TS-07-21",
+      "requirement_id": "07-REQ-6.3",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/promote returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/00000000-0000-0000-0000-000000000000/promote",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = POST('/users/00000000-0000-0000-0000-000000000000/promote', {}, admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-22",
+      "requirement_id": "07-REQ-6.4",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/promote returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "POST /users/<any-uuid>/promote from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = POST('/users/some-id/promote', {}, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-23",
+      "requirement_id": "07-REQ-7.1",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/demote sets role to user and returns HTTP 200 when more than one active admin exists.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Two users with role='admin' and status='active' exist; target user is one of them",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<target-admin-uuid>/demote",
+      "expected": "HTTP 200; response body is User object with role='user'; updated_at is refreshed",
+      "assertion_pseudocode": "resp = POST('/users/'+target_id+'/demote', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.role == 'user'"
+    },
+    {
+      "id": "TS-07-24",
+      "requirement_id": "07-REQ-7.2",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/demote is idempotent: calling it on a non-admin user returns HTTP 200 unchanged.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with role='user' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/demote (user is already role=user)",
+      "expected": "HTTP 200; response body is the unchanged User object with role='user'; no database update occurs",
+      "assertion_pseudocode": "original = fetch_user(user_id); resp = POST('/users/'+user_id+'/demote', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.role == 'user'; assert user.updated_at == original.updated_at"
+    },
+    {
+      "id": "TS-07-25",
+      "requirement_id": "07-REQ-7.3",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/demote returns HTTP 409 with message 'cannot demote the last admin' when the target is the only active admin.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Exactly one user with role='admin' and status='active' exists",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<sole-admin-uuid>/demote",
+      "expected": "HTTP 409; response body contains message 'cannot demote the last admin'; the user's role remains 'admin' in the database",
+      "assertion_pseudocode": "resp = POST('/users/'+sole_admin_id+'/demote', {}, admin_ctx); assert resp.status == 409; assert parse_json(resp.body).message == 'cannot demote the last admin'; db_user = fetch_user(sole_admin_id); assert db_user.role == 'admin'"
+    },
+    {
+      "id": "TS-07-26",
+      "requirement_id": "07-REQ-7.4",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/demote returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/00000000-0000-0000-0000-000000000000/demote",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = POST('/users/00000000-0000-0000-0000-000000000000/demote', {}, admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-27",
+      "requirement_id": "07-REQ-7.5",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/demote returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "POST /users/<any-uuid>/demote from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = POST('/users/some-id/demote', {}, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-28",
+      "requirement_id": "07-REQ-8.1",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/block sets status to blocked and returns HTTP 200 with the updated user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with status='active' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/block",
+      "expected": "HTTP 200; response body is User object with status='blocked'; updated_at is refreshed",
+      "assertion_pseudocode": "resp = POST('/users/'+user_id+'/block', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.status == 'blocked'"
+    },
+    {
+      "id": "TS-07-29",
+      "requirement_id": "07-REQ-8.2",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/block is idempotent: blocking an already-blocked user returns HTTP 200 unchanged.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with status='blocked' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/block (user is already blocked)",
+      "expected": "HTTP 200; response body is the unchanged User object with status='blocked'; no database update occurs",
+      "assertion_pseudocode": "original = fetch_user(user_id); resp = POST('/users/'+user_id+'/block', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.status == 'blocked'; assert user.updated_at == original.updated_at"
+    },
+    {
+      "id": "TS-07-30",
+      "requirement_id": "07-REQ-8.3",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/block returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/00000000-0000-0000-0000-000000000000/block",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = POST('/users/00000000-0000-0000-0000-000000000000/block', {}, admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-31",
+      "requirement_id": "07-REQ-8.4",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/block returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "POST /users/<any-uuid>/block from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = POST('/users/some-id/block', {}, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-32",
+      "requirement_id": "07-REQ-9.1",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/unblock sets status to active and returns HTTP 200 with the updated user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with status='blocked' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/unblock",
+      "expected": "HTTP 200; response body is User object with status='active'; updated_at is refreshed",
+      "assertion_pseudocode": "resp = POST('/users/'+user_id+'/unblock', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.status == 'active'"
+    },
+    {
+      "id": "TS-07-33",
+      "requirement_id": "07-REQ-9.2",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/unblock is idempotent: unblocking an already-active user returns HTTP 200 unchanged.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with status='active' exists with a known UUID",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/<known-uuid>/unblock (user is already active)",
+      "expected": "HTTP 200; response body is the unchanged User object with status='active'; no database update occurs",
+      "assertion_pseudocode": "original = fetch_user(user_id); resp = POST('/users/'+user_id+'/unblock', {}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.status == 'active'; assert user.updated_at == original.updated_at"
+    },
+    {
+      "id": "TS-07-34",
+      "requirement_id": "07-REQ-9.3",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/unblock returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users/00000000-0000-0000-0000-000000000000/unblock",
+      "expected": "HTTP 404; response body contains message 'user not found'",
+      "assertion_pseudocode": "resp = POST('/users/00000000-0000-0000-0000-000000000000/unblock', {}, admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-35",
+      "requirement_id": "07-REQ-9.4",
+      "kind": "unit",
+      "description": "Verifies that POST /users/:id/unblock returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "POST /users/<any-uuid>/unblock from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = POST('/users/some-id/unblock', {}, non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-36",
+      "requirement_id": "07-REQ-10.1",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/keys returns HTTP 200 with an array of APIKeyMeta objects for an existing user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table and api_keys table",
+        "A user exists with two API keys; one has revoked_at set, one does not",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<known-uuid>/keys",
+      "expected": "HTTP 200; JSON array of two APIKeyMeta objects each with fields key_id, user_id, created_at, expires_at (nullable), revoked_at (nullable); no secret fields present",
+      "assertion_pseudocode": "resp = GET('/users/'+user_id+'/keys', admin_ctx); assert resp.status == 200; keys = parse_json(resp.body); assert len(keys) == 2; for k in keys: assert set(k.keys()) == {'key_id','user_id','created_at','expires_at','revoked_at'}"
+    },
+    {
+      "id": "TS-07-37",
+      "requirement_id": "07-REQ-10.2",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/keys returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/00000000-0000-0000-0000-000000000000/keys",
+      "expected": "HTTP 404; response body contains message 'user not found'; api_keys table is not queried",
+      "assertion_pseudocode": "resp = GET('/users/00000000-0000-0000-0000-000000000000/keys', admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-38",
+      "requirement_id": "07-REQ-10.3",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/keys returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "GET /users/<any-uuid>/keys from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = GET('/users/some-id/keys', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-39",
+      "requirement_id": "07-REQ-11.1",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/keys/:key_id revokes an active API key and returns HTTP 204 No Content.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and api_keys table",
+        "A user exists with an active API key (revoked_at is NULL)",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/keys/<key-id>",
+      "expected": "HTTP 204; no response body; the api_keys table row has revoked_at set to a non-null RFC 3339 UTC timestamp",
+      "assertion_pseudocode": "resp = DELETE('/users/'+user_id+'/keys/'+key_id, admin_ctx); assert resp.status == 204; assert resp.body == ''; db_key = fetch_api_key(key_id); assert db_key.revoked_at is not null"
+    },
+    {
+      "id": "TS-07-40",
+      "requirement_id": "07-REQ-11.2",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/keys/:key_id is idempotent: revoking an already-revoked key returns HTTP 204 without overwriting revoked_at.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and api_keys table",
+        "A user exists with an API key that has revoked_at already set",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/keys/<key-id> (key already revoked)",
+      "expected": "HTTP 204; no response body; revoked_at in the database is unchanged",
+      "assertion_pseudocode": "original_revoked_at = fetch_api_key(key_id).revoked_at; resp = DELETE('/users/'+user_id+'/keys/'+key_id, admin_ctx); assert resp.status == 204; assert resp.body == ''; assert fetch_api_key(key_id).revoked_at == original_revoked_at"
+    },
+    {
+      "id": "TS-07-41",
+      "requirement_id": "07-REQ-11.3",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/keys/:key_id returns HTTP 404 when the key does not exist for the given user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and api_keys table",
+        "A user exists but has no keys, or the key_id does not match the user_id",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/keys/nonexistent-key-id",
+      "expected": "HTTP 404; response body contains message 'api key not found'",
+      "assertion_pseudocode": "resp = DELETE('/users/'+user_id+'/keys/nonexistent', admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'api key not found'"
+    },
+    {
+      "id": "TS-07-42",
+      "requirement_id": "07-REQ-11.4",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/keys/:key_id returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "DELETE /users/<any-uuid>/keys/<any-key-id> from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = DELETE('/users/some-id/keys/some-key', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-43",
+      "requirement_id": "07-REQ-12.1",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/tokens returns HTTP 200 with an array of PATMeta objects for an existing user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and pats table",
+        "A user exists with two PATs; one has revoked_at set, one does not",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<known-uuid>/tokens",
+      "expected": "HTTP 200; JSON array of two PATMeta objects each with fields token_id, name, permissions, user_id, created_at, expires_at (nullable), revoked_at (nullable); no secret fields present",
+      "assertion_pseudocode": "resp = GET('/users/'+user_id+'/tokens', admin_ctx); assert resp.status == 200; tokens = parse_json(resp.body); assert len(tokens) == 2; for t in tokens: assert set(t.keys()) == {'token_id','name','permissions','user_id','created_at','expires_at','revoked_at'}"
+    },
+    {
+      "id": "TS-07-44",
+      "requirement_id": "07-REQ-12.2",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/tokens returns HTTP 404 when the target user does not exist.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no matching user",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/00000000-0000-0000-0000-000000000000/tokens",
+      "expected": "HTTP 404; response body contains message 'user not found'; pats table is not queried",
+      "assertion_pseudocode": "resp = GET('/users/00000000-0000-0000-0000-000000000000/tokens', admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'user not found'"
+    },
+    {
+      "id": "TS-07-45",
+      "requirement_id": "07-REQ-12.3",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id/tokens returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "GET /users/<any-uuid>/tokens from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = GET('/users/some-id/tokens', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-46",
+      "requirement_id": "07-REQ-13.1",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/tokens/:token_id revokes an active PAT and returns HTTP 204 No Content.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and pats table",
+        "A user exists with an active PAT (revoked_at is NULL)",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/tokens/<token-id>",
+      "expected": "HTTP 204; no response body; the pats table row has revoked_at set to a non-null RFC 3339 UTC timestamp",
+      "assertion_pseudocode": "resp = DELETE('/users/'+user_id+'/tokens/'+token_id, admin_ctx); assert resp.status == 204; assert resp.body == ''; db_token = fetch_pat(token_id); assert db_token.revoked_at is not null"
+    },
+    {
+      "id": "TS-07-47",
+      "requirement_id": "07-REQ-13.2",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/tokens/:token_id is idempotent: revoking an already-revoked PAT returns HTTP 204 without overwriting revoked_at.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and pats table",
+        "A user exists with a PAT that has revoked_at already set",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/tokens/<token-id> (token already revoked)",
+      "expected": "HTTP 204; no response body; revoked_at in the database is unchanged",
+      "assertion_pseudocode": "original_revoked_at = fetch_pat(token_id).revoked_at; resp = DELETE('/users/'+user_id+'/tokens/'+token_id, admin_ctx); assert resp.status == 204; assert resp.body == ''; assert fetch_pat(token_id).revoked_at == original_revoked_at"
+    },
+    {
+      "id": "TS-07-48",
+      "requirement_id": "07-REQ-13.3",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/tokens/:token_id returns HTTP 404 when the token does not exist for the given user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users table and pats table",
+        "A user exists but the token_id does not match",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "DELETE /users/<user-uuid>/tokens/nonexistent-token-id",
+      "expected": "HTTP 404; response body contains message 'token not found'",
+      "assertion_pseudocode": "resp = DELETE('/users/'+user_id+'/tokens/nonexistent', admin_ctx); assert resp.status == 404; assert parse_json(resp.body).message == 'token not found'"
+    },
+    {
+      "id": "TS-07-49",
+      "requirement_id": "07-REQ-13.4",
+      "kind": "unit",
+      "description": "Verifies that DELETE /users/:id/tokens/:token_id returns HTTP 403 when called by a non-admin user.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is non-admin"
+      ],
+      "input": "DELETE /users/<any-uuid>/tokens/<any-token-id> from a non-admin context",
+      "expected": "HTTP 403; response body contains message 'forbidden'",
+      "assertion_pseudocode": "resp = DELETE('/users/some-id/tokens/some-token', non_admin_ctx); assert resp.status == 403; assert parse_json(resp.body).message == 'forbidden'"
+    },
+    {
+      "id": "TS-07-50",
+      "requirement_id": "07-REQ-14.1",
+      "kind": "unit",
+      "description": "Verifies that GET /user returns HTTP 200 with the authenticated user's profile and sets the ETag header.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "An authenticated user record exists in the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has users:read permission via PAT or session; auth.GetUserID returns the user's UUID"
+      ],
+      "input": "GET /user with a PAT bearing users:read permission",
+      "expected": "HTTP 200; response body is the User JSON object for the authenticated user; ETag response header is set",
+      "assertion_pseudocode": "resp = GET('/user', user_ctx_with_users_read); assert resp.status == 200; user = parse_json(resp.body); assert user.id == auth_user_id; assert resp.headers['ETag'] != ''"
+    },
+    {
+      "id": "TS-07-51",
+      "requirement_id": "07-REQ-14.2",
+      "kind": "unit",
+      "description": "Verifies that GET /user returns HTTP 403 when the PAT lacks the users:read permission.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has a PAT without users:read permission; auth.RequirePermission returns 403"
+      ],
+      "input": "GET /user with a PAT lacking users:read permission",
+      "expected": "HTTP 403; response body contains message 'insufficient permissions'",
+      "assertion_pseudocode": "resp = GET('/user', ctx_without_users_read); assert resp.status == 403; assert parse_json(resp.body).message == 'insufficient permissions'"
+    },
+    {
+      "id": "TS-07-52",
+      "requirement_id": "07-REQ-15.1",
+      "kind": "unit",
+      "description": "Verifies that PATCH /user updates the authenticated user's full_name and returns HTTP 200 with the updated user.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "An authenticated user record exists with full_name=''",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has users:read permission"
+      ],
+      "input": "PATCH /user with body {\"full_name\": \"Alice Updated\"} from an authenticated user with users:read",
+      "expected": "HTTP 200; response body is the updated User object with full_name='Alice Updated' and refreshed updated_at",
+      "assertion_pseudocode": "resp = PATCH('/user', {full_name:'Alice Updated'}, user_ctx_with_users_read); assert resp.status == 200; user = parse_json(resp.body); assert user.full_name == 'Alice Updated'; assert user.updated_at > original_updated_at"
+    },
+    {
+      "id": "TS-07-53",
+      "requirement_id": "07-REQ-15.2",
+      "kind": "unit",
+      "description": "Verifies that PATCH /user returns HTTP 400 when the full_name field is absent from the request body.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has users:read permission"
+      ],
+      "input": "PATCH /user with body {} (no full_name field)",
+      "expected": "HTTP 400; response body contains message 'missing required field: full_name'",
+      "assertion_pseudocode": "resp = PATCH('/user', {}, user_ctx_with_users_read); assert resp.status == 400; assert parse_json(resp.body).message == 'missing required field: full_name'"
+    },
+    {
+      "id": "TS-07-54",
+      "requirement_id": "07-REQ-15.3",
+      "kind": "unit",
+      "description": "Verifies that PATCH /user returns HTTP 403 when the PAT lacks the users:read permission.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has a PAT without users:read permission"
+      ],
+      "input": "PATCH /user with valid body but PAT lacking users:read",
+      "expected": "HTTP 403; response body contains message 'insufficient permissions'",
+      "assertion_pseudocode": "resp = PATCH('/user', {full_name:'X'}, ctx_without_users_read); assert resp.status == 403; assert parse_json(resp.body).message == 'insufficient permissions'"
+    },
+    {
+      "id": "TS-07-55",
+      "requirement_id": "07-REQ-16.1",
+      "kind": "unit",
+      "description": "Verifies that GET /user/orgs returns HTTP 200 with the authenticated user's active organization memberships.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users, orgs, and org_members tables",
+        "Authenticated user is a member of two active organizations and one blocked organization",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has orgs:read permission"
+      ],
+      "input": "GET /user/orgs with a PAT bearing orgs:read permission",
+      "expected": "HTTP 200; JSON array of two organization objects (only active orgs), each with fields id, name, slug, url, status, created_at, updated_at; blocked org excluded",
+      "assertion_pseudocode": "resp = GET('/user/orgs', user_ctx_with_orgs_read); assert resp.status == 200; orgs = parse_json(resp.body); assert len(orgs) == 2; assert all(o.status == 'active' for o in orgs)"
+    },
+    {
+      "id": "TS-07-56",
+      "requirement_id": "07-REQ-16.2",
+      "kind": "unit",
+      "description": "Verifies that GET /user/orgs returns HTTP 403 when the PAT lacks the orgs:read permission.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has a PAT without orgs:read permission"
+      ],
+      "input": "GET /user/orgs with a PAT lacking orgs:read",
+      "expected": "HTTP 403; response body contains message 'insufficient permissions'",
+      "assertion_pseudocode": "resp = GET('/user/orgs', ctx_without_orgs_read); assert resp.status == 403; assert parse_json(resp.body).message == 'insufficient permissions'"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-07-P1",
+      "property_id": "07-PROP-1",
+      "validates": [
+        "07-REQ-7.3",
+        "07-REQ-7.1"
+      ],
+      "description": "For any sequence of promote and demote operations, the system always retains at least one active admin; the demote endpoint never reduces the active admin count below 1.",
+      "for_any_strategy": "Generate sequences of 1–20 promote/demote calls against a database seeded with 1–5 admin users and 1–5 non-admin users; vary which user is targeted in each call",
+      "invariant_check": "After each demote call completes (whether it succeeds with 200 or fails with 409), query the users table and count rows where role='admin' AND status='active'; assert count >= 1; also assert that if a demote returned 200 then count was >= 2 before the call"
+    },
+    {
+      "id": "TS-07-P2",
+      "property_id": "07-PROP-2",
+      "validates": [
+        "07-REQ-6.2",
+        "07-REQ-7.2",
+        "07-REQ-8.2",
+        "07-REQ-9.2"
+      ],
+      "description": "For any number of repeated calls to promote, demote, block, or unblock with the same user ID, the response is always HTTP 200 and the user record in the database is unchanged after the second and subsequent calls.",
+      "for_any_strategy": "For each action endpoint (promote, demote, block, unblock), generate 2–10 identical repeated calls against a user already in the target state; vary the initial user state and the action",
+      "invariant_check": "For each repeated call after the first: assert resp.status == 200; fetch user from users table and assert all fields equal the state captured after the first call; assert updated_at is unchanged after the second and subsequent calls"
+    },
+    {
+      "id": "TS-07-P3",
+      "property_id": "07-PROP-3",
+      "validates": [
+        "07-REQ-11.2",
+        "07-REQ-13.2",
+        "07-REQ-11.1",
+        "07-REQ-13.1"
+      ],
+      "description": "For any number of repeated DELETE calls to revoke the same API key or PAT, every call that finds the credential returns HTTP 204, and revoked_at is set exactly once and never overwritten.",
+      "for_any_strategy": "Generate 2–10 repeated DELETE calls to DELETE /users/:id/keys/:key_id and DELETE /users/:id/tokens/:token_id targeting the same credential; start with an active credential; vary the number of repetitions",
+      "invariant_check": "assert every response has status 204; capture revoked_at from the database after the first successful revocation; for each subsequent call assert revoked_at in the database equals the captured value (never overwritten)"
+    },
+    {
+      "id": "TS-07-P4",
+      "property_id": "07-PROP-4",
+      "validates": [
+        "07-REQ-10.1",
+        "07-REQ-12.1",
+        "07-REQ-10.E1",
+        "07-REQ-12.E1"
+      ],
+      "description": "For any response from GET /users/:id/keys or GET /users/:id/tokens, no JSON field in any returned object contains a plaintext secret value.",
+      "for_any_strategy": "Seed the database with 1–10 API keys and 1–10 PATs for a given user, each with a distinct secret string; call GET /users/:id/keys and GET /users/:id/tokens; vary the number and state of credentials",
+      "invariant_check": "For each object in the response array: assert the set of keys is exactly {'key_id','user_id','created_at','expires_at','revoked_at'} for keys or {'token_id','name','permissions','user_id','created_at','expires_at','revoked_at'} for tokens; assert no field value matches any known secret string from the database seed"
+    },
+    {
+      "id": "TS-07-P5",
+      "property_id": "07-PROP-5",
+      "validates": [
+        "07-REQ-2.6",
+        "07-REQ-3.3",
+        "07-REQ-4.3",
+        "07-REQ-5.4",
+        "07-REQ-6.4",
+        "07-REQ-7.5",
+        "07-REQ-8.4",
+        "07-REQ-9.4",
+        "07-REQ-10.3",
+        "07-REQ-11.4",
+        "07-REQ-12.3",
+        "07-REQ-13.4"
+      ],
+      "description": "For any request to any endpoint under /users, no database query is executed before auth.RequireAdmin returns successfully; non-admin requests never touch the users, api_keys, or pats tables.",
+      "for_any_strategy": "For each of the 12 admin endpoints, generate requests with non-admin auth contexts; instrument the *sql.DB to record whether any query was executed; vary the path parameters and request bodies",
+      "invariant_check": "For each non-admin request: assert resp.status == 403; assert db_query_count == 0 (no SQL was executed against the users, api_keys, or pats tables)"
+    },
+    {
+      "id": "TS-07-P6",
+      "property_id": "07-PROP-6",
+      "validates": [
+        "07-REQ-3.E1",
+        "07-REQ-16.E2",
+        "07-REQ-3.1",
+        "07-REQ-10.1",
+        "07-REQ-12.1"
+      ],
+      "description": "For any list endpoint (GET /users, GET /users/:id/keys, GET /users/:id/tokens, GET /user/orgs) when no records match, the response body is the JSON literal [] and the status is 200, never null or 404.",
+      "for_any_strategy": "For each list endpoint, call with an empty database or a database where all records are filtered out; vary the filter conditions (e.g. include_blocked=false with only blocked users, user with no keys, user with no orgs)",
+      "invariant_check": "assert resp.status == 200; body = parse_json(resp.body); assert body == [] (an empty array, not null, not missing); assert resp.body != 'null'"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-07-E1",
+      "requirement_id": "07-REQ-2.E1",
+      "kind": "unit",
+      "description": "Verifies that an unexpected database error during user INSERT returns HTTP 500 without leaking internal error details.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin",
+        "The *sql.DB is mocked or replaced with a stub that returns a non-constraint error on INSERT"
+      ],
+      "input": "POST /users with a fully valid body; database is configured to return a generic error",
+      "expected": "HTTP 500; response body contains message 'internal server error'; no internal database error message is exposed",
+      "assertion_pseudocode": "db_stub = mock_db_that_errors_on_insert(error='disk full'); resp = POST('/users', valid_body, admin_ctx, db=db_stub); assert resp.status == 500; assert parse_json(resp.body).message == 'internal server error'"
+    },
+    {
+      "id": "TS-07-E2",
+      "requirement_id": "07-REQ-2.E2",
+      "kind": "unit",
+      "description": "Verifies that the provider field is stored as-is without validation when an admin provides any non-empty string.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "POST /users with body {\"username\": \"carol\", \"email\": \"carol@example.com\", \"provider\": \"future-provider-xyz\", \"provider_id\": \"fp-999\"}",
+      "expected": "HTTP 201; the returned User object has provider='future-provider-xyz'; the value is persisted verbatim in the users table",
+      "assertion_pseudocode": "resp = POST('/users', {username:'carol', email:'carol@example.com', provider:'future-provider-xyz', provider_id:'fp-999'}, admin_ctx); assert resp.status == 201; user = parse_json(resp.body); assert user.provider == 'future-provider-xyz'; db_user = fetch_user(user.id); assert db_user.provider == 'future-provider-xyz'"
+    },
+    {
+      "id": "TS-07-E3",
+      "requirement_id": "07-REQ-3.E1",
+      "kind": "unit",
+      "description": "Verifies that GET /users returns an empty JSON array (not null) when no users match the filter.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table containing no active users",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users (no include_blocked, no active users in database)",
+      "expected": "HTTP 200; response body is exactly '[]' (empty JSON array), not null",
+      "assertion_pseudocode": "resp = GET('/users', admin_ctx); assert resp.status == 200; assert parse_json(resp.body) == []"
+    },
+    {
+      "id": "TS-07-E4",
+      "requirement_id": "07-REQ-3.E2",
+      "kind": "unit",
+      "description": "Verifies that an unexpected database error during list users query returns HTTP 500.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin",
+        "The *sql.DB is mocked to return an error on the SELECT query"
+      ],
+      "input": "GET /users; database returns a generic error",
+      "expected": "HTTP 500; response body contains message 'internal server error'",
+      "assertion_pseudocode": "db_stub = mock_db_that_errors_on_select(); resp = GET('/users', admin_ctx, db=db_stub); assert resp.status == 500; assert parse_json(resp.body).message == 'internal server error'"
+    },
+    {
+      "id": "TS-07-E5",
+      "requirement_id": "07-REQ-4.E1",
+      "kind": "unit",
+      "description": "Verifies that GET /users/:id returns HTTP 304 with no body when the If-None-Match header matches the current ETag.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user exists with a known UUID and updated_at timestamp",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<known-uuid> with If-None-Match header set to the ETag derived from user.UpdatedAt",
+      "expected": "HTTP 304; no response body",
+      "assertion_pseudocode": "etag = compute_etag(user.updated_at); resp = GET('/users/'+user_id, admin_ctx, headers={'If-None-Match': etag}); assert resp.status == 304; assert resp.body == ''"
+    },
+    {
+      "id": "TS-07-E6",
+      "requirement_id": "07-REQ-5.E1",
+      "kind": "unit",
+      "description": "Verifies that PATCH /users/:id with full_name set to an empty string clears the field and returns HTTP 200.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "A user with full_name='Alice Smith' exists",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "PATCH /users/<known-uuid> with body {\"full_name\": \"\"}",
+      "expected": "HTTP 200; returned User object has full_name=''; the users table row has full_name persisted as empty string",
+      "assertion_pseudocode": "resp = PATCH('/users/'+user_id, {full_name:''}, admin_ctx); assert resp.status == 200; user = parse_json(resp.body); assert user.full_name == ''; db_user = fetch_user(user_id); assert db_user.full_name == ''"
+    },
+    {
+      "id": "TS-07-E7",
+      "requirement_id": "07-REQ-5.E2",
+      "kind": "unit",
+      "description": "Verifies that UpdateUserRequest uses a pointer for FullName so that a missing field (nil pointer) is distinguished from an empty string.",
+      "preconditions": [
+        "Source file internal/handlers/users.go is available for inspection",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "Inspect the UpdateUserRequest struct definition; also send PATCH /users/:id with body {} (no full_name key)",
+      "expected": "UpdateUserRequest.FullName is declared as *string; a request with no full_name key results in a nil pointer and triggers HTTP 400",
+      "assertion_pseudocode": "assert type_of(UpdateUserRequest.FullName) == '*string'; resp = PATCH('/users/'+user_id, {}, admin_ctx); assert resp.status == 400; assert parse_json(resp.body).message == 'missing required field: full_name'"
+    },
+    {
+      "id": "TS-07-E8",
+      "requirement_id": "07-REQ-7.E1",
+      "kind": "unit",
+      "description": "Verifies that an unexpected database error when counting active admins during demote returns HTTP 500 without modifying the user record.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin",
+        "Target user exists with role='admin'",
+        "The *sql.DB is mocked to return an error on the COUNT query for active admins"
+      ],
+      "input": "POST /users/<admin-uuid>/demote; database errors on the admin count SELECT",
+      "expected": "HTTP 500; response body contains message 'internal server error'; user record is unchanged in the database",
+      "assertion_pseudocode": "db_stub = mock_db_that_errors_on_count_query(); resp = POST('/users/'+admin_id+'/demote', {}, admin_ctx, db=db_stub); assert resp.status == 500; assert parse_json(resp.body).message == 'internal server error'"
+    },
+    {
+      "id": "TS-07-E9",
+      "requirement_id": "07-REQ-10.E1",
+      "kind": "unit",
+      "description": "Verifies that API key listing responses contain only the defined metadata fields and no secret values.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users and api_keys tables",
+        "A user exists with one API key that has a secret value stored in the database",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<user-uuid>/keys",
+      "expected": "HTTP 200; each object in the array has exactly the keys {key_id, user_id, created_at, expires_at, revoked_at} and no field named 'secret', 'key', 'token', or any similar secret field",
+      "assertion_pseudocode": "resp = GET('/users/'+user_id+'/keys', admin_ctx); keys = parse_json(resp.body); for k in keys: assert 'secret' not in k; assert 'key' not in k; assert set(k.keys()) == {'key_id','user_id','created_at','expires_at','revoked_at'}"
+    },
+    {
+      "id": "TS-07-E10",
+      "requirement_id": "07-REQ-12.E1",
+      "kind": "unit",
+      "description": "Verifies that PAT listing responses contain only the defined metadata fields and no secret values.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users and pats tables",
+        "A user exists with one PAT that has a secret value stored in the database",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context is authenticated as admin"
+      ],
+      "input": "GET /users/<user-uuid>/tokens",
+      "expected": "HTTP 200; each object in the array has exactly the keys {token_id, name, permissions, user_id, created_at, expires_at, revoked_at} and no secret field",
+      "assertion_pseudocode": "resp = GET('/users/'+user_id+'/tokens', admin_ctx); tokens = parse_json(resp.body); for t in tokens: assert 'secret' not in t; assert 'token' not in t or t.keys() == {'token_id','name','permissions','user_id','created_at','expires_at','revoked_at'}"
+    },
+    {
+      "id": "TS-07-E11",
+      "requirement_id": "07-REQ-14.E1",
+      "kind": "unit",
+      "description": "Verifies that GET /user returns HTTP 304 with no body when the If-None-Match header matches the current ETag.",
+      "preconditions": [
+        "In-memory SQLite database initialised with the users table",
+        "An authenticated user record exists with a known updated_at timestamp",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has users:read permission"
+      ],
+      "input": "GET /user with If-None-Match header set to the ETag derived from user.UpdatedAt",
+      "expected": "HTTP 304; no response body",
+      "assertion_pseudocode": "etag = compute_etag(user.updated_at); resp = GET('/user', user_ctx_with_users_read, headers={'If-None-Match': etag}); assert resp.status == 304; assert resp.body == ''"
+    },
+    {
+      "id": "TS-07-E12",
+      "requirement_id": "07-REQ-15.E1",
+      "kind": "unit",
+      "description": "Verifies that PATCH /user uses the users:read permission check (not a write permission) because no users:write scope is defined in the PAT permission set.",
+      "preconditions": [
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has a PAT with users:read permission"
+      ],
+      "input": "PATCH /user with body {\"full_name\": \"Updated\"} using a PAT with only users:read (no users:write)",
+      "expected": "HTTP 200; update succeeds, confirming that users:read is sufficient for self-service full_name updates",
+      "assertion_pseudocode": "resp = PATCH('/user', {full_name:'Updated'}, ctx_with_only_users_read); assert resp.status == 200; user = parse_json(resp.body); assert user.full_name == 'Updated'"
+    },
+    {
+      "id": "TS-07-E13",
+      "requirement_id": "07-REQ-16.E1",
+      "kind": "unit",
+      "description": "Verifies that GET /user/orgs excludes organizations with status='blocked' from the response.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users, orgs, and org_members tables",
+        "Authenticated user is a member of one active org and one blocked org",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has orgs:read permission"
+      ],
+      "input": "GET /user/orgs with a PAT bearing orgs:read permission",
+      "expected": "HTTP 200; JSON array contains only the active organization; the blocked organization is absent from the response",
+      "assertion_pseudocode": "resp = GET('/user/orgs', user_ctx_with_orgs_read); orgs = parse_json(resp.body); assert len(orgs) == 1; assert orgs[0].status == 'active'"
+    },
+    {
+      "id": "TS-07-E14",
+      "requirement_id": "07-REQ-16.E2",
+      "kind": "unit",
+      "description": "Verifies that GET /user/orgs returns an empty JSON array (not null) when the user has no memberships or all memberships are in blocked orgs.",
+      "preconditions": [
+        "In-memory SQLite database initialised with users, orgs, and org_members tables",
+        "Authenticated user has no active org memberships",
+        "Echo test server with RegisterUserHandlers configured",
+        "Request context has orgs:read permission"
+      ],
+      "input": "GET /user/orgs when user has no active org memberships",
+      "expected": "HTTP 200; response body is exactly '[]' (empty JSON array), not null",
+      "assertion_pseudocode": "resp = GET('/user/orgs', user_ctx_with_orgs_read); assert resp.status == 200; assert parse_json(resp.body) == []"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-07-SMOKE-1",
+      "execution_path_id": "07-PATH-1",
+      "description": "End-to-end smoke test: an admin creates a new user via POST /users, verifying the full handler flow from auth check through UUID generation, database insertion, and 201 response with the complete User object.",
+      "trigger": "Admin client sends POST /users with body {\"username\":\"smoketest\",\"email\":\"smoke@example.com\",\"provider\":\"github\",\"provider_id\":\"gh-smoke\"} authenticated as admin",
+      "real_components": [
+        "internal/handlers/users.go (createUser handler, RegisterUserHandlers)",
+        "Echo router (APIGroup)",
+        "internal/db (users table via *sql.DB, db.FormatTime)",
+        "github.com/google/uuid (UUID generation)"
+      ],
+      "mockable": [
+        "auth.RequireAdmin (stub to return nil for admin context)",
+        "auth.GetUserID (stub returning fixed UUID)"
+      ],
+      "expected_effects": [
+        "HTTP 201 response with Content-Type application/json",
+        "Response body is a valid User JSON object with all 10 fields present",
+        "user.username == 'smoketest', user.role == 'user', user.status == 'active', user.full_name == ''",
+        "user.id is a valid UUID v4 string",
+        "user.created_at and user.updated_at are valid RFC 3339 UTC timestamps",
+        "A new row exists in the users table of the SQLite database matching the returned user.id"
+      ]
+    },
+    {
+      "id": "TS-07-SMOKE-2",
+      "execution_path_id": "07-PATH-2",
+      "description": "End-to-end smoke test: admin demotes a target admin user, exercising the last-admin safeguard by verifying that demoting a non-last admin succeeds and demoting the sole admin returns 409.",
+      "trigger": "Admin client sends POST /users/:id/demote for a target admin user; run twice: once with two active admins, once with only one active admin",
+      "real_components": [
+        "internal/handlers/users.go (demoteUser handler)",
+        "Echo router (APIGroup)",
+        "internal/db (users table via *sql.DB, active admin count query)"
+      ],
+      "mockable": [
+        "auth.RequireAdmin (stub to return nil for admin context)"
+      ],
+      "expected_effects": [
+        "First call (two active admins): HTTP 200 with User object where role='user'; users table updated",
+        "Second call (sole admin): HTTP 409 with message 'cannot demote the last admin'; users table unchanged",
+        "After second call, the users table still has exactly one user with role='admin' AND status='active'"
+      ]
+    },
+    {
+      "id": "TS-07-SMOKE-3",
+      "execution_path_id": "07-PATH-3",
+      "description": "End-to-end smoke test: admin revokes a user's API key via DELETE /users/:id/keys/:key_id, then verifies idempotency on the second call.",
+      "trigger": "Admin client sends DELETE /users/<user-uuid>/keys/<key-id> twice: first call targets an active key, second call targets the same (now revoked) key",
+      "real_components": [
+        "internal/handlers/users.go (revokeUserKey handler)",
+        "Echo router (APIGroup)",
+        "internal/db (api_keys table via *sql.DB)"
+      ],
+      "mockable": [
+        "auth.RequireAdmin (stub to return nil for admin context)"
+      ],
+      "expected_effects": [
+        "First call: HTTP 204 No Content; api_keys table row has revoked_at set to a non-null UTC timestamp",
+        "Second call: HTTP 204 No Content; api_keys table row revoked_at is unchanged from the first revocation",
+        "No response body on either call"
+      ]
+    },
+    {
+      "id": "TS-07-SMOKE-4",
+      "execution_path_id": "07-PATH-4",
+      "description": "End-to-end smoke test: an authenticated user reads their own profile via GET /user (with ETag) and then updates their full_name via PATCH /user.",
+      "trigger": "Authenticated user client sends GET /user with users:read PAT, then sends PATCH /user with {\"full_name\": \"Updated Name\"} using the same PAT",
+      "real_components": [
+        "internal/handlers/users.go (getOwnProfile handler, updateOwnProfile handler)",
+        "Echo router (APIGroup)",
+        "internal/db (users table via *sql.DB)",
+        "apikit.SetETag, apikit.CheckETag"
+      ],
+      "mockable": [
+        "auth.RequirePermission (stub to return nil for users:read permission)",
+        "auth.GetUserID (stub returning the authenticated user's UUID)"
+      ],
+      "expected_effects": [
+        "GET /user returns HTTP 200 with User JSON object and ETag header set",
+        "GET /user with matching If-None-Match returns HTTP 304 with no body",
+        "PATCH /user returns HTTP 200 with updated User object where full_name='Updated Name'",
+        "users table row has full_name='Updated Name' and a refreshed updated_at"
+      ]
+    },
+    {
+      "id": "TS-07-SMOKE-5",
+      "execution_path_id": "07-PATH-5",
+      "description": "Full end-to-end smoke test: admin creates a user, promotes them, and the new user lists their org memberships, exercising all three handler interactions and both admin and self-service paths.",
+      "trigger": "Step 1: Admin sends POST /users to create a new user. Step 2: Admin sends POST /users/:id/promote for the new user. Step 3: New user sends GET /user/orgs with a PAT bearing orgs:read permission.",
+      "real_components": [
+        "internal/handlers/users.go (createUser, promoteUser, listOwnOrgs handlers, RegisterUserHandlers)",
+        "Echo router (server_core APIGroup)",
+        "internal/db (users table, org_members table, orgs table via *sql.DB, db.FormatTime)",
+        "github.com/google/uuid"
+      ],
+      "mockable": [
+        "auth.RequireAdmin (stub to return nil for admin context in steps 1 and 2)",
+        "auth.RequirePermission (stub to return nil for orgs:read in step 3)",
+        "auth.GetUserID (stub returning the new user's UUID in step 3)"
+      ],
+      "expected_effects": [
+        "Step 1: HTTP 201 with User object; new user row exists in users table with role='user'",
+        "Step 2: HTTP 200 with User object where role='admin'; users table row updated",
+        "Step 3: HTTP 200 with JSON array of active organizations the user belongs to; blocked orgs excluded; empty array if no memberships"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}
