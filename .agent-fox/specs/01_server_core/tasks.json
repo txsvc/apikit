@@ -311,7 +311,7 @@
             "01-REQ-8.2",
             "01-REQ-8.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -333,7 +333,7 @@
             "01-REQ-9.2",
             "01-REQ-9.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -355,7 +355,7 @@
             "01-REQ-10.2",
             "01-REQ-10.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -376,7 +376,7 @@
             "01-REQ-11.2",
             "01-REQ-11.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -397,7 +397,7 @@
             "01-REQ-10.2",
             "01-REQ-10.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
