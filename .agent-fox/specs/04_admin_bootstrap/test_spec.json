@@ -1,0 +1,1124 @@
+{
+  "$schema": null,
+  "spec_id": "04",
+  "spec_name": "admin_bootstrap",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-04-1",
+      "requirement_id": "04-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify that Run queries SELECT COUNT(*) FROM users to determine boot type before any other action.",
+      "preconditions": [
+        "In-memory SQLite database opened via db.OpenMemory with schema applied (users and admin_config tables exist)",
+        "BootstrapParams populated with a valid AdminEmail and a temp ConfigDir"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false,
+        "users_count": 0
+      },
+      "expected": "Run internally issues SELECT COUNT(*) FROM users as its first database operation; the zero-user branch is executed and Run returns nil",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; row = db.QueryRow('SELECT value FROM admin_config WHERE key = \"admin_email\"'); assert row.Scan(&v) == nil"
+    },
+    {
+      "id": "TS-04-2",
+      "requirement_id": "04-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify that Run classifies the startup as first boot and executes the first boot sequence when the users table has zero rows.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false,
+        "users_count": 0
+      },
+      "expected": "Run returns nil and admin_email is stored in admin_config, indicating the first boot sequence ran",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; v = queryAdminConfig(db, 'admin_email'); assert v == 'admin@example.com'"
+    },
+    {
+      "id": "TS-04-3",
+      "requirement_id": "04-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that Run classifies the startup as a subsequent boot and executes the subsequent boot sequence when the users table has at least one row.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains one or more rows",
+        "admin_config contains a valid admin_token_hash matching ADMIN_TOKEN env var",
+        "admin_token file does not exist in ConfigDir",
+        "ADMIN_TOKEN environment variable set to a known token whose SHA-256 hash matches admin_token_hash"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "ak_admin_aabbccdd...",
+        "AdminEmail": "",
+        "ResetToken": false,
+        "users_count": 1
+      },
+      "expected": "Run returns nil without executing the first boot sequence (no new token generated, admin_email not overwritten)",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); token = 'ak_admin_' + hex(randomBytes(32)); hash = hexSHA256(token); setAdminConfig(db, 'admin_token_hash', hash); setEnv('ADMIN_TOKEN', token); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-4",
+      "requirement_id": "04-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify that Run returns an error containing 'admin-email' when first boot is detected and AdminEmail is empty.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows"
+      ],
+      "input": {
+        "AdminEmail": "",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error whose message contains 'admin-email' (specifically 'first boot: --admin-email is required')",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'admin-email')"
+    },
+    {
+      "id": "TS-04-5",
+      "requirement_id": "04-REQ-2.2",
+      "kind": "integration",
+      "description": "Verify that Run stores the provided AdminEmail in admin_config under key 'admin_email' using INSERT OR REPLACE on first boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "admin_config table contains a row with key='admin_email' and value='admin@example.com'",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; v = queryAdminConfig(db, 'admin_email'); assert v == 'admin@example.com'"
+    },
+    {
+      "id": "TS-04-6",
+      "requirement_id": "04-REQ-2.3",
+      "kind": "unit",
+      "description": "Verify that the generated admin token consists of the TokenPrefix, '_admin_', and exactly 64 lowercase hex characters derived from 32 random bytes.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false,
+        "TokenPrefix": "ak"
+      },
+      "expected": "Token written to admin_token file matches regex '^ak_admin_[0-9a-f]{64}$'",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; content = readFile(tmpDir + '/admin_token'); assert matches(content, '^ak_admin_[0-9a-f]{64}$')"
+    },
+    {
+      "id": "TS-04-7",
+      "requirement_id": "04-REQ-2.4",
+      "kind": "integration",
+      "description": "Verify that the SHA-256 hash of the generated token (hex-encoded, 64 chars) is stored in admin_config under key 'admin_token_hash' on first boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "admin_config contains key 'admin_token_hash' whose value equals hex(SHA256(token_file_contents)) and is exactly 64 lowercase hex characters",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; token = readFile(tmpDir + '/admin_token'); expectedHash = hexSHA256(token); storedHash = queryAdminConfig(db, 'admin_token_hash'); assert storedHash == expectedHash; assert len(storedHash) == 64; assert isLowercaseHex(storedHash)"
+    },
+    {
+      "id": "TS-04-8",
+      "requirement_id": "04-REQ-2.5",
+      "kind": "integration",
+      "description": "Verify that Run writes the plaintext token to the admin_token file at the correct path with file mode 0600 on first boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory",
+        "XDG_CONFIG_HOME is unset (or set to a controlled test value)"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/tmp/testdir",
+        "ResetToken": false
+      },
+      "expected": "File admin_token exists at ConfigDir/admin_token with mode 0600 and contains the plaintext token",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; fi = os.Stat(tmpDir + '/admin_token'); assert fi.Mode() == 0o600; assert len(readFile(tmpDir + '/admin_token')) > 0"
+    },
+    {
+      "id": "TS-04-9",
+      "requirement_id": "04-REQ-2.6",
+      "kind": "unit",
+      "description": "Verify that Run logs the absolute path of the admin_token file at warn level after writing it on first boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory",
+        "Logger is a test logger that captures log entries"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "A log entry at warn level exists whose message contains the absolute path of the admin_token file",
+      "assertion_pseudocode": "db = openMemoryDB(); hook = newLogCapture(); logger = newLoggerWithHook(hook); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: logger}; err = Run(ctx, params); assert err == nil; warnEntries = hook.EntriesAtLevel(WARN); assert any(entry, strings.Contains(entry.Message, absPath(tmpDir + '/admin_token')))"
+    },
+    {
+      "id": "TS-04-10",
+      "requirement_id": "04-REQ-2.7",
+      "kind": "integration",
+      "description": "Verify that Run returns nil when the full first boot sequence completes without error.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory",
+        "Valid AdminEmail provided"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "Run returns nil error",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-11",
+      "requirement_id": "04-REQ-2.8",
+      "kind": "unit",
+      "description": "Verify that the admin_token file contains the raw plaintext token with no trailing newline.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains zero rows",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "File content does not end with '\\n' or '\\r\\n' and contains a non-empty token string",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; content = readFileBytes(tmpDir + '/admin_token'); assert content[-1] != '\\n'; assert len(content) > 0"
+    },
+    {
+      "id": "TS-04-12",
+      "requirement_id": "04-REQ-3.1",
+      "kind": "unit",
+      "description": "Verify that ShouldAutoPromote returns (true, nil) when the provided email matches the stored admin_email in admin_config.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "admin_config contains key 'admin_email' with value 'admin@example.com'"
+      ],
+      "input": {
+        "email": "admin@example.com"
+      },
+      "expected": "ShouldAutoPromote returns (true, nil)",
+      "assertion_pseudocode": "db = openMemoryDB(); setAdminConfig(db, 'admin_email', 'admin@example.com'); result, err = ShouldAutoPromote(ctx, db, 'admin@example.com'); assert err == nil; assert result == true"
+    },
+    {
+      "id": "TS-04-13",
+      "requirement_id": "04-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify that ShouldAutoPromote returns (false, nil) when the provided email does not match the stored admin_email.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "admin_config contains key 'admin_email' with value 'admin@example.com'"
+      ],
+      "input": {
+        "email": "other@example.com"
+      },
+      "expected": "ShouldAutoPromote returns (false, nil)",
+      "assertion_pseudocode": "db = openMemoryDB(); setAdminConfig(db, 'admin_email', 'admin@example.com'); result, err = ShouldAutoPromote(ctx, db, 'other@example.com'); assert err == nil; assert result == false"
+    },
+    {
+      "id": "TS-04-14",
+      "requirement_id": "04-REQ-3.3",
+      "kind": "unit",
+      "description": "Verify that ShouldAutoPromote returns (false, nil) when no admin_email key exists in admin_config.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "admin_config table is empty (no admin_email key)"
+      ],
+      "input": {
+        "email": "anyone@example.com"
+      },
+      "expected": "ShouldAutoPromote returns (false, nil) without error",
+      "assertion_pseudocode": "db = openMemoryDB(); result, err = ShouldAutoPromote(ctx, db, 'anyone@example.com'); assert err == nil; assert result == false"
+    },
+    {
+      "id": "TS-04-15",
+      "requirement_id": "04-REQ-3.4",
+      "kind": "unit",
+      "description": "Verify that ShouldAutoPromote is documented and designed to be called only for newly created users, not for updates to existing users.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "admin_config contains key 'admin_email' with value 'admin@example.com'"
+      ],
+      "input": {
+        "email": "admin@example.com",
+        "is_new_user": true
+      },
+      "expected": "ShouldAutoPromote returns (true, nil) when called for a new user; callers must not call it for existing user updates (enforced by caller convention, not by this function itself)",
+      "assertion_pseudocode": "db = openMemoryDB(); setAdminConfig(db, 'admin_email', 'admin@example.com'); result, err = ShouldAutoPromote(ctx, db, 'admin@example.com'); assert err == nil; assert result == true; // The function itself does not check is_new_user; the OAuth caller is responsible for this gate"
+    },
+    {
+      "id": "TS-04-16",
+      "requirement_id": "04-REQ-3.5",
+      "kind": "integration",
+      "description": "Verify that the server logs the auto-promotion event at info level when ShouldAutoPromote returns true and the OAuth callback grants the admin role.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "admin_config contains key 'admin_email' with value 'admin@example.com'",
+        "Logger captures log entries",
+        "Caller (simulating OAuth callback) logs the auto-promotion event at info level upon receiving true from ShouldAutoPromote"
+      ],
+      "input": {
+        "email": "admin@example.com"
+      },
+      "expected": "An info-level log entry exists containing the promoted user's email",
+      "assertion_pseudocode": "db = openMemoryDB(); setAdminConfig(db, 'admin_email', 'admin@example.com'); hook = newLogCapture(); logger = newLoggerWithHook(hook); result, err = ShouldAutoPromote(ctx, db, 'admin@example.com'); assert result == true; assert err == nil; logger.Infof('auto-promoted user %s to admin', 'admin@example.com'); infoEntries = hook.EntriesAtLevel(INFO); assert any(entry, strings.Contains(entry.Message, 'admin@example.com'))"
+    },
+    {
+      "id": "TS-04-17",
+      "requirement_id": "04-REQ-4.1",
+      "kind": "integration",
+      "description": "Verify that Run returns an error containing 'admin_token file exists' when the admin_token file is present on disk during a subsequent boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file exists in ConfigDir",
+        "admin_config contains a valid admin_token_hash"
+      ],
+      "input": {
+        "ResetToken": false,
+        "token_file_present": true
+      },
+      "expected": "Run returns a non-nil error whose message matches 'admin_token file exists at <path>: save the token securely and delete the file before restarting'",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); writeFile(tmpDir + '/admin_token', 'sometoken', 0o600); setAdminConfig(db, 'admin_token_hash', hexSHA256('sometoken')); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'admin_token file exists')"
+    },
+    {
+      "id": "TS-04-18",
+      "requirement_id": "04-REQ-4.2",
+      "kind": "integration",
+      "description": "Verify that Run returns an error containing 'ADMIN_TOKEN' when the ADMIN_TOKEN environment variable is empty or unset on a subsequent boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file does not exist in ConfigDir",
+        "ADMIN_TOKEN environment variable is unset",
+        "admin_config contains a valid admin_token_hash"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error with message 'ADMIN_TOKEN environment variable is required'",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); unsetEnv('ADMIN_TOKEN'); setAdminConfig(db, 'admin_token_hash', 'somehash'); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'ADMIN_TOKEN environment variable is required')"
+    },
+    {
+      "id": "TS-04-19",
+      "requirement_id": "04-REQ-4.3",
+      "kind": "unit",
+      "description": "Verify that Run computes SHA-256 of ADMIN_TOKEN, hex-encodes it, and compares against admin_token_hash using subtle.ConstantTimeCompare on a subsequent boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file does not exist",
+        "ADMIN_TOKEN is set to a known token",
+        "admin_config contains admin_token_hash = hex(SHA256(ADMIN_TOKEN))"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "ak_admin_aabbccdd1122334455667788990011223344556677889900112233445566778899",
+        "ResetToken": false
+      },
+      "expected": "Run returns nil (comparison passes) demonstrating it correctly compared SHA-256 hash of ADMIN_TOKEN against stored hash",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); token = 'ak_admin_' + hex(bytes(32)); hash = hexSHA256(token); setAdminConfig(db, 'admin_token_hash', hash); setEnv('ADMIN_TOKEN', token); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-20",
+      "requirement_id": "04-REQ-4.4",
+      "kind": "integration",
+      "description": "Verify that Run returns an error containing 'does not match' when the SHA-256 hash of ADMIN_TOKEN does not match the stored admin_token_hash.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file does not exist",
+        "ADMIN_TOKEN is set to a wrong token",
+        "admin_config contains a different admin_token_hash"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "ak_admin_wrongtoken",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error with message 'ADMIN_TOKEN does not match the stored admin token'",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); correctToken = 'ak_admin_' + hex(randomBytes(32)); wrongToken = 'ak_admin_' + hex(randomBytes(32)); assert correctToken != wrongToken; setAdminConfig(db, 'admin_token_hash', hexSHA256(correctToken)); setEnv('ADMIN_TOKEN', wrongToken); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'does not match')"
+    },
+    {
+      "id": "TS-04-21",
+      "requirement_id": "04-REQ-4.5",
+      "kind": "integration",
+      "description": "Verify that Run silently ignores AdminEmail on subsequent boot without logging a warning or modifying the stored admin_email.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_config contains 'admin_email'='original@example.com' and a valid admin_token_hash",
+        "admin_token file does not exist",
+        "ADMIN_TOKEN env var set to the correct token",
+        "Logger captures log entries"
+      ],
+      "input": {
+        "AdminEmail": "new@example.com",
+        "ResetToken": false
+      },
+      "expected": "Run returns nil; admin_email in admin_config remains 'original@example.com'; no warning log about admin_email",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); token = 'ak_admin_' + hex(randomBytes(32)); setAdminConfig(db, 'admin_token_hash', hexSHA256(token)); setAdminConfig(db, 'admin_email', 'original@example.com'); setEnv('ADMIN_TOKEN', token); hook = newLogCapture(); params = {DB: db, AdminEmail: 'new@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLoggerWithHook(hook)}; err = Run(ctx, params); assert err == nil; v = queryAdminConfig(db, 'admin_email'); assert v == 'original@example.com'"
+    },
+    {
+      "id": "TS-04-22",
+      "requirement_id": "04-REQ-4.6",
+      "kind": "integration",
+      "description": "Verify that Run returns nil when the subsequent boot hash comparison succeeds.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file does not exist",
+        "ADMIN_TOKEN env var set to a token whose SHA-256 matches admin_token_hash in admin_config"
+      ],
+      "input": {
+        "ResetToken": false
+      },
+      "expected": "Run returns nil",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); token = 'ak_admin_' + hex(randomBytes(32)); setAdminConfig(db, 'admin_token_hash', hexSHA256(token)); setEnv('ADMIN_TOKEN', token); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-23",
+      "requirement_id": "04-REQ-4.7",
+      "kind": "integration",
+      "description": "Verify that Run returns an error instructing the operator to run with --reset-admin-token when admin_token_hash is absent from admin_config on a subsequent boot.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_token file does not exist",
+        "admin_config does not contain the key 'admin_token_hash'",
+        "ADMIN_TOKEN env var is set"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "some_token",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error with message 'no admin token hash found in database; run with --reset-admin-token to generate a new token'",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); setEnv('ADMIN_TOKEN', 'ak_admin_whatever'); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'no admin token hash found')"
+    },
+    {
+      "id": "TS-04-24",
+      "requirement_id": "04-REQ-5.1",
+      "kind": "integration",
+      "description": "Verify that Run runs token rotation and generates a new admin token when ResetToken is true, regardless of user count.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row (subsequent boot context)",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "",
+        "ResetToken": true
+      },
+      "expected": "Run returns nil and a new admin_token file is written to ConfigDir containing a token matching '^<prefix>_admin_[0-9a-f]{64}$'",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; content = readFile(tmpDir + '/admin_token'); assert matches(content, '^ak_admin_[0-9a-f]{64}$')"
+    },
+    {
+      "id": "TS-04-25",
+      "requirement_id": "04-REQ-5.2",
+      "kind": "integration",
+      "description": "Verify that Run overwrites admin_token_hash in admin_config with the SHA-256 hash of the new token during token rotation, invalidating the old token.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "admin_config contains an existing admin_token_hash",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "admin_config.admin_token_hash is updated to the SHA-256 hash of the new token, which differs from the old hash",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); oldToken = 'ak_admin_' + hex(randomBytes(32)); oldHash = hexSHA256(oldToken); setAdminConfig(db, 'admin_token_hash', oldHash); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; newToken = readFile(tmpDir + '/admin_token'); newHash = queryAdminConfig(db, 'admin_token_hash'); assert newHash == hexSHA256(newToken); assert newHash != oldHash"
+    },
+    {
+      "id": "TS-04-26",
+      "requirement_id": "04-REQ-5.3",
+      "kind": "integration",
+      "description": "Verify that Run writes the new plaintext token to the admin_token file with mode 0600 during token rotation.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "admin_token file exists at ConfigDir/admin_token with mode 0600 and contains a valid token format",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; fi = os.Stat(tmpDir + '/admin_token'); assert fi.Mode() == 0o600; content = readFile(tmpDir + '/admin_token'); assert matches(content, '^ak_admin_[0-9a-f]{64}$')"
+    },
+    {
+      "id": "TS-04-27",
+      "requirement_id": "04-REQ-5.4",
+      "kind": "unit",
+      "description": "Verify that Run logs the admin_token file path at warn level after writing the token file during token rotation.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "ConfigDir is a writable temp directory",
+        "Logger captures log entries"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "A warn-level log entry exists containing the absolute path of the admin_token file",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); hook = newLogCapture(); logger = newLoggerWithHook(hook); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: logger}; err = Run(ctx, params); assert err == nil; warnEntries = hook.EntriesAtLevel(WARN); assert any(entry, strings.Contains(entry.Message, absPath(tmpDir + '/admin_token')))"
+    },
+    {
+      "id": "TS-04-28",
+      "requirement_id": "04-REQ-5.5",
+      "kind": "integration",
+      "description": "Verify that Run skips the file-presence guard and ADMIN_TOKEN env var check during a reset boot, returning nil even if the token file exists and ADMIN_TOKEN is unset.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "ADMIN_TOKEN environment variable is unset",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "Run returns nil without checking for the token file or ADMIN_TOKEN env var",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); unsetEnv('ADMIN_TOKEN'); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-29",
+      "requirement_id": "04-REQ-5.6",
+      "kind": "integration",
+      "description": "Verify that on the next restart after token rotation (without --reset-admin-token), the file-presence guard and ADMIN_TOKEN validation apply normally.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table contains at least one row",
+        "A previous token rotation boot left the admin_token file on disk",
+        "ADMIN_TOKEN env var is unset"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "",
+        "ResetToken": false,
+        "token_file_present": true
+      },
+      "expected": "Run returns a non-nil error because the admin_token file is present (file-presence guard fires)",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); writeFile(tmpDir + '/admin_token', 'ak_admin_abc', 0o600); setAdminConfig(db, 'admin_token_hash', hexSHA256('ak_admin_abc')); unsetEnv('ADMIN_TOKEN'); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'admin_token file exists')"
+    },
+    {
+      "id": "TS-04-30",
+      "requirement_id": "04-REQ-6.1",
+      "kind": "unit",
+      "description": "Verify that the token generation function produces tokens strictly in the format '<prefix>_admin_<64 lowercase hex chars>'.",
+      "preconditions": [
+        "No database required — testing the token generation helper in isolation"
+      ],
+      "input": {
+        "TokenPrefix": "ak"
+      },
+      "expected": "Generated token matches regex '^ak_admin_[0-9a-f]{64}$' and the hex portion is exactly 64 characters",
+      "assertion_pseudocode": "token = generateToken('ak'); assert matches(token, '^ak_admin_[0-9a-f]{64}$'); parts = strings.Split(token, '_admin_'); assert len(parts) == 2; assert len(parts[1]) == 64; assert isLowercaseHex(parts[1])"
+    },
+    {
+      "id": "TS-04-31",
+      "requirement_id": "04-REQ-6.2",
+      "kind": "unit",
+      "description": "Verify that token hash computation uses SHA-256 over the full token string and produces a 64-character lowercase hex digest.",
+      "preconditions": [
+        "No database required"
+      ],
+      "input": {
+        "token": "ak_admin_aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+      },
+      "expected": "hashToken(token) returns a 64-character lowercase hex string equal to hex(SHA256(token))",
+      "assertion_pseudocode": "token = 'ak_admin_aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'; expected = hexSHA256(token); result = hashToken(token); assert result == expected; assert len(result) == 64; assert isLowercaseHex(result)"
+    },
+    {
+      "id": "TS-04-32",
+      "requirement_id": "04-REQ-6.3",
+      "kind": "unit",
+      "description": "Verify that token hash comparison uses subtle.ConstantTimeCompare by checking correct results for matching and non-matching inputs.",
+      "preconditions": [
+        "No database required"
+      ],
+      "input": {
+        "token_a": "ak_admin_aaaa...",
+        "token_b": "ak_admin_bbbb..."
+      },
+      "expected": "compareHashes(hashToken(token_a), hashToken(token_a)) returns true; compareHashes(hashToken(token_a), hashToken(token_b)) returns false",
+      "assertion_pseudocode": "hashA = hexSHA256('ak_admin_aaaa'); hashB = hexSHA256('ak_admin_bbbb'); assert compareTokenHashes(hashA, hashA) == true; assert compareTokenHashes(hashA, hashB) == false; // The implementation must use subtle.ConstantTimeCompare — verify by code inspection or grep for 'ConstantTimeCompare' in bootstrap.go"
+    },
+    {
+      "id": "TS-04-33",
+      "requirement_id": "04-REQ-6.4",
+      "kind": "unit",
+      "description": "Verify that the token generator never uses math/rand by inspecting the source or confirming crypto/rand is used.",
+      "preconditions": [
+        "Source file internal/bootstrap/bootstrap.go is available"
+      ],
+      "input": {},
+      "expected": "Source file does not import 'math/rand' and does import 'crypto/rand'",
+      "assertion_pseudocode": "source = readFile('internal/bootstrap/bootstrap.go'); assert not strings.Contains(source, '\"math/rand\"'); assert strings.Contains(source, '\"crypto/rand\"')"
+    },
+    {
+      "id": "TS-04-34",
+      "requirement_id": "04-REQ-6.5",
+      "kind": "unit",
+      "description": "Verify that the admin_token file contains only the raw plaintext token with no trailing newline.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table is empty (first boot)",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "readFileBytes(admin_token) does not end with 0x0A (newline); content is a valid token string",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; Run(ctx, params); raw = readFileBytes(tmpDir + '/admin_token'); assert raw[-1] != 0x0A; assert matches(string(raw), '^ak_admin_[0-9a-f]{64}$')"
+    },
+    {
+      "id": "TS-04-35",
+      "requirement_id": "04-REQ-7.1",
+      "kind": "integration",
+      "description": "Verify that Run is invoked only after LoadConfig and db.Open complete, and that it returns before the HTTP server starts.",
+      "preconditions": [
+        "Full server startup sequence observable (e.g., via integration test or startup ordering test)",
+        "In-memory SQLite database opened with schema applied",
+        "users table is empty"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "Run completes and returns nil before any HTTP listener binds; DB schema exists when Run is called",
+      "assertion_pseudocode": "db = openMemoryDB(); // schema must exist before Run; assert tableExists(db, 'users'); assert tableExists(db, 'admin_config'); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; // HTTP server is only started after Run returns nil in main()"
+    },
+    {
+      "id": "TS-04-36",
+      "requirement_id": "04-REQ-7.2",
+      "kind": "unit",
+      "description": "Verify that Run executes token rotation first and returns without running first-boot or subsequent-boot sequences when ResetToken is true.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table may be empty or non-empty",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "AdminEmail": "",
+        "ResetToken": true
+      },
+      "expected": "Run returns nil after writing a new token file; first-boot and subsequent-boot checks are not executed",
+      "assertion_pseudocode": "db = openMemoryDB(); // Test with zero users — first boot checks would require AdminEmail; ResetToken=true should bypass that params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; // If first-boot ran, it would error because AdminEmail is empty; since it doesn't, rotation took priority"
+    },
+    {
+      "id": "TS-04-37",
+      "requirement_id": "04-REQ-7.3",
+      "kind": "unit",
+      "description": "Verify that when Run returns a non-nil error, the server binary's main() treats it as fatal and must not start the HTTP server.",
+      "preconditions": [
+        "In-memory SQLite database opened with schema applied",
+        "users table is empty, AdminEmail is empty (guaranteed error condition)"
+      ],
+      "input": {
+        "AdminEmail": "",
+        "ResetToken": false
+      },
+      "expected": "Run returns non-nil error; the caller is expected to call log.Fatal(err) and not proceed to start the HTTP listener",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; // Verify Run does not itself call os.Exit or log.Fatal (no panic, no process termination observed); // The test process continues after Run returns"
+    },
+    {
+      "id": "TS-04-38",
+      "requirement_id": "04-REQ-7.4",
+      "kind": "unit",
+      "description": "Verify that the Run function documentation and design acknowledge the single-instance startup constraint (concurrent calls are not supported).",
+      "preconditions": [
+        "Source file internal/bootstrap/bootstrap.go is available"
+      ],
+      "input": {},
+      "expected": "The godoc comment for Run mentions that concurrent calls against the same database are not supported",
+      "assertion_pseudocode": "source = readFile('internal/bootstrap/bootstrap.go'); assert strings.Contains(source, 'Concurrent') OR strings.Contains(source, 'single-instance'); // Additionally, sequential calls in a single test complete without deadlock or panic: db = openMemoryDB(); insertUser(db); token = 'ak_admin_' + hex(randomBytes(32)); setAdminConfig(db, 'admin_token_hash', hexSHA256(token)); setEnv('ADMIN_TOKEN', token); params = {DB: db, ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil"
+    },
+    {
+      "id": "TS-04-39",
+      "requirement_id": "04-REQ-8.1",
+      "kind": "unit",
+      "description": "Verify that Run resolves the admin_token file path to $XDG_CONFIG_HOME/apikit/admin_token when XDG_CONFIG_HOME is set.",
+      "preconditions": [
+        "XDG_CONFIG_HOME environment variable is set to a temp directory",
+        "ConfigDir is set to '$XDG_CONFIG_HOME/apikit'",
+        "In-memory SQLite database with zero users"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/tmp/xdgtest/apikit",
+        "XDG_CONFIG_HOME": "/tmp/xdgtest"
+      },
+      "expected": "admin_token file is created at /tmp/xdgtest/apikit/admin_token",
+      "assertion_pseudocode": "setEnv('XDG_CONFIG_HOME', '/tmp/xdgtest'); db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: '/tmp/xdgtest/apikit', TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; fi = os.Stat('/tmp/xdgtest/apikit/admin_token'); assert fi != nil"
+    },
+    {
+      "id": "TS-04-40",
+      "requirement_id": "04-REQ-8.2",
+      "kind": "unit",
+      "description": "Verify that Run resolves the admin_token file path to ./admin_token (ConfigDir/admin_token) when XDG_CONFIG_HOME is not set.",
+      "preconditions": [
+        "XDG_CONFIG_HOME environment variable is unset",
+        "ConfigDir is set to a writable temp directory representing the current working directory",
+        "In-memory SQLite database with zero users"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/tmp/cwdtest",
+        "XDG_CONFIG_HOME": ""
+      },
+      "expected": "admin_token file is created at /tmp/cwdtest/admin_token",
+      "assertion_pseudocode": "unsetEnv('XDG_CONFIG_HOME'); db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: '/tmp/cwdtest', TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; fi = os.Stat('/tmp/cwdtest/admin_token'); assert fi != nil"
+    },
+    {
+      "id": "TS-04-41",
+      "requirement_id": "04-REQ-8.3",
+      "kind": "unit",
+      "description": "Verify that Run uses the ConfigDir field of BootstrapParams to construct the absolute path to the admin_token file.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "ConfigDir is a writable temp directory with a known absolute path"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/tmp/configdirtest"
+      },
+      "expected": "admin_token file is created at exactly ConfigDir + '/admin_token'",
+      "assertion_pseudocode": "db = openMemoryDB(); configDir = '/tmp/configdirtest'; os.MkdirAll(configDir); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: configDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err == nil; assert os.Stat(configDir + '/admin_token') != nil"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-04-P1",
+      "property_id": "04-PROP-1",
+      "validates": [
+        "04-REQ-6.1",
+        "04-REQ-2.3"
+      ],
+      "description": "For any two independently generated admin tokens, they must be different with overwhelming probability.",
+      "for_any_strategy": "Generate pairs of tokens using the internal token generation function with any valid TokenPrefix string",
+      "invariant_check": "token1 = generateToken(prefix); token2 = generateToken(prefix); assert token1 != token2"
+    },
+    {
+      "id": "TS-04-P2",
+      "property_id": "04-PROP-2",
+      "validates": [
+        "04-REQ-6.2",
+        "04-REQ-4.3"
+      ],
+      "description": "For any admin token string, hashing it twice with SHA-256 and hex-encoding must produce the same 64-character lowercase hex result.",
+      "for_any_strategy": "Any non-empty string token (using Go's testing/quick or manual table of representative tokens including various prefixes and lengths)",
+      "invariant_check": "hash1 = hexSHA256(token); hash2 = hexSHA256(token); assert hash1 == hash2; assert len(hash1) == 64; assert isLowercaseHex(hash1)"
+    },
+    {
+      "id": "TS-04-P3",
+      "property_id": "04-PROP-3",
+      "validates": [
+        "04-REQ-6.2",
+        "04-REQ-4.4"
+      ],
+      "description": "For any two distinct admin token strings, their SHA-256 hex digests must be different, ensuring the wrong token never passes hash comparison.",
+      "for_any_strategy": "Pairs of distinct non-empty strings (token_a, token_b) where token_a != token_b",
+      "invariant_check": "if token_a != token_b: assert hexSHA256(token_a) != hexSHA256(token_b)"
+    },
+    {
+      "id": "TS-04-P4",
+      "property_id": "04-PROP-4",
+      "validates": [
+        "04-REQ-4.1",
+        "04-REQ-7.3"
+      ],
+      "description": "For any subsequent boot attempt where the admin_token file is present on disk, Run must always return a non-nil error.",
+      "for_any_strategy": "Any valid admin_config state (with a stored hash), any token file content, any ADMIN_TOKEN env var value",
+      "invariant_check": "writeFile(configDir + '/admin_token', anyContent); err = Run(ctx, params_with_users_and_no_reset); assert err != nil; assert strings.Contains(err.Error(), 'admin_token file exists')"
+    },
+    {
+      "id": "TS-04-P5",
+      "property_id": "04-PROP-5",
+      "validates": [
+        "04-REQ-5.2",
+        "04-REQ-5.5"
+      ],
+      "description": "For any token rotation that stores a new admin_token_hash, the SHA-256 hash of the old token must no longer match the stored hash.",
+      "for_any_strategy": "Any prior admin token and any database state with users",
+      "invariant_check": "oldToken = generateToken('ak'); setAdminConfig(db, 'admin_token_hash', hexSHA256(oldToken)); Run(ctx, {ResetToken: true, ...}); newHash = queryAdminConfig(db, 'admin_token_hash'); assert subtle.ConstantTimeCompare([]byte(hexSHA256(oldToken)), []byte(newHash)) == 0"
+    },
+    {
+      "id": "TS-04-P6",
+      "property_id": "04-PROP-6",
+      "validates": [
+        "04-REQ-2.1"
+      ],
+      "description": "For any first boot attempt with an empty AdminEmail, Run must return a non-nil error and neither admin_email nor admin_token_hash must be written to admin_config.",
+      "for_any_strategy": "Any empty AdminEmail value (empty string), any database state with zero users",
+      "invariant_check": "db = openMemoryDB(); Run(ctx, {DB: db, AdminEmail: '', ResetToken: false, ...}); assert queryAdminConfig(db, 'admin_email') == ''; assert queryAdminConfig(db, 'admin_token_hash') == ''"
+    },
+    {
+      "id": "TS-04-P7",
+      "property_id": "04-PROP-7",
+      "validates": [
+        "04-REQ-3.3"
+      ],
+      "description": "For any call to ShouldAutoPromote when no admin_email key exists in admin_config, it must return (false, nil) regardless of the email argument.",
+      "for_any_strategy": "Any non-empty email string, with admin_config table present but empty (no rows)",
+      "invariant_check": "db = openMemoryDB(); // no admin_email in admin_config; result, err = ShouldAutoPromote(ctx, db, anyEmail); assert result == false; assert err == nil"
+    },
+    {
+      "id": "TS-04-P8",
+      "property_id": "04-PROP-8",
+      "validates": [
+        "04-REQ-2.E4",
+        "04-REQ-7.E1"
+      ],
+      "description": "For any error condition encountered inside Run, it must signal failure by returning a non-nil error and must never call os.Exit or log.Fatal.",
+      "for_any_strategy": "Any combination of invalid inputs (empty AdminEmail on first boot, wrong ADMIN_TOKEN, file permission errors, database errors)",
+      "invariant_check": "// Static check: source = readFile('internal/bootstrap/bootstrap.go'); assert not strings.Contains(source, 'os.Exit'); assert not strings.Contains(source, 'log.Fatal'); // Dynamic check: for each error scenario, err = Run(ctx, badParams); assert err != nil; // test process survives (no os.Exit was called)"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-04-E1",
+      "requirement_id": "04-REQ-1.E1",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping a database error when SELECT COUNT(*) FROM users fails.",
+      "preconditions": [
+        "A mock or broken SQLite database that returns an error for any query"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "DB": "broken_db_connection",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error whose message wraps the underlying database error",
+      "assertion_pseudocode": "db = openBrokenDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert errors.Unwrap(err) != nil OR strings.Contains(err.Error(), 'sql')"
+    },
+    {
+      "id": "TS-04-E2",
+      "requirement_id": "04-REQ-2.E1",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the crypto/rand error when random byte generation fails on first boot.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "crypto/rand.Read is mocked/replaced to return an error"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false,
+        "rand_error": "simulated entropy failure"
+      },
+      "expected": "Run returns a non-nil error; no admin_token_hash or admin_token file is written",
+      "assertion_pseudocode": "db = openMemoryDB(); // inject failing rand; params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = runWithBrokenRand(ctx, params); assert err != nil; assert queryAdminConfig(db, 'admin_token_hash') == ''; assert not fileExists(tmpDir + '/admin_token')"
+    },
+    {
+      "id": "TS-04-E3",
+      "requirement_id": "04-REQ-2.E2",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the OS error when writing the admin_token file fails on first boot.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "ConfigDir is a read-only directory or a path that cannot be written to"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/read-only-dir",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error wrapping an os.WriteFile or permission error; server does not start",
+      "assertion_pseudocode": "db = openMemoryDB(); readOnlyDir = createReadOnlyDir(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: readOnlyDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert errors.Unwrap(err) != nil OR strings.Contains(err.Error(), 'permission')"
+    },
+    {
+      "id": "TS-04-E4",
+      "requirement_id": "04-REQ-2.E3",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the database error when storing admin_email or admin_token_hash fails during first boot.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "Database write operations are mocked to fail after user count query succeeds"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error wrapping the database error; server does not start",
+      "assertion_pseudocode": "db = openMemoryWithWriteFailure(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil"
+    },
+    {
+      "id": "TS-04-E5",
+      "requirement_id": "04-REQ-2.E4",
+      "kind": "unit",
+      "description": "Verify that Run never calls os.Exit or log.Fatal internally; all errors are returned to the caller.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "AdminEmail is empty (triggers a guaranteed error path)"
+      ],
+      "input": {
+        "AdminEmail": "",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error; the test process is not terminated; no os.Exit or log.Fatal is called",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; // If Run called os.Exit, this assertion would never execute — its execution proves Run returned normally; source = readFile('internal/bootstrap/bootstrap.go'); assert not strings.Contains(source, 'os.Exit'); assert not strings.Contains(source, 'log.Fatal')"
+    },
+    {
+      "id": "TS-04-E6",
+      "requirement_id": "04-REQ-3.E1",
+      "kind": "unit",
+      "description": "Verify that ShouldAutoPromote returns (false, error) wrapping the database error when the query to read admin_email fails.",
+      "preconditions": [
+        "A broken SQLite database connection that returns an error on query"
+      ],
+      "input": {
+        "DB": "broken_db_connection",
+        "email": "admin@example.com"
+      },
+      "expected": "ShouldAutoPromote returns (false, non-nil error)",
+      "assertion_pseudocode": "db = openBrokenDB(); result, err = ShouldAutoPromote(ctx, db, 'admin@example.com'); assert result == false; assert err != nil"
+    },
+    {
+      "id": "TS-04-E7",
+      "requirement_id": "04-REQ-4.E1",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the database error when reading admin_token_hash from admin_config fails during a subsequent boot.",
+      "preconditions": [
+        "A database where the users table returns count > 0 but admin_config reads fail",
+        "admin_token file does not exist",
+        "ADMIN_TOKEN env var is set"
+      ],
+      "input": {
+        "ADMIN_TOKEN": "some_token",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error wrapping the database error",
+      "assertion_pseudocode": "db = openDBWithAdminConfigReadFailure(); params = {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; setEnv('ADMIN_TOKEN', 'some_token'); err = Run(ctx, params); assert err != nil"
+    },
+    {
+      "id": "TS-04-E8",
+      "requirement_id": "04-REQ-4.E2",
+      "kind": "unit",
+      "description": "Verify that the token hash comparison function uses subtle.ConstantTimeCompare to prevent timing side-channel attacks.",
+      "preconditions": [
+        "Source file internal/bootstrap/bootstrap.go is available"
+      ],
+      "input": {},
+      "expected": "Source file contains 'subtle.ConstantTimeCompare' and imports 'crypto/subtle'",
+      "assertion_pseudocode": "source = readFile('internal/bootstrap/bootstrap.go'); assert strings.Contains(source, 'subtle.ConstantTimeCompare'); assert strings.Contains(source, '\"crypto/subtle\"'); // Functional check: compareTokenHashes(h, h) == true; compareTokenHashes(h, differentH) == false"
+    },
+    {
+      "id": "TS-04-E9",
+      "requirement_id": "04-REQ-5.E1",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the crypto/rand error during token rotation without modifying the old admin_token_hash.",
+      "preconditions": [
+        "In-memory SQLite database with at least one user",
+        "admin_config contains an existing admin_token_hash",
+        "crypto/rand.Read is mocked to return an error"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "Run returns non-nil error; admin_token_hash in admin_config remains unchanged (equal to oldHash)",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); oldToken = 'ak_admin_' + hex(randomBytes(32)); oldHash = hexSHA256(oldToken); setAdminConfig(db, 'admin_token_hash', oldHash); err = runWithBrokenRand(ctx, {DB: db, ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}); assert err != nil; storedHash = queryAdminConfig(db, 'admin_token_hash'); assert storedHash == oldHash"
+    },
+    {
+      "id": "TS-04-E10",
+      "requirement_id": "04-REQ-5.E2",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the OS error when writing the admin_token file fails during token rotation.",
+      "preconditions": [
+        "In-memory SQLite database with at least one user",
+        "ConfigDir is a read-only directory"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "Run returns a non-nil error wrapping an os.WriteFile error; server does not start",
+      "assertion_pseudocode": "db = openMemoryDB(); insertUser(db); readOnlyDir = createReadOnlyDir(); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: readOnlyDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert strings.Contains(err.Error(), 'permission') OR errors.Unwrap(err) != nil"
+    },
+    {
+      "id": "TS-04-E11",
+      "requirement_id": "04-REQ-5.E3",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping the database error when updating admin_token_hash fails during token rotation.",
+      "preconditions": [
+        "A database that allows reading (user count) but fails on admin_config writes during rotation",
+        "ConfigDir is a writable temp directory"
+      ],
+      "input": {
+        "ResetToken": true
+      },
+      "expected": "Run returns a non-nil error wrapping the database error; server does not start",
+      "assertion_pseudocode": "db = openDBWithAdminConfigWriteFailure(); params = {DB: db, AdminEmail: '', ResetToken: true, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil"
+    },
+    {
+      "id": "TS-04-E12",
+      "requirement_id": "04-REQ-7.E1",
+      "kind": "unit",
+      "description": "Verify that Run never calls os.Exit or log.Fatal for any error condition by inspecting source and confirming test process survives all error paths.",
+      "preconditions": [
+        "Source file internal/bootstrap/bootstrap.go is available"
+      ],
+      "input": {},
+      "expected": "Source file does not contain 'os.Exit' or 'log.Fatal'; all error paths return non-nil error values",
+      "assertion_pseudocode": "source = readFile('internal/bootstrap/bootstrap.go'); assert not strings.Contains(source, 'os.Exit'); assert not strings.Contains(source, 'log.Fatal'); // Confirm multiple error paths all return normally: db = openMemoryDB(); err1 = Run(ctx, {DB: db, AdminEmail: '', ResetToken: false, ConfigDir: tmpDir, TokenPrefix: 'ak', Logger: newLogger()}); assert err1 != nil; // test process is still running"
+    },
+    {
+      "id": "TS-04-E13",
+      "requirement_id": "04-REQ-8.E1",
+      "kind": "unit",
+      "description": "Verify that Run returns a non-nil error wrapping an OS error when the directory for the admin_token file does not exist and cannot be created.",
+      "preconditions": [
+        "In-memory SQLite database with zero users",
+        "ConfigDir is set to a path that does not exist and cannot be created (e.g., inside a read-only filesystem)"
+      ],
+      "input": {
+        "AdminEmail": "admin@example.com",
+        "ConfigDir": "/nonexistent/readonly/path",
+        "ResetToken": false
+      },
+      "expected": "Run returns a non-nil error wrapping an OS error; admin_token file is not created",
+      "assertion_pseudocode": "db = openMemoryDB(); params = {DB: db, AdminEmail: 'admin@example.com', ResetToken: false, ConfigDir: '/nonexistent/readonly/path', TokenPrefix: 'ak', Logger: newLogger()}; err = Run(ctx, params); assert err != nil; assert not fileExists('/nonexistent/readonly/path/admin_token')"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-04-SMOKE-1",
+      "execution_path_id": "04-PATH-1",
+      "description": "Smoke test for the happy-path first boot: operator starts a fresh server with --admin-email, token and hash are stored, token file is written, server proceeds normally.",
+      "trigger": "Call Run with zero users in the DB and a valid AdminEmail",
+      "real_components": [
+        "internal/bootstrap.Run",
+        "internal/db (db.OpenMemory)",
+        "crypto/rand",
+        "crypto/sha256",
+        "os.WriteFile",
+        "logrus.Logger"
+      ],
+      "mockable": [
+        "crypto/rand.Read (optional, for determinism)"
+      ],
+      "expected_effects": [
+        "admin_config.admin_email = 'admin@example.com'",
+        "admin_config.admin_token_hash is a 64-char lowercase hex string equal to hex(SHA256(token_file_contents))",
+        "admin_token file exists at ConfigDir/admin_token with mode 0600",
+        "admin_token file contains a token matching '^ak_admin_[0-9a-f]{64}$' with no trailing newline",
+        "A warn-level log entry contains the absolute path of the admin_token file",
+        "Run returns nil"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-2",
+      "execution_path_id": "04-PATH-2",
+      "description": "Smoke test for the subsequent boot happy path: operator deletes the token file, sets ADMIN_TOKEN env var, and restarts; Run validates the token and returns nil.",
+      "trigger": "Call Run with users in the DB, no token file, and ADMIN_TOKEN set to the matching token",
+      "real_components": [
+        "internal/bootstrap.Run",
+        "internal/db (db.OpenMemory)",
+        "crypto/subtle.ConstantTimeCompare",
+        "os.Stat",
+        "os.Getenv"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "No new token file is created",
+        "admin_config is not modified",
+        "Run returns nil"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-3",
+      "execution_path_id": "04-PATH-3",
+      "description": "Smoke test for the file-presence guard: operator restarts without deleting the admin_token file; Run returns an error blocking server startup.",
+      "trigger": "Call Run with users in the DB and the admin_token file present in ConfigDir",
+      "real_components": [
+        "internal/bootstrap.Run",
+        "internal/db (db.OpenMemory)",
+        "os.Stat"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Run returns a non-nil error containing 'admin_token file exists at <path>'",
+        "HTTP server is not started (caller receives non-nil error)"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-4",
+      "execution_path_id": "04-PATH-4",
+      "description": "Smoke test for token rotation: operator restarts with --reset-admin-token; Run generates a new token, invalidates the old hash, writes the new token file, and returns nil.",
+      "trigger": "Call Run with ResetToken=true, users in the DB, and an existing admin_token_hash in admin_config",
+      "real_components": [
+        "internal/bootstrap.Run",
+        "internal/db (db.OpenMemory)",
+        "crypto/rand",
+        "crypto/sha256",
+        "os.WriteFile",
+        "logrus.Logger"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "admin_config.admin_token_hash is updated to a new value different from the previous hash",
+        "admin_token file exists at ConfigDir/admin_token with mode 0600 containing the new token",
+        "A warn-level log entry contains the absolute path of the admin_token file",
+        "Run returns nil",
+        "Old token no longer matches stored hash"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-5",
+      "execution_path_id": "04-PATH-5",
+      "description": "Smoke test for auto-promotion: a user with the designated admin email authenticates via OAuth for the first time; ShouldAutoPromote returns true.",
+      "trigger": "Call ShouldAutoPromote with the email matching admin_config.admin_email",
+      "real_components": [
+        "internal/bootstrap.ShouldAutoPromote",
+        "internal/db (db.OpenMemory)"
+      ],
+      "mockable": [
+        "OAuth callback handler (caller simulation)"
+      ],
+      "expected_effects": [
+        "ShouldAutoPromote returns (true, nil)",
+        "Caller (simulated OAuth handler) logs info-level auto-promotion event containing the user's email"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-6",
+      "execution_path_id": "04-PATH-6",
+      "description": "End-to-end smoke test covering first boot, auto-promotion on first OAuth login, and subsequent boot with ADMIN_TOKEN validation.",
+      "trigger": "Sequentially: (1) Run with zero users and AdminEmail, (2) ShouldAutoPromote with matching email, (3) Run with users and valid ADMIN_TOKEN after deleting token file",
+      "real_components": [
+        "internal/bootstrap.Run",
+        "internal/bootstrap.ShouldAutoPromote",
+        "internal/db (db.OpenMemory)",
+        "crypto/rand",
+        "crypto/sha256",
+        "crypto/subtle",
+        "os.WriteFile",
+        "os.Stat",
+        "logrus.Logger"
+      ],
+      "mockable": [
+        "OAuth callback handler (caller simulation)"
+      ],
+      "expected_effects": [
+        "After step 1: admin_email and admin_token_hash stored; admin_token file written with mode 0600; Run returns nil",
+        "After step 2: ShouldAutoPromote returns (true, nil) for the designated email; info-level log entry for auto-promotion",
+        "After step 3 (token file deleted, ADMIN_TOKEN set): Run returns nil; system is fully operational"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

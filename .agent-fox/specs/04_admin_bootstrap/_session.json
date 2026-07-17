@@ -1,0 +1,74 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The \"admin_bootstrap\" PRD is exceptionally well-written and comprehensive. All four required sections (Intent, Goals, Non-Goals, Background/Source) are present and of high quality. The spec clearly defines first-boot detection, token generation, file management, environment variable validation, token rotation, and auto-promotion logic. Functional requirements are precise and unambiguous, interfaces are fully specified with Go signatures, error conditions are enumerated, and a thorough testing strategy is provided. Dependencies on `server_core` and `database_layer` are explicitly declared. The `auth_middleware` spec is correctly identified as a downstream consumer. No blocking gaps or overlaps were found.",
+      "gaps": [
+        "Minor: The spec references an 'OAuth spec' (for the OAuth callback handler that calls ShouldAutoPromote) in Non-Goals and the auto-promotion section, but no OAuth spec appears in the active spec landscape. This downstream dependency is not declared in the Dependencies table, which may cause integration ambiguity when the OAuth spec is authored.",
+        "Minor: The 'Background' section is implicitly covered by the 'Source' section (referencing the master PRD), but no dedicated ## Background section exists. The Source section adequately provides context, so this is a formatting note rather than a substantive gap.",
+        "Minor: The spec does not address concurrency safety \u2014 e.g., what happens if two server instances start simultaneously on first boot against the same database. Given SQLite's single-writer model this is likely acceptable, but it is not explicitly called out.",
+        "Minor: The token file path for the 'Otherwise: ./admin_token' case uses the current working directory, which may differ from the config.toml location if the server is started from a different working directory. The relationship between CWD and config.toml location in the non-XDG case could be clarified."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The spec references an 'OAuth spec' as the owner of the OAuth callback handler that calls ShouldAutoPromote, but no OAuth spec exists in the current active spec landscape. Should the OAuth spec be declared as a planned dependency in the Dependencies table, or is the auto-promotion hook expected to be wired up within a future spec that is not yet created?",
+          "context": "The ShouldAutoPromote function is exported for use by the OAuth callback handler, but without a corresponding spec declaring the OAuth flow, there is no spec that owns the call site. This could lead to an integration gap when the OAuth spec is authored.",
+          "options": [
+            "Add a placeholder dependency entry for a future 'oauth_flow' or 'oauth_callback' spec in the Dependencies table.",
+            "Document the expected call site in a 'Consumers' or 'Integration Notes' section without a formal dependency.",
+            "No change needed \u2014 the OAuth spec will declare a dependency on admin_bootstrap when it is written."
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "For the non-XDG-CONFIG_HOME case, the token file is placed at './admin_token' (current working directory). Is it guaranteed that the server's working directory is always the same directory as config.toml in this case, or could they differ (e.g., when the binary is run from a different directory)?",
+          "context": "If the CWD and config.toml directory can diverge, the token file and config file would be in different locations, which contradicts the stated design decision of placing the token file 'next to config.toml'.",
+          "options": [
+            "Confirm that CWD always equals the config.toml directory in the non-XDG case (no change needed).",
+            "Update the path resolution to explicitly use the directory of config.toml rather than CWD.",
+            "Add a note clarifying the assumption that the server is always launched from the config directory."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "The spec does not address what happens if two server instances start concurrently against the same database on first boot (e.g., in a multi-process or restart-race scenario). Should the bootstrap logic include any database-level locking or idempotency guarantees beyond the existing INSERT OR REPLACE?",
+          "context": "SQLite's single-writer model provides some protection, but a race between two first-boot sequences could result in two different token hashes being written. The current INSERT OR REPLACE approach makes re-runs idempotent within a single process but may not protect against concurrent starts.",
+          "options": [
+            "Explicitly document that concurrent first-boot starts are unsupported and the operator must ensure single-instance startup.",
+            "Add a SQLite transaction or advisory lock around the first-boot sequence.",
+            "No change needed \u2014 SQLite's serialized write model is sufficient protection."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The admin_bootstrap PRD is complete and production-ready. All three previously identified minor gaps have been resolved: (1) the OAuth spec dependency relationship is now explicitly documented in Non-Goals, the Dependencies section, and a new Design Decision, clarifying that the OAuth spec will declare its dependency on admin_bootstrap when authored; (2) the non-XDG token file path ambiguity is resolved by a clearly worded note in the First Boot Sequence and a corresponding Design Decision stating that CWD equals the config.toml directory by operational convention; (3) the concurrency/multi-instance concern is addressed with a dedicated \"Concurrency and Multi-Instance Startup\" section, a doc comment on Run(), a Glossary entry, and a Design Decision. The PRD remains comprehensive across all standard sections: intent, goals, non-goals, dependencies, functional requirements, interfaces, error handling, testing strategy, and design decisions.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "No change needed. The OAuth spec will declare a dependency on admin_bootstrap when it is written.",
+        "q2": "CWD always equals the config.toml directory in the non-XDG case. No change needed.",
+        "q3": "Document that concurrent first-boot starts are unsupported. Operator must ensure single-instance startup."
+      },
+      "timestamp": "2026-07-17T10:45:31.432322+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

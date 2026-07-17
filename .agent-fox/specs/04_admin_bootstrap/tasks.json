@@ -1,0 +1,1385 @@
+{
+  "$schema": null,
+  "spec_id": "04",
+  "spec_name": "admin_bootstrap",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/bootstrap/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 4,
+      "to_group": 1,
+      "relationship": "Run() consumes apikit.TokenPrefix and LoadConfig()-derived ConfigDir from 01_server_core",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 4,
+      "to_group": 1,
+      "relationship": "Run() and ShouldAutoPromote() use *sql.DB from db.Open() and admin_config/users tables from 02_database_layer",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: First Boot Detection and First Boot Sequence (Part 1)",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write test file skeleton and helper utilities for bootstrap tests",
+          "details": [
+            "Create internal/bootstrap/bootstrap_test.go with package bootstrap_test.",
+            "Implement openMemoryDB() helper that calls db.OpenMemory and applies schema (users, admin_config tables).",
+            "Implement insertUser(db *sql.DB) helper for seeding test users.",
+            "Implement setAdminConfig(db *sql.DB, key, value string) and queryAdminConfig(db *sql.DB, key string) (string, error) helpers.",
+            "Implement hexSHA256(s string) string helper computing hex-encoded SHA-256.",
+            "Implement newTestLogger() returning a *logrus.Logger with a logrus test hook for capturing entries.",
+            "Implement fileExists(path string) bool and readFileBytes(path string) []byte helpers."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for first boot detection (REQ-1)",
+          "details": [
+            "Write TestRun_FirstBoot_UserCountQueried (TS-04-1): zero-user DB with valid AdminEmail; assert Run returns nil and admin_email is stored.",
+            "Write TestRun_FirstBoot_Classification (TS-04-2): zero users → first boot sequence executes, admin_email stored.",
+            "Write TestRun_SubsequentBoot_Classification (TS-04-3): insert user, set matching ADMIN_TOKEN and admin_token_hash, assert Run returns nil without re-writing admin_email.",
+            "Write TestRun_BrokenDB_UserCountFails (TS-04-E1): pass a closed/broken *sql.DB; assert Run returns non-nil error."
+          ],
+          "test_spec_refs": [
+            "TS-04-1",
+            "TS-04-2",
+            "TS-04-3",
+            "TS-04-E1"
+          ],
+          "requirement_refs": [
+            "04-REQ-1.1",
+            "04-REQ-1.2",
+            "04-REQ-1.3",
+            "04-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for first boot sequence – email requirement and storage (REQ-2.1, REQ-2.2)",
+          "details": [
+            "Write TestRun_FirstBoot_NoEmail (TS-04-4): zero-user DB, AdminEmail=''; assert non-nil error containing 'admin-email'.",
+            "Write TestRun_FirstBoot_EmailStored (TS-04-5): zero-user DB, AdminEmail='admin@example.com'; assert admin_config.admin_email == 'admin@example.com' after Run."
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-5"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.1",
+            "04-REQ-2.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write tests for first boot sequence – token generation, hashing, and file writing (REQ-2.3 – REQ-2.8)",
+          "details": [
+            "Write TestRun_FirstBoot_TokenFormat (TS-04-6): verify token file content matches '^ak_admin_[0-9a-f]{64}$'.",
+            "Write TestRun_FirstBoot_TokenHashStored (TS-04-7): verify admin_token_hash == hexSHA256(token_file_content) and is 64 lowercase hex chars.",
+            "Write TestRun_FirstBoot_TokenFilePermissions (TS-04-8): skip on Windows; verify token file mode == 0600.",
+            "Write TestRun_FirstBoot_WarnLog (TS-04-9): capture logrus entries; assert warn-level entry contains absolute path of admin_token file.",
+            "Write TestRun_FirstBoot_ReturnsNil (TS-04-10): valid params → Run returns nil.",
+            "Write TestRun_FirstBoot_NoTrailingNewline (TS-04-11): readFileBytes; assert last byte != 0x0A."
+          ],
+          "test_spec_refs": [
+            "TS-04-6",
+            "TS-04-7",
+            "TS-04-8",
+            "TS-04-9",
+            "TS-04-10",
+            "TS-04-11"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.3",
+            "04-REQ-2.4",
+            "04-REQ-2.5",
+            "04-REQ-2.6",
+            "04-REQ-2.7",
+            "04-REQ-2.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write tests for first boot error paths (REQ-2.E1 – REQ-2.E4)",
+          "details": [
+            "Write TestRun_FirstBoot_RandFailure (TS-04-E2): inject broken rand reader via package-level var or dependency injection; assert error returned, no token file written, no hash stored.",
+            "Write TestRun_FirstBoot_FileWriteFailure (TS-04-E3): use read-only tmpDir; assert non-nil error wrapping OS error.",
+            "Write TestRun_FirstBoot_DBWriteFailure (TS-04-E4): drop admin_config table before Run; assert non-nil error.",
+            "Write TestRun_NeverCallsOsExit (TS-04-E5, TS-04-E12): empty AdminEmail triggers error; assert test process continues; grep source for 'os.Exit' and 'log.Fatal' and assert absent."
+          ],
+          "test_spec_refs": [
+            "TS-04-E2",
+            "TS-04-E3",
+            "TS-04-E4",
+            "TS-04-E5"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.E1",
+            "04-REQ-2.E2",
+            "04-REQ-2.E3",
+            "04-REQ-2.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test functions in bootstrap_test.go compile without errors: go build ./internal/bootstrap/...",
+          "Test file exists at internal/bootstrap/bootstrap_test.go with all named test functions present.",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "Helper utilities (openMemoryDB, insertUser, setAdminConfig, queryAdminConfig, hexSHA256, newTestLogger) are defined and used consistently across test cases."
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: Subsequent Boot Sequence and Token Rotation",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for subsequent boot – file-presence guard and env var validation (REQ-4.1 – REQ-4.3)",
+          "details": [
+            "Write TestRun_SubsequentBoot_FileExists (TS-04-17): insert user, write admin_token file to ConfigDir; assert error containing 'admin_token file exists'.",
+            "Write TestRun_SubsequentBoot_NoEnvVar (TS-04-18): insert user, no token file, unset ADMIN_TOKEN; assert error containing 'ADMIN_TOKEN environment variable is required'.",
+            "Write TestRun_SubsequentBoot_HashComparison (TS-04-19): insert user, correct token in env, matching hash in admin_config; assert Run returns nil (proves SHA-256 comparison path runs)."
+          ],
+          "test_spec_refs": [
+            "TS-04-17",
+            "TS-04-18",
+            "TS-04-19"
+          ],
+          "requirement_refs": [
+            "04-REQ-4.1",
+            "04-REQ-4.2",
+            "04-REQ-4.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for subsequent boot – hash mismatch, email ignore, success, missing hash (REQ-4.4 – REQ-4.7)",
+          "details": [
+            "Write TestRun_SubsequentBoot_WrongToken (TS-04-20): wrong ADMIN_TOKEN; assert error containing 'does not match'.",
+            "Write TestRun_SubsequentBoot_IgnoresAdminEmail (TS-04-21): non-empty AdminEmail on subsequent boot; assert Run returns nil, admin_email in admin_config unchanged.",
+            "Write TestRun_SubsequentBoot_Success (TS-04-22): correct token, file absent; assert nil return.",
+            "Write TestRun_SubsequentBoot_NoStoredHash (TS-04-23): no admin_token_hash in admin_config; assert error containing 'no admin token hash found'."
+          ],
+          "test_spec_refs": [
+            "TS-04-20",
+            "TS-04-21",
+            "TS-04-22",
+            "TS-04-23"
+          ],
+          "requirement_refs": [
+            "04-REQ-4.4",
+            "04-REQ-4.5",
+            "04-REQ-4.6",
+            "04-REQ-4.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for subsequent boot error paths (REQ-4.E1, REQ-4.E2)",
+          "details": [
+            "Write TestRun_SubsequentBoot_DBReadFailure (TS-04-E7): insert user, no token file, ADMIN_TOKEN set, but drop admin_config table; assert non-nil error.",
+            "Write TestConstantTimeCompare_UsedInSource (TS-04-E8): read internal/bootstrap/bootstrap.go source; assert contains 'subtle.ConstantTimeCompare' and '\"crypto/subtle\"'. Also write functional sub-test: same hash compares equal, different hashes compare unequal."
+          ],
+          "test_spec_refs": [
+            "TS-04-E7",
+            "TS-04-E8"
+          ],
+          "requirement_refs": [
+            "04-REQ-4.E1",
+            "04-REQ-4.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write tests for token rotation happy path (REQ-5.1 – REQ-5.5)",
+          "details": [
+            "Write TestRun_ResetToken_GeneratesToken (TS-04-24): insert user, ResetToken=true; assert token file contains valid format, Run returns nil.",
+            "Write TestRun_ResetToken_InvalidatesOldHash (TS-04-25): store old hash, run rotation; assert new stored hash != old hash and equals hexSHA256(new token file content).",
+            "Write TestRun_ResetToken_FilePermissions (TS-04-26): skip on Windows; assert token file mode == 0600 after rotation.",
+            "Write TestRun_ResetToken_WarnLog (TS-04-27): capture log entries; assert warn-level entry contains absolute path of admin_token file.",
+            "Write TestRun_ResetToken_SkipsGuards (TS-04-28): ResetToken=true, ADMIN_TOKEN unset, no prior token file; assert nil returned (proves file-presence and env var guards are skipped)."
+          ],
+          "test_spec_refs": [
+            "TS-04-24",
+            "TS-04-25",
+            "TS-04-26",
+            "TS-04-27",
+            "TS-04-28"
+          ],
+          "requirement_refs": [
+            "04-REQ-5.1",
+            "04-REQ-5.2",
+            "04-REQ-5.3",
+            "04-REQ-5.4",
+            "04-REQ-5.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write tests for token rotation next-restart behavior and error paths (REQ-5.6, REQ-5.E1 – REQ-5.E3)",
+          "details": [
+            "Write TestRun_ResetToken_NextRestart_FileGuardFires (TS-04-29): simulate post-rotation restart (token file left, ResetToken=false, users exist); assert error containing 'admin_token file exists'.",
+            "Write TestRun_ResetToken_RandFailure (TS-04-E9): inject broken rand, ResetToken=true; assert error returned, old hash in admin_config unchanged.",
+            "Write TestRun_ResetToken_FileWriteFailure (TS-04-E10): read-only ConfigDir, ResetToken=true; assert non-nil error wrapping OS error.",
+            "Write TestRun_ResetToken_DBWriteFailure (TS-04-E11): drop admin_config table before rotation; assert non-nil error."
+          ],
+          "test_spec_refs": [
+            "TS-04-29",
+            "TS-04-E9",
+            "TS-04-E10",
+            "TS-04-E11"
+          ],
+          "requirement_refs": [
+            "04-REQ-5.6",
+            "04-REQ-5.E1",
+            "04-REQ-5.E2",
+            "04-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All subsequent boot and token rotation test functions compile: go build ./internal/bootstrap/...",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "Test function names match exactly those referenced in TS-04-17 through TS-04-29 and TS-04-E7 through TS-04-E11.",
+          "t.Skip is used appropriately on file-permission tests when runtime.GOOS == 'windows'."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: ShouldAutoPromote, Token Format/Hashing, Execution Order, File Path Resolution",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for ShouldAutoPromote (REQ-3)",
+          "details": [
+            "Write TestShouldAutoPromote_Match (TS-04-12): store admin_email, call with matching email; assert (true, nil).",
+            "Write TestShouldAutoPromote_NoMatch (TS-04-13): store admin_email, call with different email; assert (false, nil).",
+            "Write TestShouldAutoPromote_NoConfig (TS-04-14): empty admin_config; assert (false, nil).",
+            "Write TestShouldAutoPromote_NewUserConvention (TS-04-15): call with matching email; assert (true, nil); add comment documenting caller responsibility for new-user gate.",
+            "Write TestShouldAutoPromote_InfoLog (TS-04-16): simulate OAuth callback calling ShouldAutoPromote then logging at info; assert info-level log entry contains email.",
+            "Write TestShouldAutoPromote_DBError (TS-04-E6): broken DB; assert (false, non-nil error)."
+          ],
+          "test_spec_refs": [
+            "TS-04-12",
+            "TS-04-13",
+            "TS-04-14",
+            "TS-04-15",
+            "TS-04-16",
+            "TS-04-E6"
+          ],
+          "requirement_refs": [
+            "04-REQ-3.1",
+            "04-REQ-3.2",
+            "04-REQ-3.3",
+            "04-REQ-3.4",
+            "04-REQ-3.5",
+            "04-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for token format and hashing properties (REQ-6)",
+          "details": [
+            "Write TestGenerateToken_Format (TS-04-30): call internal generateToken helper (or via Run + file read); assert regex '^ak_admin_[0-9a-f]{64}$' and hex portion exactly 64 chars.",
+            "Write TestHashToken_KnownValue (TS-04-31): hash a fixed token string; assert 64-char lowercase hex equal to expected SHA-256.",
+            "Write TestConstantTimeCompare_Correctness (TS-04-32): compareTokenHashes(h, h)==true, compareTokenHashes(h, differentH)==false.",
+            "Write TestGenerateToken_NoCryptoRand (TS-04-33): read source file; assert no 'math/rand' import, assert 'crypto/rand' import present.",
+            "Write TestTokenFile_NoTrailingNewline (TS-04-34): first boot; readFileBytes; assert last byte != 0x0A and content matches token regex."
+          ],
+          "test_spec_refs": [
+            "TS-04-30",
+            "TS-04-31",
+            "TS-04-32",
+            "TS-04-33",
+            "TS-04-34"
+          ],
+          "requirement_refs": [
+            "04-REQ-6.1",
+            "04-REQ-6.2",
+            "04-REQ-6.3",
+            "04-REQ-6.4",
+            "04-REQ-6.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests for bootstrap execution order and process termination contract (REQ-7)",
+          "details": [
+            "Write TestRun_SchemaExistsBeforeRun (TS-04-35): openMemoryDB (schema applied), assert users and admin_config tables exist before calling Run; Run returns nil.",
+            "Write TestRun_ResetToken_Priority (TS-04-36): ResetToken=true with empty AdminEmail and zero users; assert Run returns nil (rotation bypasses first-boot AdminEmail check).",
+            "Write TestRun_ErrorIsNonFatal (TS-04-37): trigger error (empty AdminEmail, zero users); assert Run returns non-nil error and test process continues (no os.Exit).",
+            "Write TestRun_SingleInstanceDocumented (TS-04-38): read source; assert 'Concurrent' or 'single-instance' appears in Run godoc; also run sequential calls without deadlock.",
+            "Write TestRun_NoOsExitInSource (TS-04-E12): read bootstrap.go source; assert 'os.Exit' and 'log.Fatal' absent."
+          ],
+          "test_spec_refs": [
+            "TS-04-35",
+            "TS-04-36",
+            "TS-04-37",
+            "TS-04-38",
+            "TS-04-E12"
+          ],
+          "requirement_refs": [
+            "04-REQ-7.1",
+            "04-REQ-7.2",
+            "04-REQ-7.3",
+            "04-REQ-7.4",
+            "04-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write tests for token file path resolution (REQ-8)",
+          "details": [
+            "Write TestTokenFilePath_XDGSet (TS-04-39): set XDG_CONFIG_HOME to a tmpDir, ConfigDir = tmpDir+'/apikit'; Run with zero users; assert file at ConfigDir/admin_token.",
+            "Write TestTokenFilePath_XDGUnset (TS-04-40): unset XDG_CONFIG_HOME, ConfigDir = another tmpDir; Run with zero users; assert file at ConfigDir/admin_token.",
+            "Write TestTokenFilePath_UsesConfigDir (TS-04-41): supply explicit ConfigDir; assert file appears at exactly ConfigDir+'/admin_token'.",
+            "Write TestTokenFilePath_NonExistentDir (TS-04-E13): set ConfigDir to a path that cannot be created (e.g., inside /proc on Linux or similar); assert non-nil error, file not created."
+          ],
+          "test_spec_refs": [
+            "TS-04-39",
+            "TS-04-40",
+            "TS-04-41",
+            "TS-04-E13"
+          ],
+          "requirement_refs": [
+            "04-REQ-8.1",
+            "04-REQ-8.2",
+            "04-REQ-8.3",
+            "04-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write property and smoke test stubs",
+          "details": [
+            "Write property tests using testing/quick or table-driven approach: TestProp_TokenUniqueness (TS-04-P1), TestProp_HashDeterminism (TS-04-P2), TestProp_HashDiscrimination (TS-04-P3).",
+            "Write TestProp_FilePresentGuardBlocks (TS-04-P4): for any subsequent boot with file present, Run returns non-nil error.",
+            "Write TestProp_OldTokenInvalidatedAfterRotation (TS-04-P5): rotate, assert old hash no longer matches.",
+            "Write TestProp_FirstBootRequiresEmail (TS-04-P6), TestProp_ShouldAutoPromoteNoConfig (TS-04-P7), TestProp_RunNeverTerminates (TS-04-P8).",
+            "Write smoke tests as integration test functions: TestSmoke_FirstBoot (TS-04-SMOKE-1), TestSmoke_SubsequentBoot (TS-04-SMOKE-2), TestSmoke_FilePresentGuard (TS-04-SMOKE-3), TestSmoke_TokenRotation (TS-04-SMOKE-4), TestSmoke_AutoPromotion (TS-04-SMOKE-5), TestSmoke_EndToEnd (TS-04-SMOKE-6)."
+          ],
+          "test_spec_refs": [
+            "TS-04-P1",
+            "TS-04-P2",
+            "TS-04-P3",
+            "TS-04-P4",
+            "TS-04-P5",
+            "TS-04-P6",
+            "TS-04-P7",
+            "TS-04-P8",
+            "TS-04-SMOKE-1",
+            "TS-04-SMOKE-2",
+            "TS-04-SMOKE-3",
+            "TS-04-SMOKE-4",
+            "TS-04-SMOKE-5",
+            "TS-04-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "04-PROP-1",
+            "04-PROP-2",
+            "04-PROP-3",
+            "04-PROP-4",
+            "04-PROP-5",
+            "04-PROP-6",
+            "04-PROP-7",
+            "04-PROP-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All test functions in groups 1–3 compile without error: go build ./internal/bootstrap/...",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "go test ./internal/bootstrap/... -count=1 -list '.*' shows all expected test function names.",
+          "No test function body is empty (each has at least one assertion or t.Skip call).",
+          "Smoke test functions reference real components (no mocked Run or ShouldAutoPromote at the smoke level)."
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Implement Package Skeleton and Core Token Primitives",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Create internal/bootstrap/bootstrap.go with package declaration and public types",
+          "details": [
+            "Create internal/bootstrap/bootstrap.go with package bootstrap.",
+            "Declare BootstrapParams struct with all fields: DB *sql.DB, AdminEmail string, ResetToken bool, ConfigDir string, TokenPrefix string, Logger *logrus.Logger.",
+            "Add func Run(ctx context.Context, params BootstrapParams) error stub with panic(\"not implemented\").",
+            "Add func ShouldAutoPromote(ctx context.Context, sqlDB *sql.DB, email string) (bool, error) stub with panic(\"not implemented\").",
+            "Import required stdlib packages: context, crypto/rand, crypto/sha256, crypto/subtle, database/sql, encoding/hex, errors, fmt, os, path/filepath.",
+            "Import github.com/sirupsen/logrus.",
+            "Ensure the godoc comment on Run mentions concurrent calls not supported and single-instance startup requirement (satisfies TS-04-38)."
+          ],
+          "test_spec_refs": [
+            "TS-04-30",
+            "TS-04-31",
+            "TS-04-32",
+            "TS-04-33"
+          ],
+          "requirement_refs": [
+            "04-REQ-6.1",
+            "04-REQ-6.2",
+            "04-REQ-6.3",
+            "04-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Implement generateToken(prefix string) (string, error) internal helper",
+          "details": [
+            "Implement generateToken: allocate [32]byte, call crypto/rand.Read, hex-encode to 64 lowercase hex chars using encoding/hex.EncodeToString, prepend prefix+'_admin_'.",
+            "Return (token string, error); wrap crypto/rand error with fmt.Errorf.",
+            "Never import or reference math/rand."
+          ],
+          "test_spec_refs": [
+            "TS-04-30",
+            "TS-04-33",
+            "TS-04-P1"
+          ],
+          "requirement_refs": [
+            "04-REQ-6.1",
+            "04-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Implement hashToken(token string) string and compareTokenHashes(a, b string) bool internal helpers",
+          "details": [
+            "Implement hashToken: compute sha256.Sum256([]byte(token)), hex-encode with encoding/hex.EncodeToString, return 64-char lowercase hex string.",
+            "Implement compareTokenHashes(a, b string) bool: use subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1.",
+            "Import crypto/subtle explicitly."
+          ],
+          "test_spec_refs": [
+            "TS-04-31",
+            "TS-04-32",
+            "TS-04-P2",
+            "TS-04-P3",
+            "TS-04-E8"
+          ],
+          "requirement_refs": [
+            "04-REQ-6.2",
+            "04-REQ-6.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Implement tokenFilePath(configDir string) string internal helper",
+          "details": [
+            "Implement tokenFilePath(configDir string) string: return filepath.Join(configDir, \"admin_token\").",
+            "Note: path resolution (XDG vs CWD) is handled by the caller passing ConfigDir via BootstrapParams; this helper only joins the filename. Document this in a comment."
+          ],
+          "test_spec_refs": [
+            "TS-04-39",
+            "TS-04-40",
+            "TS-04-41"
+          ],
+          "requirement_refs": [
+            "04-REQ-8.1",
+            "04-REQ-8.2",
+            "04-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Implement writeTokenFile(path, token string) error internal helper",
+          "details": [
+            "Implement writeTokenFile: call os.WriteFile(path, []byte(token), 0600).",
+            "Do NOT append a trailing newline to the token bytes.",
+            "Wrap any error with fmt.Errorf."
+          ],
+          "test_spec_refs": [
+            "TS-04-8",
+            "TS-04-11",
+            "TS-04-34",
+            "TS-04-E3"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.5",
+            "04-REQ-2.8",
+            "04-REQ-6.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go build ./internal/bootstrap/... succeeds (package compiles).",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "grep -r 'math/rand' internal/bootstrap/ returns no matches.",
+          "grep 'crypto/subtle' internal/bootstrap/bootstrap.go returns a match.",
+          "grep 'Concurrent\\|single-instance' internal/bootstrap/bootstrap.go returns a match in the Run godoc.",
+          "Tests for token primitives pass: go test ./internal/bootstrap/... -run 'TestGenerateToken|TestHashToken|TestConstantTime|TestTokenFilePath' -count=1 -v"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement First Boot Sequence in Run()",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement user count query and boot type detection in Run()",
+          "details": [
+            "Remove panic stub from Run().",
+            "First action in Run: if params.ResetToken is true, jump directly to rotation (call runTokenRotation, return result).",
+            "Otherwise query: var count int; err = params.DB.QueryRowContext(ctx, 'SELECT COUNT(*) FROM users').Scan(&count); wrap and return any error.",
+            "If count == 0 call runFirstBoot(ctx, params); else call runSubsequentBoot(ctx, params).",
+            "Return the result of whichever branch was called."
+          ],
+          "test_spec_refs": [
+            "TS-04-1",
+            "TS-04-2",
+            "TS-04-3",
+            "TS-04-E1"
+          ],
+          "requirement_refs": [
+            "04-REQ-1.1",
+            "04-REQ-1.2",
+            "04-REQ-1.3",
+            "04-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement runFirstBoot() – admin email validation and storage",
+          "details": [
+            "Implement runFirstBoot(ctx context.Context, params BootstrapParams) error.",
+            "If params.AdminEmail == '' return errors.New(\"first boot: --admin-email is required\").",
+            "Execute INSERT OR REPLACE INTO admin_config (key, value) VALUES ('admin_email', ?) with params.AdminEmail; wrap any DB error."
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-5",
+            "TS-04-P6"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.1",
+            "04-REQ-2.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Implement runFirstBoot() – token generation, hashing, file writing, and logging",
+          "details": [
+            "Call generateToken(params.TokenPrefix); wrap and return any error.",
+            "Call hashToken(token); execute INSERT OR REPLACE INTO admin_config (key, value) VALUES ('admin_token_hash', ?) with the hash; wrap DB error.",
+            "Compute filePath = tokenFilePath(params.ConfigDir); call writeTokenFile(filePath, token); wrap and return any OS error.",
+            "Log: params.Logger.Warnf(\"admin token written to %s — save this token securely and delete the file before restarting\", absPath) where absPath = filepath.Abs(filePath) (ignore Abs error, fall back to filePath).",
+            "Return nil."
+          ],
+          "test_spec_refs": [
+            "TS-04-6",
+            "TS-04-7",
+            "TS-04-8",
+            "TS-04-9",
+            "TS-04-10",
+            "TS-04-11"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.3",
+            "04-REQ-2.4",
+            "04-REQ-2.5",
+            "04-REQ-2.6",
+            "04-REQ-2.7",
+            "04-REQ-2.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Ensure runFirstBoot() does not call os.Exit or log.Fatal",
+          "details": [
+            "Code review: verify runFirstBoot and all helpers it calls contain no os.Exit, os.Exit(), log.Fatal, or logrus.Fatal calls.",
+            "All error conditions return non-nil error values.",
+            "Add a build-time check comment: // Run and its callees must never call os.Exit or log.Fatal."
+          ],
+          "test_spec_refs": [
+            "TS-04-E5",
+            "TS-04-E12"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.E4",
+            "04-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go build ./internal/bootstrap/... succeeds.",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "First boot tests pass: go test ./internal/bootstrap/... -run 'TestRun_FirstBoot|TestRun_BrokenDB' -count=1 -v",
+          "grep -n 'os.Exit\\|log.Fatal' internal/bootstrap/bootstrap.go returns no matches.",
+          "04-REQ-2.1 acceptance criteria met: empty AdminEmail on first boot returns error containing 'admin-email'.",
+          "04-REQ-2.5 acceptance criteria met: token file created with mode 0600."
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement Subsequent Boot Sequence and Token Rotation in Run()",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement runSubsequentBoot() – file-presence guard and ADMIN_TOKEN env var check",
+          "details": [
+            "Implement runSubsequentBoot(ctx context.Context, params BootstrapParams) error.",
+            "Compute filePath = tokenFilePath(params.ConfigDir).",
+            "Call os.Stat(filePath); if the file exists (err == nil), return fmt.Errorf(\"admin_token file exists at %s: save the token securely and delete the file before restarting\", filePath).",
+            "Read envToken = os.Getenv(\"ADMIN_TOKEN\"); if empty, return errors.New(\"ADMIN_TOKEN environment variable is required\").",
+            "AdminEmail field is silently ignored (no logging, no DB write)."
+          ],
+          "test_spec_refs": [
+            "TS-04-17",
+            "TS-04-18",
+            "TS-04-21",
+            "TS-04-P4"
+          ],
+          "requirement_refs": [
+            "04-REQ-4.1",
+            "04-REQ-4.2",
+            "04-REQ-4.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement runSubsequentBoot() – hash retrieval and constant-time comparison",
+          "details": [
+            "Query stored hash: var storedHash string; err = params.DB.QueryRowContext(ctx, 'SELECT value FROM admin_config WHERE key = \"admin_token_hash\"').Scan(&storedHash).",
+            "If err == sql.ErrNoRows return errors.New(\"no admin token hash found in database; run with --reset-admin-token to generate a new token\").",
+            "Wrap any other DB error with fmt.Errorf.",
+            "Compute candidateHash = hashToken(envToken).",
+            "If !compareTokenHashes(candidateHash, storedHash) return errors.New(\"ADMIN_TOKEN does not match the stored admin token\").",
+            "Return nil."
+          ],
+          "test_spec_refs": [
+            "TS-04-19",
+            "TS-04-20",
+            "TS-04-22",
+            "TS-04-23",
+            "TS-04-E7",
+            "TS-04-E8"
+          ],
+          "requirement_refs": [
+            "04-REQ-4.3",
+            "04-REQ-4.4",
+            "04-REQ-4.6",
+            "04-REQ-4.7",
+            "04-REQ-4.E1",
+            "04-REQ-4.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement runTokenRotation() – token generation, storage, file writing, and logging",
+          "details": [
+            "Implement runTokenRotation(ctx context.Context, params BootstrapParams) error.",
+            "Call generateToken(params.TokenPrefix); wrap and return any error (old hash must NOT be overwritten if rand fails).",
+            "Call hashToken(token); execute INSERT OR REPLACE INTO admin_config (key, value) VALUES ('admin_token_hash', ?); wrap DB error.",
+            "Compute filePath = tokenFilePath(params.ConfigDir); call writeTokenFile(filePath, token); wrap OS error.",
+            "Log absolute path at warn level (same as first boot logging).",
+            "Return nil on success.",
+            "Skips file-presence guard and ADMIN_TOKEN check — these are not called in runTokenRotation."
+          ],
+          "test_spec_refs": [
+            "TS-04-24",
+            "TS-04-25",
+            "TS-04-26",
+            "TS-04-27",
+            "TS-04-28",
+            "TS-04-E9",
+            "TS-04-E10",
+            "TS-04-E11"
+          ],
+          "requirement_refs": [
+            "04-REQ-5.1",
+            "04-REQ-5.2",
+            "04-REQ-5.3",
+            "04-REQ-5.4",
+            "04-REQ-5.5",
+            "04-REQ-5.E1",
+            "04-REQ-5.E2",
+            "04-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Implement ShouldAutoPromote()",
+          "details": [
+            "Remove panic stub from ShouldAutoPromote.",
+            "Query: var adminEmail string; err = sqlDB.QueryRowContext(ctx, 'SELECT value FROM admin_config WHERE key = \"admin_email\"').Scan(&adminEmail).",
+            "If err == sql.ErrNoRows return (false, nil).",
+            "If err != nil return (false, fmt.Errorf(\"ShouldAutoPromote: %w\", err)).",
+            "Return (adminEmail == email, nil).",
+            "Note in godoc: this function is intended for new user creation only; callers must not invoke it on existing user updates."
+          ],
+          "test_spec_refs": [
+            "TS-04-12",
+            "TS-04-13",
+            "TS-04-14",
+            "TS-04-15",
+            "TS-04-E6",
+            "TS-04-P7"
+          ],
+          "requirement_refs": [
+            "04-REQ-3.1",
+            "04-REQ-3.2",
+            "04-REQ-3.3",
+            "04-REQ-3.4",
+            "04-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go build ./internal/bootstrap/... succeeds.",
+          "go vet ./internal/bootstrap/... reports no issues.",
+          "Subsequent boot tests pass: go test ./internal/bootstrap/... -run 'TestRun_SubsequentBoot|TestRun_ResetToken|TestShouldAutoPromote' -count=1 -v",
+          "04-REQ-4.1 acceptance criteria met: error message matches 'admin_token file exists at %s'.",
+          "04-REQ-4.7 acceptance criteria met: error message contains 'no admin token hash found'.",
+          "04-REQ-5.5 acceptance criteria met: rotation returns nil when ADMIN_TOKEN is unset.",
+          "grep 'subtle.ConstantTimeCompare' internal/bootstrap/bootstrap.go returns a match."
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "checkpoint",
+      "title": "Checkpoint: Full Unit and Integration Test Suite Passes",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Run full bootstrap test suite and fix any failures",
+          "details": [
+            "Run: go test ./internal/bootstrap/... -count=1 -v",
+            "Triage and fix any failing tests.",
+            "Ensure no test is skipped unintentionally (only Windows permission tests may be skipped on non-Windows)."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2",
+            "04-REQ-3",
+            "04-REQ-4",
+            "04-REQ-5",
+            "04-REQ-6",
+            "04-REQ-7",
+            "04-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Run property tests and smoke tests",
+          "details": [
+            "Run: go test ./internal/bootstrap/... -run 'TestProp_|TestSmoke_' -count=1 -v",
+            "Verify all property invariants hold.",
+            "Verify all six smoke tests pass using real components."
+          ],
+          "test_spec_refs": [
+            "TS-04-P1",
+            "TS-04-P2",
+            "TS-04-P3",
+            "TS-04-P4",
+            "TS-04-P5",
+            "TS-04-P6",
+            "TS-04-P7",
+            "TS-04-P8",
+            "TS-04-SMOKE-1",
+            "TS-04-SMOKE-2",
+            "TS-04-SMOKE-3",
+            "TS-04-SMOKE-4",
+            "TS-04-SMOKE-5",
+            "TS-04-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "04-PROP-1",
+            "04-PROP-2",
+            "04-PROP-3",
+            "04-PROP-4",
+            "04-PROP-5",
+            "04-PROP-6",
+            "04-PROP-7",
+            "04-PROP-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Run linter and static analysis",
+          "details": [
+            "Run: go vet ./...",
+            "Run: staticcheck ./internal/bootstrap/... (if available in the project).",
+            "Resolve any reported issues before proceeding."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Verify source-level compliance checks pass",
+          "details": [
+            "grep -n 'math/rand' internal/bootstrap/bootstrap.go — must return no matches.",
+            "grep -n 'os.Exit\\|log.Fatal' internal/bootstrap/bootstrap.go — must return no matches.",
+            "grep -n 'subtle.ConstantTimeCompare' internal/bootstrap/bootstrap.go — must return at least one match.",
+            "grep -n 'crypto/rand' internal/bootstrap/bootstrap.go — must return a match in the import block."
+          ],
+          "test_spec_refs": [
+            "TS-04-33",
+            "TS-04-E8",
+            "TS-04-E12"
+          ],
+          "requirement_refs": [
+            "04-REQ-2.E4",
+            "04-REQ-4.E2",
+            "04-REQ-6.4",
+            "04-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go test ./internal/bootstrap/... -count=1 exits with code 0 (all tests pass).",
+          "go vet ./... exits with code 0.",
+          "All 41 regular test cases (TS-04-1 through TS-04-41), 8 property tests (TS-04-P1 through TS-04-P8), 13 edge case tests (TS-04-E1 through TS-04-E13), and 6 smoke tests (TS-04-SMOKE-1 through TS-04-SMOKE-6) are accounted for.",
+          "No panic(\"not implemented\") markers remain in internal/bootstrap/bootstrap.go.",
+          "Test coverage for internal/bootstrap package is reported (go test -cover) at a reasonable level."
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Execution Path Validation",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Trace execution paths and verify entry point call chains (PATH-1 through PATH-6)",
+          "details": [
+            "Verify PATH-1 (first boot): Run is called after DB open, stores admin_email, generates token, writes file, logs warn, returns nil — trace through runFirstBoot implementation.",
+            "Verify PATH-2 (subsequent boot valid): Run calls runSubsequentBoot which calls os.Stat, os.Getenv, DB query, compareTokenHashes; returns nil on success.",
+            "Verify PATH-3 (file-presence guard): runSubsequentBoot returns non-nil error when file exists; caller (main) would call log.Fatal.",
+            "Verify PATH-4 (token rotation): Run detects ResetToken=true, calls runTokenRotation, skips all other checks, returns nil.",
+            "Verify PATH-5 (auto-promotion): ShouldAutoPromote queries admin_config, returns (true, nil) on match; caller logs info.",
+            "Verify PATH-6 (end-to-end): run TestSmoke_EndToEnd and confirm all three phases complete without error."
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-SMOKE-2",
+            "TS-04-SMOKE-3",
+            "TS-04-SMOKE-4",
+            "TS-04-SMOKE-5",
+            "TS-04-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-7.1",
+            "04-REQ-7.2",
+            "04-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Verify return value propagation from Run() to server binary main()",
+          "details": [
+            "Confirm Run() never calls os.Exit or log.Fatal — errors bubble up as return values.",
+            "Inspect any call site of Run in main (or cmd) package: verify pattern is 'if err := bootstrap.Run(ctx, params); err != nil { log.Fatal(err) }'.",
+            "Verify ShouldAutoPromote return values are consumed by the OAuth callback caller and not silently discarded."
+          ],
+          "test_spec_refs": [
+            "TS-04-37",
+            "TS-04-E5",
+            "TS-04-E12"
+          ],
+          "requirement_refs": [
+            "04-REQ-7.3",
+            "04-REQ-2.E4",
+            "04-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Run all smoke tests with real components and verify no stubs remain",
+          "details": [
+            "Run: go test ./internal/bootstrap/... -run 'TestSmoke_' -count=1 -v and verify all 6 smoke tests pass.",
+            "Audit for stub markers: grep -rn 'panic(\"not implemented\")\\|// TODO\\|// FIXME' internal/bootstrap/ — resolve any found.",
+            "Confirm no bare 'return nil' exists in non-trivial functions (Run, runFirstBoot, runSubsequentBoot, runTokenRotation, ShouldAutoPromote) without preceding logic.",
+            "Run: go test ./... -count=1 to confirm no regressions in dependent packages."
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-SMOKE-2",
+            "TS-04-SMOKE-3",
+            "TS-04-SMOKE-4",
+            "TS-04-SMOKE-5",
+            "TS-04-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2",
+            "04-REQ-3",
+            "04-REQ-4",
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Verify cross-spec entry points and interface contracts",
+          "details": [
+            "Confirm BootstrapParams.DB accepts *sql.DB as provided by 02_database_layer db.Open() (type compatibility check via go build).",
+            "Confirm BootstrapParams.TokenPrefix is populated from apikit.TokenPrefix (01_server_core) — verify the call site in main or cmd package.",
+            "Confirm BootstrapParams.ConfigDir is populated from LoadConfig() result (01_server_core) — inspect how ConfigDir is derived and passed.",
+            "Confirm ShouldAutoPromote signature (ctx context.Context, sqlDB *sql.DB, email string) (bool, error) matches what the OAuth spec will call — document the interface contract in the package godoc.",
+            "Verify the admin_config table schema (key TEXT PRIMARY KEY, value TEXT) matches what bootstrap reads/writes — cross-check against 02_database_layer schema definition."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "04-REQ-3.4",
+            "04-REQ-7.1",
+            "04-REQ-7.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "go test ./... -count=1 exits with code 0 — full test suite passes with no regressions.",
+          "go vet ./... exits with code 0.",
+          "go test ./internal/bootstrap/... -run 'TestSmoke_' -count=1 -v — all 6 smoke tests pass.",
+          "grep -rn 'panic(\"not implemented\")' internal/bootstrap/ returns no matches.",
+          "grep -n 'os.Exit\\|log.Fatal' internal/bootstrap/bootstrap.go returns no matches.",
+          "grep -n 'subtle.ConstantTimeCompare' internal/bootstrap/bootstrap.go returns at least one match.",
+          "grep -n 'math/rand' internal/bootstrap/ returns no matches.",
+          "ShouldAutoPromote and Run are exported symbols visible via go doc ./internal/bootstrap.",
+          "BootstrapParams struct fields (DB, AdminEmail, ResetToken, ConfigDir, TokenPrefix, Logger) all present and correctly typed as confirmed by go build ./..."
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "04-REQ-1.1",
+      "test_spec_id": "TS-04-1",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-1.2",
+      "test_spec_id": "TS-04-2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-1.3",
+      "test_spec_id": "TS-04-3",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-1.E1",
+      "test_spec_id": "TS-04-E1",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.1",
+      "test_spec_id": "TS-04-4",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.2",
+      "test_spec_id": "TS-04-5",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.3",
+      "test_spec_id": "TS-04-6",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.4",
+      "test_spec_id": "TS-04-7",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.5",
+      "test_spec_id": "TS-04-8",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.6",
+      "test_spec_id": "TS-04-9",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.7",
+      "test_spec_id": "TS-04-10",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.8",
+      "test_spec_id": "TS-04-11",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.E1",
+      "test_spec_id": "TS-04-E2",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.E2",
+      "test_spec_id": "TS-04-E3",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.E3",
+      "test_spec_id": "TS-04-E4",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2.E4",
+      "test_spec_id": "TS-04-E5",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.1",
+      "test_spec_id": "TS-04-12",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.2",
+      "test_spec_id": "TS-04-13",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.3",
+      "test_spec_id": "TS-04-14",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.4",
+      "test_spec_id": "TS-04-15",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.5",
+      "test_spec_id": "TS-04-16",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3.E1",
+      "test_spec_id": "TS-04-E6",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.1",
+      "test_spec_id": "TS-04-17",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.2",
+      "test_spec_id": "TS-04-18",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.3",
+      "test_spec_id": "TS-04-19",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.4",
+      "test_spec_id": "TS-04-20",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.5",
+      "test_spec_id": "TS-04-21",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.6",
+      "test_spec_id": "TS-04-22",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.7",
+      "test_spec_id": "TS-04-23",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.E1",
+      "test_spec_id": "TS-04-E7",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4.E2",
+      "test_spec_id": "TS-04-E8",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.1",
+      "test_spec_id": "TS-04-24",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.2",
+      "test_spec_id": "TS-04-25",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.3",
+      "test_spec_id": "TS-04-26",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.4",
+      "test_spec_id": "TS-04-27",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.5",
+      "test_spec_id": "TS-04-28",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.6",
+      "test_spec_id": "TS-04-29",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.E1",
+      "test_spec_id": "TS-04-E9",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.E2",
+      "test_spec_id": "TS-04-E10",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5.E3",
+      "test_spec_id": "TS-04-E11",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6.1",
+      "test_spec_id": "TS-04-30",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6.2",
+      "test_spec_id": "TS-04-31",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6.3",
+      "test_spec_id": "TS-04-32",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6.4",
+      "test_spec_id": "TS-04-33",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6.5",
+      "test_spec_id": "TS-04-34",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7.1",
+      "test_spec_id": "TS-04-35",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7.2",
+      "test_spec_id": "TS-04-36",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7.3",
+      "test_spec_id": "TS-04-37",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7.4",
+      "test_spec_id": "TS-04-38",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7.E1",
+      "test_spec_id": "TS-04-E12",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-8.1",
+      "test_spec_id": "TS-04-39",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-8.2",
+      "test_spec_id": "TS-04-40",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-8.3",
+      "test_spec_id": "TS-04-41",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-8.E1",
+      "test_spec_id": "TS-04-E13",
+      "task_id": "3.4",
+      "test_path": null
+    }
+  ]
+}

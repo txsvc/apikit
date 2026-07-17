@@ -1,0 +1,1049 @@
+{
+  "$schema": null,
+  "spec_id": "04",
+  "spec_name": "admin_bootstrap",
+  "schema_version": 1,
+  "introduction": "This spec defines the Admin Bootstrap component for apikit: the first-boot detection, admin token generation, admin email designation, file-presence guard, environment-variable validation, token rotation lifecycle, and auto-promotion hook called by the OAuth callback. Note: requirements referencing external library APIs (logrus, crypto/rand, crypto/subtle) are based on PRD descriptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "--admin-email": "The CLI flag whose value designates the admin email address on first boot.",
+    "--reset-admin-token": "The CLI flag that triggers token rotation on the current boot.",
+    "ADMIN_TOKEN": "The environment variable that the operator must set on subsequent boots, containing the plaintext admin token for hash validation.",
+    "BootstrapParams": "The Go struct passed to `Run()` that bundles all inputs for the bootstrap sequence.",
+    "INSERT OR REPLACE": "An SQLite upsert statement used to write `admin_config` keys idempotently.",
+    "LoadConfig": "The function from `01_server_core` / `internal/config` that loads `config.toml` and determines its directory.",
+    "Run": "The primary exported function of the `internal/bootstrap` package that executes the full admin bootstrap sequence.",
+    "ShouldAutoPromote": "The exported function in `internal/bootstrap` called by the OAuth callback handler to decide whether a newly created user should receive the `admin` role.",
+    "TokenPrefix": "The build-time configurable string from `apikit.TokenPrefix` prepended to the admin token (default: `ak`).",
+    "XDG_CONFIG_HOME": "An environment variable following the XDG Base Directory Specification; when set, determines the config and token file directory as `$XDG_CONFIG_HOME/apikit/`.",
+    "admin token": "A break-glass infrastructure credential in the format `<prefix>_admin_<64 hex chars>` for emergency access — not for routine use.",
+    "admin_config": "A key-value table in SQLite that stores singleton server state including the admin token hash and designated admin email.",
+    "admin_email": "The key in `admin_config` that stores the designated administrator's email address.",
+    "admin_token": "The plaintext token file written to the same directory as `config.toml`, containing the raw admin token string.",
+    "admin_token_hash": "The key in `admin_config` that stores the SHA-256 hex digest of the admin token.",
+    "auto-promotion": "The automatic granting of the `admin` role to a user whose email matches the designated `admin_email` on their first OAuth login.",
+    "break-glass": "An emergency-only access mechanism bypassing normal authentication flows; the admin token is a break-glass credential.",
+    "config.toml": "The primary apikit configuration file whose directory co-locates with the `admin_token` file.",
+    "crypto/rand": "The Go standard library package providing cryptographically secure random byte generation.",
+    "crypto/sha256": "The Go standard library package providing SHA-256 hash computation.",
+    "db.OpenMemory": "A helper from `02_database_layer` that opens an in-memory SQLite database for testing.",
+    "file-presence guard": "A startup check that refuses to start the server if the plaintext `admin_token` file still exists on disk, forcing the operator to secure and remove the file.",
+    "first boot": "A server start where zero users exist in the `users` table, indicating the system has never been bootstrapped.",
+    "single-instance startup": "The operational requirement that only one server instance runs the bootstrap sequence at a time, preventing concurrent writes to `admin_config`.",
+    "subtle.ConstantTimeCompare": "The Go standard library function from `crypto/subtle` used for timing-safe byte-slice comparison.",
+    "token rotation": "The process of generating a new admin token and invalidating the old one, triggered by the `--reset-admin-token` flag.",
+    "users": "The SQLite table that stores registered user records; its row count determines whether this is a first boot.",
+    "AdminEmail": "A field in `BootstrapParams` containing the value of the `--admin-email` flag; required on `first boot`, ignored on subsequent boots.",
+    "ResetToken": "A boolean field in `BootstrapParams`; when true, triggers `token rotation` regardless of boot type.",
+    "ConfigDir": "A field in `BootstrapParams` specifying the directory containing `config.toml`, used to resolve the `admin_token` file path.",
+    "admin": "A user role value granting full access to all endpoints and resources; assigned via `auto-promotion` on `first boot` or manually by existing admins.",
+    "warn": "A logrus log level used for important operational messages such as the `admin_token` file path on `first boot` and `token rotation`.",
+    "info": "A logrus log level used for notable events such as `auto-promotion` of the designated admin user.",
+    "math/rand": "The Go standard library pseudo-random number generator; explicitly prohibited for token generation in favor of `crypto/rand`.",
+    "02_database_layer": "The database layer spec that provides the SQLite schema (including `users` and `admin_config` tables) and the `db.OpenMemory` test helper.",
+    "SELECT COUNT(*) FROM users": "The SQL query used by `Run` to determine whether this is a `first boot` (zero rows) or a subsequent boot (one or more rows).",
+    "<prefix>_admin_<64 hex chars>": "The format of the `admin token` string: the configurable `TokenPrefix`, followed by `_admin_`, followed by 64 lowercase hexadecimal characters.",
+    "<TokenPrefix>_admin_<64 hex chars>": "Equivalent to `<prefix>_admin_<64 hex chars>`; the `admin token` format using the `TokenPrefix` build-time variable.",
+    "_admin_": "The fixed infix in the `admin token` format that identifies the credential as an admin token, appearing between `TokenPrefix` and the 64 hex characters.",
+    "$XDG_CONFIG_HOME/apikit/admin_token": "The resolved path of the `admin_token` file when `XDG_CONFIG_HOME` is set in the environment.",
+    "./admin_token": "The resolved path of the `admin_token` file when `XDG_CONFIG_HOME` is not set, relative to the current working directory."
+  },
+  "requirements": [
+    {
+      "id": "04-REQ-1",
+      "title": "First Boot Detection",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the server automatically detect whether this is a first-boot situation",
+        "benefit": "the correct bootstrap path runs without manual configuration beyond the first-boot flags"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Run`",
+          "action": "queries `SELECT COUNT(*) FROM users` after the database is opened and schema is created, before the HTTP server starts, to determine whether this is a `first boot`",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "classifies the current startup as a `first boot` and executes the first boot sequence",
+          "return_contract": null,
+          "trigger": "the row count from `users` is zero"
+        },
+        {
+          "id": "04-REQ-1.3",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "classifies the current startup as a subsequent boot and executes the subsequent boot sequence",
+          "return_contract": null,
+          "trigger": "the row count from `users` is greater than zero"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the database error; the server must not start",
+          "return_contract": "non-nil error wrapping the database error",
+          "error_condition": "the query to `SELECT COUNT(*) FROM users` fails due to a database error"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-2",
+      "title": "First Boot Sequence",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the server generate and store a secure admin token on first boot",
+        "benefit": "I have an emergency break-glass credential from the moment the system is first started"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns a non-nil error without starting the server",
+          "return_contract": "non-nil error with message `\"first boot: --admin-email is required\"`",
+          "trigger": "a `first boot` is detected and `AdminEmail` in `BootstrapParams` is empty"
+        },
+        {
+          "id": "04-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "stores the email in `admin_config` using `INSERT OR REPLACE` with key `admin_email`",
+          "return_contract": null,
+          "trigger": "a `first boot` is detected and a non-empty `AdminEmail` is provided"
+        },
+        {
+          "id": "04-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "generates 32 cryptographically random bytes via `crypto/rand`, hex-encodes them as 64 lowercase hex characters, and prepends `TokenPrefix` and `_admin_` to form the `admin token` string `<prefix>_admin_<64 hex chars>`",
+          "return_contract": null,
+          "trigger": "a `first boot` is detected"
+        },
+        {
+          "id": "04-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "computes the SHA-256 hash of the full token string using `crypto/sha256`, hex-encodes the 32-byte digest to a 64-character lowercase hex string, and stores it in `admin_config` with key `admin_token_hash` using `INSERT OR REPLACE`",
+          "return_contract": null,
+          "trigger": "the `admin token` is generated on `first boot`"
+        },
+        {
+          "id": "04-REQ-2.5",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "writes the plaintext token to the `admin_token` file in the directory determined by `XDG_CONFIG_HOME` (if set: `$XDG_CONFIG_HOME/apikit/admin_token`, otherwise `./admin_token`) with file mode 0600, overwriting any existing file",
+          "return_contract": null,
+          "trigger": "the `admin token` is generated on `first boot`"
+        },
+        {
+          "id": "04-REQ-2.6",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "logs the absolute path of the `admin_token` file at `warn` level with a message instructing the operator to save the token securely",
+          "return_contract": null,
+          "trigger": "the `admin_token` file is written on `first boot`"
+        },
+        {
+          "id": "04-REQ-2.7",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns nil, allowing the server to proceed to start the HTTP server",
+          "return_contract": "nil error",
+          "trigger": "the full first boot sequence completes without error"
+        },
+        {
+          "id": "04-REQ-2.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`admin_token` file",
+          "action": "contains the raw plaintext admin token string with no trailing newline",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the `crypto/rand` error; no token is stored or written",
+          "return_contract": "non-nil error wrapping the `crypto/rand` error",
+          "error_condition": "`crypto/rand` fails to generate random bytes during `first boot`"
+        },
+        {
+          "id": "04-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the OS error; the server must not start",
+          "return_contract": "non-nil error wrapping the os.WriteFile error",
+          "error_condition": "writing the `admin_token` file fails (e.g., permission denied, disk full) during `first boot`"
+        },
+        {
+          "id": "04-REQ-2.E3",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the database error; the server must not start",
+          "return_contract": "non-nil error wrapping the database error",
+          "error_condition": "storing `admin_email` or `admin_token_hash` in `admin_config` fails due to a database error during `first boot`"
+        },
+        {
+          "id": "04-REQ-2.E4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Run`",
+          "action": "never calls os.Exit or log.Fatal internally; all errors are returned to the caller as non-nil error values so that the server binary's main() function controls process termination",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-3",
+      "title": "Admin Email Auto-Promotion",
+      "user_story": {
+        "role": "designated admin user",
+        "goal": "automatically receive the admin role when I first log in via OAuth",
+        "benefit": "I do not need a separate manual role-grant step to manage the system"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "`ShouldAutoPromote`",
+          "action": "returns true, indicating the newly created user should be granted the `admin` role",
+          "return_contract": "(true, nil)",
+          "trigger": "called with an email that matches the value stored in `admin_config` under key `admin_email`"
+        },
+        {
+          "id": "04-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "`ShouldAutoPromote`",
+          "action": "returns false",
+          "return_contract": "(false, nil)",
+          "trigger": "called with an email that does not match the stored `admin_email`"
+        },
+        {
+          "id": "04-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "`ShouldAutoPromote`",
+          "action": "returns false with a nil error",
+          "return_contract": "(false, nil)",
+          "trigger": "called when no `admin_email` key exists in `admin_config`"
+        },
+        {
+          "id": "04-REQ-3.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`ShouldAutoPromote`",
+          "action": "is only meaningful for newly created users (first OAuth login); callers (the OAuth callback handler) are responsible for not calling it on updates to existing users",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-3.5",
+          "ears_pattern": "event_driven",
+          "system": "server",
+          "action": "logs the auto-promotion event at `info` level, identifying the promoted user's email",
+          "return_contract": null,
+          "trigger": "`ShouldAutoPromote` returns true and the OAuth callback grants the `admin` role to the new user"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "`ShouldAutoPromote`",
+          "action": "returns (false, error) wrapping the database error",
+          "return_contract": "(false, non-nil error)",
+          "error_condition": "the database query to read `admin_email` from `admin_config` fails"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-4",
+      "title": "Subsequent Boot Sequence",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the server verify I have secured the admin token before starting on any non-first boot",
+        "benefit": "the plaintext admin token cannot persist on disk accidentally across restarts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns a non-nil error instructing the operator to save the token securely and delete the file; the server must not start",
+          "return_contract": "non-nil error with message matching `\"admin_token file exists at %s: save the token securely and delete the file before restarting\"`",
+          "trigger": "a subsequent boot is detected and the `admin_token` file exists on disk"
+        },
+        {
+          "id": "04-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns a non-nil error indicating that `ADMIN_TOKEN` is required",
+          "return_contract": "non-nil error with message `\"ADMIN_TOKEN environment variable is required\"`",
+          "trigger": "a subsequent boot is detected, the `admin_token` file is absent, and `ADMIN_TOKEN` environment variable is empty or unset"
+        },
+        {
+          "id": "04-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "computes the SHA-256 hash of the `ADMIN_TOKEN` value, hex-encodes it, and compares it against `admin_token_hash` from `admin_config` using `subtle.ConstantTimeCompare`",
+          "return_contract": null,
+          "trigger": "a subsequent boot is detected, the `admin_token` file is absent, and `ADMIN_TOKEN` is set"
+        },
+        {
+          "id": "04-REQ-4.4",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns a non-nil error indicating the admin token is invalid",
+          "return_contract": "non-nil error with message `\"ADMIN_TOKEN does not match the stored admin token\"`",
+          "trigger": "the SHA-256 hash of `ADMIN_TOKEN` does not match the stored `admin_token_hash`"
+        },
+        {
+          "id": "04-REQ-4.5",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "silently ignores the `--admin-email` value without logging a warning or modifying the stored `admin_email`",
+          "return_contract": null,
+          "trigger": "a subsequent boot is detected and `AdminEmail` is non-empty in `BootstrapParams`"
+        },
+        {
+          "id": "04-REQ-4.6",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns nil, allowing the server to proceed to start the HTTP server",
+          "return_contract": "nil error",
+          "trigger": "hash comparison succeeds on a subsequent boot"
+        },
+        {
+          "id": "04-REQ-4.7",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "returns a non-nil error instructing the operator to run with `--reset-admin-token`",
+          "return_contract": "non-nil error with message `\"no admin token hash found in database; run with --reset-admin-token to generate a new token\"`",
+          "trigger": "a subsequent boot is detected and `admin_token_hash` key is absent from `admin_config`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the database error",
+          "return_contract": "non-nil error wrapping the database error",
+          "error_condition": "reading `admin_token_hash` from `admin_config` fails due to a database error on a subsequent boot"
+        },
+        {
+          "id": "04-REQ-4.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Run`",
+          "action": "uses `subtle.ConstantTimeCompare` for all token hash comparisons to prevent timing side-channel attacks",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-5",
+      "title": "Token Rotation via --reset-admin-token",
+      "user_story": {
+        "role": "server operator",
+        "goal": "rotate the admin token using the --reset-admin-token flag",
+        "benefit": "I can generate a fresh break-glass credential even when the current token may be compromised, without needing a running server"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "runs `token rotation` regardless of user count: generates a new `admin token` using the same flow as `first boot` (32 random bytes via `crypto/rand`, hex-encode, prepend `TokenPrefix`)",
+          "return_contract": null,
+          "trigger": "`ResetToken` is true in `BootstrapParams`"
+        },
+        {
+          "id": "04-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "overwrites `admin_token_hash` in `admin_config` with the SHA-256 hash of the new token using `INSERT OR REPLACE`, immediately invalidating the old token",
+          "return_contract": null,
+          "trigger": "a new `admin token` is generated during `token rotation`"
+        },
+        {
+          "id": "04-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "writes the new plaintext token to the `admin_token` file (same path resolution, mode 0600), overwriting any existing file",
+          "return_contract": null,
+          "trigger": "a new `admin token` is generated during `token rotation`"
+        },
+        {
+          "id": "04-REQ-5.4",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "logs the absolute path of the `admin_token` file at `warn` level with a message instructing the operator to save the token securely",
+          "return_contract": null,
+          "trigger": "the `admin_token` file is written during `token rotation`"
+        },
+        {
+          "id": "04-REQ-5.5",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "skips the `file-presence guard` and `ADMIN_TOKEN` environment variable check for this boot and returns nil",
+          "return_contract": "nil error",
+          "trigger": "`token rotation` completes without error"
+        },
+        {
+          "id": "04-REQ-5.6",
+          "ears_pattern": "state_driven",
+          "system": "`Run`",
+          "action": "applies the `file-presence guard` and `ADMIN_TOKEN` environment variable validation as a normal subsequent boot",
+          "return_contract": null,
+          "state": "the next restart after a `token rotation` boot, without `--reset-admin-token`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the `crypto/rand` error; the old `admin_token_hash` in `admin_config` is not modified",
+          "return_contract": "non-nil error wrapping the `crypto/rand` error",
+          "error_condition": "`crypto/rand` fails during `token rotation`"
+        },
+        {
+          "id": "04-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the OS error; the server must not start",
+          "return_contract": "non-nil error wrapping the os.WriteFile error",
+          "error_condition": "writing the `admin_token` file fails during `token rotation`"
+        },
+        {
+          "id": "04-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the database error; the server must not start",
+          "return_contract": "non-nil error wrapping the database error",
+          "error_condition": "updating `admin_token_hash` in `admin_config` fails during `token rotation`"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-6",
+      "title": "Token Format and Hashing",
+      "user_story": {
+        "role": "security reviewer",
+        "goal": "confirm the admin token is generated and stored using cryptographically sound methods",
+        "benefit": "the token cannot be guessed or derived, and timing attacks on comparison are prevented"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "admin token generator",
+          "action": "produces tokens in the format `<TokenPrefix>_admin_<64 hex chars>` where the 64 hex chars are the lowercase hex encoding of 32 bytes from `crypto/rand`",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "token hash computation",
+          "action": "applies `crypto/sha256` to the full token string including the prefix, then hex-encodes the 32-byte digest to produce a 64-character lowercase hex string stored in `admin_token_hash`",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "token hash comparison",
+          "action": "uses `subtle.ConstantTimeCompare` to compare the hex-encoded SHA-256 hash of the candidate token against the stored `admin_token_hash`",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "token generator",
+          "action": "never uses `math/rand`; all randomness comes from `crypto/rand`",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`admin_token` file",
+          "action": "contains only the raw plaintext admin token string with no trailing newline, making it safe for use with shell command substitution",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "04-REQ-7",
+      "title": "Bootstrap Execution Order and Single-Instance Constraint",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the bootstrap sequence run at the correct point during server startup",
+        "benefit": "the database is ready before bootstrap logic executes, and the HTTP server only starts after bootstrap succeeds"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "server startup sequence",
+          "action": "executes bootstrap via `Run` after `LoadConfig` completes and after the database is opened and schema is created by `02_database_layer`, but before the HTTP server begins accepting requests",
+          "return_contract": null
+        },
+        {
+          "id": "04-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "`Run`",
+          "action": "executes `token rotation` first, then returns without running the first-boot or subsequent-boot sequence",
+          "return_contract": "nil error on success",
+          "trigger": "`ResetToken` is true"
+        },
+        {
+          "id": "04-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "server binary main()",
+          "action": "treats the error as fatal and does not start the HTTP server; the process exits with a non-zero status",
+          "return_contract": null,
+          "trigger": "`Run` returns a non-nil error"
+        },
+        {
+          "id": "04-REQ-7.4",
+          "ears_pattern": "ubiquitous",
+          "system": "deployment tooling",
+          "action": "must ensure only a single server instance executes the bootstrap sequence at a time, particularly on `first boot` and during `token rotation`; concurrent `Run` calls against the same database are not supported",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-7.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Run`",
+          "action": "never calls os.Exit, log.Fatal, or any function that terminates the process; all failure conditions are signaled by returning a non-nil error to the caller",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-8",
+      "title": "Token File Path Resolution",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the admin_token file placed predictably alongside config.toml",
+        "benefit": "I can reliably find and delete the file after securing the token"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-8.1",
+          "ears_pattern": "state_driven",
+          "system": "`Run`",
+          "action": "resolves the `admin_token` file path to `$XDG_CONFIG_HOME/apikit/admin_token`",
+          "return_contract": null,
+          "state": "`XDG_CONFIG_HOME` is set in the environment"
+        },
+        {
+          "id": "04-REQ-8.2",
+          "ears_pattern": "state_driven",
+          "system": "`Run`",
+          "action": "resolves the `admin_token` file path to `./admin_token` (current working directory), consistent with how `LoadConfig` resolves `config.toml`",
+          "return_contract": null,
+          "state": "`XDG_CONFIG_HOME` is not set"
+        },
+        {
+          "id": "04-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Run`",
+          "action": "uses the `ConfigDir` field of `BootstrapParams` to construct the absolute path to the `admin_token` file",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Run`",
+          "action": "returns a non-nil error wrapping the OS error",
+          "return_contract": "non-nil error wrapping the OS error",
+          "error_condition": "the directory for the `admin_token` file does not exist and cannot be created"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "04-PROP-1",
+      "title": "Token Uniqueness",
+      "for_any": "two independently generated `admin token` values",
+      "invariant": "the two token strings are different with overwhelming probability (each draws 32 bytes from `crypto/rand`)",
+      "validates": [
+        "04-REQ-6.1",
+        "04-REQ-2.3"
+      ]
+    },
+    {
+      "id": "04-PROP-2",
+      "title": "Token Hash Determinism",
+      "for_any": "the same `admin token` string",
+      "invariant": "hashing it twice with `crypto/sha256` and hex-encoding produces the same 64-character lowercase hex string",
+      "validates": [
+        "04-REQ-6.2",
+        "04-REQ-4.3"
+      ]
+    },
+    {
+      "id": "04-PROP-3",
+      "title": "Token Hash Discrimination",
+      "for_any": "two distinct `admin token` strings",
+      "invariant": "their SHA-256 hex digests are different, so the wrong token never passes the `admin_token_hash` comparison",
+      "validates": [
+        "04-REQ-6.2",
+        "04-REQ-4.4"
+      ]
+    },
+    {
+      "id": "04-PROP-4",
+      "title": "File-Presence Guard Blocks Start",
+      "for_any": "subsequent boot attempt where the `admin_token` file is present on disk",
+      "invariant": "`Run` returns a non-nil error and the HTTP server never starts",
+      "validates": [
+        "04-REQ-4.1",
+        "04-REQ-7.3"
+      ]
+    },
+    {
+      "id": "04-PROP-5",
+      "title": "Old Token Invalidated After Rotation",
+      "for_any": "`token rotation` that stores a new `admin_token_hash`",
+      "invariant": "the SHA-256 hash of the previous `admin token` no longer matches `admin_token_hash` in `admin_config`",
+      "validates": [
+        "04-REQ-5.2",
+        "04-REQ-5.5"
+      ]
+    },
+    {
+      "id": "04-PROP-6",
+      "title": "First Boot Requires Admin Email",
+      "for_any": "first boot attempt with an empty `AdminEmail` in `BootstrapParams`",
+      "invariant": "`Run` returns a non-nil error and neither `admin_email` nor `admin_token_hash` is written to `admin_config`",
+      "validates": [
+        "04-REQ-2.1"
+      ]
+    },
+    {
+      "id": "04-PROP-7",
+      "title": "ShouldAutoPromote Is Idempotent on No-Config",
+      "for_any": "call to `ShouldAutoPromote` when no `admin_email` key exists in `admin_config`",
+      "invariant": "the function returns (false, nil) without error regardless of the email argument",
+      "validates": [
+        "04-REQ-3.3"
+      ]
+    },
+    {
+      "id": "04-PROP-8",
+      "title": "Run Never Terminates the Process",
+      "for_any": "any error condition encountered inside `Run`",
+      "invariant": "`Run` signals failure by returning a non-nil error and never calls os.Exit or log.Fatal",
+      "validates": [
+        "04-REQ-2.E4",
+        "04-REQ-7.E1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "04-PATH-1",
+      "title": "First Boot: Operator Starts Fresh Server",
+      "steps": [
+        {
+          "actor": "operator",
+          "action": "runs the server binary with `--admin-email admin@example.com` against a database with zero users"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "calls `LoadConfig` (from `01_server_core`) to load `config.toml` and determine `ConfigDir`"
+        },
+        {
+          "actor": "02_database_layer",
+          "action": "opens the SQLite database and creates the schema including the `users` and `admin_config` tables"
+        },
+        {
+          "actor": "`Run`",
+          "action": "queries `SELECT COUNT(*) FROM users`; receives 0; classifies as `first boot`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "stores `admin@example.com` in `admin_config` under key `admin_email` via `INSERT OR REPLACE`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "generates 32 random bytes via `crypto/rand`, forms the `admin token` `<TokenPrefix>_admin_<64 hex chars>`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "computes SHA-256 hash of the token, hex-encodes it, stores it in `admin_config` under `admin_token_hash`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "writes the plaintext token to the `admin_token` file at the resolved path with mode 0600"
+        },
+        {
+          "actor": "`Run`",
+          "action": "logs the absolute path of the `admin_token` file at `warn` level; returns nil"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "starts the HTTP server and begins accepting requests"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-2",
+      "title": "Subsequent Boot: Operator Provides Valid ADMIN_TOKEN",
+      "steps": [
+        {
+          "actor": "operator",
+          "action": "deletes the `admin_token` file, sets `ADMIN_TOKEN` env var to the saved token, and restarts the server"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "calls `LoadConfig` and opens the database via `02_database_layer`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "queries `SELECT COUNT(*) FROM users`; receives a positive count; classifies as subsequent boot"
+        },
+        {
+          "actor": "`Run`",
+          "action": "checks for `admin_token` file presence; file is absent; continues"
+        },
+        {
+          "actor": "`Run`",
+          "action": "reads `ADMIN_TOKEN` from the environment; computes SHA-256 hash; compares with `admin_token_hash` in `admin_config` via `subtle.ConstantTimeCompare`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "hashes match; returns nil"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "starts the HTTP server and begins accepting requests"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-3",
+      "title": "Subsequent Boot: File-Presence Guard Blocks Startup",
+      "steps": [
+        {
+          "actor": "operator",
+          "action": "restarts the server without deleting the `admin_token` file"
+        },
+        {
+          "actor": "`Run`",
+          "action": "queries `SELECT COUNT(*) FROM users`; classifies as subsequent boot"
+        },
+        {
+          "actor": "`Run`",
+          "action": "detects the `admin_token` file still exists on disk"
+        },
+        {
+          "actor": "`Run`",
+          "action": "returns a non-nil error with message instructing the operator to save the token and delete the file"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "calls log.Fatal with the error; process exits with non-zero status; HTTP server never starts"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-4",
+      "title": "Token Rotation: Operator Resets Admin Token",
+      "steps": [
+        {
+          "actor": "operator",
+          "action": "restarts the server with `--reset-admin-token` flag"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "calls `LoadConfig` and opens the database via `02_database_layer`; sets `ResetToken: true` in `BootstrapParams`"
+        },
+        {
+          "actor": "`Run`",
+          "action": "detects `ResetToken` is true; runs `token rotation` immediately without checking user count"
+        },
+        {
+          "actor": "`Run`",
+          "action": "generates a new `admin token`; computes and stores new `admin_token_hash` via `INSERT OR REPLACE`, invalidating the old token"
+        },
+        {
+          "actor": "`Run`",
+          "action": "writes the new plaintext token to the `admin_token` file (mode 0600); logs the path at `warn` level"
+        },
+        {
+          "actor": "`Run`",
+          "action": "skips `file-presence guard` and `ADMIN_TOKEN` check for this boot; returns nil"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "starts the HTTP server normally for this boot"
+        },
+        {
+          "actor": "operator",
+          "action": "saves the new token, deletes the `admin_token` file, sets `ADMIN_TOKEN` to the new value before the next restart"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-5",
+      "title": "Auto-Promotion: Designated Admin Email First OAuth Login",
+      "steps": [
+        {
+          "actor": "user",
+          "action": "authenticates via OAuth for the first time using the email address stored in `admin_email`"
+        },
+        {
+          "actor": "OAuth callback handler (OAuth spec)",
+          "action": "creates a new user record and calls `ShouldAutoPromote(ctx, sqlDB, email)`"
+        },
+        {
+          "actor": "`ShouldAutoPromote`",
+          "action": "queries `admin_config` for the `admin_email` key; finds a match with the provided email; returns (true, nil)"
+        },
+        {
+          "actor": "OAuth callback handler (OAuth spec)",
+          "action": "grants the `admin` role to the newly created user"
+        },
+        {
+          "actor": "server",
+          "action": "logs the auto-promotion event at `info` level identifying the promoted user's email"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-6",
+      "title": "Full End-to-End: First Boot Through Subsequent Boot With OAuth Auto-Promotion",
+      "steps": [
+        {
+          "actor": "operator",
+          "action": "runs `server --admin-email admin@corp.com` for the first time against an empty database"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "calls `LoadConfig` (01_server_core) to load `config.toml` and populate `ConfigDir` and `TokenPrefix`"
+        },
+        {
+          "actor": "02_database_layer",
+          "action": "opens the SQLite database via `db.Open` and applies schema migrations creating `users` and `admin_config` tables"
+        },
+        {
+          "actor": "`Run`",
+          "action": "detects zero rows in `users`; runs first boot sequence: stores `admin_email`, generates token, stores `admin_token_hash`, writes `admin_token` file, logs path at `warn`; returns nil"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "starts the HTTP server; begins accepting OAuth callback requests"
+        },
+        {
+          "actor": "operator",
+          "action": "saves the admin token from the `admin_token` file, then deletes the file"
+        },
+        {
+          "actor": "operator",
+          "action": "user with email `admin@corp.com` completes OAuth login for the first time"
+        },
+        {
+          "actor": "OAuth callback handler (OAuth spec)",
+          "action": "creates the user record and calls `ShouldAutoPromote(ctx, sqlDB, \"admin@corp.com\")`"
+        },
+        {
+          "actor": "`ShouldAutoPromote`",
+          "action": "finds `admin_email = admin@corp.com` in `admin_config`; returns (true, nil)"
+        },
+        {
+          "actor": "OAuth callback handler (OAuth spec)",
+          "action": "sets `role: admin` on the new user record; server logs auto-promotion at `info`"
+        },
+        {
+          "actor": "operator",
+          "action": "restarts the server with `ADMIN_TOKEN` environment variable set to the saved token"
+        },
+        {
+          "actor": "`Run`",
+          "action": "detects users exist; runs subsequent boot: `file-presence guard` passes (file deleted), `ADMIN_TOKEN` hash matches `admin_token_hash`; returns nil"
+        },
+        {
+          "actor": "server binary main()",
+          "action": "starts the HTTP server normally; system is fully operational"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "04-ERR-1",
+      "condition": "First boot detected and `--admin-email` flag not provided (empty `AdminEmail` in `BootstrapParams`)",
+      "behavior": "`Run` returns a non-nil error with message `\"first boot: --admin-email is required\"`; the server does not start",
+      "requirement_id": "04-REQ-2.1"
+    },
+    {
+      "id": "04-ERR-2",
+      "condition": "`admin_token` file exists on disk during a subsequent boot (not a reset boot)",
+      "behavior": "`Run` returns a non-nil error with message `\"admin_token file exists at %s: save the token securely and delete the file before restarting\"`; the server does not start",
+      "requirement_id": "04-REQ-4.1"
+    },
+    {
+      "id": "04-ERR-3",
+      "condition": "`ADMIN_TOKEN` environment variable is empty or unset on a subsequent boot",
+      "behavior": "`Run` returns a non-nil error with message `\"ADMIN_TOKEN environment variable is required\"`; the server does not start",
+      "requirement_id": "04-REQ-4.2"
+    },
+    {
+      "id": "04-ERR-4",
+      "condition": "SHA-256 hash of `ADMIN_TOKEN` does not match `admin_token_hash` stored in `admin_config`",
+      "behavior": "`Run` returns a non-nil error with message `\"ADMIN_TOKEN does not match the stored admin token\"`; the server does not start",
+      "requirement_id": "04-REQ-4.4"
+    },
+    {
+      "id": "04-ERR-5",
+      "condition": "`admin_token_hash` key not found in `admin_config` on a subsequent boot",
+      "behavior": "`Run` returns a non-nil error with message `\"no admin token hash found in database; run with --reset-admin-token to generate a new token\"`; the server does not start",
+      "requirement_id": "04-REQ-4.7"
+    },
+    {
+      "id": "04-ERR-6",
+      "condition": "`crypto/rand` fails to generate random bytes during token generation",
+      "behavior": "`Run` returns a non-nil error wrapping the `crypto/rand` error; no token or hash is written; the server does not start",
+      "requirement_id": "04-REQ-2.E1"
+    },
+    {
+      "id": "04-ERR-7",
+      "condition": "Writing the `admin_token` file fails (e.g., permission denied, disk full)",
+      "behavior": "`Run` returns a non-nil error wrapping the os.WriteFile error; the server does not start",
+      "requirement_id": "04-REQ-2.E2"
+    },
+    {
+      "id": "04-ERR-8",
+      "condition": "Database error when querying `SELECT COUNT(*) FROM users`",
+      "behavior": "`Run` returns a non-nil error wrapping the database error; bootstrap sequence is aborted; the server does not start",
+      "requirement_id": "04-REQ-1.E1"
+    },
+    {
+      "id": "04-ERR-9",
+      "condition": "Database error when reading or writing `admin_config` (any key)",
+      "behavior": "`Run` returns a non-nil error wrapping the database error; the server does not start",
+      "requirement_id": "04-REQ-2.E3"
+    },
+    {
+      "id": "04-ERR-10",
+      "condition": "Database error inside `ShouldAutoPromote` when querying `admin_email`",
+      "behavior": "`ShouldAutoPromote` returns (false, error) wrapping the database error; the caller (OAuth callback) is responsible for handling the error",
+      "requirement_id": "04-REQ-3.E1"
+    },
+    {
+      "id": "04-ERR-11",
+      "condition": "The directory for the `admin_token` file does not exist and cannot be created",
+      "behavior": "`Run` returns a non-nil error wrapping the OS error; the server does not start",
+      "requirement_id": "04-REQ-8.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/sirupsen/logrus",
+      "version": "unverified — cross-check before implementation",
+      "symbols": [
+        {
+          "name": "Logger",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "type Logger struct",
+          "notes": "Structured logger instance passed via BootstrapParams.Logger; used for Warn and Info level log calls"
+        },
+        {
+          "name": "Logger.Warnf",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "func (l *Logger) Warnf(format string, args ...interface{})",
+          "notes": "Used to log admin_token file path on first boot and token rotation"
+        },
+        {
+          "name": "Logger.Infof",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "func (l *Logger) Infof(format string, args ...interface{})",
+          "notes": "Used to log auto-promotion events"
+        }
+      ]
+    },
+    {
+      "package": "crypto/rand",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "Read",
+          "import_path": "crypto/rand",
+          "signature": "func Read(b []byte) (n int, err error)",
+          "notes": "Used to generate 32 cryptographically random bytes for the admin token"
+        }
+      ]
+    },
+    {
+      "package": "crypto/sha256",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "Sum256",
+          "import_path": "crypto/sha256",
+          "signature": "func Sum256(data []byte) [32]byte",
+          "notes": "Used to compute the SHA-256 hash of the admin token string"
+        }
+      ]
+    },
+    {
+      "package": "crypto/subtle",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "ConstantTimeCompare",
+          "import_path": "crypto/subtle",
+          "signature": "func ConstantTimeCompare(x, y []byte) int",
+          "notes": "Used for timing-safe comparison of token hash byte slices; returns 1 if equal, 0 if not"
+        }
+      ]
+    },
+    {
+      "package": "encoding/hex",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "EncodeToString",
+          "import_path": "encoding/hex",
+          "signature": "func EncodeToString(src []byte) string",
+          "notes": "Used to hex-encode random bytes and SHA-256 digests"
+        }
+      ]
+    },
+    {
+      "package": "os",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "WriteFile",
+          "import_path": "os",
+          "signature": "func WriteFile(name string, data []byte, perm fs.FileMode) error",
+          "notes": "Used to write the plaintext admin token to the admin_token file with mode 0600"
+        },
+        {
+          "name": "Stat",
+          "import_path": "os",
+          "signature": "func Stat(name string) (fs.FileInfo, error)",
+          "notes": "Used to check for existence of the admin_token file during the file-presence guard"
+        },
+        {
+          "name": "Getenv",
+          "import_path": "os",
+          "signature": "func Getenv(key string) string",
+          "notes": "Used to read the ADMIN_TOKEN environment variable"
+        }
+      ]
+    }
+  ]
+}
