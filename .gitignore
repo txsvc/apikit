@@ -25,3 +25,11 @@ coverage.txt
 
 # Other unwanted files
 .DS_Store
+# agent-fox
+.agent-fox/*
+!.agent-fox/config.toml
+!.agent-fox/steering.md
+!.agent-fox/specs/
+!.agent-fox/profiles/
+!.agent-fox/profiles/*
+.claude/worktrees/

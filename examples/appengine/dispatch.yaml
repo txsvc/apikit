@@ -1,6 +1,0 @@
-dispatch:
-  #- url: "api.example.com/*"
-  #  service: default
-
-  #- url: "cdn.example.com/*"
-  #  service: default

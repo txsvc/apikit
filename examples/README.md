@@ -1,2 +1,0 @@
-## Example service and CLI
-
