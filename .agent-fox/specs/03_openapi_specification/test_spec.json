@@ -1,0 +1,1192 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "openapi_specification",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-03-1",
+      "requirement_id": "03-REQ-1.1",
+      "kind": "functional",
+      "description": "Verify that api/openapi.yaml exists, uses OpenAPI 3.1.0 format with YAML syntax, and is parseable by libopenapi without structural errors.",
+      "preconditions": [
+        "Repository root is accessible",
+        "api/openapi.yaml file exists at the repository root",
+        "libopenapi Go module is available via go.mod"
+      ],
+      "input": "Read api/openapi.yaml bytes and pass to libopenapi NewDocument",
+      "expected": "NewDocument returns no error; BuildV3Model returns a non-nil model and an empty errors slice; the parsed openapi field equals '3.1.0'",
+      "assertion_pseudocode": "bytes = readFile('api/openapi.yaml'); doc, err = NewDocument(bytes); assert err == nil; model, errs = doc.BuildV3Model(); assert len(errs) == 0; assert model.Model.Info != nil"
+    },
+    {
+      "id": "TS-03-2",
+      "requirement_id": "03-REQ-1.2",
+      "kind": "functional",
+      "description": "Verify that api/openapi.yaml defines a top-level servers block with exactly one entry: url '/api/v1' and the correct description.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the top-level servers array",
+      "expected": "servers array has exactly one element; element.url == '/api/v1'; element.description == 'Default mount point (configurable per deployment)'",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); servers = model.Servers; assert len(servers) == 1; assert servers[0].URL == '/api/v1'; assert servers[0].Description == 'Default mount point (configurable per deployment)'"
+    },
+    {
+      "id": "TS-03-3",
+      "requirement_id": "03-REQ-1.3",
+      "kind": "functional",
+      "description": "Verify that /healthz, /readyz, and /version each have a path-level servers override with url '/' to resolve as absolute paths.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect path items for /healthz, /readyz, /version",
+      "expected": "Each of the three paths has a path-level servers array with exactly one entry where url == '/'",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for path in ['/healthz', '/readyz', '/version']: pathItem = model.Paths[path]; assert pathItem.Servers != nil; assert len(pathItem.Servers) == 1; assert pathItem.Servers[0].URL == '/'"
+    },
+    {
+      "id": "TS-03-4",
+      "requirement_id": "03-REQ-1.4",
+      "kind": "functional",
+      "description": "Verify that all $ref references in api/openapi.yaml resolve without errors, indicating correct use of components/schemas.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Run openapi-validator against api/openapi.yaml",
+      "expected": "Validator exits with code 0 and reports no unresolved $ref errors",
+      "assertion_pseudocode": "exitCode = runCommand('go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml'); assert exitCode == 0"
+    },
+    {
+      "id": "TS-03-5",
+      "requirement_id": "03-REQ-2.1",
+      "kind": "functional",
+      "description": "Verify that a single bearerAuth HTTP bearer security scheme is defined under components/securitySchemes with a description covering all three credential types.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.securitySchemes",
+      "expected": "components.securitySchemes.bearerAuth exists; type == 'http'; scheme == 'bearer'; description contains references to 'admin', 'API Key', and 'PAT' credential types",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); scheme = model.Components.SecuritySchemes['bearerAuth']; assert scheme != nil; assert scheme.Type == 'http'; assert scheme.Scheme == 'bearer'; assert 'admin' in scheme.Description; assert 'PAT' in scheme.Description"
+    },
+    {
+      "id": "TS-03-6",
+      "requirement_id": "03-REQ-2.2",
+      "kind": "functional",
+      "description": "Verify that all authenticated and admin endpoints include bearerAuth in their security array.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and enumerate all operations except health probes and GET /auth/providers",
+      "expected": "Every authenticated operation has a security array containing at least one entry referencing bearerAuth",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); publicPaths = ['/healthz', '/readyz', '/version', '/auth/providers']; for each operation not in publicPaths: assert 'bearerAuth' in operation.Security"
+    },
+    {
+      "id": "TS-03-7",
+      "requirement_id": "03-REQ-2.3",
+      "kind": "functional",
+      "description": "Verify that health probe endpoints and GET /auth/providers are public with no bearerAuth security requirement and no 401 response defined.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect security and responses for GET /healthz, GET /readyz, GET /version, GET /auth/providers",
+      "expected": "Each of these four operations has an empty or absent security array and no 401 response entry",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for op in [GET /healthz, GET /readyz, GET /version, GET /auth/providers]: assert op.Security == nil or len(op.Security) == 0; assert '401' not in op.Responses"
+    },
+    {
+      "id": "TS-03-8",
+      "requirement_id": "03-REQ-3.1",
+      "kind": "functional",
+      "description": "Verify that the PAT permissions array item schema uses pattern '^[a-z_]+:[a-z_]+$' and does not use an enum property.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the permissions item schema in PatMetadata and Pat schemas",
+      "expected": "permissions items schema has pattern == '^[a-z_]+:[a-z_]+$'; no enum property present on the item schema",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for schemaName in ['PatMetadata', 'Pat']: schema = model.Components.Schemas[schemaName]; permItems = schema.Properties['permissions'].Items; assert permItems.Pattern == '^[a-z_]+:[a-z_]+$'; assert permItems.Enum == nil or len(permItems.Enum) == 0"
+    },
+    {
+      "id": "TS-03-9",
+      "requirement_id": "03-REQ-3.2",
+      "kind": "functional",
+      "description": "Verify that the PAT permissions item schema description documents all six built-in permission strings.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the description of the permissions item schema",
+      "expected": "Description contains 'users:read', 'orgs:read', 'keys:read', 'keys:manage', 'tokens:read', 'tokens:manage'",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); permItems = model.Components.Schemas['PatMetadata'].Properties['permissions'].Items; desc = permItems.Description; for perm in ['users:read', 'orgs:read', 'keys:read', 'keys:manage', 'tokens:read', 'tokens:manage']: assert perm in desc"
+    },
+    {
+      "id": "TS-03-10",
+      "requirement_id": "03-REQ-4.1",
+      "kind": "functional",
+      "description": "Verify that the expires field on POST /auth/callback and POST /user/tokens uses enum [0,30,60,90], default 90, with 0 documented as permanent.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the expires property in POST /auth/callback and POST /user/tokens request body schemas",
+      "expected": "expires schema has enum == [0, 30, 60, 90]; default == 90; description states 0 means permanent/no expiry with expires_at null",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for path in ['POST /auth/callback', 'POST /user/tokens']: expiresSchema = getRequestBodyProperty(path, 'expires'); assert expiresSchema.Enum == [0, 30, 60, 90]; assert expiresSchema.Default == 90; assert '0' in expiresSchema.Description and 'null' in expiresSchema.Description"
+    },
+    {
+      "id": "TS-03-11",
+      "requirement_id": "03-REQ-4.2",
+      "kind": "functional",
+      "description": "Verify that expires_at fields in all relevant schemas are declared nullable with format date-time.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect expires_at in ApiKeyMetadata, ApiKey, PatMetadata, Pat, and AuthCallbackResponse schemas",
+      "expected": "All expires_at fields allow null values (nullable: true or type: [string, null]) and have format: date-time",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for schemaName in ['ApiKeyMetadata', 'ApiKey', 'PatMetadata', 'Pat']: expiresAt = model.Components.Schemas[schemaName].Properties['expires_at']; assert isNullable(expiresAt); assert expiresAt.Format == 'date-time'"
+    },
+    {
+      "id": "TS-03-12",
+      "requirement_id": "03-REQ-5.1",
+      "kind": "functional",
+      "description": "Verify that the PATCH /user request body schema contains only full_name and does not include username or email.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the request body schema for PATCH /user",
+      "expected": "Request body schema has exactly one property 'full_name'; properties 'username' and 'email' are absent",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = getRequestBodySchema('PATCH', '/user'); assert set(schema.Properties.keys()) == {'full_name'}; assert 'username' not in schema.Properties; assert 'email' not in schema.Properties"
+    },
+    {
+      "id": "TS-03-13",
+      "requirement_id": "03-REQ-5.2",
+      "kind": "functional",
+      "description": "Verify that the PATCH /users/{id} request body schema contains only full_name and does not include username or email.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect the request body schema for PATCH /users/{id}",
+      "expected": "Request body schema has exactly one property 'full_name'; properties 'username' and 'email' are absent",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = getRequestBodySchema('PATCH', '/users/{id}'); assert set(schema.Properties.keys()) == {'full_name'}; assert 'username' not in schema.Properties; assert 'email' not in schema.Properties"
+    },
+    {
+      "id": "TS-03-14",
+      "requirement_id": "03-REQ-5.3",
+      "kind": "functional",
+      "description": "Verify that both PATCH /user and PATCH /users/{id} operation descriptions state that username and email are immutable via PATCH.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect operation description for PATCH /user and PATCH /users/{id}",
+      "expected": "Both operation descriptions contain text indicating username and email are immutable and cannot be changed via PATCH",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for op in [getOperation('PATCH', '/user'), getOperation('PATCH', '/users/{id}')]: assert 'immutable' in op.Description.lower() or 'username' in op.Description"
+    },
+    {
+      "id": "TS-03-15",
+      "requirement_id": "03-REQ-6.1",
+      "kind": "functional",
+      "description": "Verify that GET /healthz is defined with path-level servers override, no auth, 200 response with status ok, Cache-Control no-cache, and X-Request-ID header.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /healthz",
+      "expected": "Path has servers [{url: '/'}]; operation has no security; 200 response body schema has status='ok'; Cache-Control header value is 'no-cache'; X-Request-ID header is defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/healthz'); assert pathItem('/healthz').Servers[0].URL == '/'; assert op.Security == nil; assert getResponseSchema(op, '200').Properties['status'].Enum == ['ok']; assert getResponseHeader(op, '200', 'Cache-Control').Schema.Enum contains 'no-cache'; assert getResponseHeader(op, '200', 'X-Request-ID') != nil"
+    },
+    {
+      "id": "TS-03-16",
+      "requirement_id": "03-REQ-6.2",
+      "kind": "functional",
+      "description": "Verify that GET /readyz defines both 200 (status ok) and 503 (status unavailable) responses with appropriate headers.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /readyz",
+      "expected": "Path has servers [{url: '/'}]; no security; 200 response has {status: ok}; 503 response has {status: unavailable}; both responses include Cache-Control: no-cache and X-Request-ID",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/readyz'); assert '200' in op.Responses; assert '503' in op.Responses; assert getResponseSchema(op, '503').Properties['status'].Enum contains 'unavailable'; assert getResponseHeader(op, '503', 'X-Request-ID') != nil"
+    },
+    {
+      "id": "TS-03-17",
+      "requirement_id": "03-REQ-6.3",
+      "kind": "functional",
+      "description": "Verify that GET /version defines a 200 response with version, build_time, commit, and mount_point fields plus appropriate headers.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /version 200 response schema",
+      "expected": "200 response body schema has all four string fields: version, build_time, commit, mount_point; Cache-Control: no-cache; X-Request-ID defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/version'); schema = getResponseSchema(op, '200'); for field in ['version', 'build_time', 'commit', 'mount_point']: assert field in schema.Properties; assert schema.Properties[field].Type == 'string'"
+    },
+    {
+      "id": "TS-03-18",
+      "requirement_id": "03-REQ-7.1",
+      "kind": "functional",
+      "description": "Verify that GET /auth/providers is public, returns array of OAuthProvider objects, has Cache-Control public max-age=300, and no 401 response.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /auth/providers",
+      "expected": "No security requirement; 200 response is array of objects with name and authorize_url; Cache-Control header value contains 'public, max-age=300'; no 401 in responses",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/auth/providers'); assert op.Security == nil or len(op.Security) == 0; assert '401' not in op.Responses; assert getResponseSchema(op, '200').Type == 'array'; assert getResponseHeader(op, '200', 'Cache-Control') references 'public'"
+    },
+    {
+      "id": "TS-03-19",
+      "requirement_id": "03-REQ-7.2",
+      "kind": "functional",
+      "description": "Verify that POST /auth/callback has correct required fields, expires enum, 200 AuthCallbackResponse, 400 error, Cache-Control no-store, and X-Request-ID.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /auth/callback request body and responses",
+      "expected": "Required fields: provider, code, redirect_uri; expires is optional integer enum [0,30,60,90] default 90; 200 response matches AuthCallbackResponse with user and api_key; 400 defined; Cache-Control: no-store; X-Request-ID defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/auth/callback'); reqSchema = getRequestBodySchema(op); assert 'provider' in reqSchema.Required; assert 'code' in reqSchema.Required; assert 'redirect_uri' in reqSchema.Required; assert reqSchema.Properties['expires'].Enum == [0,30,60,90]; assert '200' in op.Responses; assert '400' in op.Responses"
+    },
+    {
+      "id": "TS-03-20",
+      "requirement_id": "03-REQ-8.1",
+      "kind": "functional",
+      "description": "Verify that GET /user has bearerAuth, returns User object with ETag, supports 304 conditional response with X-Request-ID and ETag but no body.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /user",
+      "expected": "bearerAuth in security; 200 returns User object; ETag response header on 200; 304 defined with X-Request-ID and ETag headers and no content; 401 and 403 responses present; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/user'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; assert '304' in op.Responses; assert '401' in op.Responses; assert '403' in op.Responses; assert getResponseHeader(op, '200', 'ETag') != nil; assert getResponseHeader(op, '304', 'X-Request-ID') != nil; assert getResponseContent(op, '304') == nil"
+    },
+    {
+      "id": "TS-03-21",
+      "requirement_id": "03-REQ-8.2",
+      "kind": "functional",
+      "description": "Verify that PATCH /user has bearerAuth, accepts only full_name in request body, and defines all required response codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect PATCH /user",
+      "expected": "bearerAuth in security; request body has only full_name; responses 200, 400, 401, 403, 415 all defined; Cache-Control: no-store; X-Request-ID header present",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('PATCH', '/user'); assert hasSecurity(op, 'bearerAuth'); schema = getRequestBodySchema(op); assert set(schema.Properties.keys()) == {'full_name'}; for code in ['200', '400', '401', '403', '415']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-22",
+      "requirement_id": "03-REQ-8.3",
+      "kind": "functional",
+      "description": "Verify that GET /user/keys has bearerAuth, returns array of ApiKeyMetadata objects with nullable fields, and documents 401 and 403.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /user/keys",
+      "expected": "bearerAuth in security; 200 response is array of ApiKeyMetadata with key_id, created_at, nullable expires_at, nullable revoked_at; 401 and 403 defined; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/user/keys'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; assert '401' in op.Responses; assert '403' in op.Responses; responseSchema = getResponseSchema(op, '200'); assert responseSchema.Type == 'array'"
+    },
+    {
+      "id": "TS-03-23",
+      "requirement_id": "03-REQ-8.4",
+      "kind": "functional",
+      "description": "Verify that POST /user/keys/{key_id}/refresh has bearerAuth, returns ApiKey object with key field, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /user/keys/{key_id}/refresh",
+      "expected": "bearerAuth in security; 200 response schema has key, key_id, and nullable expires_at; 401, 403, 404 defined; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/user/keys/{key_id}/refresh'); assert hasSecurity(op, 'bearerAuth'); schema = getResponseSchema(op, '200'); assert 'key' in schema.Properties; assert 'key_id' in schema.Properties; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-24",
+      "requirement_id": "03-REQ-8.5",
+      "kind": "functional",
+      "description": "Verify that DELETE /user/keys/{key_id} has bearerAuth, returns 204 with no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /user/keys/{key_id}",
+      "expected": "bearerAuth in security; 204 response has no content body; 401, 403, 404 defined; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/user/keys/{key_id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-25",
+      "requirement_id": "03-REQ-8.6",
+      "kind": "functional",
+      "description": "Verify that GET /user/tokens has bearerAuth, returns array of PatMetadata objects with all required fields, and documents 401 and 403.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /user/tokens",
+      "expected": "bearerAuth in security; 200 response is array of PatMetadata with token_id, name, permissions, created_at, nullable expires_at, nullable revoked_at; 401 and 403 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/user/tokens'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; responseSchema = getResponseSchema(op, '200'); assert responseSchema.Type == 'array'; for code in ['401', '403']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-26",
+      "requirement_id": "03-REQ-8.7",
+      "kind": "functional",
+      "description": "Verify that POST /user/tokens has bearerAuth, correct request body, 201 response with Pat object including token field, and all error codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /user/tokens",
+      "expected": "bearerAuth in security; request body requires name and permissions; expires is optional enum [0,30,60,90] default 90; 201 response schema has token, token_id, name, permissions, nullable expires_at; 400, 401, 403, 415 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/user/tokens'); reqSchema = getRequestBodySchema(op); assert 'name' in reqSchema.Required; assert 'permissions' in reqSchema.Required; assert '201' in op.Responses; schema = getResponseSchema(op, '201'); assert 'token' in schema.Properties; for code in ['400', '401', '403', '415']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-27",
+      "requirement_id": "03-REQ-8.8",
+      "kind": "functional",
+      "description": "Verify that GET /user/tokens/{token_id} has ETag, supports 304 conditional response with X-Request-ID and ETag but no body, and documents all error codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /user/tokens/{token_id}",
+      "expected": "bearerAuth in security; 200 response has ETag header; 304 response has X-Request-ID and ETag headers and no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/user/tokens/{token_id}'); assert hasSecurity(op, 'bearerAuth'); assert getResponseHeader(op, '200', 'ETag') != nil; assert '304' in op.Responses; assert getResponseContent(op, '304') == nil; assert getResponseHeader(op, '304', 'ETag') != nil"
+    },
+    {
+      "id": "TS-03-28",
+      "requirement_id": "03-REQ-8.9",
+      "kind": "functional",
+      "description": "Verify that DELETE /user/tokens/{token_id} has bearerAuth, returns 204 with no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /user/tokens/{token_id}",
+      "expected": "bearerAuth in security; 204 response with no content; 401, 403, 404 defined; Cache-Control: no-store; X-Request-ID header defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/user/tokens/{token_id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-29",
+      "requirement_id": "03-REQ-8.10",
+      "kind": "functional",
+      "description": "Verify that GET /user/orgs has bearerAuth with orgs:read, returns array of Organization objects, and documents 401 and 403.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /user/orgs",
+      "expected": "bearerAuth in security; description mentions orgs:read PAT permission; 200 response is array of Organization objects; 401 and 403 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/user/orgs'); assert hasSecurity(op, 'bearerAuth'); assert 'orgs:read' in op.Description or 'orgs:read' in op.Summary; assert '200' in op.Responses; for code in ['401', '403']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-30",
+      "requirement_id": "03-REQ-9.1",
+      "kind": "functional",
+      "description": "Verify that POST /users has admin bearerAuth, required request body fields, 201 created user, and 409 conflict for duplicate username/provider.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /users",
+      "expected": "bearerAuth in security; request body requires username, email, provider, provider_id; 201 response returns User object; 409 response defined; 400, 401, 403, 415 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/users'); reqSchema = getRequestBodySchema(op); for field in ['username', 'email', 'provider', 'provider_id']: assert field in reqSchema.Required; assert '201' in op.Responses; assert '409' in op.Responses"
+    },
+    {
+      "id": "TS-03-31",
+      "requirement_id": "03-REQ-9.2",
+      "kind": "functional",
+      "description": "Verify that GET /users has admin bearerAuth, include_blocked boolean query param defaulting to false, 200 User array, and documented filtering behavior.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /users",
+      "expected": "bearerAuth in security; include_blocked query parameter exists with type boolean and default false; 200 response is array of User objects; 401 and 403 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/users'); assert hasSecurity(op, 'bearerAuth'); param = getQueryParam(op, 'include_blocked'); assert param != nil; assert param.Schema.Type == 'boolean'; assert param.Schema.Default == false; assert '200' in op.Responses"
+    },
+    {
+      "id": "TS-03-32",
+      "requirement_id": "03-REQ-9.3",
+      "kind": "functional",
+      "description": "Verify that GET /users/{id} has admin bearerAuth, ETag header, 304 conditional response with X-Request-ID and ETag and no body, and all response codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /users/{id}",
+      "expected": "bearerAuth in security; ETag on 200 response; 304 with X-Request-ID and ETag headers and no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/users/{id}'); assert getResponseHeader(op, '200', 'ETag') != nil; assert '304' in op.Responses; assert getResponseContent(op, '304') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-33",
+      "requirement_id": "03-REQ-9.4",
+      "kind": "functional",
+      "description": "Verify that PATCH /users/{id} has admin bearerAuth, only full_name in request body, and all required response codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect PATCH /users/{id}",
+      "expected": "bearerAuth in security; request body schema has only full_name property; 200, 401, 403, 404, 415 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('PATCH', '/users/{id}'); schema = getRequestBodySchema(op); assert set(schema.Properties.keys()) == {'full_name'}; for code in ['200', '401', '403', '404', '415']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-34",
+      "requirement_id": "03-REQ-9.5",
+      "kind": "functional",
+      "description": "Verify that POST /users/{id}/promote has admin bearerAuth, returns 200 User object, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /users/{id}/promote",
+      "expected": "bearerAuth in security; 200 response returns User schema; 401, 403, 404 defined; description or response description mentions role=admin",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/users/{id}/promote'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-35",
+      "requirement_id": "03-REQ-9.6",
+      "kind": "functional",
+      "description": "Verify that POST /users/{id}/demote has admin bearerAuth, 200 response, and 409 conflict for last-admin constraint.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /users/{id}/demote",
+      "expected": "bearerAuth in security; 200 response; 409 response defined with description mentioning last admin; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/users/{id}/demote'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; assert '409' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-36",
+      "requirement_id": "03-REQ-9.7",
+      "kind": "functional",
+      "description": "Verify that POST /users/{id}/block has admin bearerAuth, returns 200 User object, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /users/{id}/block",
+      "expected": "bearerAuth in security; 200 response returns User object; 401, 403, 404 defined; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/users/{id}/block'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-37",
+      "requirement_id": "03-REQ-9.8",
+      "kind": "functional",
+      "description": "Verify that POST /users/{id}/unblock has admin bearerAuth, returns 200 User object, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /users/{id}/unblock",
+      "expected": "bearerAuth in security; 200 response returns User object; 401, 403, 404 defined; Cache-Control: no-store",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/users/{id}/unblock'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-38",
+      "requirement_id": "03-REQ-9.9",
+      "kind": "functional",
+      "description": "Verify that GET /users/{id}/keys has admin bearerAuth, returns array of ApiKeyMetadata objects, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /users/{id}/keys",
+      "expected": "bearerAuth in security; 200 response is array of ApiKeyMetadata objects; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/users/{id}/keys'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-39",
+      "requirement_id": "03-REQ-9.10",
+      "kind": "functional",
+      "description": "Verify that DELETE /users/{id}/keys/{key_id} has admin bearerAuth, 204 no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /users/{id}/keys/{key_id}",
+      "expected": "bearerAuth in security; 204 response with no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/users/{id}/keys/{key_id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-40",
+      "requirement_id": "03-REQ-9.11",
+      "kind": "functional",
+      "description": "Verify that GET /users/{id}/tokens has admin bearerAuth, returns array of PatMetadata objects, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /users/{id}/tokens",
+      "expected": "bearerAuth in security; 200 response is array of PatMetadata objects; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/users/{id}/tokens'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-41",
+      "requirement_id": "03-REQ-9.12",
+      "kind": "functional",
+      "description": "Verify that DELETE /users/{id}/tokens/{token_id} has admin bearerAuth, 204 no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /users/{id}/tokens/{token_id}",
+      "expected": "bearerAuth in security; 204 response with no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/users/{id}/tokens/{token_id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-42",
+      "requirement_id": "03-REQ-10.1",
+      "kind": "functional",
+      "description": "Verify that POST /orgs has admin bearerAuth, required name and slug fields, optional url, 201 response, and 409 conflict.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /orgs",
+      "expected": "bearerAuth in security; request body requires name and slug; url is optional; 201 returns Organization object; 409 defined; 400, 401, 403, 415 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/orgs'); reqSchema = getRequestBodySchema(op); assert 'name' in reqSchema.Required; assert 'slug' in reqSchema.Required; assert 'url' not in reqSchema.Required; assert '201' in op.Responses; assert '409' in op.Responses"
+    },
+    {
+      "id": "TS-03-43",
+      "requirement_id": "03-REQ-10.2",
+      "kind": "functional",
+      "description": "Verify that GET /orgs has admin bearerAuth, include_blocked boolean query param, 200 Organization array, and documented filtering behavior.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /orgs",
+      "expected": "bearerAuth in security; include_blocked query param with type boolean and default false; 200 returns array of Organization objects; 401 and 403 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/orgs'); param = getQueryParam(op, 'include_blocked'); assert param != nil; assert param.Schema.Type == 'boolean'; assert param.Schema.Default == false; assert '200' in op.Responses"
+    },
+    {
+      "id": "TS-03-44",
+      "requirement_id": "03-REQ-10.3",
+      "kind": "functional",
+      "description": "Verify that GET /orgs/{id} documents dual-role auth (admin or orgs:read PAT), ETag, 304 conditional response with X-Request-ID and ETag, and all response codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /orgs/{id}",
+      "expected": "bearerAuth in security; description mentions orgs:read for member access; ETag on 200 response; 304 with X-Request-ID and ETag headers and no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/orgs/{id}'); assert hasSecurity(op, 'bearerAuth'); assert 'orgs:read' in (op.Description + op.Summary); assert getResponseHeader(op, '200', 'ETag') != nil; assert '304' in op.Responses; assert getResponseContent(op, '304') == nil"
+    },
+    {
+      "id": "TS-03-45",
+      "requirement_id": "03-REQ-10.4",
+      "kind": "functional",
+      "description": "Verify that PATCH /orgs/{id} has admin bearerAuth, optional name and url in request body, 200 response, and 409 conflict.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect PATCH /orgs/{id}",
+      "expected": "bearerAuth in security; request body schema has optional name and url (not in required); 200, 401, 403, 404, 409, 415 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('PATCH', '/orgs/{id}'); reqSchema = getRequestBodySchema(op); assert 'name' not in (reqSchema.Required or []); assert 'url' not in (reqSchema.Required or []); for code in ['200', '409', '401', '403', '404', '415']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-46",
+      "requirement_id": "03-REQ-10.5",
+      "kind": "functional",
+      "description": "Verify that DELETE /orgs/{id} has admin bearerAuth, 204 no body with cascade noted, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /orgs/{id}",
+      "expected": "bearerAuth in security; 204 response with no content; description mentions cascade of memberships; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/orgs/{id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; assert 'cascade' in op.Description.lower() or 'membership' in op.Description.lower()"
+    },
+    {
+      "id": "TS-03-47",
+      "requirement_id": "03-REQ-10.6",
+      "kind": "functional",
+      "description": "Verify that POST /orgs/{id}/block has admin bearerAuth, returns 200 Organization object with status=blocked, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /orgs/{id}/block",
+      "expected": "bearerAuth in security; 200 response returns Organization schema; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/orgs/{id}/block'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-48",
+      "requirement_id": "03-REQ-10.7",
+      "kind": "functional",
+      "description": "Verify that POST /orgs/{id}/unblock has admin bearerAuth, returns 200 Organization object with status=active, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect POST /orgs/{id}/unblock",
+      "expected": "bearerAuth in security; 200 response returns Organization schema; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('POST', '/orgs/{id}/unblock'); assert hasSecurity(op, 'bearerAuth'); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-49",
+      "requirement_id": "03-REQ-10.8",
+      "kind": "functional",
+      "description": "Verify that GET /orgs/{id}/members documents dual-role auth (admin or orgs:read PAT), returns array of User objects, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect GET /orgs/{id}/members",
+      "expected": "bearerAuth in security; description mentions orgs:read for member access; 200 response is array of User objects; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/orgs/{id}/members'); assert hasSecurity(op, 'bearerAuth'); assert 'orgs:read' in (op.Description + op.Summary); assert '200' in op.Responses; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-50",
+      "requirement_id": "03-REQ-10.9",
+      "kind": "functional",
+      "description": "Verify that PUT /orgs/{id}/members/{user_id} has admin bearerAuth, no request body defined, 204 no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect PUT /orgs/{id}/members/{user_id}",
+      "expected": "bearerAuth in security; no requestBody defined on the operation; 204 response with no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('PUT', '/orgs/{id}/members/{user_id}'); assert hasSecurity(op, 'bearerAuth'); assert op.RequestBody == nil; assert '204' in op.Responses; assert getResponseContent(op, '204') == nil; for code in ['401', '403', '404']: assert code in op.Responses"
+    },
+    {
+      "id": "TS-03-51",
+      "requirement_id": "03-REQ-10.10",
+      "kind": "functional",
+      "description": "Verify that DELETE /orgs/{id}/members/{user_id} has admin bearerAuth, 204 no body, and documents 401, 403, 404.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect DELETE /orgs/{id}/members/{user_id}",
+      "expected": "bearerAuth in security; 204 response with no content; 401, 403, 404 defined",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('DELETE', '/orgs/{id}/members/{user_id}'); assert hasSecurity(op, 'bearerAuth'); assert '204' in op.Responses; assert getResponseContent(op, '204') == nil"
+    },
+    {
+      "id": "TS-03-52",
+      "requirement_id": "03-REQ-11.1",
+      "kind": "functional",
+      "description": "Verify that the User schema in components/schemas has all required fields with correct types, status and role enums, and nullable full_name.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.User",
+      "expected": "User schema has id (uuid string), username, email, full_name (nullable), status (enum active/blocked), role (enum admin/user), provider, provider_id, created_at and updated_at (date-time strings)",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['User']; for field in ['id', 'username', 'email', 'full_name', 'status', 'role', 'provider', 'provider_id', 'created_at', 'updated_at']: assert field in schema.Properties; assert isNullable(schema.Properties['full_name']); assert schema.Properties['status'].Enum == ['active', 'blocked']; assert schema.Properties['role'].Enum == ['admin', 'user']"
+    },
+    {
+      "id": "TS-03-53",
+      "requirement_id": "03-REQ-11.2",
+      "kind": "functional",
+      "description": "Verify that the ApiKeyMetadata schema has key_id, created_at, nullable expires_at, and nullable revoked_at.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.ApiKeyMetadata",
+      "expected": "Schema has key_id (string), created_at (date-time string), expires_at (nullable date-time), revoked_at (nullable date-time)",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['ApiKeyMetadata']; for field in ['key_id', 'created_at', 'expires_at', 'revoked_at']: assert field in schema.Properties; assert isNullable(schema.Properties['expires_at']); assert isNullable(schema.Properties['revoked_at'])"
+    },
+    {
+      "id": "TS-03-54",
+      "requirement_id": "03-REQ-11.3",
+      "kind": "functional",
+      "description": "Verify that the ApiKey schema has key (full plaintext), key_id, and nullable expires_at.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.ApiKey",
+      "expected": "Schema has key (string containing plaintext secret), key_id (string), expires_at (nullable date-time); description for key mentions plaintext",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['ApiKey']; for field in ['key', 'key_id', 'expires_at']: assert field in schema.Properties; assert isNullable(schema.Properties['expires_at']); assert schema.Properties['key'].Type == 'string'"
+    },
+    {
+      "id": "TS-03-55",
+      "requirement_id": "03-REQ-11.4",
+      "kind": "functional",
+      "description": "Verify that the PatMetadata schema has all required fields with permissions using pattern constraint.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.PatMetadata",
+      "expected": "Schema has token_id, name, permissions (array of pattern-constrained strings), created_at, nullable expires_at, nullable revoked_at",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['PatMetadata']; for field in ['token_id', 'name', 'permissions', 'created_at', 'expires_at', 'revoked_at']: assert field in schema.Properties; permItems = schema.Properties['permissions'].Items; assert permItems.Pattern == '^[a-z_]+:[a-z_]+$'"
+    },
+    {
+      "id": "TS-03-56",
+      "requirement_id": "03-REQ-11.5",
+      "kind": "functional",
+      "description": "Verify that the Pat schema (creation) has token field with plaintext secret, token_id, name, permissions, and nullable expires_at.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.Pat",
+      "expected": "Schema has token (string), token_id, name, permissions (pattern-constrained array), nullable expires_at; description of token indicates it contains plaintext secret returned only at creation",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['Pat']; for field in ['token', 'token_id', 'name', 'permissions', 'expires_at']: assert field in schema.Properties; assert isNullable(schema.Properties['expires_at'])"
+    },
+    {
+      "id": "TS-03-57",
+      "requirement_id": "03-REQ-11.6",
+      "kind": "functional",
+      "description": "Verify that the Organization schema has all required fields with status enum, nullable url, and uuid id.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.Organization",
+      "expected": "Schema has id (uuid string), name, slug, url (nullable), status (enum active/blocked), created_at and updated_at (date-time strings)",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['Organization']; for field in ['id', 'name', 'slug', 'url', 'status', 'created_at', 'updated_at']: assert field in schema.Properties; assert isNullable(schema.Properties['url']); assert schema.Properties['status'].Enum == ['active', 'blocked']"
+    },
+    {
+      "id": "TS-03-58",
+      "requirement_id": "03-REQ-11.7",
+      "kind": "functional",
+      "description": "Verify that the OAuthProvider schema has exactly two string properties: name and authorize_url.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.OAuthProvider",
+      "expected": "Schema has exactly two properties: name (string) and authorize_url (string)",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['OAuthProvider']; assert set(schema.Properties.keys()) == {'name', 'authorize_url'}; assert schema.Properties['name'].Type == 'string'; assert schema.Properties['authorize_url'].Type == 'string'"
+    },
+    {
+      "id": "TS-03-59",
+      "requirement_id": "03-REQ-11.8",
+      "kind": "functional",
+      "description": "Verify that the Error schema has error object with code (integer) and message (string), and description states code equals HTTP status code with no sub-codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.Error",
+      "expected": "Schema has required error object with code (integer) and message (string); description states code equals HTTP status code and no sub-codes",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['Error']; errObj = schema.Properties['error']; assert errObj.Properties['code'].Type == 'integer'; assert errObj.Properties['message'].Type == 'string'; assert 'HTTP' in schema.Description or 'status code' in schema.Description"
+    },
+    {
+      "id": "TS-03-60",
+      "requirement_id": "03-REQ-11.9",
+      "kind": "functional",
+      "description": "Verify that the AuthCallbackResponse schema has user ($ref to User) and api_key object with key, key_id, and nullable expires_at.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect components.schemas.AuthCallbackResponse",
+      "expected": "Schema has user property referencing User schema and api_key object with key (string), key_id (string), and nullable expires_at",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); schema = model.Components.Schemas['AuthCallbackResponse']; assert schema.Properties['user'] references '#/components/schemas/User'; apiKey = schema.Properties['api_key']; assert 'key' in apiKey.Properties; assert 'key_id' in apiKey.Properties; assert isNullable(apiKey.Properties['expires_at'])"
+    },
+    {
+      "id": "TS-03-61",
+      "requirement_id": "03-REQ-12.1",
+      "kind": "functional",
+      "description": "Verify that every applicable endpoint documents all relevant error responses (400, 401, 403, 404, 409, 413, 415, 500) using the Error schema.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and enumerate all operations with expected error codes",
+      "expected": "Each operation that can produce a given error code has that status code defined in its responses using the Error schema $ref",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for each operation in model: for each expectedErrorCode in getExpectedErrorCodes(operation): assert expectedErrorCode in operation.Responses; assert operation.Responses[expectedErrorCode] references '#/components/schemas/Error'"
+    },
+    {
+      "id": "TS-03-62",
+      "requirement_id": "03-REQ-12.2",
+      "kind": "functional",
+      "description": "Verify that all authenticated endpoints explicitly document both 401 and 403 responses using the Error schema.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and find all operations with bearerAuth in security",
+      "expected": "Every operation with bearerAuth security has both 401 and 403 responses referencing the Error schema",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for each op in model where hasSecurity(op, 'bearerAuth'): assert '401' in op.Responses; assert '403' in op.Responses; assert op.Responses['401'] references Error schema; assert op.Responses['403'] references Error schema"
+    },
+    {
+      "id": "TS-03-63",
+      "requirement_id": "03-REQ-12.3",
+      "kind": "functional",
+      "description": "Verify that 413 Payload Too Large is documented on all endpoints that accept a request body, with the Error schema.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and find all operations with a requestBody defined",
+      "expected": "Every operation with a requestBody has a 413 response entry referencing the Error schema",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for each op in model where op.RequestBody != nil: assert '413' in op.Responses; assert op.Responses['413'] references Error schema"
+    },
+    {
+      "id": "TS-03-64",
+      "requirement_id": "03-REQ-13.1",
+      "kind": "functional",
+      "description": "Verify that all mutable resource endpoints document Cache-Control: no-store response header.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect Cache-Control header on all /user, /users/*, /orgs/*, key, and token operations",
+      "expected": "All mutable resource operations include a Cache-Control response header with value 'no-store' on their 200/201/204 responses",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); mutablePaths = all paths except /healthz, /readyz, /version, /auth/providers; for each op in mutablePaths: for each successResponse in op.Responses where code in [200, 201, 204]: cacheControl = getResponseHeader(successResponse, 'Cache-Control'); assert cacheControl != nil; assert 'no-store' in cacheControl.Schema.Enum or cacheControl.Schema.Example == 'no-store'"
+    },
+    {
+      "id": "TS-03-65",
+      "requirement_id": "03-REQ-13.2",
+      "kind": "functional",
+      "description": "Verify that GET /healthz, GET /readyz, and GET /version document Cache-Control: no-cache.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect Cache-Control header on health probe operations",
+      "expected": "Each of GET /healthz, GET /readyz, GET /version has a Cache-Control response header with value 'no-cache'",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for path in ['GET /healthz', 'GET /readyz', 'GET /version']: op = getOperation(path); cacheControl = getResponseHeader(op, '200', 'Cache-Control'); assert cacheControl != nil"
+    },
+    {
+      "id": "TS-03-66",
+      "requirement_id": "03-REQ-13.3",
+      "kind": "functional",
+      "description": "Verify that GET /auth/providers documents Cache-Control: public, max-age=300.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect Cache-Control header on GET /auth/providers",
+      "expected": "GET /auth/providers has Cache-Control response header with value containing 'public' and 'max-age=300'",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); op = getOperation('GET', '/auth/providers'); cacheControl = getResponseHeader(op, '200', 'Cache-Control'); assert cacheControl != nil; assert 'public' in cacheControlHeaderDescription and 'max-age=300' in cacheControlHeaderDescription"
+    },
+    {
+      "id": "TS-03-67",
+      "requirement_id": "03-REQ-14.1",
+      "kind": "functional",
+      "description": "Verify that X-Request-ID UUID header is defined on every response across all operations and all status codes.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and enumerate every response across all operations",
+      "expected": "Every response (200, 201, 204, 304, 400, 401, 403, 404, 409, 413, 415, 500, 503) on every operation defines an X-Request-ID header",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for each op in model: for each statusCode, response in op.Responses: xRequestId = response.Headers['X-Request-ID']; assert xRequestId != nil; assert xRequestId.Schema.Type == 'string'"
+    },
+    {
+      "id": "TS-03-68",
+      "requirement_id": "03-REQ-14.2",
+      "kind": "functional",
+      "description": "Verify that ETag is documented as an opaque string header (no format/pattern) on exactly the four single-resource GET endpoints.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect ETag header on GET /user, GET /users/{id}, GET /user/tokens/{token_id}, GET /orgs/{id}",
+      "expected": "Each of the four endpoints has an ETag response header with schema type string and no format or pattern constraint",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for path in ['GET /user', 'GET /users/{id}', 'GET /user/tokens/{token_id}', 'GET /orgs/{id}']: op = getOperation(path); etag = getResponseHeader(op, '200', 'ETag'); assert etag != nil; assert etag.Schema.Type == 'string'; assert etag.Schema.Format == '' or etag.Schema.Format == nil; assert etag.Schema.Pattern == '' or etag.Schema.Pattern == nil"
+    },
+    {
+      "id": "TS-03-69",
+      "requirement_id": "03-REQ-14.3",
+      "kind": "functional",
+      "description": "Verify that Content-Type constraints are documented: request bodies require application/json, response bodies use application/json; charset=utf-8, and 204/304 have no body.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect requestBody media types, response media types, and 204/304 response content",
+      "expected": "All requestBody definitions use 'application/json' media type; all response bodies use 'application/json; charset=utf-8' or 'application/json'; 204 and 304 responses have no content",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for each op: if op.RequestBody: assert 'application/json' in op.RequestBody.Content; for code, response in op.Responses: if code in ['204', '304']: assert response.Content == nil or len(response.Content) == 0"
+    },
+    {
+      "id": "TS-03-70",
+      "requirement_id": "03-REQ-14.4",
+      "kind": "functional",
+      "description": "Verify that 304 responses on the four conditional GET endpoints have X-Request-ID and ETag headers, no body, and no Cache-Control header.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect 304 responses on GET /user, GET /users/{id}, GET /user/tokens/{token_id}, GET /orgs/{id}",
+      "expected": "Each 304 response has X-Request-ID and ETag headers defined; no response content; no Cache-Control header defined on the 304 response itself",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); for path in ['GET /user', 'GET /users/{id}', 'GET /user/tokens/{token_id}', 'GET /orgs/{id}']: op = getOperation(path); r304 = op.Responses['304']; assert r304.Headers['X-Request-ID'] != nil; assert r304.Headers['ETag'] != nil; assert r304.Content == nil; assert 'Cache-Control' not in r304.Headers"
+    },
+    {
+      "id": "TS-03-71",
+      "requirement_id": "03-REQ-15.1",
+      "kind": "functional",
+      "description": "Verify that all timestamp fields across all schemas use format: date-time and descriptions specify RFC 3339 UTC with Z suffix.",
+      "preconditions": [
+        "api/openapi.yaml exists and is valid OpenAPI 3.1.0"
+      ],
+      "input": "Parse api/openapi.yaml and inspect all timestamp fields in User, ApiKeyMetadata, ApiKey, PatMetadata, Pat, Organization schemas",
+      "expected": "All fields named created_at, updated_at, expires_at, revoked_at use type: string and format: date-time; descriptions or spec info mentions UTC and Z suffix",
+      "assertion_pseudocode": "model = parseOpenAPI('api/openapi.yaml'); timestampFields = ['created_at', 'updated_at', 'expires_at', 'revoked_at']; for schemaName in ['User', 'ApiKeyMetadata', 'ApiKey', 'PatMetadata', 'Pat', 'Organization']: schema = model.Components.Schemas[schemaName]; for field in timestampFields: if field in schema.Properties: assert schema.Properties[field].Format == 'date-time'"
+    },
+    {
+      "id": "TS-03-72",
+      "requirement_id": "03-REQ-16.1",
+      "kind": "functional",
+      "description": "Verify that api/api_test.go exists and contains a Go test that reads and validates api/openapi.yaml using libopenapi, asserting no structural errors.",
+      "preconditions": [
+        "Repository root is accessible",
+        "api/api_test.go exists at the api/ directory",
+        "Go toolchain is installed",
+        "libopenapi is listed in go.mod"
+      ],
+      "input": "Read api/api_test.go source and run 'go test ./api/...'",
+      "expected": "File exists; contains at least one test function; imports libopenapi; calls ReadFile on api/openapi.yaml; calls NewDocument; calls BuildV3Model; asserts no errors; go test exits 0 when spec is valid",
+      "assertion_pseudocode": "source = readFile('api/api_test.go'); assert 'libopenapi' in source; assert 'openapi.yaml' in source; assert 'BuildV3Model' in source or 'NewDocument' in source; exitCode = runCommand('go test ./api/...'); assert exitCode == 0"
+    },
+    {
+      "id": "TS-03-73",
+      "requirement_id": "03-REQ-16.2",
+      "kind": "functional",
+      "description": "Verify that api/api_test.go does not assert on individual operations, response examples, or ETag derivation — scope is structural parsing only.",
+      "preconditions": [
+        "api/api_test.go exists"
+      ],
+      "input": "Read api/api_test.go source and inspect test logic",
+      "expected": "Test source does not contain assertions on specific operation semantics, ETag values, or response example validation; it only checks the error/errs return from the libopenapi parsing calls",
+      "assertion_pseudocode": "source = readFile('api/api_test.go'); assert 'ETag derivation' not in source; assert no assertions on specific operationIDs or paths beyond structural parsing errors; logically: test body calls parse function and checks len(errs) == 0"
+    },
+    {
+      "id": "TS-03-74",
+      "requirement_id": "03-REQ-16.3",
+      "kind": "functional",
+      "description": "Verify that the Go validation test is discovered and executed as part of 'go test ./...' from the repository root.",
+      "preconditions": [
+        "Repository root is accessible",
+        "Go toolchain installed",
+        "api/api_test.go exists with a valid test function",
+        "api/openapi.yaml is valid"
+      ],
+      "input": "Run 'go test ./...' from repository root",
+      "expected": "Test output includes the api package test results; exit code is 0 when spec is valid; test name appears in output",
+      "assertion_pseudocode": "output, exitCode = runCommand('go test ./...'); assert exitCode == 0; assert 'api' in output or 'PASS' in output"
+    },
+    {
+      "id": "TS-03-75",
+      "requirement_id": "03-REQ-17.1",
+      "kind": "functional",
+      "description": "Verify that 'make check' runs the openapi-validator against api/openapi.yaml and fails with non-zero exit code when the spec has errors.",
+      "preconditions": [
+        "Repository root is accessible",
+        "Makefile defines a check target",
+        "Go toolchain installed",
+        "api/openapi.yaml exists"
+      ],
+      "input": "Run 'make check' with a valid api/openapi.yaml; then run with a deliberately broken spec",
+      "expected": "With valid spec: make check exits 0. With invalid spec: make check exits non-zero and openapi-validator error output is present",
+      "assertion_pseudocode": "exitCode = runCommand('make check'); assert exitCode == 0; corruptSpec(); exitCode2 = runCommand('make check'); assert exitCode2 != 0"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-03-P1",
+      "property_id": "03-PROP-1",
+      "validates": [
+        "03-REQ-14.2"
+      ],
+      "description": "For any ETag-returning endpoint in the spec, verify the ETag schema is typed as an opaque string with no format, pattern, or derivation algorithm specified.",
+      "for_any_strategy": "Enumerate all operations in the parsed api/openapi.yaml that define an ETag response header on their 200 response",
+      "invariant_check": "for each such operation: etag = getResponseHeader(op, '200', 'ETag'); assert etag.Schema.Type == 'string'; assert etag.Schema.Format == nil or etag.Schema.Format == ''; assert etag.Schema.Pattern == nil or etag.Schema.Pattern == ''; assert 'hash' not in (etag.Description or '').lower(); assert 'algorithm' not in (etag.Description or '').lower()"
+    },
+    {
+      "id": "TS-03-P2",
+      "property_id": "03-PROP-2",
+      "validates": [
+        "03-REQ-12.2",
+        "03-REQ-8.1",
+        "03-REQ-8.2",
+        "03-REQ-9.1",
+        "03-REQ-9.2"
+      ],
+      "description": "For any operation with bearerAuth security, verify it defines both a 401 and a 403 response each referencing the Error schema.",
+      "for_any_strategy": "Enumerate all operations in the parsed api/openapi.yaml that have bearerAuth in their security array",
+      "invariant_check": "for each such operation: assert '401' in op.Responses; assert '403' in op.Responses; assert op.Responses['401'] uses Error schema ref; assert op.Responses['403'] uses Error schema ref"
+    },
+    {
+      "id": "TS-03-P3",
+      "property_id": "03-PROP-3",
+      "validates": [
+        "03-REQ-14.1"
+      ],
+      "description": "For every response across all operations and all status codes, verify that X-Request-ID header is defined as a string.",
+      "for_any_strategy": "Enumerate all (operation, statusCode, response) triples in the parsed api/openapi.yaml",
+      "invariant_check": "for each (op, statusCode, response): xReqId = response.Headers['X-Request-ID']; assert xReqId != nil; assert xReqId.Schema.Type == 'string'"
+    },
+    {
+      "id": "TS-03-P4",
+      "property_id": "03-PROP-4",
+      "validates": [
+        "03-REQ-3.1"
+      ],
+      "description": "For any schema modeling PAT permission strings, verify it uses pattern constraint and not an enum.",
+      "for_any_strategy": "Enumerate all schemas in components/schemas that contain a 'permissions' array property",
+      "invariant_check": "for each such schema: items = schema.Properties['permissions'].Items; assert items.Pattern == '^[a-z_]+:[a-z_]+$'; assert items.Enum == nil or len(items.Enum) == 0"
+    },
+    {
+      "id": "TS-03-P5",
+      "property_id": "03-PROP-5",
+      "validates": [
+        "03-REQ-5.1",
+        "03-REQ-5.2"
+      ],
+      "description": "For any PATCH operation in the spec, verify the request body schema contains exactly one property (full_name) and does not include username or email.",
+      "for_any_strategy": "Enumerate all operations with HTTP method PATCH in the parsed api/openapi.yaml",
+      "invariant_check": "for each PATCH operation: schema = getRequestBodySchema(op); assert set(schema.Properties.keys()) == {'full_name'}; assert 'username' not in schema.Properties; assert 'email' not in schema.Properties"
+    },
+    {
+      "id": "TS-03-P6",
+      "property_id": "03-PROP-6",
+      "validates": [
+        "03-REQ-4.2"
+      ],
+      "description": "For any schema containing an expires_at field, verify it is declared nullable with format date-time.",
+      "for_any_strategy": "Enumerate all schemas in components/schemas and all inline schemas in operation request/response bodies that contain an 'expires_at' property",
+      "invariant_check": "for each such schema with expires_at: field = schema.Properties['expires_at']; assert isNullable(field); assert field.Format == 'date-time'"
+    },
+    {
+      "id": "TS-03-P7",
+      "property_id": "03-PROP-7",
+      "validates": [
+        "03-REQ-1.3",
+        "03-REQ-6.1",
+        "03-REQ-6.2",
+        "03-REQ-6.3"
+      ],
+      "description": "For any health probe path (/healthz, /readyz, /version), verify the path item defines a servers block with url '/' overriding the top-level servers.",
+      "for_any_strategy": "Enumerate path items for /healthz, /readyz, /version in the parsed api/openapi.yaml",
+      "invariant_check": "for each health probe path item: assert pathItem.Servers != nil; assert len(pathItem.Servers) >= 1; assert pathItem.Servers[0].URL == '/'"
+    },
+    {
+      "id": "TS-03-P8",
+      "property_id": "03-PROP-8",
+      "validates": [
+        "03-REQ-11.8",
+        "03-REQ-12.1"
+      ],
+      "description": "For every error response in the spec, verify the Error schema code field is documented as an integer equal to the HTTP status code with no sub-codes.",
+      "for_any_strategy": "Inspect the Error schema in components/schemas and all error response entries referencing it",
+      "invariant_check": "errorSchema = model.Components.Schemas['Error']; codeField = errorSchema.Properties['error'].Properties['code']; assert codeField.Type == 'integer'; assert 'sub' not in (codeField.Description or '').lower(); assert 'HTTP' in (errorSchema.Description + codeField.Description) or 'status' in (errorSchema.Description + codeField.Description)"
+    },
+    {
+      "id": "TS-03-P9",
+      "property_id": "03-PROP-9",
+      "validates": [
+        "03-REQ-14.4"
+      ],
+      "description": "For any 304 Not Modified response on conditional GET endpoints, verify it has no body, has X-Request-ID and ETag headers, and does not define Cache-Control.",
+      "for_any_strategy": "Enumerate 304 responses on GET /user, GET /users/{id}, GET /user/tokens/{token_id}, GET /orgs/{id} in the parsed api/openapi.yaml",
+      "invariant_check": "for each 304 response: assert response.Content == nil or len(response.Content) == 0; assert response.Headers['X-Request-ID'] != nil; assert response.Headers['ETag'] != nil; assert 'Cache-Control' not in response.Headers"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-03-E1",
+      "requirement_id": "03-REQ-1.E1",
+      "kind": "edge_case",
+      "description": "Verify that a $ref pointing to a non-existent components/schemas entry causes the OpenAPI validator to report an unresolved reference error and make check to fail.",
+      "preconditions": [
+        "A copy of api/openapi.yaml is modified to contain a $ref pointing to '#/components/schemas/NonExistentSchema'",
+        "make check target is configured to run openapi-validator"
+      ],
+      "input": "api/openapi.yaml with a $ref to '#/components/schemas/NonExistentSchema' substituted for a valid ref",
+      "expected": "openapi-validator reports an unresolved reference error; make check exits with non-zero exit code; go test ./... also fails",
+      "assertion_pseudocode": "modifiedSpec = injectBadRef('api/openapi.yaml', '$ref: \"#/components/schemas/NonExistentSchema\"'); writeFile('api/openapi.yaml', modifiedSpec); exitCode = runCommand('make check'); assert exitCode != 0; exitCode2 = runCommand('go test ./...'); assert exitCode2 != 0"
+    },
+    {
+      "id": "TS-03-E2",
+      "requirement_id": "03-REQ-16.E1",
+      "kind": "edge_case",
+      "description": "Verify that when libopenapi returns structural errors from a malformed api/openapi.yaml, the test calls t.Fatalf with error details and go test exits non-zero.",
+      "preconditions": [
+        "api/api_test.go exists with structural validation logic",
+        "A malformed version of api/openapi.yaml is placed on disk (e.g. invalid YAML syntax or missing openapi version field)"
+      ],
+      "input": "api/openapi.yaml with invalid YAML syntax (e.g. unmatched colon or missing required openapi field)",
+      "expected": "go test ./api/... exits with non-zero code; test output contains the libopenapi parser error details from t.Fatalf",
+      "assertion_pseudocode": "writeMalformedYAML('api/openapi.yaml'); output, exitCode = runCommand('go test ./api/...'); assert exitCode != 0; assert 'FAIL' in output; assert len(output) > 0 // error details from t.Fatalf"
+    },
+    {
+      "id": "TS-03-E3",
+      "requirement_id": "03-REQ-16.E2",
+      "kind": "edge_case",
+      "description": "Verify that when api/openapi.yaml cannot be read from disk, the test calls t.Fatalf with the file read error and exits non-zero without panicking.",
+      "preconditions": [
+        "api/api_test.go exists",
+        "api/openapi.yaml is renamed or removed to simulate a missing file"
+      ],
+      "input": "api/openapi.yaml does not exist on disk when go test runs",
+      "expected": "go test ./api/... exits with non-zero exit code; output contains 'FAIL' and a message about file read failure; process does not panic or call os.Exit directly",
+      "assertion_pseudocode": "removeFile('api/openapi.yaml'); output, exitCode = runCommand('go test ./api/...'); assert exitCode != 0; assert 'FAIL' in output; assert 'panic' not in output.lower() // t.Fatalf used not panic"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-03-SMOKE-1",
+      "execution_path_id": "03-PATH-1",
+      "description": "End-to-end smoke test: developer edits api/openapi.yaml, runs 'go test ./...', and the api/api_test.go validation test executes and passes.",
+      "trigger": "Run 'go test ./...' from the repository root with a valid api/openapi.yaml in place",
+      "real_components": [
+        "api/openapi.yaml",
+        "api/api_test.go",
+        "Go test runner",
+        "libopenapi library"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Go test runner discovers and runs the test in api/api_test.go",
+        "Test reads api/openapi.yaml from disk successfully",
+        "libopenapi parses the file and returns no structural errors",
+        "Test asserts no errors and passes",
+        "go test exits with code 0",
+        "Output shows 'ok' or 'PASS' for the api package"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-2",
+      "execution_path_id": "03-PATH-2",
+      "description": "Smoke test verifying POST /auth/callback is fully specified with correct request schema, expires enum, and AuthCallbackResponse with nullable expires_at.",
+      "trigger": "Parse api/openapi.yaml and validate the POST /auth/callback operation definition",
+      "real_components": [
+        "api/openapi.yaml"
+      ],
+      "mockable": [
+        "OAuth provider",
+        "server implementation"
+      ],
+      "expected_effects": [
+        "POST /auth/callback operation is present under /auth/callback path",
+        "Request body requires provider, code, redirect_uri strings",
+        "expires field is optional integer with enum [0, 30, 60, 90] and default 90",
+        "200 response references AuthCallbackResponse schema containing user and api_key with nullable expires_at",
+        "400 response is defined with Error schema",
+        "X-Request-ID header is defined on all responses",
+        "Cache-Control: no-store is defined on the 200 response"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-3",
+      "execution_path_id": "03-PATH-3",
+      "description": "Smoke test verifying conditional GET with ETag and 304 Not Modified is fully specified on GET /user.",
+      "trigger": "Parse api/openapi.yaml and validate GET /user operation for ETag and 304 conditional response support",
+      "real_components": [
+        "api/openapi.yaml"
+      ],
+      "mockable": [
+        "server implementation"
+      ],
+      "expected_effects": [
+        "GET /user 200 response defines ETag header as opaque string",
+        "GET /user 304 response is defined with X-Request-ID and ETag headers",
+        "GET /user 304 response has no content body",
+        "GET /user 304 response does not define Cache-Control header",
+        "GET /user operation description or parameter documentation references If-None-Match"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-4",
+      "execution_path_id": "03-PATH-4",
+      "description": "Smoke test verifying admin user lifecycle endpoints (POST /users, promote, demote) are all fully specified with correct response codes.",
+      "trigger": "Parse api/openapi.yaml and validate POST /users, POST /users/{id}/promote, POST /users/{id}/demote operations",
+      "real_components": [
+        "api/openapi.yaml"
+      ],
+      "mockable": [
+        "server implementation",
+        "database"
+      ],
+      "expected_effects": [
+        "POST /users requires username, email, provider, provider_id; returns 201 User; documents 409 for duplicates",
+        "POST /users/{id}/promote returns 200 User; documents 401, 403, 404",
+        "POST /users/{id}/demote returns 200 User; documents 409 for last-admin constraint; documents 401, 403, 404",
+        "All three operations require bearerAuth security",
+        "All three operations define Cache-Control: no-store and X-Request-ID on responses"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-5",
+      "execution_path_id": "03-PATH-5",
+      "description": "Smoke test verifying PAT creation (POST /user/tokens) and scoped use (GET /user/orgs) are fully specified.",
+      "trigger": "Parse api/openapi.yaml and validate POST /user/tokens and GET /user/orgs operations",
+      "real_components": [
+        "api/openapi.yaml"
+      ],
+      "mockable": [
+        "server implementation"
+      ],
+      "expected_effects": [
+        "POST /user/tokens requires name and permissions; permissions items use pattern '^[a-z_]+:[a-z_]+$'",
+        "POST /user/tokens returns 201 Pat schema with token (plaintext), token_id, name, permissions, nullable expires_at",
+        "POST /user/tokens expires field is optional integer enum [0,30,60,90] default 90",
+        "GET /user/orgs requires bearerAuth with orgs:read PAT permission documented",
+        "GET /user/orgs returns 200 array of Organization objects",
+        "GET /user/orgs documents 403 for insufficient permissions"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-6",
+      "execution_path_id": "03-PATH-6",
+      "description": "Smoke test verifying GET /orgs with include_blocked query parameter filtering behavior is fully specified.",
+      "trigger": "Parse api/openapi.yaml and validate GET /orgs operation with include_blocked parameter",
+      "real_components": [
+        "api/openapi.yaml"
+      ],
+      "mockable": [
+        "server implementation",
+        "database"
+      ],
+      "expected_effects": [
+        "GET /orgs defines include_blocked as an optional boolean query parameter with default false",
+        "GET /orgs description documents that include_blocked=false returns only status=active organizations",
+        "GET /orgs description documents that include_blocked=true includes status=blocked organizations",
+        "GET /orgs returns 200 array of Organization objects",
+        "GET /orgs requires admin bearerAuth; documents 401 and 403",
+        "GET /orgs defines Cache-Control: no-store and X-Request-ID on responses"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

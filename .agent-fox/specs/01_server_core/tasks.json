@@ -1,0 +1,1937 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "server_core",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./... -count=1 -v -run 'TestConfig|TestServer|TestMiddleware|TestHealth|TestShutdown|TestCache|TestETag|TestTimestamp|TestAPI|TestRequest|TestLogging|TestSecurity|TestBody|TestContent|TestPanic|TestSmoke'",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Config Loading and XDG Support",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for LoadConfig defaults and missing file behavior",
+          "details": [
+            "Write test cases for LoadConfig returning (*Config, nil) when config.toml is absent",
+            "Verify all documented defaults: port=8080, bind='0.0.0.0', external_url='', mount_point='/api/v1', MaxBodyBytes()=1048576, Database.Path='./data/apikit.db', Logging.Level='info'",
+            "Write test verifying no filesystem side effects (snapshot before/after LoadConfig call)"
+          ],
+          "test_spec_refs": [
+            "TS-01-9",
+            "TS-01-11",
+            "TS-01-17"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.1",
+            "01-REQ-3.3",
+            "01-REQ-3.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for LoadConfig validation: port, bind, external_url",
+          "details": [
+            "Write test for malformed TOML returning (nil, error)",
+            "Write table-driven tests for port validation: 0, 8080, 65535 (valid); 65536, -1, 99999 (invalid)",
+            "Write tests for bind: non-empty stored as-is, empty/absent replaced with '0.0.0.0'",
+            "Write tests for external_url: stored as-is for any value, empty string when absent, no error returned"
+          ],
+          "test_spec_refs": [
+            "TS-01-10",
+            "TS-01-12",
+            "TS-01-13",
+            "TS-01-14"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.2",
+            "01-REQ-3.4",
+            "01-REQ-3.5",
+            "01-REQ-3.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for LoadConfig validation: log level and max_body_size",
+          "details": [
+            "Write table-driven tests for log level: all 7 valid values (case-insensitive), invalid values return (nil, error)",
+            "Write tests for max_body_size: valid suffixes (KB, MB, GB, case-insensitive), empty string treated as 1MB default, invalid values (0MB, -1MB, 1TB, '1 MB', plain integer) return (nil, error)",
+            "Verify MaxBodyBytes() returns correct int64 for representative inputs"
+          ],
+          "test_spec_refs": [
+            "TS-01-15",
+            "TS-01-16",
+            "TS-01-E3",
+            "TS-01-E4",
+            "TS-01-E5",
+            "TS-01-E6"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.7",
+            "01-REQ-3.8",
+            "01-REQ-3.E1",
+            "01-REQ-3.E2",
+            "01-REQ-3.E3",
+            "01-REQ-3.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write unit tests for XDG base directory support",
+          "details": [
+            "Write test for XDG_CONFIG_HOME set with file present: reads from XDG path (not ./config.toml)",
+            "Write test for XDG_CONFIG_HOME set with file absent: applies defaults, does NOT fall back to ./config.toml",
+            "Write test for XDG_DATA_HOME set: Database.Path resolves to $XDG_DATA_HOME/apikit/apikit.db, no directory created",
+            "Write test for neither env var set: uses ./config.toml path and ./data/apikit.db default"
+          ],
+          "test_spec_refs": [
+            "TS-01-18",
+            "TS-01-19",
+            "TS-01-20",
+            "TS-01-E7"
+          ],
+          "requirement_refs": [
+            "01-REQ-4.1",
+            "01-REQ-4.2",
+            "01-REQ-4.3",
+            "01-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write unit tests for build-time variables and config re-export",
+          "details": [
+            "Write test verifying apikit.Version=='dev', apikit.Build=='dev', apikit.TokenPrefix=='ak' when built without -ldflags",
+            "Write test verifying apikit.Config is a type alias for internal/config.Config (no conversion needed)",
+            "Write test verifying apikit.LoadConfig() produces identical results to internal/config.Load()",
+            "Write test verifying make build exits 0 and bin/apikit exists"
+          ],
+          "test_spec_refs": [
+            "TS-01-67",
+            "TS-01-68",
+            "TS-01-69",
+            "TS-01-70"
+          ],
+          "requirement_refs": [
+            "01-REQ-20.1",
+            "01-REQ-20.2",
+            "01-REQ-21.1",
+            "01-REQ-21.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All config-related tests compile and pass: go test ./internal/config/... ./... -count=1 -run 'TestConfig|TestLoad|TestXDG' -v",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings introduced: go vet ./...",
+          "Requirements 01-REQ-3.1 through 01-REQ-4.E1 acceptance criteria are covered by written tests"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: Server Lifecycle, Caller Contract, and Reference Binary",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for caller usage contract and NewServer behavior",
+          "details": [
+            "Write compile-time test verifying LoadConfig, NewServer, APIGroup, Start are exported from root apikit package",
+            "Write test verifying NewServer does not perform file I/O (constructed from in-memory Config)",
+            "Write test verifying NewServer panics with descriptive message when cfg is nil (use recover())",
+            "Write test verifying library functions return errors via return values and never call os.Exit()"
+          ],
+          "test_spec_refs": [
+            "TS-01-1",
+            "TS-01-2",
+            "TS-01-3",
+            "TS-01-4",
+            "TS-01-E1",
+            "TS-01-E2"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.1",
+            "01-REQ-1.2",
+            "01-REQ-1.3",
+            "01-REQ-1.4",
+            "01-REQ-1.E1",
+            "01-REQ-1.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write integration tests for Start() lifecycle and blocking contract",
+          "details": [
+            "Write test verifying Start() blocks and returns nil on clean graceful shutdown (use goroutine + Shutdown)",
+            "Write test verifying make build compiles cmd/apikit to bin/apikit",
+            "Write test verifying go test ./... succeeds (cmd/apikit compiles as part of suite)",
+            "Write integration test verifying bin/apikit responds to GET /healthz with HTTP 200 {\"status\":\"ok\"}"
+          ],
+          "test_spec_refs": [
+            "TS-01-5",
+            "TS-01-6",
+            "TS-01-7",
+            "TS-01-8"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.5",
+            "01-REQ-2.1",
+            "01-REQ-2.2",
+            "01-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write integration tests for Port 0 ephemeral port and Addr()",
+          "details": [
+            "Write test verifying port=0 config causes OS-assigned ephemeral port; Addr() returns non-empty host:port",
+            "Write test verifying Addr() returns empty string before Start() binds and after shutdown",
+            "Implement helper waitUntilListening(srv, timeout) for use across integration tests"
+          ],
+          "test_spec_refs": [
+            "TS-01-32",
+            "TS-01-33"
+          ],
+          "requirement_refs": [
+            "01-REQ-7.1",
+            "01-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write integration tests for graceful shutdown behavior",
+          "details": [
+            "Write test verifying SIGTERM triggers graceful shutdown with drain timeout",
+            "Write test verifying drainTimeout constant is 15*time.Second in server package",
+            "Write test verifying Shutdown(ctx) with short deadline force-closes before 15s drain",
+            "Write test verifying Shutdown() is idempotent: multiple sequential and concurrent calls all return nil",
+            "Write test verifying shutdown initiation logged at info level with drain timeout duration",
+            "Write test verifying Start() returns to caller (not os.Exit()) after shutdown"
+          ],
+          "test_spec_refs": [
+            "TS-01-26",
+            "TS-01-27",
+            "TS-01-28",
+            "TS-01-29",
+            "TS-01-30",
+            "TS-01-31"
+          ],
+          "requirement_refs": [
+            "01-REQ-6.1",
+            "01-REQ-6.2",
+            "01-REQ-6.3",
+            "01-REQ-6.4",
+            "01-REQ-6.5",
+            "01-REQ-6.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write integration tests for shutdown edge cases",
+          "details": [
+            "Write test verifying cancelled caller context causes force-close before 15s drainTimeout elapses",
+            "Write test verifying slow handler that exceeds drainTimeout causes force-close (~15s elapsed)",
+            "Write test verifying concurrent Shutdown() calls (5 goroutines) all return nil, server shuts down once (run with -race)",
+            "Write test verifying second Start() call after shutdown returns non-nil error immediately with 'already shut down' message"
+          ],
+          "test_spec_refs": [
+            "TS-01-E10",
+            "TS-01-E11",
+            "TS-01-E12",
+            "TS-01-E13"
+          ],
+          "requirement_refs": [
+            "01-REQ-6.E1",
+            "01-REQ-6.E2",
+            "01-REQ-6.E3",
+            "01-REQ-6.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All server lifecycle tests compile and pass: go test ./... -count=1 -run 'TestServer|TestStart|TestShutdown|TestAddr|TestNewServer' -v",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings introduced: go vet ./...",
+          "Requirements 01-REQ-1.1 through 01-REQ-7.2 and 01-REQ-6.E1 through 01-REQ-6.E4 acceptance criteria are covered"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: Middleware Chain, Panic Recovery, and Request ID",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write integration tests for middleware execution order",
+          "details": [
+            "Write test verifying fixed middleware order by confirming 413 response includes X-Request-ID (body limit fires after request ID assignment)",
+            "Write test verifying 413 response contains X-Request-ID header with valid UUID v4",
+            "Write test verifying structured log entry status field matches actual HTTP status code for middleware-generated errors"
+          ],
+          "test_spec_refs": [
+            "TS-01-34",
+            "TS-01-35",
+            "TS-01-36"
+          ],
+          "requirement_refs": [
+            "01-REQ-8.1",
+            "01-REQ-8.2",
+            "01-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write unit and integration tests for panic recovery middleware",
+          "details": [
+            "Write integration test: panicking handler returns HTTP 500 with standard JSON error envelope, Content-Type: application/json; charset=utf-8, server continues serving",
+            "Write test verifying error log entry includes request_id, panic, and stack_trace fields at error level",
+            "Write test verifying Echo's built-in middleware.Recover() is NOT registered (only one recovery layer active)",
+            "Write test verifying panic recovery log entry request_id matches X-Request-ID response header"
+          ],
+          "test_spec_refs": [
+            "TS-01-37",
+            "TS-01-38",
+            "TS-01-E14"
+          ],
+          "requirement_refs": [
+            "01-REQ-9.1",
+            "01-REQ-9.2",
+            "01-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write unit and integration tests for Request ID middleware",
+          "details": [
+            "Write test verifying missing X-Request-ID header generates fresh UUID v4 in response header",
+            "Write test verifying valid UUID v4 in incoming X-Request-ID is reused in response and log entry",
+            "Write test verifying invalid/non-UUID-v4 X-Request-ID (non-UUID string, UUID v3) is discarded and new UUID v4 generated",
+            "Implement isValidUUIDv4() helper for use across tests"
+          ],
+          "test_spec_refs": [
+            "TS-01-39",
+            "TS-01-40",
+            "TS-01-41"
+          ],
+          "requirement_refs": [
+            "01-REQ-10.1",
+            "01-REQ-10.2",
+            "01-REQ-10.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write integration tests for structured JSON logging",
+          "details": [
+            "Write test verifying every request produces JSON log entry with method (string), path (string), status (integer), duration (float64 ms), request_id (string)",
+            "Write test verifying /healthz and /readyz logged at debug level with all five fields including duration as float64; absent at info level",
+            "Write test verifying logrus log level is configured from Config.Logging.Level at startup (warn level suppresses info entries)"
+          ],
+          "test_spec_refs": [
+            "TS-01-42",
+            "TS-01-43",
+            "TS-01-44"
+          ],
+          "requirement_refs": [
+            "01-REQ-11.1",
+            "01-REQ-11.2",
+            "01-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write property tests for middleware chain invariants",
+          "details": [
+            "Write property test (TS-01-P1): for any HTTP request reaching a registered handler, all six middleware steps are applied; verify X-Request-ID present, security headers set, log status matches response status",
+            "Write property test (TS-01-P3): for any HTTP response, X-Request-ID is valid UUID v4 and matches log entry request_id; test with no header, valid UUID v4 header, and invalid header inputs"
+          ],
+          "test_spec_refs": [
+            "TS-01-P1",
+            "TS-01-P3"
+          ],
+          "requirement_refs": [
+            "01-REQ-8.1",
+            "01-REQ-9.1",
+            "01-REQ-10.1",
+            "01-REQ-10.2",
+            "01-REQ-10.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All middleware tests compile and pass: go test ./... -count=1 -run 'TestMiddleware|TestPanic|TestRequestID|TestLogging' -v",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings introduced: go vet ./...",
+          "Requirements 01-REQ-8.1 through 01-REQ-11.3 acceptance criteria are covered by written tests"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: Content-Type, Body Size, Security Headers, Cache, and Error Handling",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write integration tests for Content-Type enforcement and Body Size Limit middleware",
+          "details": [
+            "Write tests for POST/PUT/PATCH with non-JSON Content-Type returning HTTP 415 with JSON error envelope",
+            "Write tests verifying GET, DELETE, HEAD, OPTIONS pass through without Content-Type enforcement",
+            "Write test for body > max_body_size returning HTTP 413 with X-Request-ID and Content-Type: application/json; charset=utf-8",
+            "Write unit test verifying MaxBodyBytes() defaults to 1048576 when not configured"
+          ],
+          "test_spec_refs": [
+            "TS-01-45",
+            "TS-01-46",
+            "TS-01-47",
+            "TS-01-48"
+          ],
+          "requirement_refs": [
+            "01-REQ-12.1",
+            "01-REQ-12.2",
+            "01-REQ-13.1",
+            "01-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write integration tests for Security Headers middleware",
+          "details": [
+            "Write tests verifying X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer on every response (healthz, api routes, error responses)",
+            "Write test verifying Security Headers middleware does NOT set Cache-Control (source-level check and behavioral check)",
+            "Write property test (TS-01-P4): for any HTTP response, all three security headers are present with exact values; Cache-Control absent from security middleware output"
+          ],
+          "test_spec_refs": [
+            "TS-01-49",
+            "TS-01-50",
+            "TS-01-P4"
+          ],
+          "requirement_refs": [
+            "01-REQ-14.1",
+            "01-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write unit and integration tests for Cache-Control middleware",
+          "details": [
+            "Write unit test verifying CacheMiddleware returns middleware setting exact values: no-store, no-cache, public max-age=300",
+            "Write integration test: APIGroup() pre-applies CacheNoStore; consumer routes without override return Cache-Control: no-store",
+            "Write integration test: CacheMiddleware(CachePublic) on specific route returns Cache-Control: public, max-age=300; other group routes still get no-store"
+          ],
+          "test_spec_refs": [
+            "TS-01-51",
+            "TS-01-52",
+            "TS-01-53"
+          ],
+          "requirement_refs": [
+            "01-REQ-15.1",
+            "01-REQ-15.2",
+            "01-REQ-15.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write unit tests for APIError and error envelope consistency",
+          "details": [
+            "Write unit test verifying APIError writes {\"error\":{\"code\":<integer>,\"message\":\"<string>\"}} with correct Content-Type and returns c.JSON() error",
+            "Write integration test verifying all middleware-generated errors (413, 415, 500) include Content-Type: application/json; charset=utf-8 and standard envelope",
+            "Write property test (TS-01-P2): for any HTTP error response from any middleware or handler, envelope matches schema and Content-Type is correct"
+          ],
+          "test_spec_refs": [
+            "TS-01-58",
+            "TS-01-59",
+            "TS-01-P2"
+          ],
+          "requirement_refs": [
+            "01-REQ-17.1",
+            "01-REQ-17.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Write property tests for error envelope consistency and library non-termination",
+          "details": [
+            "Write property test (TS-01-P5): for any sequence of 1-20 concurrent Shutdown() calls, server shuts down exactly once, all calls return nil, no goroutine blocks; run with -race",
+            "Write property test (TS-01-P8): for any documented error path, library never calls os.Exit(); all errors returned as values and test goroutine continues executing"
+          ],
+          "test_spec_refs": [
+            "TS-01-P5",
+            "TS-01-P8"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.E2",
+            "01-REQ-6.6",
+            "01-REQ-6.4",
+            "01-REQ-6.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All middleware and error tests compile and pass: go test ./... -count=1 -run 'TestContentType|TestBodySize|TestSecurity|TestCache|TestAPIError|TestError' -v",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings introduced: go vet ./...",
+          "Requirements 01-REQ-12.1 through 01-REQ-17.2 acceptance criteria are covered by written tests"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write Tests: Health Probes, ETag, Timestamp Utilities, and Handler Registration",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write integration tests for health probe endpoints",
+          "details": [
+            "Write tests for GET /healthz: HTTP 200, {\"status\":\"ok\"}, Cache-Control: no-cache, Content-Type: application/json; charset=utf-8",
+            "Write tests for GET /readyz: HTTP 200 {\"status\":\"ready\"} with nil checker; HTTP 503 {\"status\":\"not ready\"} with error-returning checker; Cache-Control: no-cache",
+            "Write test for GET /version: HTTP 200 with version, build, mount_point fields, Cache-Control: public, max-age=300",
+            "Write test verifying /healthz, /readyz, /version are at server root (not under mount_point); confirm /api/v2/healthz returns 404",
+            "Write test for /version returning 'dev' values when no -ldflags override; edge case for empty string override"
+          ],
+          "test_spec_refs": [
+            "TS-01-21",
+            "TS-01-22",
+            "TS-01-23",
+            "TS-01-24",
+            "TS-01-25",
+            "TS-01-E8",
+            "TS-01-E9"
+          ],
+          "requirement_refs": [
+            "01-REQ-5.1",
+            "01-REQ-5.2",
+            "01-REQ-5.3",
+            "01-REQ-5.4",
+            "01-REQ-5.5",
+            "01-REQ-5.E1",
+            "01-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write unit tests for ETag utilities",
+          "details": [
+            "Write test verifying SetETag sets ETag header to W/\"<RFC3339-UTC>\" format from updatedAt",
+            "Write test verifying CheckETag returns true when If-None-Match matches current ETag",
+            "Write test verifying CheckETag returns false when If-None-Match does not match",
+            "Write test verifying SetETag and CheckETag are no-ops (no header set, false returned) when called with zero time.Time{}"
+          ],
+          "test_spec_refs": [
+            "TS-01-54",
+            "TS-01-55",
+            "TS-01-56",
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-16.1",
+            "01-REQ-16.2",
+            "01-REQ-16.3",
+            "01-REQ-16.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write unit tests for timestamp utilities",
+          "details": [
+            "Write test verifying NowUTC() returns string ending with 'Z' parseable as RFC 3339",
+            "Write test verifying FormatUTC() converts non-UTC times to UTC Z-suffix string",
+            "Write test verifying ParseUTC() normalizes offset timestamps to UTC (e.g. +05:00 input yields UTC equivalent)",
+            "Write test verifying ParseUTC() returns (time.Time{}, non-nil error) for invalid inputs"
+          ],
+          "test_spec_refs": [
+            "TS-01-60",
+            "TS-01-61",
+            "TS-01-62",
+            "TS-01-63"
+          ],
+          "requirement_refs": [
+            "01-REQ-18.1",
+            "01-REQ-18.2",
+            "01-REQ-18.3",
+            "01-REQ-18.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Write unit and integration tests for handler registration API",
+          "details": [
+            "Write test verifying APIGroup() returns same non-nil *echo.Group before Start(), during serving, and after Shutdown()",
+            "Write integration test verifying handlers on APIGroup() inherit full middleware chain (415 for wrong content-type, 413 for oversized body)",
+            "Write concurrency test verifying APIGroup() safe from multiple goroutines after NewServer() (run with -race)",
+            "Write test verifying APIGroup() returns non-nil group without panic after Shutdown() completes"
+          ],
+          "test_spec_refs": [
+            "TS-01-64",
+            "TS-01-65",
+            "TS-01-66",
+            "TS-01-E15"
+          ],
+          "requirement_refs": [
+            "01-REQ-19.1",
+            "01-REQ-19.2",
+            "01-REQ-19.3",
+            "01-REQ-19.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Write property tests for UTC timestamp normalization and health probe log suppression",
+          "details": [
+            "Write property test (TS-01-P7): for any time.Time in any timezone, FormatUTC(t) ends with 'Z' and ParseUTC(FormatUTC(t)) round-trips correctly; for any RFC 3339 string with offset, ParseUTC returns UTC time.Time",
+            "Write property test (TS-01-P10): for GET /healthz or /readyz at log level info or above, no log entry emitted at info level; at debug, entry present with all five standard fields including duration as float64"
+          ],
+          "test_spec_refs": [
+            "TS-01-P7",
+            "TS-01-P10"
+          ],
+          "requirement_refs": [
+            "01-REQ-18.2",
+            "01-REQ-18.3",
+            "01-REQ-11.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All health probe, ETag, timestamp, and handler registration tests pass: go test ./... -count=1 -run 'TestHealth|TestETag|TestTimestamp|TestAPIGroup|TestHandler|TestNowUTC|TestFormatUTC|TestParseUTC|TestSetETag|TestCheckETag' -v",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter warnings introduced: go vet ./...",
+          "Requirements 01-REQ-5.1 through 01-REQ-19.3 acceptance criteria are covered by written tests"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement internal/config Package",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement Config struct hierarchy and TOML tags",
+          "details": [
+            "Define Config, ServerConfig, DatabaseConfig, LoggingConfig structs in internal/config/config.go with correct TOML tags",
+            "Add unexported maxBodyBytes int64 field to ServerConfig",
+            "Implement MaxBodyBytes() int64 getter on *ServerConfig",
+            "Ensure type alias `type Config = config.Config` is declared in root apikit package"
+          ],
+          "test_spec_refs": [
+            "TS-01-9",
+            "TS-01-11"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.3",
+            "01-REQ-21.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement Load() with defaults, TOML parsing, and XDG resolution",
+          "details": [
+            "Implement Load() in internal/config/load.go: resolve config path using XDG_CONFIG_HOME or current directory",
+            "When file absent: apply all defaults and return (*Config, nil) — no fallback between XDG and cwd",
+            "When file exists: parse with github.com/BurntSushi/toml; return (nil, error) for malformed TOML",
+            "Resolve XDG_DATA_HOME for Database.Path; store path string only — no directory creation or filesystem side effects",
+            "Re-export as apikit.LoadConfig() in root package"
+          ],
+          "test_spec_refs": [
+            "TS-01-10",
+            "TS-01-17",
+            "TS-01-18",
+            "TS-01-19",
+            "TS-01-20",
+            "TS-01-E7"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.1",
+            "01-REQ-3.2",
+            "01-REQ-3.9",
+            "01-REQ-4.1",
+            "01-REQ-4.2",
+            "01-REQ-4.3",
+            "01-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement config validation: port, bind, external_url, log level",
+          "details": [
+            "Validate port: must be 0-65535; return (nil, error) for out-of-range values",
+            "Validate bind: accept any non-empty string as-is; replace empty/absent with '0.0.0.0'",
+            "Store external_url as-is with no validation; empty or absent stores empty string",
+            "Validate log level: case-insensitive match against [trace, debug, info, warn, error, fatal, panic]; return (nil, error) for unrecognized values"
+          ],
+          "test_spec_refs": [
+            "TS-01-12",
+            "TS-01-13",
+            "TS-01-14",
+            "TS-01-15",
+            "TS-01-E5",
+            "TS-01-E6"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.4",
+            "01-REQ-3.5",
+            "01-REQ-3.6",
+            "01-REQ-3.7",
+            "01-REQ-3.E3",
+            "01-REQ-3.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Implement max_body_size parsing and validation",
+          "details": [
+            "Implement parseBodySize(s string) (int64, error) in internal/config: parse '<positive-integer><KB|MB|GB>' case-insensitively",
+            "Empty string treated as absent → default 1MB (1048576 bytes); no error",
+            "Invalid values (0MB, negative, space, unsupported suffix like TB, plain integer) return error",
+            "Store parsed int64 in serverConfig.maxBodyBytes; expose via MaxBodyBytes() getter"
+          ],
+          "test_spec_refs": [
+            "TS-01-16",
+            "TS-01-E3",
+            "TS-01-E4"
+          ],
+          "requirement_refs": [
+            "01-REQ-3.8",
+            "01-REQ-3.E1",
+            "01-REQ-3.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Config package tests pass: go test ./internal/config/... -count=1 -v",
+          "All spec tests for config requirements pass: go test ./... -count=1 -run 'TestConfig|TestLoad|TestXDG|TestMaxBody' -v",
+          "No linter warnings: go vet ./...",
+          "Requirements 01-REQ-3.1 through 01-REQ-4.E1 and 01-REQ-21.1, 01-REQ-21.2 acceptance criteria pass"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement Root Package: Build-Time Variables, Utilities, and Error Helper",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement build-time configurable package-level variables",
+          "details": [
+            "Declare `var Version = \"dev\"`, `var Build = \"dev\"`, `var TokenPrefix = \"ak\"` in root apikit package (e.g. apikit.go)",
+            "Update Makefile: set VERSION via `git describe --tags 2>/dev/null || echo \"dev\"`, BUILD via `git rev-parse --short HEAD 2>/dev/null || echo \"dev\"`",
+            "Add LDFLAGS to Makefile build target: `-X github.com/txsvc/apikit.Version=$(VERSION) -X github.com/txsvc/apikit.Build=$(BUILD)`",
+            "Verify variables are accessible as apikit.Version, apikit.Build, apikit.TokenPrefix from external packages"
+          ],
+          "test_spec_refs": [
+            "TS-01-67",
+            "TS-01-68"
+          ],
+          "requirement_refs": [
+            "01-REQ-20.1",
+            "01-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement timestamp utility functions",
+          "details": [
+            "Implement NowUTC() string in apikit package: return time.Now().UTC().Format(time.RFC3339)",
+            "Implement FormatUTC(t time.Time) string: return t.UTC().Format(time.RFC3339)",
+            "Implement ParseUTC(s string) (time.Time, error): parse with time.Parse(time.RFC3339, s); call .UTC() on result before returning",
+            "Ensure ParseUTC returns (time.Time{}, error) for invalid input"
+          ],
+          "test_spec_refs": [
+            "TS-01-60",
+            "TS-01-61",
+            "TS-01-62",
+            "TS-01-63"
+          ],
+          "requirement_refs": [
+            "01-REQ-18.1",
+            "01-REQ-18.2",
+            "01-REQ-18.3",
+            "01-REQ-18.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement APIError helper and ETag utility functions",
+          "details": [
+            "Implement APIError(c echo.Context, code int, message string) error: write JSON envelope {\"error\":{\"code\":code,\"message\":message}}, set Content-Type: application/json; charset=utf-8, return c.JSON() error",
+            "Implement SetETag(c echo.Context, updatedAt time.Time): if zero time, no-op; otherwise set ETag header to `W/\"<FormatUTC(updatedAt)>\"`",
+            "Implement CheckETag(c echo.Context, updatedAt time.Time) bool: if zero time return false; compare If-None-Match header against `W/\"<FormatUTC(updatedAt)>\"`, return true if match"
+          ],
+          "test_spec_refs": [
+            "TS-01-58",
+            "TS-01-54",
+            "TS-01-55",
+            "TS-01-56",
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-17.1",
+            "01-REQ-16.1",
+            "01-REQ-16.2",
+            "01-REQ-16.3",
+            "01-REQ-16.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Implement CacheCategory type and CacheMiddleware constructor",
+          "details": [
+            "Declare CacheCategory int type with constants CacheNoStore (iota), CacheNoCache, CachePublic in root apikit package",
+            "Implement CacheMiddleware(cat CacheCategory) echo.MiddlewareFunc: returns middleware that sets Cache-Control header based on category",
+            "CacheNoStore → 'no-store'; CacheNoCache → 'no-cache'; CachePublic → 'public, max-age=300'",
+            "CacheMiddleware is entirely separate from Security Headers middleware; it only sets Cache-Control"
+          ],
+          "test_spec_refs": [
+            "TS-01-53"
+          ],
+          "requirement_refs": [
+            "01-REQ-15.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Root package utility tests pass: go test ./... -count=1 -run 'TestNowUTC|TestFormatUTC|TestParseUTC|TestAPIError|TestSetETag|TestCheckETag|TestCacheMiddleware|TestVersion|TestBuild|TestTokenPrefix' -v",
+          "No linter warnings: go vet ./...",
+          "All existing tests still pass: go test ./... -count=1",
+          "Requirements 01-REQ-15.3, 01-REQ-16.1 through 01-REQ-18.4, 01-REQ-20.1 acceptance criteria pass"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement Server Core: Middleware Chain",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement custom panic recovery middleware",
+          "details": [
+            "Implement panicRecoveryMiddleware() echo.MiddlewareFunc in server package",
+            "On panic: recover(), log at error level using logrus.WithFields with request_id, panic (fmt.Sprintf(\"%v\", recovered)), stack_trace (string(debug.Stack()))",
+            "Call APIError(c, 500, \"internal server error\") to return standard envelope",
+            "Do NOT register echo's built-in middleware.Recover(); only this custom middleware handles panics",
+            "Extract request_id from Echo context value set by Request ID middleware"
+          ],
+          "test_spec_refs": [
+            "TS-01-37",
+            "TS-01-38",
+            "TS-01-E14"
+          ],
+          "requirement_refs": [
+            "01-REQ-9.1",
+            "01-REQ-9.2",
+            "01-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement Request ID middleware",
+          "details": [
+            "Implement requestIDMiddleware() echo.MiddlewareFunc",
+            "Check incoming X-Request-ID header; validate with uuid.Parse() and check version==4",
+            "If valid UUID v4: reuse as request ID; otherwise generate new UUID v4 with uuid.New()",
+            "Set request ID in X-Request-ID response header and store in Echo context for downstream use"
+          ],
+          "test_spec_refs": [
+            "TS-01-39",
+            "TS-01-40",
+            "TS-01-41"
+          ],
+          "requirement_refs": [
+            "01-REQ-10.1",
+            "01-REQ-10.2",
+            "01-REQ-10.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement Body Size Limit and Content-Type Enforcement middleware",
+          "details": [
+            "Implement bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc: reject requests with body > maxBytes via APIError(c, 413, ...)",
+            "Implement contentTypeEnforcementMiddleware() echo.MiddlewareFunc: for POST/PUT/PATCH only, check Content-Type == 'application/json'; reject with APIError(c, 415, ...) otherwise",
+            "GET, DELETE, HEAD, OPTIONS pass through without Content-Type check"
+          ],
+          "test_spec_refs": [
+            "TS-01-45",
+            "TS-01-46",
+            "TS-01-47",
+            "TS-01-48"
+          ],
+          "requirement_refs": [
+            "01-REQ-12.1",
+            "01-REQ-12.2",
+            "01-REQ-13.1",
+            "01-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Implement Security Headers middleware and Logging middleware",
+          "details": [
+            "Implement securityHeadersMiddleware() echo.MiddlewareFunc: set X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer on every response; do NOT set Cache-Control",
+            "Implement loggingMiddleware() echo.MiddlewareFunc: after handler executes, log structured JSON entry with method, path, status (int), duration (float64 ms), request_id",
+            "For /healthz and /readyz paths: log at debug level; all other paths: log at info level",
+            "Configure logrus for JSON output and apply log level from Config.Logging.Level at startup"
+          ],
+          "test_spec_refs": [
+            "TS-01-49",
+            "TS-01-50",
+            "TS-01-42",
+            "TS-01-43",
+            "TS-01-44"
+          ],
+          "requirement_refs": [
+            "01-REQ-14.1",
+            "01-REQ-14.2",
+            "01-REQ-11.1",
+            "01-REQ-11.2",
+            "01-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Middleware unit and integration tests pass: go test ./... -count=1 -run 'TestMiddleware|TestPanic|TestRequestID|TestBodySize|TestContentType|TestSecurity|TestLogging' -v",
+          "Race detector finds no data races in middleware tests: go test -race ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 01-REQ-9.1 through 01-REQ-14.2 acceptance criteria pass"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement Server Core: Server Struct, Lifecycle, and Handler Registration",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement Server struct and NewServer constructor",
+          "details": [
+            "Define Server struct in server package: holds *echo.Echo, *echo.Group (api group), *config.Config, HealthChecker, listener, sync.Once for shutdown, started/shut-down state flags",
+            "Implement NewServer(cfg *Config, checker HealthChecker) *Server: panic with descriptive message if cfg is nil",
+            "Register middleware chain in order: panicRecovery, requestID, bodySizeLimit, contentTypeEnforcement, securityHeaders, logging",
+            "Create api group at cfg.Server.MountPoint with CacheMiddleware(CacheNoStore) pre-applied",
+            "Never call LoadConfig() internally; perform no file I/O"
+          ],
+          "test_spec_refs": [
+            "TS-01-3",
+            "TS-01-4",
+            "TS-01-64",
+            "TS-01-66"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.3",
+            "01-REQ-1.4",
+            "01-REQ-19.1",
+            "01-REQ-19.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement APIGroup() method and health probe route registration",
+          "details": [
+            "Implement APIGroup() *echo.Group: return pre-constructed echo group; never nil; never panic even after Shutdown()",
+            "Register GET /healthz at Echo root with CacheMiddleware(CacheNoCache): return HTTP 200 {\"status\":\"ok\"}",
+            "Register GET /readyz at Echo root with CacheMiddleware(CacheNoCache): call HealthChecker if not nil; 200 {\"status\":\"ready\"} or 503 {\"status\":\"not ready\"}",
+            "Register GET /version at Echo root with CacheMiddleware(CachePublic): return {\"version\": apikit.Version, \"build\": apikit.Build, \"mount_point\": cfg.Server.MountPoint}"
+          ],
+          "test_spec_refs": [
+            "TS-01-21",
+            "TS-01-22",
+            "TS-01-23",
+            "TS-01-24",
+            "TS-01-25",
+            "TS-01-51",
+            "TS-01-64"
+          ],
+          "requirement_refs": [
+            "01-REQ-5.1",
+            "01-REQ-5.2",
+            "01-REQ-5.3",
+            "01-REQ-5.4",
+            "01-REQ-5.5",
+            "01-REQ-15.1",
+            "01-REQ-19.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Implement Start() with listener binding and Addr()",
+          "details": [
+            "Implement Start() error: bind listener at cfg.Server.Bind:cfg.Server.Port; on bind failure return non-nil error without calling os.Exit()",
+            "After listener is bound, store actual address for Addr(); block with echo.Server.Serve(listener) until shutdown",
+            "Implement Addr() string: return listener address after Start() binds; return empty string before binding and after shutdown",
+            "If Start() called on already-shut-down server, return non-nil error immediately with descriptive message; do not rebind"
+          ],
+          "test_spec_refs": [
+            "TS-01-5",
+            "TS-01-32",
+            "TS-01-33"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.5",
+            "01-REQ-7.1",
+            "01-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Implement Shutdown() with signal handling and idempotency",
+          "details": [
+            "Declare `const drainTimeout = 15 * time.Second` in server package",
+            "Implement Shutdown(ctx context.Context) error using sync.Once: first call logs info-level message, derives context via context.WithTimeout(ctx, drainTimeout), calls echo.Shutdown(derivedCtx); subsequent calls return nil immediately",
+            "Register OS signal handler for SIGTERM and SIGINT in Start(): on signal call Shutdown(context.Background())",
+            "In-flight requests during drain window produce normal structured log entries; Start() returns nil on clean drain"
+          ],
+          "test_spec_refs": [
+            "TS-01-26",
+            "TS-01-28",
+            "TS-01-29",
+            "TS-01-30",
+            "TS-01-31"
+          ],
+          "requirement_refs": [
+            "01-REQ-6.1",
+            "01-REQ-6.2",
+            "01-REQ-6.3",
+            "01-REQ-6.4",
+            "01-REQ-6.5",
+            "01-REQ-6.6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "Server lifecycle and handler registration tests pass: go test ./... -count=1 -run 'TestServer|TestStart|TestShutdown|TestAddr|TestAPIGroup|TestHealth|TestVersion' -v",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "Requirements 01-REQ-1.3 through 01-REQ-7.2 and 01-REQ-19.1 through 01-REQ-19.3 acceptance criteria pass"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement cmd/apikit Reference Binary and Makefile",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement cmd/apikit/main.go reference binary",
+          "details": [
+            "Create cmd/apikit/main.go: call apikit.LoadConfig(), log.Fatal on error; call apikit.NewServer(cfg, nil); call server.Start(), log.Fatal on error",
+            "Register no additional handlers beyond built-in /healthz, /readyz, /version",
+            "When started, server responds to /healthz with HTTP 200 {\"status\":\"ok\"} confirming library wiring"
+          ],
+          "test_spec_refs": [
+            "TS-01-6",
+            "TS-01-7",
+            "TS-01-8"
+          ],
+          "requirement_refs": [
+            "01-REQ-2.1",
+            "01-REQ-2.2",
+            "01-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Configure Makefile build, test, and lint targets",
+          "details": [
+            "Add `build` target: `go build -o bin/apikit $(LDFLAGS) ./cmd/apikit`",
+            "Set VERSION and BUILD using git commands with dev fallback: `VERSION := $(shell git describe --tags 2>/dev/null || echo \"dev\")`, `BUILD := $(shell git rev-parse --short HEAD 2>/dev/null || echo \"dev\")`",
+            "Set LDFLAGS: `-ldflags \"-X github.com/txsvc/apikit.Version=$(VERSION) -X github.com/txsvc/apikit.Build=$(BUILD)\"`",
+            "Add `test` target: `go test ./...`; add `lint` target: `go vet ./...`"
+          ],
+          "test_spec_refs": [
+            "TS-01-6",
+            "TS-01-68"
+          ],
+          "requirement_refs": [
+            "01-REQ-2.1",
+            "01-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "make build exits 0 and bin/apikit binary exists",
+          "go test ./... -count=1 exits 0 (cmd/apikit compiles)",
+          "bin/apikit responds to GET /healthz with HTTP 200 {\"status\":\"ok\"} when started",
+          "No linter warnings: go vet ./...",
+          "Requirements 01-REQ-2.1 through 01-REQ-2.3 and 01-REQ-20.2 acceptance criteria pass"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "checkpoint",
+      "title": "Integration Checkpoint: Full Server Lifecycle and Middleware Verification",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Run full integration test suite for server lifecycle and health probes",
+          "details": [
+            "Execute all integration tests for server startup, health probes, and graceful shutdown",
+            "Verify ephemeral port (port=0) test pattern works: Addr() returns real port after Start()",
+            "Verify /healthz, /readyz (nil and error checker), /version all return correct responses with correct cache headers",
+            "Verify SIGTERM shutdown drains in-flight requests and Start() returns nil"
+          ],
+          "test_spec_refs": [
+            "TS-01-5",
+            "TS-01-21",
+            "TS-01-22",
+            "TS-01-23",
+            "TS-01-24",
+            "TS-01-26",
+            "TS-01-32"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.5",
+            "01-REQ-5.1",
+            "01-REQ-5.2",
+            "01-REQ-5.3",
+            "01-REQ-5.4",
+            "01-REQ-6.1",
+            "01-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Run middleware chain integration tests",
+          "details": [
+            "Verify middleware ordering: 413 includes X-Request-ID, log status matches response status",
+            "Verify panic recovery returns HTTP 500 with standard envelope; logs error with request_id, panic, stack_trace fields",
+            "Verify content-type enforcement and body size limit produce correct HTTP 415/413 responses",
+            "Verify security headers on all responses; verify CacheNoStore applied to consumer routes by default"
+          ],
+          "test_spec_refs": [
+            "TS-01-34",
+            "TS-01-35",
+            "TS-01-37",
+            "TS-01-45",
+            "TS-01-47",
+            "TS-01-49",
+            "TS-01-51"
+          ],
+          "requirement_refs": [
+            "01-REQ-8.1",
+            "01-REQ-8.2",
+            "01-REQ-8.3",
+            "01-REQ-9.1",
+            "01-REQ-12.1",
+            "01-REQ-13.1",
+            "01-REQ-14.1",
+            "01-REQ-15.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Run all property tests and check for data races",
+          "details": [
+            "Run all property tests (P1-P10) and verify invariants hold",
+            "Run full test suite with race detector: go test -race ./... -count=1",
+            "Verify no data races in concurrent Shutdown() calls, concurrent APIGroup() calls, or concurrent request handling"
+          ],
+          "test_spec_refs": [
+            "TS-01-P1",
+            "TS-01-P2",
+            "TS-01-P3",
+            "TS-01-P4",
+            "TS-01-P5",
+            "TS-01-P7"
+          ],
+          "requirement_refs": [
+            "01-REQ-6.4",
+            "01-REQ-8.1",
+            "01-REQ-10.1",
+            "01-REQ-14.1",
+            "01-REQ-17.1",
+            "01-REQ-18.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "All integration tests pass: go test ./... -count=1 -v -run 'Test' 2>&1 | grep -E 'PASS|FAIL'",
+          "Race detector finds no data races: go test -race ./... -count=1",
+          "All property tests pass: go test ./... -count=1 -run 'TestProperty|TestProp'",
+          "No linter warnings: go vet ./...",
+          "All correctness properties 01-PROP-1 through 01-PROP-10 verified by tests"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Stub Audit",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Trace all execution paths and verify function call chains",
+          "details": [
+            "Trace 01-PATH-1 (zero-config startup): confirm LoadConfig() → NewServer() → Start() chain with no stubs; actual Echo listener binds",
+            "Trace 01-PATH-2 (readiness probe): confirm injected HealthChecker is actually called in /readyz handler; result flows to response",
+            "Trace 01-PATH-4 (graceful shutdown): confirm signal handler calls Shutdown(context.Background()); Shutdown calls echo.Shutdown with derived timeout context",
+            "Trace 01-PATH-5 (ephemeral port): confirm Addr() reads from actual listener after Start() binds; returns empty string before/after"
+          ],
+          "test_spec_refs": [
+            "TS-01-SMOKE-1",
+            "TS-01-SMOKE-2",
+            "TS-01-SMOKE-4",
+            "TS-01-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.1",
+            "01-REQ-1.2",
+            "01-REQ-1.3",
+            "01-REQ-1.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Verify return value propagation across the middleware chain",
+          "details": [
+            "Trace 01-PATH-3 (oversized body): confirm body limit middleware calls APIError() and its return propagates to Echo; 413 status code reaches client",
+            "Trace 01-PATH-6 (panic recovery): confirm panic is recovered, logrus error log entry includes all three fields, APIError() HTTP 500 returned to client",
+            "Verify APIError() return value (from c.JSON()) is returned by handler; write errors propagate to Echo's error handler"
+          ],
+          "test_spec_refs": [
+            "TS-01-SMOKE-3",
+            "TS-01-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "01-REQ-8.1",
+            "01-REQ-9.1",
+            "01-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run TS-01-SMOKE-1: zero-config startup; GET /healthz returns 200 {\"status\":\"ok\"}",
+            "Run TS-01-SMOKE-2: readiness probe with mock HealthChecker; correct 200/503 and debug-level log",
+            "Run TS-01-SMOKE-3: oversized body returns 413 with X-Request-ID and JSON envelope",
+            "Run TS-01-SMOKE-4: SIGTERM causes graceful shutdown; in-flight request completes; Start() returns nil",
+            "Run TS-01-SMOKE-5: ephemeral port; Addr() returns real port; GET /healthz succeeds; Shutdown() works",
+            "Run TS-01-SMOKE-6: panicking handler returns 500; server continues serving; error log has all three fields",
+            "Run TS-01-SMOKE-7: ETag round-trip; 200 with ETag on first request; 304 on matching If-None-Match",
+            "Run TS-01-SMOKE-8: CachePublic route override; /providers = public max-age=300; /items = no-store"
+          ],
+          "test_spec_refs": [
+            "TS-01-SMOKE-1",
+            "TS-01-SMOKE-2",
+            "TS-01-SMOKE-3",
+            "TS-01-SMOKE-4",
+            "TS-01-SMOKE-5",
+            "TS-01-SMOKE-6",
+            "TS-01-SMOKE-7",
+            "TS-01-SMOKE-8"
+          ],
+          "requirement_refs": [
+            "01-REQ-1.1",
+            "01-REQ-2.2",
+            "01-REQ-5.1",
+            "01-REQ-6.1",
+            "01-REQ-15.2",
+            "01-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.4",
+          "title": "Audit for stub markers and dead code",
+          "details": [
+            "Search for Go stub markers: `panic(\"not implemented\")`, bare `return nil` in non-trivial paths, `// TODO`, `// FIXME`",
+            "Verify no `panic(\"not implemented\")` in production code paths (server.go, middleware files, config/load.go, apikit.go)",
+            "Verify all middleware functions (panicRecovery, requestID, bodySizeLimit, contentTypeEnforcement, securityHeaders, logging) have complete implementations",
+            "Verify LoadConfig(), NewServer(), Start(), Shutdown(), Addr(), APIGroup(), APIError(), SetETag(), CheckETag(), NowUTC(), FormatUTC(), ParseUTC() all have non-stub implementations"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "01-REQ-1.3",
+            "01-REQ-9.1",
+            "01-REQ-18.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.5",
+          "title": "Verify cross-spec entry points and complete full test suite run",
+          "details": [
+            "Confirm apikit.LoadConfig() is a thin re-export of internal/config.Load() with no stub body",
+            "Confirm APIGroup() is the correct entry point for downstream specs (auth, business logic); handlers registered on it inherit full middleware chain",
+            "Confirm HealthChecker injection point in NewServer() is the correct interface for database_layer spec",
+            "Run complete test suite: go test ./... -count=1; confirm exit code 0",
+            "Run with race detector: go test -race ./... -count=1; confirm no data races"
+          ],
+          "test_spec_refs": [
+            "TS-01-SMOKE-1",
+            "TS-01-SMOKE-8"
+          ],
+          "requirement_refs": [
+            "01-REQ-19.2",
+            "01-REQ-21.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "All smoke tests pass with real components: go test ./... -count=1 -run 'TestSmoke' -v",
+          "Full test suite passes: go test ./... -count=1",
+          "Race detector clean: go test -race ./... -count=1",
+          "No stub markers found: grep -r 'not implemented\\|TODO\\|FIXME' --include='*.go' internal/ *.go cmd/ | grep -v '_test.go' returns empty or only acceptable comments",
+          "No linter warnings: go vet ./...",
+          "make build exits 0 and bin/apikit binary responds to GET /healthz",
+          "All 10 correctness properties (01-PROP-1 through 01-PROP-10) verified by passing tests"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "01-REQ-1.1",
+      "test_spec_id": "TS-01-1",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.2",
+      "test_spec_id": "TS-01-2",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.3",
+      "test_spec_id": "TS-01-3",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.4",
+      "test_spec_id": "TS-01-4",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.5",
+      "test_spec_id": "TS-01-5",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.E1",
+      "test_spec_id": "TS-01-E1",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1.E2",
+      "test_spec_id": "TS-01-E2",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2.1",
+      "test_spec_id": "TS-01-6",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2.2",
+      "test_spec_id": "TS-01-7",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2.3",
+      "test_spec_id": "TS-01-8",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.1",
+      "test_spec_id": "TS-01-9",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.2",
+      "test_spec_id": "TS-01-10",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.3",
+      "test_spec_id": "TS-01-11",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.4",
+      "test_spec_id": "TS-01-12",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.5",
+      "test_spec_id": "TS-01-13",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.6",
+      "test_spec_id": "TS-01-14",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.7",
+      "test_spec_id": "TS-01-15",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.8",
+      "test_spec_id": "TS-01-16",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.9",
+      "test_spec_id": "TS-01-17",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.E1",
+      "test_spec_id": "TS-01-E3",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.E2",
+      "test_spec_id": "TS-01-E4",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.E3",
+      "test_spec_id": "TS-01-E5",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3.E4",
+      "test_spec_id": "TS-01-E6",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4.1",
+      "test_spec_id": "TS-01-18",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4.2",
+      "test_spec_id": "TS-01-19",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4.3",
+      "test_spec_id": "TS-01-20",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4.E1",
+      "test_spec_id": "TS-01-E7",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.1",
+      "test_spec_id": "TS-01-21",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.2",
+      "test_spec_id": "TS-01-22",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.3",
+      "test_spec_id": "TS-01-23",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.4",
+      "test_spec_id": "TS-01-24",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.5",
+      "test_spec_id": "TS-01-25",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.E1",
+      "test_spec_id": "TS-01-E8",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5.E2",
+      "test_spec_id": "TS-01-E9",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.1",
+      "test_spec_id": "TS-01-26",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.2",
+      "test_spec_id": "TS-01-27",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.3",
+      "test_spec_id": "TS-01-28",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.4",
+      "test_spec_id": "TS-01-29",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.5",
+      "test_spec_id": "TS-01-30",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.6",
+      "test_spec_id": "TS-01-31",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.E1",
+      "test_spec_id": "TS-01-E10",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.E2",
+      "test_spec_id": "TS-01-E11",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.E3",
+      "test_spec_id": "TS-01-E12",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6.E4",
+      "test_spec_id": "TS-01-E13",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-7.1",
+      "test_spec_id": "TS-01-32",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-7.2",
+      "test_spec_id": "TS-01-33",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8.1",
+      "test_spec_id": "TS-01-34",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8.2",
+      "test_spec_id": "TS-01-35",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8.3",
+      "test_spec_id": "TS-01-36",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-9.1",
+      "test_spec_id": "TS-01-37",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-9.2",
+      "test_spec_id": "TS-01-38",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-9.E1",
+      "test_spec_id": "TS-01-E14",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10.1",
+      "test_spec_id": "TS-01-39",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10.2",
+      "test_spec_id": "TS-01-40",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10.3",
+      "test_spec_id": "TS-01-41",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-11.1",
+      "test_spec_id": "TS-01-42",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-11.2",
+      "test_spec_id": "TS-01-43",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-11.3",
+      "test_spec_id": "TS-01-44",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-12.1",
+      "test_spec_id": "TS-01-45",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-12.2",
+      "test_spec_id": "TS-01-46",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-13.1",
+      "test_spec_id": "TS-01-47",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-13.2",
+      "test_spec_id": "TS-01-48",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-14.1",
+      "test_spec_id": "TS-01-49",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-14.2",
+      "test_spec_id": "TS-01-50",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-15.1",
+      "test_spec_id": "TS-01-51",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-15.2",
+      "test_spec_id": "TS-01-52",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-15.3",
+      "test_spec_id": "TS-01-53",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-16.1",
+      "test_spec_id": "TS-01-54",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-16.2",
+      "test_spec_id": "TS-01-55",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-16.3",
+      "test_spec_id": "TS-01-56",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-16.4",
+      "test_spec_id": "TS-01-57",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-17.1",
+      "test_spec_id": "TS-01-58",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-17.2",
+      "test_spec_id": "TS-01-59",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-18.1",
+      "test_spec_id": "TS-01-60",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-18.2",
+      "test_spec_id": "TS-01-61",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-18.3",
+      "test_spec_id": "TS-01-62",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-18.4",
+      "test_spec_id": "TS-01-63",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-19.1",
+      "test_spec_id": "TS-01-64",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-19.2",
+      "test_spec_id": "TS-01-65",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-19.3",
+      "test_spec_id": "TS-01-66",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-19.E1",
+      "test_spec_id": "TS-01-E15",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-20.1",
+      "test_spec_id": "TS-01-67",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-20.2",
+      "test_spec_id": "TS-01-68",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-21.1",
+      "test_spec_id": "TS-01-69",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-21.2",
+      "test_spec_id": "TS-01-70",
+      "task_id": "1.5",
+      "test_path": null
+    }
+  ]
+}

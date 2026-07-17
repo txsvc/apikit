@@ -1,0 +1,1346 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "server_core",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-01-1",
+      "requirement_id": "01-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify that LoadConfig, NewServer, APIGroup, and Start are all exported from the root apikit package and callable from an external import path.",
+      "preconditions": [
+        "Root apikit package is importable as github.com/txsvc/apikit",
+        "Go toolchain is installed"
+      ],
+      "input": "Import github.com/txsvc/apikit and reference apikit.LoadConfig, apikit.NewServer, (*Server).APIGroup, (*Server).Start",
+      "expected": "All four symbols resolve at compile time with no linker or type errors; go build ./... exits 0",
+      "assertion_pseudocode": "assert compile_succeeds(program_that_references(apikit.LoadConfig, apikit.NewServer, server.APIGroup, server.Start))"
+    },
+    {
+      "id": "TS-01-2",
+      "requirement_id": "01-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (*Config, nil) for a valid config and (nil, error) for a malformed config.",
+      "preconditions": [
+        "Valid config.toml exists in test working dir for the success case",
+        "Malformed config.toml (invalid TOML) exists for the error case"
+      ],
+      "input": "Call apikit.LoadConfig() in each scenario",
+      "expected": "Success: non-nil *Config and nil error. Failure: nil *Config and non-nil error describing the parse failure.",
+      "assertion_pseudocode": "cfg, err := apikit.LoadConfig(); assert err == nil && cfg != nil\n// malformed case:\ncfg2, err2 := apikit.LoadConfig(); assert cfg2 == nil && err2 != nil"
+    },
+    {
+      "id": "TS-01-3",
+      "requirement_id": "01-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that NewServer does not perform file I/O and does not call LoadConfig internally.",
+      "preconditions": [
+        "No config.toml in working directory",
+        "A valid *Config is constructed in memory (e.g. using default field values)"
+      ],
+      "input": "cfg := &apikit.Config{Server: {Port: 8080, ...}}; srv := apikit.NewServer(cfg, nil)",
+      "expected": "NewServer returns a non-nil *Server without reading any files or returning config-related errors.",
+      "assertion_pseudocode": "cfg := buildTestConfig(); srv := apikit.NewServer(cfg, nil); assert srv != nil"
+    },
+    {
+      "id": "TS-01-4",
+      "requirement_id": "01-REQ-1.4",
+      "kind": "unit",
+      "description": "Verify that NewServer panics with a descriptive message when cfg is nil.",
+      "preconditions": [
+        "Root apikit package is available"
+      ],
+      "input": "apikit.NewServer(nil, nil)",
+      "expected": "A panic is raised; the recovered panic value is a non-empty string that mentions 'cfg' or 'nil config'.",
+      "assertion_pseudocode": "assert panics_with_nonempty_message(func() { apikit.NewServer(nil, nil) })\nrecovered_value := recover_panic(func() { apikit.NewServer(nil, nil) }); assert strings_contains(recovered_value, 'cfg' OR 'nil')"
+    },
+    {
+      "id": "TS-01-5",
+      "requirement_id": "01-REQ-1.5",
+      "kind": "integration",
+      "description": "Verify that Start blocks until shutdown and returns nil on clean graceful shutdown.",
+      "preconditions": [
+        "A valid *Config with Port=0 is constructed",
+        "NewServer called with that config and nil checker"
+      ],
+      "input": "Call server.Start() in a goroutine; call server.Shutdown(context.Background()) after a short delay",
+      "expected": "Start() blocks until Shutdown completes and then returns nil.",
+      "assertion_pseudocode": "startErr := make(chan error, 1)\ngo func() { startErr <- srv.Start() }()\nsleep(50ms); srv.Shutdown(context.Background())\nerr := <-startErr; assert err == nil"
+    },
+    {
+      "id": "TS-01-6",
+      "requirement_id": "01-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify that cmd/apikit compiles to bin/apikit via make build using the three-step caller usage contract.",
+      "preconditions": [
+        "make is available",
+        "Go toolchain installed",
+        "Repository root contains Makefile with build target"
+      ],
+      "input": "Run make build",
+      "expected": "Command exits 0 and bin/apikit binary exists.",
+      "assertion_pseudocode": "exit_code := run('make build'); assert exit_code == 0\nassert file_exists('bin/apikit')"
+    },
+    {
+      "id": "TS-01-7",
+      "requirement_id": "01-REQ-2.2",
+      "kind": "integration",
+      "description": "Verify that the cmd/apikit binary responds to GET /healthz with HTTP 200 and JSON body {\"status\": \"ok\"}.",
+      "preconditions": [
+        "bin/apikit binary exists (make build succeeded)",
+        "No other process is bound to port 8080"
+      ],
+      "input": "Start bin/apikit; send GET http://localhost:8080/healthz",
+      "expected": "HTTP 200 response with body {\"status\": \"ok\"}.",
+      "assertion_pseudocode": "proc := start_process('bin/apikit'); wait_ready(proc)\nresp := GET('http://localhost:8080/healthz')\nassert resp.status == 200\nassert parse_json(resp.body) == {\"status\": \"ok\"}\nstop_process(proc)"
+    },
+    {
+      "id": "TS-01-8",
+      "requirement_id": "01-REQ-2.3",
+      "kind": "unit",
+      "description": "Verify that go test ./... succeeds including compilation of cmd/apikit.",
+      "preconditions": [
+        "Repository is in a compilable state",
+        "Go toolchain installed"
+      ],
+      "input": "Run go test ./...",
+      "expected": "Command exits 0; cmd/apikit package compiles without errors.",
+      "assertion_pseudocode": "exit_code := run('go test ./...'); assert exit_code == 0"
+    },
+    {
+      "id": "TS-01-9",
+      "requirement_id": "01-REQ-3.1",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns a *Config with all defaults and nil error when config.toml is absent.",
+      "preconditions": [
+        "No config.toml in the working directory",
+        "XDG_CONFIG_HOME is not set"
+      ],
+      "input": "Call apikit.LoadConfig() with no config file present",
+      "expected": "Returns (*Config, nil) with port=8080, bind='0.0.0.0', mount_point='/api/v1', max_body_size equivalent to 1MB, database_path='./data/apikit.db', logging_level='info'.",
+      "assertion_pseudocode": "cfg, err := apikit.LoadConfig()\nassert err == nil && cfg != nil\nassert cfg.Server.Port == 8080\nassert cfg.Server.Bind == '0.0.0.0'\nassert cfg.Server.MountPoint == '/api/v1'\nassert cfg.Server.MaxBodyBytes() == 1048576\nassert cfg.Database.Path == './data/apikit.db'\nassert cfg.Logging.Level == 'info'"
+    },
+    {
+      "id": "TS-01-10",
+      "requirement_id": "01-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (nil, error) with a descriptive parse error when config.toml exists but contains malformed TOML.",
+      "preconditions": [
+        "config.toml in working directory contains invalid TOML (e.g. '[[invalid' syntax)"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "Returns (nil, error) where error is non-nil and describes the TOML parse failure.",
+      "assertion_pseudocode": "cfg, err := apikit.LoadConfig()\nassert cfg == nil\nassert err != nil\nassert len(err.Error()) > 0"
+    },
+    {
+      "id": "TS-01-11",
+      "requirement_id": "01-REQ-3.3",
+      "kind": "unit",
+      "description": "Verify that LoadConfig applies all documented defaults for every absent key when config.toml is missing.",
+      "preconditions": [
+        "No config.toml in working directory",
+        "XDG_CONFIG_HOME not set"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "All Config fields match documented defaults: port=8080, bind='0.0.0.0', external_url='', mount_point='/api/v1', MaxBodyBytes()=1048576, Database.Path='./data/apikit.db', Logging.Level='info'.",
+      "assertion_pseudocode": "cfg, err := apikit.LoadConfig()\nassert err == nil\nassert cfg.Server.Port == 8080\nassert cfg.Server.Bind == '0.0.0.0'\nassert cfg.Server.ExternalURL == ''\nassert cfg.Server.MountPoint == '/api/v1'\nassert cfg.Server.MaxBodyBytes() == 1048576\nassert cfg.Database.Path == './data/apikit.db'\nassert cfg.Logging.Level == 'info'"
+    },
+    {
+      "id": "TS-01-12",
+      "requirement_id": "01-REQ-3.4",
+      "kind": "unit",
+      "description": "Verify that LoadConfig accepts port values 0–65535 (including port 0) and rejects values outside that range.",
+      "preconditions": [
+        "config.toml created in temp dir for each sub-case"
+      ],
+      "input": "Cases: port=0 (valid), port=8080 (valid), port=65535 (valid), port=65536 (invalid), port=-1 (invalid), port=99999 (invalid)",
+      "expected": "Valid ports return (*Config, nil); invalid ports return (nil, error).",
+      "assertion_pseudocode": "for port in [0, 8080, 65535]: cfg, err := loadConfigWithPort(port); assert err == nil && cfg.Server.Port == port\nfor port in [65536, -1, 99999]: cfg, err := loadConfigWithPort(port); assert cfg == nil && err != nil"
+    },
+    {
+      "id": "TS-01-13",
+      "requirement_id": "01-REQ-3.5",
+      "kind": "unit",
+      "description": "Verify that LoadConfig accepts any non-empty bind string as-is and replaces empty/absent bind with '0.0.0.0'.",
+      "preconditions": [
+        "config.toml created in temp dir for each sub-case"
+      ],
+      "input": "Cases: bind='192.168.1.1' (non-empty valid IP), bind='not-an-ip' (non-empty invalid), bind='' (empty), bind absent",
+      "expected": "Non-empty strings stored as-is with nil error; empty or absent replaced with '0.0.0.0' with nil error.",
+      "assertion_pseudocode": "cfg1, err1 := loadConfigWithBind('192.168.1.1'); assert err1 == nil && cfg1.Server.Bind == '192.168.1.1'\ncfg2, err2 := loadConfigWithBind('not-an-ip'); assert err2 == nil && cfg2.Server.Bind == 'not-an-ip'\ncfg3, err3 := loadConfigWithBind(''); assert err3 == nil && cfg3.Server.Bind == '0.0.0.0'\ncfg4, err4 := loadConfigWithBind(absent); assert err4 == nil && cfg4.Server.Bind == '0.0.0.0'"
+    },
+    {
+      "id": "TS-01-14",
+      "requirement_id": "01-REQ-3.6",
+      "kind": "unit",
+      "description": "Verify that LoadConfig stores external_url as-is without validation and stores empty string when absent.",
+      "preconditions": [
+        "config.toml created in temp dir for each sub-case"
+      ],
+      "input": "Cases: external_url='https://example.com', external_url='not-a-url', external_url='' (empty), external_url absent",
+      "expected": "All cases return nil error; Config.Server.ExternalURL equals the raw string or '' when absent/empty.",
+      "assertion_pseudocode": "cfg1, err1 := loadConfigWithExternalURL('https://example.com'); assert err1 == nil && cfg1.Server.ExternalURL == 'https://example.com'\ncfg2, err2 := loadConfigWithExternalURL('not-a-url'); assert err2 == nil && cfg2.Server.ExternalURL == 'not-a-url'\ncfg3, err3 := loadConfigWithExternalURL(''); assert err3 == nil && cfg3.Server.ExternalURL == ''\ncfg4, err4 := loadConfigWithExternalURL(absent); assert err4 == nil && cfg4.Server.ExternalURL == ''"
+    },
+    {
+      "id": "TS-01-15",
+      "requirement_id": "01-REQ-3.7",
+      "kind": "unit",
+      "description": "Verify that LoadConfig accepts valid log levels (case-insensitive) and rejects unknown values.",
+      "preconditions": [
+        "config.toml created in temp dir for each sub-case"
+      ],
+      "input": "Valid levels: 'trace','debug','info','warn','error','fatal','panic','INFO','DEBUG'; invalid: 'verbose','WARNING','silent'",
+      "expected": "Valid levels return (*Config, nil); invalid levels return (nil, error).",
+      "assertion_pseudocode": "for level in ['trace','debug','info','warn','error','fatal','panic','INFO','DEBUG']:\n  cfg, err := loadConfigWithLogLevel(level); assert err == nil\nfor level in ['verbose','WARNING','silent']:\n  cfg, err := loadConfigWithLogLevel(level); assert cfg == nil && err != nil"
+    },
+    {
+      "id": "TS-01-16",
+      "requirement_id": "01-REQ-3.8",
+      "kind": "unit",
+      "description": "Verify that LoadConfig validates max_body_size format: valid suffixes accepted, empty treated as default 1MB, invalid values rejected.",
+      "preconditions": [
+        "config.toml created in temp dir for each sub-case"
+      ],
+      "input": "Valid: '512KB','1MB','2GB','512kb','1mb'; empty string: ''; invalid: '1 MB','1048576','1TB','0MB'",
+      "expected": "Valid values parsed and stored; empty returns default 1MB; invalid returns (nil, error).",
+      "assertion_pseudocode": "cfg1, err1 := loadConfigWithBodySize('512KB'); assert err1 == nil && cfg1.Server.MaxBodyBytes() == 524288\ncfg2, err2 := loadConfigWithBodySize('1MB'); assert err2 == nil && cfg2.Server.MaxBodyBytes() == 1048576\ncfg3, err3 := loadConfigWithBodySize('2GB'); assert err3 == nil && cfg3.Server.MaxBodyBytes() == 2147483648\ncfg4, err4 := loadConfigWithBodySize(''); assert err4 == nil && cfg4.Server.MaxBodyBytes() == 1048576\nfor v in ['1 MB','1048576','1TB','0MB']:\n  cfg, err := loadConfigWithBodySize(v); assert cfg == nil && err != nil"
+    },
+    {
+      "id": "TS-01-17",
+      "requirement_id": "01-REQ-3.9",
+      "kind": "unit",
+      "description": "Verify that LoadConfig performs no filesystem side effects beyond reading the config file.",
+      "preconditions": [
+        "Temp directory used as working directory with no config.toml",
+        "XDG_DATA_HOME set to temp path"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "No new files or directories are created in the filesystem after LoadConfig returns.",
+      "assertion_pseudocode": "snapshot_before := list_filesystem_entries(temp_dir)\ncfg, err := apikit.LoadConfig()\nsnapshot_after := list_filesystem_entries(temp_dir)\nassert snapshot_before == snapshot_after"
+    },
+    {
+      "id": "TS-01-18",
+      "requirement_id": "01-REQ-4.1",
+      "kind": "unit",
+      "description": "Verify that when XDG_CONFIG_HOME is set, LoadConfig reads exclusively from $XDG_CONFIG_HOME/apikit/config.toml and does not fall back to ./config.toml.",
+      "preconditions": [
+        "XDG_CONFIG_HOME set to a temp directory containing apikit/config.toml with port=9090",
+        "A different config.toml exists in working directory with port=7070"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "Returns config with port=9090 (from XDG path), not 7070 (from working directory).",
+      "assertion_pseudocode": "set_env('XDG_CONFIG_HOME', xdg_temp)\nwrite_file(xdg_temp + '/apikit/config.toml', '[server]\\nport=9090')\nwrite_file('./config.toml', '[server]\\nport=7070')\ncfg, err := apikit.LoadConfig()\nassert err == nil && cfg.Server.Port == 9090"
+    },
+    {
+      "id": "TS-01-19",
+      "requirement_id": "01-REQ-4.2",
+      "kind": "unit",
+      "description": "Verify that when XDG_DATA_HOME is set, Config.Database.Path resolves to $XDG_DATA_HOME/apikit/apikit.db and no directory is created.",
+      "preconditions": [
+        "XDG_DATA_HOME set to a temp directory",
+        "No apikit subdirectory exists in that temp directory"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "Config.Database.Path == '$XDG_DATA_HOME/apikit/apikit.db'; temp directory has no new subdirectories.",
+      "assertion_pseudocode": "set_env('XDG_DATA_HOME', data_temp)\ncfg, err := apikit.LoadConfig()\nassert err == nil\nassert cfg.Database.Path == data_temp + '/apikit/apikit.db'\nassert not dir_exists(data_temp + '/apikit')"
+    },
+    {
+      "id": "TS-01-20",
+      "requirement_id": "01-REQ-4.3",
+      "kind": "unit",
+      "description": "Verify that when neither XDG_CONFIG_HOME nor XDG_DATA_HOME is set, LoadConfig uses ./config.toml and ./data/apikit.db defaults.",
+      "preconditions": [
+        "XDG_CONFIG_HOME not set",
+        "XDG_DATA_HOME not set",
+        "No config.toml in working directory"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "Config path is ./config.toml (resolved to defaults since absent); Config.Database.Path == './data/apikit.db'.",
+      "assertion_pseudocode": "unset_env('XDG_CONFIG_HOME'); unset_env('XDG_DATA_HOME')\ncfg, err := apikit.LoadConfig()\nassert err == nil\nassert cfg.Database.Path == './data/apikit.db'"
+    },
+    {
+      "id": "TS-01-21",
+      "requirement_id": "01-REQ-5.1",
+      "kind": "integration",
+      "description": "Verify that GET /healthz returns HTTP 200 with {\"status\": \"ok\"} and Cache-Control: no-cache.",
+      "preconditions": [
+        "Server started with Port=0 and nil HealthChecker",
+        "Addr() called to discover bound port"
+      ],
+      "input": "GET http://<addr>/healthz",
+      "expected": "HTTP 200, Content-Type: application/json; charset=utf-8, body={\"status\":\"ok\"}, Cache-Control: no-cache.",
+      "assertion_pseudocode": "resp := GET(server_addr + '/healthz')\nassert resp.status == 200\nassert resp.headers['Content-Type'] == 'application/json; charset=utf-8'\nassert parse_json(resp.body) == {\"status\": \"ok\"}\nassert resp.headers['Cache-Control'] == 'no-cache'"
+    },
+    {
+      "id": "TS-01-22",
+      "requirement_id": "01-REQ-5.2",
+      "kind": "integration",
+      "description": "Verify that GET /readyz calls the injected HealthChecker and returns 200 or 503 based on its result.",
+      "preconditions": [
+        "Server started with Port=0 and a HealthChecker that can be toggled to return nil or an error"
+      ],
+      "input": "GET /readyz when HealthChecker returns nil; GET /readyz when HealthChecker returns error",
+      "expected": "nil case: HTTP 200 with {\"status\":\"ready\"} and Cache-Control: no-cache. Error case: HTTP 503 with {\"status\":\"not ready\"} and Cache-Control: no-cache.",
+      "assertion_pseudocode": "checker_returns_nil := func() error { return nil }\nresp1 := GET(server_addr + '/readyz') // with nil checker\nassert resp1.status == 200 && parse_json(resp1.body) == {\"status\":\"ready\"}\nassert resp1.headers['Cache-Control'] == 'no-cache'\nchecker_returns_err := func() error { return errors.New('db down') }\nresp2 := GET(server_addr + '/readyz') // with error checker\nassert resp2.status == 503 && parse_json(resp2.body) == {\"status\":\"not ready\"}\nassert resp2.headers['Cache-Control'] == 'no-cache'"
+    },
+    {
+      "id": "TS-01-23",
+      "requirement_id": "01-REQ-5.3",
+      "kind": "integration",
+      "description": "Verify that GET /readyz returns HTTP 200 {\"status\":\"ready\"} when no HealthChecker was provided (nil).",
+      "preconditions": [
+        "Server started with Port=0 and nil HealthChecker"
+      ],
+      "input": "GET http://<addr>/readyz",
+      "expected": "HTTP 200 with body {\"status\":\"ready\"} and Cache-Control: no-cache.",
+      "assertion_pseudocode": "resp := GET(server_addr + '/readyz')\nassert resp.status == 200\nassert parse_json(resp.body) == {\"status\": \"ready\"}\nassert resp.headers['Cache-Control'] == 'no-cache'"
+    },
+    {
+      "id": "TS-01-24",
+      "requirement_id": "01-REQ-5.4",
+      "kind": "integration",
+      "description": "Verify that GET /version returns HTTP 200 with version, build, and mount_point fields and Cache-Control: public, max-age=300.",
+      "preconditions": [
+        "Server started with Port=0, default config (mount_point='/api/v1')"
+      ],
+      "input": "GET http://<addr>/version",
+      "expected": "HTTP 200, body has 'version','build','mount_point' string fields, Cache-Control: public, max-age=300.",
+      "assertion_pseudocode": "resp := GET(server_addr + '/version')\nassert resp.status == 200\nbody := parse_json(resp.body)\nassert type_of(body['version']) == string\nassert type_of(body['build']) == string\nassert body['mount_point'] == '/api/v1'\nassert resp.headers['Cache-Control'] == 'public, max-age=300'"
+    },
+    {
+      "id": "TS-01-25",
+      "requirement_id": "01-REQ-5.5",
+      "kind": "integration",
+      "description": "Verify that /healthz, /readyz, and /version are reachable at server root regardless of the configured mount_point.",
+      "preconditions": [
+        "Server started with Port=0, mount_point='/api/v2'"
+      ],
+      "input": "GET /healthz, GET /readyz, GET /version",
+      "expected": "All three endpoints return non-404 responses (200 or 503); they are NOT under /api/v2.",
+      "assertion_pseudocode": "for path in ['/healthz', '/readyz', '/version']:\n  resp := GET(server_addr + path)\n  assert resp.status != 404\n// confirm they are NOT mounted under mount_point:\nfor path in ['/api/v2/healthz', '/api/v2/readyz', '/api/v2/version']:\n  resp := GET(server_addr + path)\n  assert resp.status == 404"
+    },
+    {
+      "id": "TS-01-26",
+      "requirement_id": "01-REQ-6.1",
+      "kind": "integration",
+      "description": "Verify that the server stops accepting connections and drains in-flight requests on SIGTERM within the 15-second drain timeout.",
+      "preconditions": [
+        "Server started with Port=0",
+        "An in-flight long-running handler is executing"
+      ],
+      "input": "Send SIGTERM to the server process while a request is in-flight",
+      "expected": "Server stops accepting new connections; in-flight request completes; Start() returns nil.",
+      "assertion_pseudocode": "go func() { slow_request() }() // starts in-flight request\nsend_signal(SIGTERM, server_pid)\nwait_for_start_return(timeout=20s)\nassert start_return_value == nil\nassert slow_request_completed_normally == true"
+    },
+    {
+      "id": "TS-01-27",
+      "requirement_id": "01-REQ-6.2",
+      "kind": "unit",
+      "description": "Verify that drainTimeout is defined as a named constant equal to 15 seconds in the server package.",
+      "preconditions": [
+        "Access to server package source code"
+      ],
+      "input": "Inspect the drainTimeout constant declaration",
+      "expected": "const drainTimeout = 15 * time.Second is declared in the server package.",
+      "assertion_pseudocode": "// Static analysis / code inspection:\nassert constant_exists('drainTimeout') == true\nassert drainTimeout == 15 * time.Second"
+    },
+    {
+      "id": "TS-01-28",
+      "requirement_id": "01-REQ-6.3",
+      "kind": "integration",
+      "description": "Verify that Shutdown() uses context.WithTimeout combining caller context and drainTimeout, with the earlier of the two winning.",
+      "preconditions": [
+        "Server started with Port=0",
+        "In-flight slow handler is executing"
+      ],
+      "input": "Call srv.Shutdown(ctx) with a context that has a 2-second deadline while drain timeout is 15 seconds",
+      "expected": "Shutdown completes (force-closes) within ~2 seconds when caller context expires first.",
+      "assertion_pseudocode": "ctx, cancel := context_with_timeout(2 * time.Second)\nstart_time := now()\ngo func() { srv.Start() }()\ntime.Sleep(100ms)\nsrv.Shutdown(ctx)\nelapsed := now() - start_time\nassert elapsed < 5 * time.Second // well before 15s drain timeout"
+    },
+    {
+      "id": "TS-01-29",
+      "requirement_id": "01-REQ-6.4",
+      "kind": "integration",
+      "description": "Verify that Shutdown() is idempotent: first call initiates shutdown; subsequent calls return nil immediately without blocking.",
+      "preconditions": [
+        "Server started with Port=0"
+      ],
+      "input": "Call srv.Shutdown(context.Background()) twice sequentially and twice concurrently",
+      "expected": "All calls return nil; server shuts down exactly once; no deadlock or panic.",
+      "assertion_pseudocode": "go func() { srv.Start() }(); sleep(50ms)\nerr1 := srv.Shutdown(context.Background())\nerr2 := srv.Shutdown(context.Background())\nassert err1 == nil && err2 == nil\n// concurrent case:\ngo func() { srv2.Start() }(); sleep(50ms)\nerrs := run_concurrent(func() { return srv2.Shutdown(context.Background()) }, count=5)\nfor err in errs: assert err == nil"
+    },
+    {
+      "id": "TS-01-30",
+      "requirement_id": "01-REQ-6.5",
+      "kind": "integration",
+      "description": "Verify that shutdown initiation is logged at info level with the drainTimeout duration before the drain window begins.",
+      "preconditions": [
+        "Server started with Port=0, log level=info",
+        "Log output captured to buffer"
+      ],
+      "input": "Call srv.Shutdown(context.Background())",
+      "expected": "A log entry at info level mentioning graceful shutdown and 15s drain timeout is emitted.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nsrv.Shutdown(context.Background())\nlog_entries := parse_json_log_lines(captured_logs)\nshutdown_log := find_log_entry(log_entries, level='info', message_contains='shutdown')\nassert shutdown_log != nil\nassert string_contains(shutdown_log.message OR shutdown_log.fields, '15')"
+    },
+    {
+      "id": "TS-01-31",
+      "requirement_id": "01-REQ-6.6",
+      "kind": "integration",
+      "description": "Verify that Start() returns to its caller after shutdown completes and os.Exit() is never called by the library.",
+      "preconditions": [
+        "Server started with Port=0 in a goroutine"
+      ],
+      "input": "Call srv.Shutdown(context.Background()); wait for Start() to return",
+      "expected": "Start() returns (nil) without calling os.Exit(); the calling goroutine unblocks.",
+      "assertion_pseudocode": "startCh := make(chan error, 1)\ngo func() { startCh <- srv.Start() }()\nsleep(50ms)\nsrv.Shutdown(context.Background())\nselect {\n  case err := <-startCh: assert err == nil\n  case <-time.After(5s): fail('Start() did not return')\n}"
+    },
+    {
+      "id": "TS-01-32",
+      "requirement_id": "01-REQ-7.1",
+      "kind": "integration",
+      "description": "Verify that configuring port=0 causes the server to bind to an OS-assigned ephemeral port and Addr() returns the actual host:port.",
+      "preconditions": [
+        "Config created with Port=0",
+        "Server started in a goroutine"
+      ],
+      "input": "Call server.Addr() after Start() begins listening",
+      "expected": "Addr() returns a non-empty string in host:port format (e.g. '0.0.0.0:54321').",
+      "assertion_pseudocode": "cfg := buildTestConfig(port=0)\nsrv := apikit.NewServer(cfg, nil)\ngo func() { srv.Start() }()\nwait_until_listening(srv, timeout=2s)\naddr := srv.Addr()\nassert len(addr) > 0\nassert addr matches regex '^[^:]+:\\d+$'\n_, port_str := split_host_port(addr)\nport := parse_int(port_str)\nassert port > 0"
+    },
+    {
+      "id": "TS-01-33",
+      "requirement_id": "01-REQ-7.2",
+      "kind": "integration",
+      "description": "Verify that Addr() returns empty string before Start() has bound the listener and after shutdown.",
+      "preconditions": [
+        "Server constructed with NewServer but Start() not yet called"
+      ],
+      "input": "Call Addr() before Start(); call Addr() after Shutdown()",
+      "expected": "Both calls return empty string ''.",
+      "assertion_pseudocode": "srv := apikit.NewServer(cfg, nil)\nassert srv.Addr() == ''\ngo func() { srv.Start() }()\nsleep(100ms)\nsrv.Shutdown(context.Background())\nwait_for_start_return()\nassert srv.Addr() == ''"
+    },
+    {
+      "id": "TS-01-34",
+      "requirement_id": "01-REQ-8.1",
+      "kind": "integration",
+      "description": "Verify that middleware is applied in the documented fixed order: Panic Recovery, Request ID, Body Size Limit, Content-Type Enforcement, Security Headers, Logging, Handler.",
+      "preconditions": [
+        "Server started with Port=0 and a test handler registered"
+      ],
+      "input": "Send a normal GET request through the middleware chain",
+      "expected": "Request ID is assigned before body size limit check; security headers are set; log entry captures final status.",
+      "assertion_pseudocode": "// Ordering evidence: 413 must include X-Request-ID (body limit fires after request ID)\nresp := POST(server_addr + '/api/v1/test', body=oversized_payload, headers={'Content-Type':'application/json'})\nassert resp.status == 413\nassert resp.headers['X-Request-ID'] != ''"
+    },
+    {
+      "id": "TS-01-35",
+      "requirement_id": "01-REQ-8.2",
+      "kind": "integration",
+      "description": "Verify that a 413 Payload Too Large response includes the X-Request-ID header assigned by the Request ID middleware.",
+      "preconditions": [
+        "Server started with Port=0, max_body_size='1MB'"
+      ],
+      "input": "POST /api/v1/test with body larger than 1MB and Content-Type: application/json",
+      "expected": "HTTP 413 response contains X-Request-ID header with a valid UUID v4.",
+      "assertion_pseudocode": "resp := POST(server_addr + '/api/v1/test', body=repeat('x', 2*1024*1024), headers={'Content-Type':'application/json'})\nassert resp.status == 413\nrequest_id := resp.headers['X-Request-ID']\nassert is_valid_uuid_v4(request_id)"
+    },
+    {
+      "id": "TS-01-36",
+      "requirement_id": "01-REQ-8.3",
+      "kind": "integration",
+      "description": "Verify that the structured log entry status field matches the actual HTTP status code returned to the client, including error codes from middleware.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Log output captured to buffer"
+      ],
+      "input": "Send a POST with non-JSON Content-Type to trigger 415",
+      "expected": "Log entry for that request has status field equal to 415.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nresp := POST(server_addr + '/api/v1/test', body='', headers={'Content-Type':'text/plain'})\nassert resp.status == 415\nlog_entry := find_log_entry_for_request(captured_logs, resp.headers['X-Request-ID'])\nassert log_entry['status'] == 415"
+    },
+    {
+      "id": "TS-01-37",
+      "requirement_id": "01-REQ-9.1",
+      "kind": "integration",
+      "description": "Verify that a panicking handler causes the recovery middleware to return HTTP 500 with the standard JSON error envelope and logs the panic at error level with request_id, panic, and stack_trace fields.",
+      "preconditions": [
+        "Server started with Port=0",
+        "A handler registered at /api/v1/panic that calls panic('test panic')",
+        "Log output captured"
+      ],
+      "input": "GET http://<addr>/api/v1/panic",
+      "expected": "HTTP 500, Content-Type: application/json; charset=utf-8, standard error envelope, no server crash; log entry at error level with request_id, panic, and stack_trace fields.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nresp := GET(server_addr + '/api/v1/panic')\nassert resp.status == 500\nassert resp.headers['Content-Type'] == 'application/json; charset=utf-8'\nbody := parse_json(resp.body)\nassert body['error']['code'] == 500\nassert type_of(body['error']['message']) == string\nerror_log := find_log_entry(captured_logs, level='error')\nassert 'request_id' in error_log.fields\nassert 'panic' in error_log.fields\nassert 'stack_trace' in error_log.fields"
+    },
+    {
+      "id": "TS-01-38",
+      "requirement_id": "01-REQ-9.2",
+      "kind": "unit",
+      "description": "Verify that Echo's built-in middleware.Recover() is not registered, and only the custom panic recovery middleware is active.",
+      "preconditions": [
+        "Server constructed with NewServer"
+      ],
+      "input": "Inspect the Echo instance middleware stack for duplicate recovery layers",
+      "expected": "Only one recovery middleware is registered; it is the custom implementation. No echo middleware.Recover() is present.",
+      "assertion_pseudocode": "// Code-level check: grep server initialization code for middleware.Recover()\nassert not_contains_echo_builtin_recover(server_initialization_code)\n// Behavioral: a panic returns exactly one HTTP 500 response, not doubled\nresp := GET(server_addr + '/api/v1/panic')\nassert resp.status == 500\nassert count_json_error_envelopes_in_body(resp.body) == 1"
+    },
+    {
+      "id": "TS-01-39",
+      "requirement_id": "01-REQ-10.1",
+      "kind": "integration",
+      "description": "Verify that a request without X-Request-ID gets a freshly generated UUID v4 in the X-Request-ID response header.",
+      "preconditions": [
+        "Server started with Port=0"
+      ],
+      "input": "GET /healthz with no X-Request-ID header",
+      "expected": "Response has X-Request-ID header set to a valid UUID v4.",
+      "assertion_pseudocode": "resp := GET(server_addr + '/healthz', headers={})\nrequest_id := resp.headers['X-Request-ID']\nassert request_id != ''\nassert is_valid_uuid_v4(request_id)"
+    },
+    {
+      "id": "TS-01-40",
+      "requirement_id": "01-REQ-10.2",
+      "kind": "integration",
+      "description": "Verify that a valid incoming UUID v4 in X-Request-ID is reused in the response header and log entry.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Log output captured"
+      ],
+      "input": "GET /healthz with X-Request-ID: '550e8400-e29b-41d4-a716-446655440000' (valid UUID v4)",
+      "expected": "Response X-Request-ID header echoes the same UUID; log entry request_id field matches.",
+      "assertion_pseudocode": "valid_uuid := '550e8400-e29b-41d4-a716-446655440000'\nresp := GET(server_addr + '/healthz', headers={'X-Request-ID': valid_uuid})\nassert resp.headers['X-Request-ID'] == valid_uuid\nlog_entry := find_most_recent_log_entry(captured_logs)\nassert log_entry['request_id'] == valid_uuid"
+    },
+    {
+      "id": "TS-01-41",
+      "requirement_id": "01-REQ-10.3",
+      "kind": "integration",
+      "description": "Verify that an invalid or non-UUID-v4 X-Request-ID is discarded and a new UUID v4 is generated.",
+      "preconditions": [
+        "Server started with Port=0"
+      ],
+      "input": "GET /healthz with X-Request-ID: 'not-a-uuid' and GET /healthz with X-Request-ID: '550e8400-e29b-31d4-a716-446655440000' (UUID v3, not v4)",
+      "expected": "Response X-Request-ID is a freshly generated UUID v4, different from the invalid input.",
+      "assertion_pseudocode": "for invalid_id in ['not-a-uuid', '550e8400-e29b-31d4-a716-446655440000']:\n  resp := GET(server_addr + '/healthz', headers={'X-Request-ID': invalid_id})\n  response_id := resp.headers['X-Request-ID']\n  assert response_id != invalid_id\n  assert is_valid_uuid_v4(response_id)"
+    },
+    {
+      "id": "TS-01-42",
+      "requirement_id": "01-REQ-11.1",
+      "kind": "integration",
+      "description": "Verify that every HTTP request produces a structured JSON log entry with method (string), path (string), status (integer), duration (float64 ms), and request_id (string).",
+      "preconditions": [
+        "Server started with Port=0, log level=debug",
+        "Log output captured to buffer"
+      ],
+      "input": "GET /api/v1/test (a registered handler returning 200)",
+      "expected": "Log line is valid JSON with all five fields present and correctly typed.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nresp := GET(server_addr + '/api/v1/test')\nlog_entry := parse_json(find_request_log_line(captured_logs, resp.headers['X-Request-ID']))\nassert type_of(log_entry['method']) == string && log_entry['method'] == 'GET'\nassert type_of(log_entry['path']) == string\nassert type_of(log_entry['status']) == integer\nassert type_of(log_entry['duration']) == float64\nassert type_of(log_entry['request_id']) == string && is_valid_uuid_v4(log_entry['request_id'])"
+    },
+    {
+      "id": "TS-01-43",
+      "requirement_id": "01-REQ-11.2",
+      "kind": "integration",
+      "description": "Verify that /healthz and /readyz requests are logged at debug level (not info) and include all five standard log fields including duration as float64.",
+      "preconditions": [
+        "Server started with Port=0, log level=debug",
+        "Log output captured"
+      ],
+      "input": "GET /healthz; GET /readyz",
+      "expected": "Log entries appear at debug level; all five fields (method, path, status, duration as float64, request_id) are present.",
+      "assertion_pseudocode": "captured_logs := capture_log_output(level='debug')\nGET(server_addr + '/healthz')\nGET(server_addr + '/readyz')\nfor path in ['/healthz', '/readyz']:\n  log_entry := find_log_entry_by_path(captured_logs, path)\n  assert log_entry['level'] == 'debug'\n  assert type_of(log_entry['duration']) == float64\n  assert 'method' in log_entry && 'path' in log_entry && 'status' in log_entry && 'request_id' in log_entry"
+    },
+    {
+      "id": "TS-01-44",
+      "requirement_id": "01-REQ-11.3",
+      "kind": "integration",
+      "description": "Verify that the logrus log level is configured from Config.Logging.Level at server startup.",
+      "preconditions": [
+        "Server started with Port=0 and logging level='warn' in config",
+        "Log output captured"
+      ],
+      "input": "GET /api/v1/test (normal info-level request)",
+      "expected": "No log entry emitted for the request at info level; only warn/error entries visible.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nGET(server_addr + '/api/v1/test')\ninfo_entries := filter_log_entries(captured_logs, level='info')\nassert len(info_entries) == 0"
+    },
+    {
+      "id": "TS-01-45",
+      "requirement_id": "01-REQ-12.1",
+      "kind": "integration",
+      "description": "Verify that POST, PUT, and PATCH requests with non-JSON Content-Type are rejected with HTTP 415 and the standard JSON error envelope.",
+      "preconditions": [
+        "Server started with Port=0",
+        "A handler registered at /api/v1/test accepting POST, PUT, PATCH"
+      ],
+      "input": "POST /api/v1/test with Content-Type: text/plain; PUT /api/v1/test with Content-Type: text/xml; PATCH /api/v1/test with Content-Type: application/octet-stream",
+      "expected": "All return HTTP 415, Content-Type: application/json; charset=utf-8, standard error envelope.",
+      "assertion_pseudocode": "for method, content_type in [('POST','text/plain'),('PUT','text/xml'),('PATCH','application/octet-stream')]:\n  resp := request(method, server_addr + '/api/v1/test', headers={'Content-Type': content_type}, body='data')\n  assert resp.status == 415\n  assert resp.headers['Content-Type'] == 'application/json; charset=utf-8'\n  body := parse_json(resp.body)\n  assert body['error']['code'] == 415"
+    },
+    {
+      "id": "TS-01-46",
+      "requirement_id": "01-REQ-12.2",
+      "kind": "integration",
+      "description": "Verify that GET, DELETE, HEAD, and OPTIONS requests pass through without Content-Type enforcement.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Handlers registered for GET, DELETE, HEAD, OPTIONS on /api/v1/test"
+      ],
+      "input": "GET, DELETE, HEAD, OPTIONS to /api/v1/test with various or absent Content-Type headers",
+      "expected": "None of these methods return HTTP 415; they reach the handler.",
+      "assertion_pseudocode": "for method in ['GET','DELETE','HEAD','OPTIONS']:\n  resp := request(method, server_addr + '/api/v1/test', headers={'Content-Type': 'text/plain'})\n  assert resp.status != 415"
+    },
+    {
+      "id": "TS-01-47",
+      "requirement_id": "01-REQ-13.1",
+      "kind": "integration",
+      "description": "Verify that a request body exceeding max_body_size returns HTTP 413 with the standard JSON error envelope, X-Request-ID, and correct Content-Type.",
+      "preconditions": [
+        "Server started with Port=0 and max_body_size='1MB'",
+        "Handler registered at /api/v1/upload accepting POST"
+      ],
+      "input": "POST /api/v1/upload with Content-Type: application/json and body of 2MB",
+      "expected": "HTTP 413, Content-Type: application/json; charset=utf-8, error envelope with code=413, X-Request-ID header present.",
+      "assertion_pseudocode": "body_2mb := repeat('x', 2*1024*1024)\nresp := POST(server_addr + '/api/v1/upload', body=body_2mb, headers={'Content-Type':'application/json'})\nassert resp.status == 413\nassert resp.headers['Content-Type'] == 'application/json; charset=utf-8'\nassert resp.headers['X-Request-ID'] != ''\nbody := parse_json(resp.body)\nassert body['error']['code'] == 413"
+    },
+    {
+      "id": "TS-01-48",
+      "requirement_id": "01-REQ-13.2",
+      "kind": "unit",
+      "description": "Verify that Body Size Limit middleware applies the limit from Config.Server.MaxBodyBytes() defaulting to 1048576 bytes when not configured.",
+      "preconditions": [
+        "Server constructed with default config (no max_body_size set)"
+      ],
+      "input": "Inspect MaxBodyBytes() value; send a request with body just over 1MB",
+      "expected": "MaxBodyBytes() returns 1048576; request with body > 1MB rejected with 413.",
+      "assertion_pseudocode": "cfg, _ := apikit.LoadConfig() // no config file, uses defaults\nassert cfg.Server.MaxBodyBytes() == 1048576\n// behavioral:\nresp := POST(server_addr + '/api/v1/test', body=repeat('x', 1048577), headers={'Content-Type':'application/json'})\nassert resp.status == 413"
+    },
+    {
+      "id": "TS-01-49",
+      "requirement_id": "01-REQ-14.1",
+      "kind": "integration",
+      "description": "Verify that X-Content-Type-Options: nosniff, X-Frame-Options: DENY, and Referrer-Policy: no-referrer are set on every response.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Handlers registered at various routes"
+      ],
+      "input": "GET /healthz; GET /api/v1/test; POST /api/v1/test with application/json",
+      "expected": "All responses include all three security headers with exact values.",
+      "assertion_pseudocode": "for req in [GET('/healthz'), GET('/api/v1/test'), POST('/api/v1/test', body='{}', ct='application/json')]:\n  resp := make_request(req)\n  assert resp.headers['X-Content-Type-Options'] == 'nosniff'\n  assert resp.headers['X-Frame-Options'] == 'DENY'\n  assert resp.headers['Referrer-Policy'] == 'no-referrer'"
+    },
+    {
+      "id": "TS-01-50",
+      "requirement_id": "01-REQ-14.2",
+      "kind": "integration",
+      "description": "Verify that the Security Headers middleware does NOT set Cache-Control.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Security headers middleware applied"
+      ],
+      "input": "Examine which middleware sets Cache-Control by calling GET /api/v1/test",
+      "expected": "Cache-Control header on response is set by CacheMiddleware, NOT by Security Headers middleware. Security headers middleware output has no Cache-Control.",
+      "assertion_pseudocode": "// Verify presence of security headers and Cache-Control from correct source:\nresp := GET(server_addr + '/api/v1/test')\nassert resp.headers['X-Content-Type-Options'] == 'nosniff'\nassert resp.headers['Cache-Control'] == 'no-store' // from CacheMiddleware, not security headers\n// Code inspection: SecurityHeadersMiddleware function body must not reference 'Cache-Control'\nassert not_contains(security_headers_middleware_source, 'Cache-Control')"
+    },
+    {
+      "id": "TS-01-51",
+      "requirement_id": "01-REQ-15.1",
+      "kind": "integration",
+      "description": "Verify that APIGroup() pre-applies CacheNoStore so all consumer routes without explicit cache middleware return Cache-Control: no-store.",
+      "preconditions": [
+        "Server started with Port=0",
+        "A handler registered on APIGroup() with no explicit CacheMiddleware"
+      ],
+      "input": "GET /api/v1/items",
+      "expected": "Response has Cache-Control: no-store.",
+      "assertion_pseudocode": "api := srv.APIGroup()\napi.GET('/items', func(c) { return c.JSON(200, {}) })\nresp := GET(server_addr + '/api/v1/items')\nassert resp.headers['Cache-Control'] == 'no-store'"
+    },
+    {
+      "id": "TS-01-52",
+      "requirement_id": "01-REQ-15.2",
+      "kind": "integration",
+      "description": "Verify that attaching CacheMiddleware(CachePublic) to a specific route overrides the group-level CacheNoStore default.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Two handlers: /api/v1/items (no cache override) and /api/v1/providers (CachePublic)"
+      ],
+      "input": "GET /api/v1/items and GET /api/v1/providers",
+      "expected": "/api/v1/items returns Cache-Control: no-store; /api/v1/providers returns Cache-Control: public, max-age=300.",
+      "assertion_pseudocode": "api := srv.APIGroup()\napi.GET('/items', handler)\napi.GET('/providers', handler, apikit.CacheMiddleware(apikit.CachePublic))\nresp1 := GET(server_addr + '/api/v1/items')\nassert resp1.headers['Cache-Control'] == 'no-store'\nresp2 := GET(server_addr + '/api/v1/providers')\nassert resp2.headers['Cache-Control'] == 'public, max-age=300'"
+    },
+    {
+      "id": "TS-01-53",
+      "requirement_id": "01-REQ-15.3",
+      "kind": "unit",
+      "description": "Verify that CacheMiddleware returns middleware setting exact Cache-Control header values for each CacheCategory.",
+      "preconditions": [
+        "Echo test context available"
+      ],
+      "input": "Apply CacheMiddleware(CacheNoStore), CacheMiddleware(CacheNoCache), CacheMiddleware(CachePublic) in separate test requests",
+      "expected": "CacheNoStore: 'no-store'; CacheNoCache: 'no-cache'; CachePublic: 'public, max-age=300'.",
+      "assertion_pseudocode": "mw_no_store := apikit.CacheMiddleware(apikit.CacheNoStore)\nmw_no_cache := apikit.CacheMiddleware(apikit.CacheNoCache)\nmw_public := apikit.CacheMiddleware(apikit.CachePublic)\nassert apply_middleware_and_get_header(mw_no_store, 'Cache-Control') == 'no-store'\nassert apply_middleware_and_get_header(mw_no_cache, 'Cache-Control') == 'no-cache'\nassert apply_middleware_and_get_header(mw_public, 'Cache-Control') == 'public, max-age=300'"
+    },
+    {
+      "id": "TS-01-54",
+      "requirement_id": "01-REQ-16.1",
+      "kind": "unit",
+      "description": "Verify that SetETag sets the ETag response header to W/\"<RFC3339-UTC-timestamp>\" derived from the updatedAt time.",
+      "preconditions": [
+        "Echo test context available"
+      ],
+      "input": "Call apikit.SetETag(c, time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC))",
+      "expected": "ETag header equals 'W/\"2026-07-17T14:30:00Z\"'.",
+      "assertion_pseudocode": "t := time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC)\napikit.SetETag(c, t)\nassert c.Response().Header().Get('ETag') == 'W/\"2026-07-17T14:30:00Z\"'"
+    },
+    {
+      "id": "TS-01-55",
+      "requirement_id": "01-REQ-16.2",
+      "kind": "unit",
+      "description": "Verify that CheckETag returns true when If-None-Match matches the current ETag derived from updatedAt.",
+      "preconditions": [
+        "Echo test context available with If-None-Match: W/\"2026-07-17T14:30:00Z\" in request"
+      ],
+      "input": "Call apikit.CheckETag(c, time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC))",
+      "expected": "Returns true.",
+      "assertion_pseudocode": "c.Request().Header.Set('If-None-Match', 'W/\"2026-07-17T14:30:00Z\"')\nresult := apikit.CheckETag(c, time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC))\nassert result == true"
+    },
+    {
+      "id": "TS-01-56",
+      "requirement_id": "01-REQ-16.3",
+      "kind": "unit",
+      "description": "Verify that CheckETag returns false when If-None-Match does not match the current ETag.",
+      "preconditions": [
+        "Echo test context available with If-None-Match: W/\"2026-01-01T00:00:00Z\" in request"
+      ],
+      "input": "Call apikit.CheckETag(c, time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC))",
+      "expected": "Returns false.",
+      "assertion_pseudocode": "c.Request().Header.Set('If-None-Match', 'W/\"2026-01-01T00:00:00Z\"')\nresult := apikit.CheckETag(c, time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC))\nassert result == false"
+    },
+    {
+      "id": "TS-01-57",
+      "requirement_id": "01-REQ-16.4",
+      "kind": "unit",
+      "description": "Verify that SetETag and CheckETag are no-ops when called with the zero value of time.Time.",
+      "preconditions": [
+        "Echo test context available"
+      ],
+      "input": "Call apikit.SetETag(c, time.Time{}); Call apikit.CheckETag(c, time.Time{})",
+      "expected": "SetETag sets no ETag header; CheckETag returns false.",
+      "assertion_pseudocode": "apikit.SetETag(c, time.Time{})\nassert c.Response().Header().Get('ETag') == ''\nresult := apikit.CheckETag(c, time.Time{})\nassert result == false"
+    },
+    {
+      "id": "TS-01-58",
+      "requirement_id": "01-REQ-17.1",
+      "kind": "unit",
+      "description": "Verify that APIError writes the standard JSON error envelope with integer code field, sets Content-Type, and returns c.JSON() error.",
+      "preconditions": [
+        "Echo test recorder context set up"
+      ],
+      "input": "Call apikit.APIError(c, 404, 'not found')",
+      "expected": "Response body is {\"error\":{\"code\":404,\"message\":\"not found\"}}; Content-Type: application/json; charset=utf-8; return value propagates write errors.",
+      "assertion_pseudocode": "err := apikit.APIError(c, 404, 'not found')\nbody := parse_json(response_body(c))\nassert body['error']['code'] == 404  // integer not string\nassert body['error']['message'] == 'not found'\nassert response_header(c, 'Content-Type') == 'application/json; charset=utf-8'"
+    },
+    {
+      "id": "TS-01-59",
+      "requirement_id": "01-REQ-17.2",
+      "kind": "integration",
+      "description": "Verify that all middleware-generated error responses (413, 415, 500) include Content-Type: application/json; charset=utf-8 and the standard error envelope.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Handler registered that panics for 500 test"
+      ],
+      "input": "Trigger 413, 415, and 500 responses via middleware",
+      "expected": "All three responses have Content-Type: application/json; charset=utf-8 and error envelope with integer code field.",
+      "assertion_pseudocode": "// 413:\nresp413 := POST(addr+'/api/v1/test', body=2mb_body, ct='application/json')\nassert resp413.headers['Content-Type'] == 'application/json; charset=utf-8'\nassert parse_json(resp413.body)['error']['code'] == 413\n// 415:\nresp415 := POST(addr+'/api/v1/test', body='x', ct='text/plain')\nassert resp415.headers['Content-Type'] == 'application/json; charset=utf-8'\nassert parse_json(resp415.body)['error']['code'] == 415\n// 500:\nresp500 := GET(addr+'/api/v1/panic')\nassert resp500.headers['Content-Type'] == 'application/json; charset=utf-8'\nassert parse_json(resp500.body)['error']['code'] == 500"
+    },
+    {
+      "id": "TS-01-60",
+      "requirement_id": "01-REQ-18.1",
+      "kind": "unit",
+      "description": "Verify that NowUTC() returns the current time as a valid RFC 3339 UTC string ending with Z.",
+      "preconditions": [],
+      "input": "Call apikit.NowUTC()",
+      "expected": "Returned string ends with 'Z' and is parseable as RFC 3339.",
+      "assertion_pseudocode": "result := apikit.NowUTC()\nassert string_ends_with(result, 'Z')\n_, err := time.Parse(time.RFC3339, result)\nassert err == nil"
+    },
+    {
+      "id": "TS-01-61",
+      "requirement_id": "01-REQ-18.2",
+      "kind": "unit",
+      "description": "Verify that FormatUTC formats a time.Time as RFC 3339 UTC with Z suffix, converting non-UTC times if necessary.",
+      "preconditions": [],
+      "input": "t := time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC); t2 := t.In(time.FixedZone('EST', -5*3600))",
+      "expected": "FormatUTC(t) == '2026-07-17T14:30:00Z'; FormatUTC(t2) == '2026-07-17T19:30:00Z'.",
+      "assertion_pseudocode": "t_utc := time.Date(2026, 7, 17, 14, 30, 0, 0, time.UTC)\nassert apikit.FormatUTC(t_utc) == '2026-07-17T14:30:00Z'\nt_est := t_utc.In(time.FixedZone('EST', -5*3600))\nresult_est := apikit.FormatUTC(t_est)\nassert string_ends_with(result_est, 'Z')\nassert result_est == '2026-07-17T19:30:00Z'"
+    },
+    {
+      "id": "TS-01-62",
+      "requirement_id": "01-REQ-18.3",
+      "kind": "unit",
+      "description": "Verify that ParseUTC parses valid RFC 3339 strings including those with timezone offsets and normalizes the result to UTC.",
+      "preconditions": [],
+      "input": "'2026-07-17T14:30:00Z' and '2026-07-17T14:30:00+05:00'",
+      "expected": "Both return (time.Time, nil); returned time is in UTC location; +05:00 input yields 2026-07-17T09:30:00Z.",
+      "assertion_pseudocode": "t1, err1 := apikit.ParseUTC('2026-07-17T14:30:00Z')\nassert err1 == nil && t1.Location() == time.UTC\nt2, err2 := apikit.ParseUTC('2026-07-17T14:30:00+05:00')\nassert err2 == nil && t2.Location() == time.UTC\nassert t2.Equal(time.Date(2026, 7, 17, 9, 30, 0, 0, time.UTC))"
+    },
+    {
+      "id": "TS-01-63",
+      "requirement_id": "01-REQ-18.4",
+      "kind": "unit",
+      "description": "Verify that ParseUTC returns (time.Time{}, error) for invalid or non-RFC-3339 input.",
+      "preconditions": [],
+      "input": "'not-a-timestamp', '2026/07/17', '', '2026-13-01T00:00:00Z'",
+      "expected": "All return (time.Time{}, non-nil error).",
+      "assertion_pseudocode": "for s in ['not-a-timestamp', '2026/07/17', '', '2026-13-01T00:00:00Z']:\n  t, err := apikit.ParseUTC(s)\n  assert err != nil\n  assert t == time.Time{}"
+    },
+    {
+      "id": "TS-01-64",
+      "requirement_id": "01-REQ-19.1",
+      "kind": "unit",
+      "description": "Verify that APIGroup() always returns a non-nil *echo.Group at the configured mount point and never panics.",
+      "preconditions": [
+        "Server constructed with NewServer(cfg, nil)"
+      ],
+      "input": "Call server.APIGroup() before Start(), after Start(), after Shutdown()",
+      "expected": "Non-nil *echo.Group returned in all cases; no panic.",
+      "assertion_pseudocode": "srv := apikit.NewServer(cfg, nil)\ng1 := srv.APIGroup(); assert g1 != nil\ngo func() { srv.Start() }(); sleep(50ms)\ng2 := srv.APIGroup(); assert g2 != nil\nsrv.Shutdown(context.Background()); sleep(50ms)\ng3 := srv.APIGroup(); assert g3 != nil\nassert g1 == g2 && g2 == g3 // same object"
+    },
+    {
+      "id": "TS-01-65",
+      "requirement_id": "01-REQ-19.2",
+      "kind": "integration",
+      "description": "Verify that handlers registered via APIGroup() automatically inherit the full middleware chain.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Handler registered on APIGroup() at /test"
+      ],
+      "input": "POST /api/v1/test with Content-Type: text/plain (triggers content-type middleware) and body > max_body_size (triggers body limit)",
+      "expected": "Handler sees 415 for wrong content-type and 413 for oversized body — proving middleware chain is active.",
+      "assertion_pseudocode": "resp_ct := POST(addr+'/api/v1/test', body='x', ct='text/plain')\nassert resp_ct.status == 415 // content-type enforcement active\nresp_sz := POST(addr+'/api/v1/test', body=2mb, ct='application/json')\nassert resp_sz.status == 413 // body size limit active"
+    },
+    {
+      "id": "TS-01-66",
+      "requirement_id": "01-REQ-19.3",
+      "kind": "unit",
+      "description": "Verify that APIGroup() is safe to call concurrently from multiple goroutines after NewServer() has returned.",
+      "preconditions": [
+        "Server constructed with NewServer"
+      ],
+      "input": "Call server.APIGroup() from 10 goroutines concurrently",
+      "expected": "All calls return the same non-nil *echo.Group with no data race detected by the Go race detector.",
+      "assertion_pseudocode": "// Run with: go test -race\nresults := run_concurrent(func() { return srv.APIGroup() }, count=10)\nfor g in results: assert g != nil && g == results[0]"
+    },
+    {
+      "id": "TS-01-67",
+      "requirement_id": "01-REQ-20.1",
+      "kind": "unit",
+      "description": "Verify that Version, Build, and TokenPrefix are declared as package-level variables in the root apikit package with correct defaults.",
+      "preconditions": [
+        "Root apikit package compiled without -ldflags overrides"
+      ],
+      "input": "Access apikit.Version, apikit.Build, apikit.TokenPrefix",
+      "expected": "Version == 'dev', Build == 'dev', TokenPrefix == 'ak'.",
+      "assertion_pseudocode": "assert apikit.Version == 'dev'\nassert apikit.Build == 'dev'\nassert apikit.TokenPrefix == 'ak'"
+    },
+    {
+      "id": "TS-01-68",
+      "requirement_id": "01-REQ-20.2",
+      "kind": "unit",
+      "description": "Verify that the Makefile injects Version and Build via -ldflags and falls back to 'dev' when git commands fail.",
+      "preconditions": [
+        "Git repository with at least one tag for the success case; no git repo for the fallback case"
+      ],
+      "input": "Run make build in a git repository; inspect binary version values",
+      "expected": "Binary in git repo has non-'dev' version values; binary built without git history has 'dev' values; make build exits 0 in both cases.",
+      "assertion_pseudocode": "exit_code := run('make build'); assert exit_code == 0\nassert file_exists('bin/apikit')\n// In non-git environment:\nexit_code_nogit := run('make build', env={...no git}); assert exit_code_nogit == 0"
+    },
+    {
+      "id": "TS-01-69",
+      "requirement_id": "01-REQ-21.1",
+      "kind": "unit",
+      "description": "Verify that apikit.Config is a type alias for internal/config.Config so *apikit.Config is directly passable to NewServer() without conversion.",
+      "preconditions": [
+        "Root apikit package importable"
+      ],
+      "input": "Compile code that assigns *internal/config.Config to *apikit.Config without conversion",
+      "expected": "Compiles successfully; no type mismatch error.",
+      "assertion_pseudocode": "// Compile-time check:\nvar cfg *apikit.Config = load_internal_config() // must not require type assertion\nassert compile_succeeds(above_code)"
+    },
+    {
+      "id": "TS-01-70",
+      "requirement_id": "01-REQ-21.2",
+      "kind": "unit",
+      "description": "Verify that apikit.LoadConfig() is a thin re-export of internal/config.Load() and produces identical results.",
+      "preconditions": [
+        "No config.toml in working directory",
+        "XDG env vars not set"
+      ],
+      "input": "Call apikit.LoadConfig() and internal/config.Load() in the same environment",
+      "expected": "Both return (*Config, nil) with identical field values.",
+      "assertion_pseudocode": "cfg1, err1 := apikit.LoadConfig()\ncfg2, err2 := internal_config_load()\nassert err1 == nil && err2 == nil\nassert cfg1.Server.Port == cfg2.Server.Port\nassert cfg1.Server.Bind == cfg2.Server.Bind\nassert cfg1.Database.Path == cfg2.Database.Path"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-01-P1",
+      "property_id": "01-PROP-1",
+      "validates": [
+        "01-REQ-8.1",
+        "01-REQ-8.2",
+        "01-REQ-8.3"
+      ],
+      "description": "For any HTTP request reaching a registered handler, all six middleware steps are applied in documented order.",
+      "for_any_strategy": "Generate arbitrary HTTP requests (varying methods, paths, headers, body sizes) against a running server with a test handler registered",
+      "invariant_check": "For each request: X-Request-ID is set (step 2); security headers are set (step 5); log entry status matches response status (step 6); 413 includes X-Request-ID; 415 includes X-Request-ID"
+    },
+    {
+      "id": "TS-01-P2",
+      "property_id": "01-PROP-2",
+      "validates": [
+        "01-REQ-17.1",
+        "01-REQ-17.2"
+      ],
+      "description": "For any HTTP error response produced by any middleware or handler, the envelope is {\"error\":{\"code\":<integer>,\"message\":\"<string>\"}} and Content-Type is application/json; charset=utf-8.",
+      "for_any_strategy": "Trigger errors at each middleware layer (413, 415, 500) and from handlers (400, 404, 409) with various inputs",
+      "invariant_check": "parse_json(resp.body)['error']['code'] is integer; parse_json(resp.body)['error']['message'] is string; resp.headers['Content-Type'] == 'application/json; charset=utf-8'"
+    },
+    {
+      "id": "TS-01-P3",
+      "property_id": "01-PROP-3",
+      "validates": [
+        "01-REQ-10.1",
+        "01-REQ-10.2",
+        "01-REQ-10.3"
+      ],
+      "description": "For any HTTP response, X-Request-ID header is present with a UUID v4, and the same value appears in the structured log entry.",
+      "for_any_strategy": "Generate requests with no X-Request-ID, valid UUID v4, and invalid values (non-UUID, UUID v3, too long strings)",
+      "invariant_check": "is_valid_uuid_v4(resp.headers['X-Request-ID']) == true; log_entry['request_id'] == resp.headers['X-Request-ID']"
+    },
+    {
+      "id": "TS-01-P4",
+      "property_id": "01-PROP-4",
+      "validates": [
+        "01-REQ-14.1",
+        "01-REQ-14.2"
+      ],
+      "description": "For any HTTP response, the three security headers are present with exact values and Cache-Control is not set by the Security Headers middleware.",
+      "for_any_strategy": "Generate requests to all registered endpoints (health probes, version, consumer routes) with various methods",
+      "invariant_check": "resp.headers['X-Content-Type-Options'] == 'nosniff'; resp.headers['X-Frame-Options'] == 'DENY'; resp.headers['Referrer-Policy'] == 'no-referrer'; security_headers_middleware_source does not contain 'Cache-Control'"
+    },
+    {
+      "id": "TS-01-P5",
+      "property_id": "01-PROP-5",
+      "validates": [
+        "01-REQ-6.4",
+        "01-REQ-6.E3"
+      ],
+      "description": "For any sequence of one or more concurrent or sequential Shutdown() calls, the server shuts down exactly once and all calls return nil.",
+      "for_any_strategy": "Generate sequences of 1 to 20 concurrent Shutdown() calls with random delays between calls (0–100ms); run with -race",
+      "invariant_check": "all results are nil; server listener stops exactly once; no goroutine blocks indefinitely (timeout assertion: all return within 5 seconds of first call)"
+    },
+    {
+      "id": "TS-01-P6",
+      "property_id": "01-PROP-6",
+      "validates": [
+        "01-REQ-3.1",
+        "01-REQ-3.3"
+      ],
+      "description": "For any call to LoadConfig() where config.toml is absent, all Config fields are set to documented defaults.",
+      "for_any_strategy": "Call LoadConfig() with no config file in different working directories and with XDG env vars unset",
+      "invariant_check": "cfg.Server.Port == 8080; cfg.Server.Bind == '0.0.0.0'; cfg.Server.ExternalURL == ''; cfg.Server.MountPoint == '/api/v1'; cfg.Server.MaxBodyBytes() == 1048576; cfg.Database.Path == './data/apikit.db'; cfg.Logging.Level == 'info'"
+    },
+    {
+      "id": "TS-01-P7",
+      "property_id": "01-PROP-7",
+      "validates": [
+        "01-REQ-18.2",
+        "01-REQ-18.3"
+      ],
+      "description": "For any call to FormatUTC() or ParseUTC() with a valid time value, the result represents the correct UTC instant and formatted strings end with Z.",
+      "for_any_strategy": "Generate arbitrary time.Time values in various timezones (UTC, +05:00, -08:00, etc.) and arbitrary valid RFC 3339 strings with offsets",
+      "invariant_check": "FormatUTC(t) ends with 'Z'; parsed result of ParseUTC(FormatUTC(t)) equals t.UTC(); FormatUTC(ParseUTC(s)) round-trips correctly for valid RFC 3339 input; no iteration — termination guaranteed by direct function call"
+    },
+    {
+      "id": "TS-01-P8",
+      "property_id": "01-PROP-8",
+      "validates": [
+        "01-REQ-1.E2",
+        "01-REQ-6.6"
+      ],
+      "description": "For any error condition arising inside any apikit library function except NewServer() with nil cfg, the library never calls os.Exit().",
+      "for_any_strategy": "Trigger every documented error path: invalid config file, invalid port, invalid log level, port in use at Start(), invalid bind at Start(), body too large, wrong content type, panic in handler",
+      "invariant_check": "After each error path, the calling test goroutine continues executing normally (os.Exit would terminate the test process); all errors are returned as values, not via process exit"
+    },
+    {
+      "id": "TS-01-P9",
+      "property_id": "01-PROP-9",
+      "validates": [
+        "01-REQ-6.3",
+        "01-REQ-6.E1",
+        "01-REQ-6.E2"
+      ],
+      "description": "For any call to Shutdown(ctx) with any caller-supplied context, force-close occurs at whichever fires first between the caller's deadline and the 15-second drainTimeout.",
+      "for_any_strategy": "Generate contexts with deadlines ranging from 100ms to 30 seconds; measure time until Shutdown() returns; also test with already-cancelled contexts",
+      "invariant_check": "If ctx deadline < 15s: Shutdown() returns within ctx.deadline + 1s (earlier wins); if ctx deadline > 15s or background: Shutdown() returns within 16s; Shutdown() never returns after 16s regardless of in-flight requests"
+    },
+    {
+      "id": "TS-01-P10",
+      "property_id": "01-PROP-10",
+      "validates": [
+        "01-REQ-11.2"
+      ],
+      "description": "For any GET request to /healthz or /readyz when configured log level is info or above, no log entry is emitted at info level; at debug level, a structurally identical entry is emitted.",
+      "for_any_strategy": "Generate requests to /healthz and /readyz with log levels: debug, info, warn, error",
+      "invariant_check": "At info/warn/error: captured log output contains no entries with path '/healthz' or '/readyz' at info-or-above level; at debug: entries present with all five standard fields; duration field type is float64"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-01-E1",
+      "requirement_id": "01-REQ-1.E1",
+      "kind": "unit",
+      "description": "Verify that NewServer panics with a non-empty descriptive message and does not call os.Exit() when cfg is nil.",
+      "preconditions": [
+        "Root apikit package available"
+      ],
+      "input": "Call apikit.NewServer(nil, nil) inside a deferred recover()",
+      "expected": "Panic is raised; recovered value is a non-empty string mentioning 'cfg' or 'nil'; no os.Exit() called.",
+      "assertion_pseudocode": "var recovered interface{}\nfunc() {\n  defer func() { recovered = recover() }()\n  apikit.NewServer(nil, nil)\n}()\nassert recovered != nil\nassert len(fmt.Sprintf('%v', recovered)) > 0\nassert string_contains(fmt.Sprintf('%v', recovered), 'cfg' OR 'nil')"
+    },
+    {
+      "id": "TS-01-E2",
+      "requirement_id": "01-REQ-1.E2",
+      "kind": "unit",
+      "description": "Verify that library functions (other than NewServer with nil cfg) signal errors via return values and never call os.Exit().",
+      "preconditions": [
+        "Config with invalid port so LoadConfig returns error"
+      ],
+      "input": "Call apikit.LoadConfig() with an invalid port config; call Start() with port already in use",
+      "expected": "Both return non-nil errors; no os.Exit() is called by the library.",
+      "assertion_pseudocode": "// LoadConfig error:\ncfg, err := apikit.LoadConfig() // with invalid port in config\nassert err != nil // returned, not exited\n// Start() error with port in use (pre-bind same port):\nbind_port(8765)\nsrv := apikit.NewServer(cfg_with_port_8765, nil)\nerr2 := srv.Start()\nassert err2 != nil // returned, not exited"
+    },
+    {
+      "id": "TS-01-E3",
+      "requirement_id": "01-REQ-3.E1",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (nil, error) when max_body_size is '0MB' or a negative integer prefix.",
+      "preconditions": [
+        "config.toml in temp dir with max_body_size set to '0MB' or '-1MB'"
+      ],
+      "input": "Call apikit.LoadConfig() with max_body_size='0MB'; then with max_body_size='-1MB'",
+      "expected": "(nil, error) in both cases with non-nil error describing invalid size.",
+      "assertion_pseudocode": "for v in ['0MB', '-1MB']:\n  cfg, err := loadConfigWithBodySize(v)\n  assert cfg == nil\n  assert err != nil && len(err.Error()) > 0"
+    },
+    {
+      "id": "TS-01-E4",
+      "requirement_id": "01-REQ-3.E2",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (nil, error) for max_body_size with unsupported suffix (TB) or space between number and suffix.",
+      "preconditions": [
+        "config.toml in temp dir for each sub-case"
+      ],
+      "input": "max_body_size='1TB'; max_body_size='1 MB'",
+      "expected": "(nil, error) with descriptive error naming the invalid format.",
+      "assertion_pseudocode": "for v in ['1TB', '1 MB']:\n  cfg, err := loadConfigWithBodySize(v)\n  assert cfg == nil\n  assert err != nil\n  assert len(err.Error()) > 0"
+    },
+    {
+      "id": "TS-01-E5",
+      "requirement_id": "01-REQ-3.E3",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (nil, error) naming the out-of-range port when port > 65535.",
+      "preconditions": [
+        "config.toml in temp dir with port=99999"
+      ],
+      "input": "Call apikit.LoadConfig() with port=99999",
+      "expected": "(nil, error) with error message referencing the invalid port value.",
+      "assertion_pseudocode": "cfg, err := loadConfigWithPort(99999)\nassert cfg == nil\nassert err != nil\nassert string_contains(err.Error(), '99999' OR 'port' OR 'range')"
+    },
+    {
+      "id": "TS-01-E6",
+      "requirement_id": "01-REQ-3.E4",
+      "kind": "unit",
+      "description": "Verify that LoadConfig returns (nil, error) listing accepted level values when an invalid log level is provided.",
+      "preconditions": [
+        "config.toml in temp dir with level='verbose'"
+      ],
+      "input": "Call apikit.LoadConfig() with logging level='verbose'",
+      "expected": "(nil, error) with error message mentioning the invalid level or listing valid options.",
+      "assertion_pseudocode": "cfg, err := loadConfigWithLogLevel('verbose')\nassert cfg == nil\nassert err != nil\nassert len(err.Error()) > 0 // mentions accepted values or the bad value"
+    },
+    {
+      "id": "TS-01-E7",
+      "requirement_id": "01-REQ-4.E1",
+      "kind": "unit",
+      "description": "Verify that when XDG_CONFIG_HOME is set but $XDG_CONFIG_HOME/apikit/config.toml does not exist, LoadConfig applies defaults without falling back to ./config.toml.",
+      "preconditions": [
+        "XDG_CONFIG_HOME set to a temp dir with no apikit/config.toml",
+        "A config.toml exists in the working directory with port=9999"
+      ],
+      "input": "Call apikit.LoadConfig()",
+      "expected": "Returns (*Config, nil) with default port=8080, NOT 9999 from the working directory config.",
+      "assertion_pseudocode": "set_env('XDG_CONFIG_HOME', xdg_temp_no_file)\nwrite_file('./config.toml', '[server]\\nport=9999')\ncfg, err := apikit.LoadConfig()\nassert err == nil\nassert cfg.Server.Port == 8080 // default, not 9999"
+    },
+    {
+      "id": "TS-01-E8",
+      "requirement_id": "01-REQ-5.E1",
+      "kind": "integration",
+      "description": "Verify that GET /version returns version='dev' and build='dev' when binary is built without -ldflags overrides.",
+      "preconditions": [
+        "Server started with binary built without -ldflags (apikit.Version and apikit.Build are 'dev')"
+      ],
+      "input": "GET /version",
+      "expected": "HTTP 200 with body containing 'version':'dev' and 'build':'dev'.",
+      "assertion_pseudocode": "resp := GET(server_addr + '/version')\nassert resp.status == 200\nbody := parse_json(resp.body)\nassert body['version'] == 'dev'\nassert body['build'] == 'dev'"
+    },
+    {
+      "id": "TS-01-E9",
+      "requirement_id": "01-REQ-5.E2",
+      "kind": "integration",
+      "description": "Verify that /version returns empty string for version or build when those variables are overridden to empty string via -ldflags, without any runtime fallback.",
+      "preconditions": [
+        "apikit.Version and apikit.Build set to empty string via -ldflags at build time",
+        "Server started"
+      ],
+      "input": "GET /version",
+      "expected": "HTTP 200; body has 'version':'' and 'build':'' (not 'dev').",
+      "assertion_pseudocode": "// Requires binary built with: -ldflags '-X github.com/txsvc/apikit.Version= -X github.com/txsvc/apikit.Build='\nresp := GET(server_addr + '/version')\nbody := parse_json(resp.body)\nassert body['version'] == ''\nassert body['build'] == ''"
+    },
+    {
+      "id": "TS-01-E10",
+      "requirement_id": "01-REQ-6.E1",
+      "kind": "integration",
+      "description": "Verify that if the caller's context passed to Shutdown() is cancelled before drainTimeout, force-close proceeds immediately.",
+      "preconditions": [
+        "Server started with Port=0",
+        "A slow in-flight handler running"
+      ],
+      "input": "Call srv.Shutdown(ctx) with a context that is cancelled after 1 second",
+      "expected": "Shutdown completes within ~1-2 seconds (not 15 seconds).",
+      "assertion_pseudocode": "ctx, cancel := context_with_cancel()\ngo func() { sleep(1s); cancel() }()\nstart := now()\nsrv.Shutdown(ctx)\nelapsed := now() - start\nassert elapsed < 5 * time.Second // well under 15s drain timeout"
+    },
+    {
+      "id": "TS-01-E11",
+      "requirement_id": "01-REQ-6.E2",
+      "kind": "integration",
+      "description": "Verify that if in-flight requests do not complete within drainTimeout, the server force-closes and Start() returns.",
+      "preconditions": [
+        "Server started with Port=0",
+        "A handler that sleeps for 30 seconds registered"
+      ],
+      "input": "Trigger the slow handler; send SIGTERM; wait for Start() to return",
+      "expected": "Start() returns within ~16 seconds (15s drain + margin); server force-closed.",
+      "assertion_pseudocode": "go func() { GET(addr + '/api/v1/slow') }() // triggers 30s handler\nsleep(200ms)\nstart := now()\nsrv.Shutdown(context.Background())\nelapsed := now() - start\nassert elapsed >= 15 * time.Second\nassert elapsed < 20 * time.Second\nassert start_returned == true"
+    },
+    {
+      "id": "TS-01-E12",
+      "requirement_id": "01-REQ-6.E3",
+      "kind": "integration",
+      "description": "Verify that concurrent Shutdown() calls result in server shutting down exactly once with no data race or deadlock.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Go race detector enabled"
+      ],
+      "input": "Call srv.Shutdown(context.Background()) from 5 goroutines simultaneously",
+      "expected": "All 5 calls return nil; server shuts down exactly once; no data race detected.",
+      "assertion_pseudocode": "// Run with: go test -race\nwg := sync.WaitGroup{}\nerrs := make([]error, 5)\nfor i := 0..4:\n  wg.Add(1)\n  go func(i int) { errs[i] = srv.Shutdown(context.Background()); wg.Done() }(i)\nwg.Wait()\nfor err in errs: assert err == nil"
+    },
+    {
+      "id": "TS-01-E13",
+      "requirement_id": "01-REQ-6.E4",
+      "kind": "integration",
+      "description": "Verify that calling Start() a second time on the same Server instance after shutdown returns a non-nil error immediately with a message indicating already shut down.",
+      "preconditions": [
+        "Server started with Port=0 and then shut down cleanly"
+      ],
+      "input": "Call srv.Start() after srv.Shutdown() has completed",
+      "expected": "Returns non-nil error immediately (no blocking); error message indicates server is already shut down.",
+      "assertion_pseudocode": "go func() { srv.Start() }()\nsrv.Shutdown(context.Background())\nwait_for_start_return()\nstart2 := now()\nerr2 := srv.Start()\nelapsed := now() - start2\nassert err2 != nil\nassert elapsed < 1 * time.Second // returns immediately\nassert string_contains(err2.Error(), 'shut down' OR 'already')"
+    },
+    {
+      "id": "TS-01-E14",
+      "requirement_id": "01-REQ-9.E1",
+      "kind": "integration",
+      "description": "Verify that the panic recovery log entry includes the request_id field matching the X-Request-ID response header.",
+      "preconditions": [
+        "Server started with Port=0",
+        "Panicking handler registered at /api/v1/panic",
+        "Log output captured"
+      ],
+      "input": "GET /api/v1/panic",
+      "expected": "Log entry at error level has request_id field equal to X-Request-ID response header value.",
+      "assertion_pseudocode": "captured_logs := capture_log_output()\nresp := GET(server_addr + '/api/v1/panic')\nresponse_request_id := resp.headers['X-Request-ID']\nerror_log := find_log_entry(captured_logs, level='error', has_field='panic')\nassert error_log['request_id'] == response_request_id"
+    },
+    {
+      "id": "TS-01-E15",
+      "requirement_id": "01-REQ-19.E1",
+      "kind": "integration",
+      "description": "Verify that APIGroup() returns the pre-constructed Echo group without panicking or returning nil after Shutdown() has completed.",
+      "preconditions": [
+        "Server started with Port=0 and then shut down"
+      ],
+      "input": "Call srv.APIGroup() after srv.Shutdown() completes",
+      "expected": "Returns non-nil *echo.Group without panic.",
+      "assertion_pseudocode": "go func() { srv.Start() }(); sleep(50ms)\nsrv.Shutdown(context.Background()); wait_for_start_return()\nvar g *echo.Group\nvar panicked bool\nfunc() {\n  defer func() { if r := recover(); r != nil { panicked = true } }()\n  g = srv.APIGroup()\n}()\nassert panicked == false\nassert g != nil"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-01-SMOKE-1",
+      "execution_path_id": "01-PATH-1",
+      "description": "Smoke test for zero-config server startup: start server without config.toml, verify it binds on default port and serves requests.",
+      "trigger": "Run bin/apikit with no config.toml present in working directory",
+      "real_components": [
+        "apikit root package",
+        "LoadConfig()",
+        "NewServer()",
+        "Start()",
+        "Echo HTTP server",
+        "health probe handlers"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "LoadConfig() returns defaults with nil error",
+        "NewServer() constructs server successfully",
+        "Server binds to 0.0.0.0:8080",
+        "GET /healthz returns HTTP 200 {\"status\":\"ok\"}",
+        "Structured log entries are emitted in JSON format"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-2",
+      "execution_path_id": "01-PATH-2",
+      "description": "Smoke test for Kubernetes readiness probe with an injected HealthChecker that simulates database ping.",
+      "trigger": "Start server with a HealthChecker func() error; send GET /readyz",
+      "real_components": [
+        "NewServer()",
+        "Start()",
+        "/readyz handler",
+        "Logging middleware"
+      ],
+      "mockable": [
+        "HealthChecker (simulated with a controllable func() error)"
+      ],
+      "expected_effects": [
+        "GET /readyz with nil-returning checker returns HTTP 200 {\"status\":\"ready\"} with Cache-Control: no-cache",
+        "GET /readyz with error-returning checker returns HTTP 503 {\"status\":\"not ready\"}",
+        "Request logged at debug level with all five standard fields"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-3",
+      "execution_path_id": "01-PATH-3",
+      "description": "Smoke test for oversized request body rejection: POST with body > max_body_size returns 413 with X-Request-ID and JSON error envelope.",
+      "trigger": "POST /api/v1/test with body of 2MB when max_body_size is 1MB",
+      "real_components": [
+        "Body Size Limit middleware",
+        "Request ID middleware",
+        "APIError()",
+        "Logging middleware"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 413 returned",
+        "X-Request-ID header present with valid UUID v4",
+        "Content-Type: application/json; charset=utf-8",
+        "Body matches {\"error\":{\"code\":413,\"message\":\"<non-empty>\"}}",
+        "Log entry status field equals 413"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-4",
+      "execution_path_id": "01-PATH-4",
+      "description": "Smoke test for graceful shutdown on SIGTERM: in-flight requests complete; Start() returns nil.",
+      "trigger": "Send SIGTERM to a running server with an in-flight slow request",
+      "real_components": [
+        "Signal handler",
+        "Shutdown()",
+        "Echo server drain",
+        "Start()",
+        "Logging middleware"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Shutdown initiation logged at info level with 15s drain timeout",
+        "In-flight request completes and produces normal structured log entry",
+        "Server stops accepting new connections",
+        "Start() returns nil after clean drain"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-5",
+      "execution_path_id": "01-PATH-5",
+      "description": "Smoke test for integration test pattern with ephemeral port: server binds to port 0, Addr() returns actual port, request succeeds.",
+      "trigger": "Create Config with Port=0; call NewServer and Start() in goroutine; call Addr(); send GET /healthz",
+      "real_components": [
+        "NewServer()",
+        "Start()",
+        "Addr()",
+        "GET /healthz handler",
+        "Shutdown()"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Server binds to OS-assigned ephemeral port",
+        "Addr() returns non-empty host:port string",
+        "GET /healthz via Addr()-constructed URL returns HTTP 200",
+        "Shutdown() stops server; Start() returns nil"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-6",
+      "execution_path_id": "01-PATH-6",
+      "description": "Smoke test for handler panic recovery: panicking handler returns HTTP 500 via APIError(), server continues serving.",
+      "trigger": "GET /api/v1/panic (a handler that calls panic('test'))",
+      "real_components": [
+        "Panic Recovery middleware",
+        "APIError()",
+        "Request ID middleware",
+        "Logging middleware"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 500 returned with standard JSON error envelope",
+        "Content-Type: application/json; charset=utf-8",
+        "Error log entry includes request_id, panic, and stack_trace fields",
+        "Server does not crash; subsequent requests succeed",
+        "Log entry has status=500"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-7",
+      "execution_path_id": "01-PATH-7",
+      "description": "Smoke test for ETag / If-None-Match conditional GET round-trip: first request returns 200 with ETag; second returns 304.",
+      "trigger": "GET a resource handler that calls SetETag(); repeat with If-None-Match from first response",
+      "real_components": [
+        "SetETag()",
+        "CheckETag()",
+        "FormatUTC()",
+        "Echo response writer"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "First GET: HTTP 200 with ETag header matching W/\"<RFC3339-UTC>\" format",
+        "Second GET with matching If-None-Match: HTTP 304 with no body",
+        "Second GET with non-matching If-None-Match: HTTP 200 with body"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-8",
+      "execution_path_id": "01-PATH-8",
+      "description": "Smoke test for consumer route registration with CachePublic override: route returns Cache-Control: public, max-age=300; other group routes still return no-store.",
+      "trigger": "Register /providers with CacheMiddleware(CachePublic) and /items without override; GET both",
+      "real_components": [
+        "APIGroup()",
+        "CacheMiddleware()",
+        "Echo group middleware",
+        "Start()"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "GET /api/v1/providers returns Cache-Control: public, max-age=300",
+        "GET /api/v1/items returns Cache-Control: no-store",
+        "Security headers present on both responses"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

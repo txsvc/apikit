@@ -1,0 +1,1619 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "server_core",
+  "schema_version": 1,
+  "introduction": "Server Core provides the foundational HTTP server infrastructure for the apikit library, including configuration loading, health probes, middleware, structured logging, error handling, graceful shutdown, and the handler registration API upon which all other specs depend. Note: requirements referencing Echo v4, logrus, and uuid APIs are based on PRD descriptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "APIError": "The helper function `apikit.APIError(c, code, message)` that writes a standard JSON error envelope and sets `Content-Type: application/json; charset=utf-8`.",
+    "APIGroup": "The method `(*Server).APIGroup()` that returns the Echo route group mounted at the configured mount point, with `CacheNoStore` pre-applied.",
+    "Addr": "The method `(*Server).Addr()` that returns the actual bound `host:port` string after the listener is established.",
+    "Build": "The package-level variable `apikit.Build` (default `\"dev\"`) holding the short git commit SHA, overridable via `-ldflags`.",
+    "CacheCategory": "An integer type identifying one of three cache behaviors: `CacheNoStore`, `CacheNoCache`, or `CachePublic`.",
+    "CacheMiddleware": "The function `apikit.CacheMiddleware(cat CacheCategory) echo.MiddlewareFunc` that returns Echo middleware setting the appropriate `Cache-Control` header.",
+    "CacheNoCache": "Cache category that produces `Cache-Control: no-cache`; applied to health probe endpoints.",
+    "CacheNoStore": "Cache category that produces `Cache-Control: no-store`; the default for all routes under the mount point.",
+    "CachePublic": "Cache category that produces `Cache-Control: public, max-age=300`; applied to the `/version` endpoint and static discovery routes.",
+    "CheckETag": "The utility function `apikit.CheckETag(c, updatedAt)` that compares the `If-None-Match` request header against the resource's ETag and returns true if the client cache is current.",
+    "ETag": "An HTTP response header carrying a weak cache validator derived from a resource's `updated_at` timestamp, formatted as `W/\"<RFC3339-UTC-timestamp>\"`.",
+    "FormatUTC": "The utility function `apikit.FormatUTC(t)` that formats a `time.Time` as RFC 3339 UTC with Z suffix.",
+    "HealthChecker": "A `func() error` injected into `NewServer()` that the `/readyz` endpoint calls to determine readiness; nil means always-ready.",
+    "If-None-Match": "An HTTP request header used in conditional GET requests; the server returns 304 Not Modified when the header value matches the current ETag.",
+    "LoadConfig": "The public function `apikit.LoadConfig()` that reads and validates `config.toml`, applying XDG resolution and defaults, and returns a `*apikit.Config`.",
+    "MaxBodyBytes": "The method `(*ServerConfig).MaxBodyBytes() int64` that returns the parsed body size limit in bytes.",
+    "NewServer": "The public function `apikit.NewServer(cfg, checker)` that constructs a configured Echo HTTP server from a `*apikit.Config`.",
+    "NowUTC": "The utility function `apikit.NowUTC()` that returns the current time formatted as RFC 3339 UTC with Z suffix.",
+    "ParseUTC": "The utility function `apikit.ParseUTC(s)` that parses any RFC 3339 timestamp (including offset variants) and normalizes it to UTC.",
+    "SetETag": "The utility function `apikit.SetETag(c, updatedAt)` that sets a weak ETag header derived from a `time.Time` timestamp.",
+    "Shutdown": "The method `(*Server).Shutdown(ctx)` that initiates graceful server shutdown with a fixed 15-second drain timeout.",
+    "Start": "The blocking method `(*Server).Start()` that binds the listener and serves requests until shutdown.",
+    "TokenPrefix": "The build-time configurable package-level variable `apikit.TokenPrefix` (default `\"ak\"`) used as a token prefix across all consuming components.",
+    "Version": "The package-level variable `apikit.Version` (default `\"dev\"`) holding the semantic version string, overridable via `-ldflags`.",
+    "X-Request-ID": "An HTTP header carrying the UUID v4 request identifier, set on every response and optionally supplied by the client.",
+    "XDG_CONFIG_HOME": "The XDG Base Directory environment variable that, when set, redirects config loading to `$XDG_CONFIG_HOME/apikit/config.toml`.",
+    "XDG_DATA_HOME": "The XDG Base Directory environment variable that, when set, resolves the default database path to `$XDG_DATA_HOME/apikit/apikit.db`.",
+    "apikit": "The root Go module (`github.com/txsvc/apikit`) that exposes the public server API to consuming projects.",
+    "cmd/apikit": "The minimal reference binary at `cmd/apikit/` that demonstrates the three-step caller usage contract and compiles to `bin/apikit`.",
+    "config.toml": "The TOML-format configuration file read by `LoadConfig()` from the current directory or XDG path.",
+    "drainTimeout": "The named compile-time constant `drainTimeout = 15 * time.Second` that bounds the graceful shutdown drain window.",
+    "external_url": "The TOML config field `[server] external_url` storing the public URL for OAuth redirect URIs; stored as-is with no validation by Server Core.",
+    "internal/config": "The internal Go package (`github.com/txsvc/apikit/internal/config`) that implements config loading; its types and functions are re-exported through the root `apikit` package.",
+    "max_body_size": "The TOML config field `[server] max_body_size` specifying the maximum allowed request body size (e.g. `1MB`).",
+    "mount_point": "The configurable URL prefix (default `/api/v1`) under which all consumer API routes are registered.",
+    "sync.Once": "A Go standard library primitive used to implement idempotent one-time execution, used here to ensure `Shutdown()` executes its shutdown logic only once.",
+    "\"\"": "Empty string value",
+    "\"./data/apikit.db\"": "Default SQLite database file path",
+    "\"/api/v1\"": "Default API mount point path",
+    "\"0.0.0.0\"": "Default bind address (all interfaces)",
+    "\"0MB\"": "Invalid max_body_size value (zero is not allowed)",
+    "\"1MB\"": "Default maximum request body size",
+    "\"2026-07-17T14:30:00Z\"": "Example RFC 3339 UTC timestamp with Z suffix",
+    "\"build\": \"dev\"": "Default build field value in /version response",
+    "\"dev\"": "Default value for Version and Build variables when not set via ldflags",
+    "\"info\"": "Default logging level",
+    "\"version\": \"dev\"": "Default version field value in /version response",
+    "$XDG_CONFIG_HOME/apikit/config.toml": "XDG-compliant config file path",
+    "$XDG_DATA_HOME/apikit/apikit.db": "XDG-compliant database file path",
+    "(*apikit.Config, error)": "Return type of LoadConfig() function",
+    "(nil, error)": "Return value when LoadConfig() encounters malformed TOML",
+    "(time.Time, nil)": "Return value of ParseUTC on successful parse",
+    "(time.Time{}, error)": "Return value of ParseUTC on parse failure",
+    "*Config": "Pointer to Config struct",
+    "*Server": "Pointer to Server struct",
+    "*apikit.Config": "Pointer to the re-exported Config type in the root apikit package",
+    "*echo.Group": "Echo route group type returned by APIGroup()",
+    "*internal/config.Config": "Pointer to the internal config.Config struct",
+    "-ldflags": "Go linker flags for injecting build-time variables",
+    "./config.toml": "Default config file path in working directory",
+    "./data/apikit.db": "Default database file path relative to working directory",
+    "/healthz": "Liveness health probe endpoint path",
+    "/readyz": "Readiness health probe endpoint path",
+    "/version": "Server version information endpoint path",
+    "0": "Integer zero (no expiry or zero value)",
+    "15 * time.Second": "Fixed drain timeout duration constant",
+    "1MB": "Default maximum request body size (1 megabyte)",
+    "APIError()": "Helper function that returns JSON error responses in the standard envelope",
+    "APIGroup()": "Method returning the Echo route group at the configured mount point",
+    "Addr()": "Method returning the actual bound address after Start() begins listening",
+    "BUILD": "Makefile variable for build commit SHA",
+    "Cache-Control": "HTTP response header controlling caching behavior",
+    "Cache-Control: no-cache": "Cache-Control header value for health probe endpoints",
+    "Cache-Control: no-store": "Cache-Control header value for mutable resource endpoints",
+    "Cache-Control: public, max-age=300": "Cache-Control header value for static discovery endpoints",
+    "CacheMiddleware(CacheNoStore)": "Middleware constructor call for no-store caching",
+    "CacheMiddleware(CachePublic)": "Middleware constructor call for public caching",
+    "Config.Database.Path": "Database path field in the Config struct",
+    "Config.Logging.Level": "Logging level field in the Config struct",
+    "Config.Server.ExternalURL": "External URL field in the ServerConfig struct",
+    "Config.Server.MaxBodyBytes()": "Getter for parsed max body size in bytes",
+    "Content-Type": "HTTP header specifying the media type of the request/response body",
+    "Content-Type: application/json; charset=utf-8": "Required Content-Type header value for all responses",
+    "FormatUTC()": "Utility function that formats a time.Time as RFC 3339 UTC with Z suffix",
+    "GB": "Gigabyte suffix for max_body_size config value",
+    "KB": "Kilobyte suffix for max_body_size config value",
+    "LoadConfig()": "Function that loads config.toml respecting XDG paths and returns Config",
+    "MB": "Megabyte suffix for max_body_size config value",
+    "NewServer()": "Constructor that creates a configured Echo server from Config",
+    "ParseUTC()": "Utility function that parses RFC 3339 timestamps and normalizes to UTC",
+    "Referrer-Policy: no-referrer": "Security header preventing referrer leakage",
+    "Shutdown()": "Method that gracefully stops the server with drain timeout",
+    "Shutdown(ctx)": "Shutdown method with context parameter for external cancellation",
+    "Start()": "Method that begins HTTP listening and blocks until shutdown",
+    "TB": "Terabyte suffix (invalid for max_body_size)",
+    "VERSION": "Makefile variable for version string",
+    "W/\"<RFC3339-UTC-timestamp>\"": "Weak ETag format derived from updated_at timestamp",
+    "X-Content-Type-Options: nosniff": "Security header preventing MIME type sniffing",
+    "X-Frame-Options: DENY": "Security header preventing clickjacking via framing",
+    "Z": "UTC timezone suffix in RFC 3339 timestamps",
+    "[logging] level": "TOML config key for log level setting",
+    "[server] bind": "TOML config key for bind address setting",
+    "[server] external_url": "TOML config key for external URL setting",
+    "[server] max_body_size": "TOML config key for maximum request body size",
+    "[server] port": "TOML config key for HTTP listen port",
+    "apikit.Build": "Package-level variable for build commit SHA, overridable via ldflags",
+    "apikit.LoadConfig()": "Public wrapper that delegates to internal/config.Load()",
+    "apikit.NewServer(cfg, nil)": "Example call creating a server with no health checker",
+    "apikit.Version": "Package-level variable for version string, overridable via ldflags",
+    "application/json": "JSON MIME type required for request Content-Type",
+    "application/json; charset=utf-8": "JSON MIME type with charset set on all responses",
+    "build": "Field in /version response containing build commit SHA",
+    "c.JSON()": "Echo context method for writing JSON responses",
+    "cfg": "Config parameter passed to NewServer()",
+    "context.WithTimeout(ctx, drainTimeout)": "Go stdlib call wrapping shutdown context with drain timeout",
+    "debug": "Log level for verbose debugging output",
+    "duration": "Structured log field for request duration in float64 milliseconds",
+    "error": "Go error type / log level for error conditions",
+    "false": "Boolean false value",
+    "fatal": "Log level for fatal errors that terminate the process",
+    "git describe --tags": "Git command to get the nearest tag for version",
+    "git rev-parse --short HEAD": "Git command to get the short commit SHA for build",
+    "github.com/txsvc/apikit.Build": "Full import path for the Build variable (ldflags target)",
+    "github.com/txsvc/apikit.TokenPrefix": "Full import path for the TokenPrefix variable (ldflags target)",
+    "github.com/txsvc/apikit.Version": "Full import path for the Version variable (ldflags target)",
+    "go test ./...": "Go test command to run all tests in the module",
+    "host:port": "Address format returned by Addr() method",
+    "info": "Default log level for standard operational messages",
+    "internal/config.Load()": "Internal function that reads and parses config.toml",
+    "make test": "Makefile target that runs the Go test suite",
+    "method": "Structured log field for HTTP request method",
+    "middleware.Recover()": "Custom panic recovery middleware returning standard error envelope",
+    "nil": "Go nil value (null pointer or absent value)",
+    "os.Exit()": "Go stdlib function to terminate the process (not called by server library)",
+    "panic": "Go panic / structured log field for panic value",
+    "path": "Structured log field for HTTP request path",
+    "request_id": "Structured log field for the X-Request-ID value",
+    "server.Start()": "Example call to start the HTTP server",
+    "stack_trace": "Structured log field for panic stack trace",
+    "status": "Structured log field for HTTP response status code",
+    "time.Time": "Go stdlib type representing a point in time",
+    "time.Time{}": "Zero value of time.Time (returned by ParseUTC on error)",
+    "trace": "Log level for most verbose output",
+    "true": "Boolean true value",
+    "type Config = config.Config": "Go type alias re-exporting internal Config type",
+    "updatedAt": "Resource timestamp used to derive ETag values",
+    "uuid.Parse()": "UUID parsing function used to validate incoming X-Request-ID values",
+    "var Build = \"dev\"": "Package-level Build variable declaration with default value",
+    "var TokenPrefix = \"ak\"": "Package-level TokenPrefix variable declaration with default value",
+    "var Version = \"dev\"": "Package-level Version variable declaration with default value",
+    "version": "Field in /version response containing version string",
+    "warn": "Log level for warning messages",
+    "{\"error\": {\"code\": <integer>, \"message\": \"<string>\"}}": "Standard JSON error envelope format",
+    "{\"status\": \"not ready\"}": "Response body for /readyz when database is unreachable",
+    "{\"status\": \"ok\"}": "Response body for /healthz liveness probe",
+    "{\"status\": \"ready\"}": "Response body for /readyz when database is reachable"
+  },
+  "requirements": [
+    {
+      "id": "01-REQ-1",
+      "title": "Caller Usage Contract",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "follow a simple three-step pattern to bring up an HTTP server",
+        "benefit": "I can integrate apikit without reading implementation details"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "apikit",
+          "action": "exposes `LoadConfig()`, `NewServer()`, `APIGroup()`, and `Start()` as its primary public API in the root module",
+          "return_contract": "Each function is callable from external packages importing `github.com/txsvc/apikit`"
+        },
+        {
+          "id": "01-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "`LoadConfig()`",
+          "action": "reads and validates `config.toml`, applies XDG resolution and defaults, and returns `(*apikit.Config, error)`",
+          "return_contract": "`(*Config, nil)` on success; `(nil, error)` on malformed or invalid config",
+          "trigger": "called by a consuming project"
+        },
+        {
+          "id": "01-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`NewServer()`",
+          "action": "never calls `LoadConfig()` internally, performs no file I/O, and never returns a config-related error",
+          "return_contract": "Returns a fully constructed `*Server` ready for handler registration"
+        },
+        {
+          "id": "01-REQ-1.4",
+          "ears_pattern": "event_driven",
+          "system": "`NewServer()`",
+          "action": "panics immediately with a descriptive message identifying the nil config as a programming error",
+          "return_contract": "panic (process terminates unless recovered by test harness); error message must name `cfg` as nil",
+          "trigger": "called with a nil `cfg` argument"
+        },
+        {
+          "id": "01-REQ-1.5",
+          "ears_pattern": "event_driven",
+          "system": "`Start()`",
+          "action": "blocks until the server shuts down via signal or external `Shutdown()` call, then returns",
+          "return_contract": "`nil` on clean graceful shutdown; non-nil error on bind failure or other network-level failure",
+          "trigger": "called on a `*Server` instance"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "`NewServer()`",
+          "action": "panics with a descriptive message; does not call `os.Exit()` or return a zero-value `*Server`",
+          "return_contract": "panic value is a non-empty string identifying the nil config",
+          "error_condition": "called with nil `cfg`"
+        },
+        {
+          "id": "01-REQ-1.E2",
+          "ears_pattern": "unwanted",
+          "system": "apikit library",
+          "action": "signals the error via return value or panic (programming error only); never calls `os.Exit()` \u2014 process termination is the caller's responsibility",
+          "return_contract": "error returned or panic raised; `os.Exit()` is never called by library code",
+          "error_condition": "any error condition arises inside `NewServer()`, `APIGroup()`, or `Start()`"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-2",
+      "title": "Reference Binary (cmd/apikit)",
+      "user_story": {
+        "role": "apikit library developer",
+        "goal": "have a minimal compilable reference binary that exercises the three-step caller usage contract",
+        "benefit": "I can smoke-test the library wiring manually and verify the build is sound"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`cmd/apikit`",
+          "action": "calls `apikit.LoadConfig()`, then `apikit.NewServer(cfg, nil)`, then `server.Start()`, registering no additional handlers beyond the built-in endpoints",
+          "return_contract": "Binary compiles successfully via `make build` and produces `bin/apikit`"
+        },
+        {
+          "id": "01-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "`cmd/apikit` binary",
+          "action": "responds with HTTP 200 and `{\"status\": \"ok\"}`, confirming library wiring is correct",
+          "return_contract": "HTTP 200 with JSON body `{\"status\": \"ok\"}`",
+          "trigger": "started and a GET request is made to `/healthz`"
+        },
+        {
+          "id": "01-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`cmd/apikit`",
+          "action": "is verified for compilation by `go test ./...` as part of `make test`; it does not have dedicated functional test cases beyond what integration tests cover for built-in endpoints",
+          "return_contract": "`go test ./...` exits 0 when the binary compiles"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-3",
+      "title": "Server Configuration Loading",
+      "user_story": {
+        "role": "operator",
+        "goal": "configure the server via a TOML file with sensible defaults",
+        "benefit": "I can run the server with zero configuration for development and override values for production"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "`LoadConfig()`",
+          "action": "returns a `*Config` populated entirely with defaults and a nil error; does not attempt to fall back to any other path",
+          "return_contract": "`(*Config, nil)` with all fields at their specified defaults",
+          "trigger": "`config.toml` is absent from the resolved config path"
+        },
+        {
+          "id": "01-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` with a descriptive parse error; does not apply defaults",
+          "return_contract": "`(nil, error)` where error describes the TOML parse failure",
+          "trigger": "`config.toml` exists but contains invalid TOML syntax"
+        },
+        {
+          "id": "01-REQ-3.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "applies the following defaults when fields are absent: port=8080, bind=`\"0.0.0.0\"`, external_url=`\"\"`, mount_point=`\"/api/v1\"`, max_body_size=`\"1MB\"`, database path=`\"./data/apikit.db\"`, logging level=`\"info\"`",
+          "return_contract": "Returned `*Config` fields match the documented defaults for any absent key"
+        },
+        {
+          "id": "01-REQ-3.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "validates `[server] port` is an integer in range 0\u201365535; port 0 is valid",
+          "return_contract": "`(nil, error)` when port is out of range; `(*Config, nil)` when valid including 0"
+        },
+        {
+          "id": "01-REQ-3.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "accepts any non-empty string for `[server] bind` without format validation; replaces an empty or absent bind value with the default `\"0.0.0.0\"`",
+          "return_contract": "Non-empty bind value stored as-is; empty replaced with `\"0.0.0.0\"`; no error returned for non-empty values"
+        },
+        {
+          "id": "01-REQ-3.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "stores `[server] external_url` as-is with no validation; when absent or empty, stores `\"\"` in `Config.Server.ExternalURL` and returns nil error",
+          "return_contract": "`Config.Server.ExternalURL` equals the raw string from config or `\"\"` when absent; no error"
+        },
+        {
+          "id": "01-REQ-3.7",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "validates `[logging] level` is one of `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` (case-insensitive); invalid values return `(nil, error)`",
+          "return_contract": "`(nil, error)` for invalid log level; `(*Config, nil)` for valid"
+        },
+        {
+          "id": "01-REQ-3.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "validates `[server] max_body_size` must be a positive integer immediately followed by `KB`, `MB`, or `GB` (case-insensitive, no spaces); an empty string is treated as absent and the default `1MB` is applied with no error; any other invalid value returns `(nil, error)`",
+          "return_contract": "Parsed byte value stored internally; `MaxBodyBytes()` returns the correct int64"
+        },
+        {
+          "id": "01-REQ-3.9",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig()`",
+          "action": "has no filesystem side effects beyond reading the config file \u2014 no directory creation, no file writes, no path existence checks",
+          "return_contract": "No files or directories are created or modified as a result of calling `LoadConfig()`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` because zero and negative sizes are invalid",
+          "return_contract": "`(nil, error)` with message indicating invalid size",
+          "error_condition": "`max_body_size` has a value of `\"0MB\"` or a negative integer prefix"
+        },
+        {
+          "id": "01-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` with a descriptive error message",
+          "return_contract": "`(nil, error)` naming the invalid format",
+          "error_condition": "`max_body_size` uses an unsupported suffix such as `TB` or contains a space between number and suffix"
+        },
+        {
+          "id": "01-REQ-3.E3",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` with a descriptive range error",
+          "return_contract": "`(nil, error)` naming the out-of-range port value",
+          "error_condition": "`[server] port` is outside the range 0\u201365535 (e.g. 99999)"
+        },
+        {
+          "id": "01-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig()`",
+          "action": "returns `(nil, error)` listing the accepted level values",
+          "return_contract": "`(nil, error)` with message listing valid levels",
+          "error_condition": "an unrecognized `[logging] level` string is provided"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-4",
+      "title": "XDG Base Directory Support",
+      "user_story": {
+        "role": "operator",
+        "goal": "have config and data paths follow XDG conventions when environment variables are set",
+        "benefit": "apikit integrates naturally with Linux desktop and server directory standards"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-4.1",
+          "ears_pattern": "state_driven",
+          "system": "`LoadConfig()`",
+          "action": "loads config exclusively from `$XDG_CONFIG_HOME/apikit/config.toml`; does not fall back to `./config.toml` if the XDG path does not exist",
+          "return_contract": "Defaults applied with nil error when XDG file is absent; parsed config returned when file exists",
+          "state": "`XDG_CONFIG_HOME` is set"
+        },
+        {
+          "id": "01-REQ-4.2",
+          "ears_pattern": "state_driven",
+          "system": "`LoadConfig()`",
+          "action": "resolves the default database path to `$XDG_DATA_HOME/apikit/apikit.db` and stores it in `Config.Database.Path`; does not create any directories",
+          "return_contract": "`Config.Database.Path` equals `$XDG_DATA_HOME/apikit/apikit.db`; no directory created",
+          "state": "`XDG_DATA_HOME` is set"
+        },
+        {
+          "id": "01-REQ-4.3",
+          "ears_pattern": "state_driven",
+          "system": "`LoadConfig()`",
+          "action": "looks for `config.toml` in the current working directory and uses `./data/apikit.db` as the default database path",
+          "return_contract": "Config path is `./config.toml`; database default path is `./data/apikit.db`",
+          "state": "neither `XDG_CONFIG_HOME` nor `XDG_DATA_HOME` is set"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-4.E1",
+          "ears_pattern": "state_driven",
+          "system": "`LoadConfig()`",
+          "action": "applies all defaults and returns nil error; does not attempt to read `./config.toml`",
+          "return_contract": "`(*Config, nil)` with all defaults applied",
+          "state": "`XDG_CONFIG_HOME` is set but `$XDG_CONFIG_HOME/apikit/config.toml` does not exist"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-5",
+      "title": "Health Probe Endpoints",
+      "user_story": {
+        "role": "Kubernetes cluster operator",
+        "goal": "have reliable liveness and readiness probe endpoints at well-known paths",
+        "benefit": "the platform can automatically restart unhealthy pods and gate traffic to ready pods"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "returns HTTP 200 with JSON body `{\"status\": \"ok\"}` and `Cache-Control: no-cache`; never requires authentication",
+          "return_contract": "HTTP 200, `Content-Type: application/json; charset=utf-8`, body `{\"status\": \"ok\"}`, `Cache-Control: no-cache`",
+          "trigger": "GET request is received at `/healthz`"
+        },
+        {
+          "id": "01-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "calls the `HealthChecker`; returns HTTP 200 `{\"status\": \"ready\"}` if it returns nil, or HTTP 503 `{\"status\": \"not ready\"}` if it returns an error",
+          "return_contract": "HTTP 200 body `{\"status\": \"ready\"}` on nil; HTTP 503 body `{\"status\": \"not ready\"}` on error; both include `Cache-Control: no-cache`",
+          "trigger": "GET request is received at `/readyz` and a `HealthChecker` was provided to `NewServer()`"
+        },
+        {
+          "id": "01-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "returns HTTP 200 `{\"status\": \"ready\"}` without calling any external check",
+          "return_contract": "HTTP 200 `{\"status\": \"ready\"}` with `Cache-Control: no-cache`",
+          "trigger": "GET request is received at `/readyz` and no `HealthChecker` was provided (nil)"
+        },
+        {
+          "id": "01-REQ-5.4",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "returns HTTP 200 with JSON body containing `version` (from `apikit.Version`), `build` (from `apikit.Build`), and `mount_point` (from config); sets `Cache-Control: public, max-age=300`",
+          "return_contract": "HTTP 200, body `{\"version\": \"<string>\", \"build\": \"<string>\", \"mount_point\": \"<string>\"}`, `Cache-Control: public, max-age=300`",
+          "trigger": "GET request is received at `/version`"
+        },
+        {
+          "id": "01-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "registers `/healthz`, `/readyz`, and `/version` at the server root, outside the `mount_point`, so they are reachable without authentication regardless of mount point configuration",
+          "return_contract": "Endpoints reachable at `/healthz`, `/readyz`, `/version` even when `mount_point` is not `/`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-5.E1",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "returns `\"version\": \"dev\"` and `\"build\": \"dev\"` in the response body",
+          "return_contract": "HTTP 200 with `version` and `build` both equal to `\"dev\"`",
+          "trigger": "GET `/version` is called when `apikit.Version` and `apikit.Build` have not been overridden by `-ldflags`"
+        },
+        {
+          "id": "01-REQ-5.E2",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "returns an empty string for the corresponding field in the `/version` response without substituting any fallback value",
+          "return_contract": "HTTP 200 with the overridden field equal to `\"\"`",
+          "trigger": "`apikit.Version` or `apikit.Build` is overridden to an empty string via `-ldflags`"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-6",
+      "title": "Graceful Shutdown",
+      "user_story": {
+        "role": "operator",
+        "goal": "have the server drain in-flight requests before exiting on SIGTERM or SIGINT",
+        "benefit": "active requests complete cleanly and no responses are truncated during deployments or restarts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "HTTP server",
+          "action": "stops accepting new connections, waits up to `drainTimeout` (15 seconds) for in-flight requests to complete, logs shutdown initiation at `info` level, then force-closes",
+          "return_contract": "`Start()` returns `nil` after clean drain; `Start()` returns non-nil if force-close was needed due to timeout",
+          "trigger": "SIGTERM or SIGINT is received"
+        },
+        {
+          "id": "01-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "defines `drainTimeout` as a named compile-time constant equal to `15 * time.Second`; it is not user-configurable",
+          "return_contract": "Constant is named `drainTimeout` in the server package and equals 15 seconds"
+        },
+        {
+          "id": "01-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "`Shutdown(ctx)`",
+          "action": "internally derives a context via `context.WithTimeout(ctx, drainTimeout)` and passes it to Echo's shutdown; the earlier of the caller's context deadline and the 15-second timeout wins",
+          "return_contract": "Returns `nil` after clean drain; returns error if force-closed",
+          "trigger": "called externally (e.g. from a test goroutine)"
+        },
+        {
+          "id": "01-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Shutdown()`",
+          "action": "is idempotent using `sync.Once` or equivalent atomic guard; the first call initiates shutdown, all subsequent calls return `nil` immediately without blocking",
+          "return_contract": "Every call to `Shutdown()` returns `nil`; no call blocks after the first completes"
+        },
+        {
+          "id": "01-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "logs shutdown initiation at `info` level, including the `drainTimeout` duration",
+          "return_contract": "Log entry at `info` level is emitted before drain window begins"
+        },
+        {
+          "id": "01-REQ-6.6",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "does not call `os.Exit()` during shutdown; `Start()` returns to its caller after shutdown completes",
+          "return_contract": "`Start()` returns normally; calling process is not terminated by the library"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Shutdown(ctx)`",
+          "action": "proceeds to force-close immediately without waiting for the drain timeout; `Start()` returns promptly",
+          "return_contract": "Force-close occurs at context cancellation; `Start()` returns non-nil error or nil depending on drain state",
+          "error_condition": "caller's context is cancelled before the 15-second `drainTimeout` elapses"
+        },
+        {
+          "id": "01-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "HTTP server",
+          "action": "force-closes all connections after the timeout; `Start()` returns",
+          "return_contract": "`Start()` returns after force-close; remaining connections are terminated",
+          "error_condition": "in-flight requests do not complete within the 15-second `drainTimeout`"
+        },
+        {
+          "id": "01-REQ-6.E3",
+          "ears_pattern": "event_driven",
+          "system": "`Shutdown()`",
+          "action": "only the first call executes the shutdown sequence; all others return `nil` immediately; no data race or deadlock occurs",
+          "return_contract": "All concurrent calls return `nil`; server shuts down exactly once",
+          "trigger": "called concurrently from multiple goroutines simultaneously"
+        },
+        {
+          "id": "01-REQ-6.E4",
+          "ears_pattern": "event_driven",
+          "system": "`Start()`",
+          "action": "returns a non-nil error immediately with a message indicating the server has already been shut down; does not attempt to rebind or reinitialize",
+          "return_contract": "Non-nil error returned immediately; error message indicates server is already shut down",
+          "trigger": "called a second time on the same `*Server` instance after shutdown has completed"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-7",
+      "title": "Port 0 / Ephemeral Port Support",
+      "user_story": {
+        "role": "integration test author",
+        "goal": "start the server on an OS-assigned port and discover the address programmatically",
+        "benefit": "tests run in parallel without port collisions in CI environments"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-7.1",
+          "ears_pattern": "state_driven",
+          "system": "HTTP server",
+          "action": "binds to an OS-assigned ephemeral port; after the listener is established, `Addr()` returns the actual `host:port` string",
+          "return_contract": "`Addr()` returns a non-empty `host:port` string such as `\"0.0.0.0:54321\"`",
+          "state": "`[server] port` is configured as `0`"
+        },
+        {
+          "id": "01-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "`Addr()`",
+          "action": "returns an empty string",
+          "return_contract": "`\"\"` (empty string)",
+          "trigger": "called before `Start()` has bound the listener or after the server has shut down"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-8",
+      "title": "Middleware Execution Order",
+      "user_story": {
+        "role": "apikit developer",
+        "goal": "have a deterministic and documented middleware chain applied to every request",
+        "benefit": "middleware interactions are predictable and error responses from early middleware include context set by earlier middleware"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "applies middleware in the fixed order: (1) Panic Recovery, (2) Request ID, (3) Body Size Limit, (4) Content-Type Enforcement, (5) Security Headers, (6) Logging, (7) Handler",
+          "return_contract": "Order is deterministic for every request reaching a registered handler"
+        },
+        {
+          "id": "01-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "ensures that a 413 (Payload Too Large) response includes the `X-Request-ID` header assigned in step 2",
+          "return_contract": "413 response carries `X-Request-ID` header"
+        },
+        {
+          "id": "01-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "ensures the structured log entry always captures the actual final HTTP status code, including error codes produced by middleware steps 1\u20135",
+          "return_contract": "Log entry `status` field matches the status code sent to the client"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-9",
+      "title": "Panic Recovery Middleware",
+      "user_story": {
+        "role": "apikit developer",
+        "goal": "have any unhandled panic in a handler or middleware caught and returned as a structured JSON 500 error",
+        "benefit": "panics do not crash the server and every error response follows the standard envelope"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "Panic Recovery middleware",
+          "action": "recovers the panic, logs the panic value and full stack trace at `error` level with logrus using structured fields `request_id`, `panic`, and `stack_trace`; returns HTTP 500 via `APIError()`",
+          "return_contract": "HTTP 500 JSON error envelope with `Content-Type: application/json; charset=utf-8`; panic is not re-raised",
+          "trigger": "a panic occurs in any downstream middleware or handler"
+        },
+        {
+          "id": "01-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "uses a custom panic recovery middleware; Echo's built-in `middleware.Recover()` is explicitly disabled to prevent duplicate recovery and inconsistent error responses",
+          "return_contract": "Only one recovery layer is active; all panic responses use `APIError()` envelope"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-9.E1",
+          "ears_pattern": "event_driven",
+          "system": "Panic Recovery middleware",
+          "action": "includes the assigned `request_id` in the structured error log entry",
+          "return_contract": "Log entry contains `request_id` field matching the value set in the `X-Request-ID` response header",
+          "trigger": "a panic occurs after the `X-Request-ID` has been assigned"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-10",
+      "title": "Request ID Middleware",
+      "user_story": {
+        "role": "operator",
+        "goal": "have a unique UUID v4 request ID on every request and response",
+        "benefit": "I can correlate log entries with client-reported request IDs for debugging"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "Request ID middleware",
+          "action": "generates a new UUID v4 and sets it in the `X-Request-ID` response header and the structured log entry",
+          "return_contract": "`X-Request-ID` response header is a valid UUID v4 string",
+          "trigger": "an incoming request does not contain an `X-Request-ID` header"
+        },
+        {
+          "id": "01-REQ-10.2",
+          "ears_pattern": "event_driven",
+          "system": "Request ID middleware",
+          "action": "parses the value using `uuid.Parse()`; if version is 4, reuses it as the request ID in the response header and log entry",
+          "return_contract": "`X-Request-ID` response header echoes the client-supplied UUID v4",
+          "trigger": "an incoming request contains an `X-Request-ID` header with a valid UUID v4 value"
+        },
+        {
+          "id": "01-REQ-10.3",
+          "ears_pattern": "event_driven",
+          "system": "Request ID middleware",
+          "action": "discards the client-supplied value and generates a new UUID v4; sets it in the `X-Request-ID` response header and log entry",
+          "return_contract": "`X-Request-ID` response header is a freshly generated UUID v4, not the invalid client value",
+          "trigger": "an incoming request contains an `X-Request-ID` header with a value that is not a valid UUID v4"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-11",
+      "title": "Structured JSON Logging",
+      "user_story": {
+        "role": "operator",
+        "goal": "have every HTTP request produce a structured JSON log entry with consistent fields",
+        "benefit": "I can query and aggregate request logs using standard log aggregation tools"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Logging middleware",
+          "action": "uses logrus configured for JSON output; every HTTP request produces a log entry with fields: `method` (string), `path` (string), `status` (integer), `duration` (float64 milliseconds), `request_id` (string)",
+          "return_contract": "Log line is valid JSON with all five fields present and correctly typed"
+        },
+        {
+          "id": "01-REQ-11.2",
+          "ears_pattern": "state_driven",
+          "system": "Logging middleware",
+          "action": "logs the request at `debug` level regardless of the configured log level; entry includes all five standard fields including `duration` as float64",
+          "return_contract": "Log entry emitted at `debug` level; absent from output when configured log level is `info` or above",
+          "state": "the request path is `/healthz` or `/readyz`"
+        },
+        {
+          "id": "01-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "Logging middleware",
+          "action": "configures logrus log level from `Config.Logging.Level` at server startup",
+          "return_contract": "Log entries below the configured level are not emitted"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-12",
+      "title": "Content-Type Enforcement",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "receive a clear error when I send a non-JSON body in a POST, PUT, or PATCH request",
+        "benefit": "I know immediately that my client is misconfigured rather than receiving a cryptic parse error"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-12.1",
+          "ears_pattern": "event_driven",
+          "system": "Content-Type Enforcement middleware",
+          "action": "rejects the request with HTTP 415 (Unsupported Media Type) via `APIError()`",
+          "return_contract": "HTTP 415, `Content-Type: application/json; charset=utf-8`, standard JSON error envelope",
+          "trigger": "a POST, PUT, or PATCH request arrives with a `Content-Type` header other than `application/json`"
+        },
+        {
+          "id": "01-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Content-Type Enforcement middleware",
+          "action": "does not apply to GET, DELETE, HEAD, or OPTIONS requests; only POST, PUT, and PATCH are checked",
+          "return_contract": "Non-mutating methods pass through without Content-Type inspection"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-13",
+      "title": "Request Body Size Limit",
+      "user_story": {
+        "role": "operator",
+        "goal": "enforce a maximum request body size to prevent oversized payloads from consuming server resources",
+        "benefit": "the server is protected against large-body denial-of-service payloads"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-13.1",
+          "ears_pattern": "event_driven",
+          "system": "Body Size Limit middleware",
+          "action": "rejects the request with HTTP 413 (Payload Too Large) via `APIError()` before any further processing",
+          "return_contract": "HTTP 413, `Content-Type: application/json; charset=utf-8`, standard JSON error envelope; includes `X-Request-ID` header",
+          "trigger": "a request body exceeds the configured `max_body_size`"
+        },
+        {
+          "id": "01-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Body Size Limit middleware",
+          "action": "applies the limit from `Config.Server.MaxBodyBytes()`, defaulting to 1,048,576 bytes (1MB) when not configured",
+          "return_contract": "Limit is enforced at the configured byte value"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-14",
+      "title": "Security Hardening Headers",
+      "user_story": {
+        "role": "security engineer",
+        "goal": "have standard HTTP security headers applied to every response automatically",
+        "benefit": "the server is protected against MIME sniffing, clickjacking, and referrer leakage without per-handler configuration"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Security Headers middleware",
+          "action": "sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer` on every response",
+          "return_contract": "All three headers are present on every response regardless of route or status code"
+        },
+        {
+          "id": "01-REQ-14.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Security Headers middleware",
+          "action": "does NOT set `Cache-Control`; that header is managed exclusively by `CacheMiddleware`",
+          "return_contract": "No `Cache-Control` header is set by the Security Headers middleware"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-15",
+      "title": "Cache-Control Headers",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "receive appropriate Cache-Control headers on every response based on endpoint category",
+        "benefit": "caching intermediaries and clients handle responses correctly without manual header management"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-15.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIGroup()`",
+          "action": "pre-applies `CacheMiddleware(CacheNoStore)` to the returned Echo group so all consumer-registered routes default to `Cache-Control: no-store`",
+          "return_contract": "Any handler registered on the group without explicit cache middleware returns `Cache-Control: no-store`"
+        },
+        {
+          "id": "01-REQ-15.2",
+          "ears_pattern": "event_driven",
+          "system": "Consumer route",
+          "action": "that route returns `Cache-Control: public, max-age=300`, overriding the group-level `CacheNoStore` default",
+          "return_contract": "`Cache-Control: public, max-age=300` on the specific route; other group routes still return `no-store`",
+          "trigger": "a consumer attaches `CacheMiddleware(CachePublic)` to a specific route registered on `APIGroup()`"
+        },
+        {
+          "id": "01-REQ-15.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`CacheMiddleware`",
+          "action": "returns Echo middleware that sets exactly one of: `Cache-Control: no-store` (`CacheNoStore`), `Cache-Control: no-cache` (`CacheNoCache`), or `Cache-Control: public, max-age=300` (`CachePublic`) based on the `CacheCategory` argument",
+          "return_contract": "Header value matches the category constant exactly"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-16",
+      "title": "ETag and If-None-Match Support",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "use conditional GET requests to avoid re-downloading unchanged resources",
+        "benefit": "bandwidth and latency are reduced for polling clients"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-16.1",
+          "ears_pattern": "event_driven",
+          "system": "`SetETag()`",
+          "action": "sets the `ETag` response header to `W/\"<RFC3339-UTC-timestamp>\"` derived from `updatedAt` formatted via `FormatUTC()`",
+          "return_contract": "`ETag` header value matches the format `W/\"2026-07-17T14:30:00Z\"`",
+          "trigger": "called by a handler with a non-zero `updatedAt` time"
+        },
+        {
+          "id": "01-REQ-16.2",
+          "ears_pattern": "event_driven",
+          "system": "`CheckETag()`",
+          "action": "returns `true`; the handler is expected to return HTTP 304 Not Modified with no body",
+          "return_contract": "Returns `true`; HTTP 304 is issued by the handler",
+          "trigger": "called by a handler with a non-zero `updatedAt` time and the request includes `If-None-Match` matching the current ETag"
+        },
+        {
+          "id": "01-REQ-16.3",
+          "ears_pattern": "event_driven",
+          "system": "`CheckETag()`",
+          "action": "returns `false`; handler proceeds normally",
+          "return_contract": "Returns `false`",
+          "trigger": "called with a non-zero `updatedAt` time and the request `If-None-Match` does not match"
+        },
+        {
+          "id": "01-REQ-16.4",
+          "ears_pattern": "event_driven",
+          "system": "`SetETag()` or `CheckETag()`",
+          "action": "is a no-op: `SetETag` sets no `ETag` header; `CheckETag` returns `false` without checking `If-None-Match`",
+          "return_contract": "No `ETag` header set by `SetETag`; `false` returned by `CheckETag`",
+          "trigger": "called with the zero value of `time.Time`"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-17",
+      "title": "Error Handling \u2014 Standard JSON Envelope",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "receive a consistent JSON error structure for all error responses",
+        "benefit": "I can parse errors with a single schema regardless of which layer produced them"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-17.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIError()`",
+          "action": "writes a JSON body `{\"error\": {\"code\": <integer>, \"message\": \"<string>\"}}` and sets `Content-Type: application/json; charset=utf-8` on the response; returns the error from `c.JSON()` directly",
+          "return_contract": "Response body matches the envelope schema; `Content-Type: application/json; charset=utf-8`; return value propagates write errors"
+        },
+        {
+          "id": "01-REQ-17.2",
+          "ears_pattern": "ubiquitous",
+          "system": "HTTP server",
+          "action": "all middleware-generated error responses (HTTP 413, 415, 500) use `APIError()` to ensure consistent envelope and Content-Type",
+          "return_contract": "Every error response from middleware includes `Content-Type: application/json; charset=utf-8` and the standard envelope"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-18",
+      "title": "Timestamp Normalization Utilities",
+      "user_story": {
+        "role": "handler developer",
+        "goal": "have utility functions that produce and parse RFC 3339 UTC timestamps with Z suffix",
+        "benefit": "all API responses use a consistent timestamp format without manual conversion in each handler"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-18.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`NowUTC()`",
+          "action": "returns the current time formatted as an RFC 3339 UTC string with Z suffix (e.g. `\"2026-07-17T14:30:00Z\"`)",
+          "return_contract": "String ends with `Z`; conforms to RFC 3339"
+        },
+        {
+          "id": "01-REQ-18.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`FormatUTC()`",
+          "action": "formats the given `time.Time` as RFC 3339 UTC with Z suffix, converting to UTC if necessary",
+          "return_contract": "String ends with `Z`; represents the equivalent UTC time"
+        },
+        {
+          "id": "01-REQ-18.3",
+          "ears_pattern": "event_driven",
+          "system": "`ParseUTC()`",
+          "action": "parses the string and normalizes the result to UTC; returns `(time.Time, nil)` with the UTC-equivalent time",
+          "return_contract": "`time.Time` is in UTC location; `.UTC()` call returns same value",
+          "trigger": "called with a valid RFC 3339 string including one with a non-UTC timezone offset"
+        },
+        {
+          "id": "01-REQ-18.4",
+          "ears_pattern": "event_driven",
+          "system": "`ParseUTC()`",
+          "action": "returns `(time.Time{}, error)` where `time.Time{}` is the zero value",
+          "return_contract": "`(time.Time{}, error)`; error is non-nil and describes the parse failure",
+          "trigger": "called with an invalid or non-RFC-3339 string"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-19",
+      "title": "Handler Registration API",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "register my own Echo handlers under the configured mount point and inherit all middleware",
+        "benefit": "I can extend the API surface without reimplementing middleware or wiring"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-19.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIGroup()`",
+          "action": "returns the same pre-constructed `*echo.Group` on every call; never returns nil and never panics, even when called after `Shutdown()` has completed",
+          "return_contract": "Non-nil `*echo.Group` with `mount_point` as its prefix"
+        },
+        {
+          "id": "01-REQ-19.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Handlers registered via `APIGroup()`",
+          "action": "automatically inherit the full middleware chain (Panic Recovery, Request ID, Body Size Limit, Content-Type Enforcement, Security Headers, Logging) in the documented order",
+          "return_contract": "All middleware is applied to every handler registered on the group"
+        },
+        {
+          "id": "01-REQ-19.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIGroup()`",
+          "action": "is safe to call from multiple goroutines concurrently after `NewServer()` has returned; all route registration should be completed before `Start()` is called",
+          "return_contract": "No data race on concurrent `APIGroup()` calls"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-19.E1",
+          "ears_pattern": "event_driven",
+          "system": "`APIGroup()`",
+          "action": "returns the pre-constructed Echo group without panicking or returning nil; routes registered at this point may never receive traffic",
+          "return_contract": "Non-nil `*echo.Group` returned; documented in godoc that post-shutdown registration is a no-op for traffic purposes",
+          "trigger": "called after `Shutdown()` has completed"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-20",
+      "title": "Build-Time Configurable Variables",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "override `Version`, `Build`, and `TokenPrefix` at compile time via `-ldflags`",
+        "benefit": "I can embed my own version and token namespace into the binary without forking the library"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-20.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Root `apikit` package",
+          "action": "declares `var Version = \"dev\"`, `var Build = \"dev\"`, and `var TokenPrefix = \"ak\"` as package-level variables overridable via `-ldflags` targeting `github.com/txsvc/apikit.Version`, `github.com/txsvc/apikit.Build`, and `github.com/txsvc/apikit.TokenPrefix` respectively",
+          "return_contract": "Variables are accessible as `apikit.Version`, `apikit.Build`, `apikit.TokenPrefix`"
+        },
+        {
+          "id": "01-REQ-20.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Makefile",
+          "action": "sets `VERSION` via `git describe --tags` and `BUILD` via `git rev-parse --short HEAD`, falling back to `\"dev\"` when git commands fail; injects both into the binary via `-ldflags`",
+          "return_contract": "Binary built in a git repository has non-`\"dev\"` version and build values; binary built outside git repository has `\"dev\"` values without build failure"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "01-REQ-21",
+      "title": "Config Package Re-Export",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "use `apikit.Config` and `apikit.LoadConfig()` without importing internal packages",
+        "benefit": "I never need to reference `internal/config` directly and the public API remains stable"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-21.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Root `apikit` package",
+          "action": "declares `type Config = config.Config` as a type alias so `*apikit.Config` and `*internal/config.Config` are identical types requiring no conversion",
+          "return_contract": "`*apikit.Config` is directly passable to `NewServer()` without type assertion or conversion"
+        },
+        {
+          "id": "01-REQ-21.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`apikit.LoadConfig()`",
+          "action": "is a thin re-export of `internal/config.Load()` with identical semantics; external consumers never need to import `internal/config` directly",
+          "return_contract": "Calling `apikit.LoadConfig()` produces the same result as calling `internal/config.Load()` directly"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "01-PROP-1",
+      "title": "Middleware Chain Completeness",
+      "for_any": "HTTP request reaching a registered handler",
+      "invariant": "all six middleware steps (Panic Recovery, Request ID, Body Size Limit, Content-Type Enforcement, Security Headers, Logging) are applied in documented order before and after the handler executes",
+      "validates": [
+        "01-REQ-8.1",
+        "01-REQ-8.2",
+        "01-REQ-8.3"
+      ]
+    },
+    {
+      "id": "01-PROP-2",
+      "title": "Error Envelope Consistency",
+      "for_any": "HTTP error response produced by any middleware or handler",
+      "invariant": "the response body conforms to `{\"error\": {\"code\": <integer>, \"message\": \"<string>\"}}` and `Content-Type` is `application/json; charset=utf-8`",
+      "validates": [
+        "01-REQ-17.1",
+        "01-REQ-17.2"
+      ]
+    },
+    {
+      "id": "01-PROP-3",
+      "title": "Request ID Propagation",
+      "for_any": "HTTP response",
+      "invariant": "`X-Request-ID` header is present and contains a UUID v4 string; the same value appears in the structured log entry for the corresponding request",
+      "validates": [
+        "01-REQ-10.1",
+        "01-REQ-10.2",
+        "01-REQ-10.3"
+      ]
+    },
+    {
+      "id": "01-PROP-4",
+      "title": "Security Headers Universality",
+      "for_any": "HTTP response",
+      "invariant": "`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer` are all present and `Cache-Control` is absent from the Security Headers middleware output",
+      "validates": [
+        "01-REQ-14.1",
+        "01-REQ-14.2"
+      ]
+    },
+    {
+      "id": "01-PROP-5",
+      "title": "Shutdown Idempotency",
+      "for_any": "sequence of one or more concurrent or sequential calls to `Shutdown()`",
+      "invariant": "the server shuts down exactly once; all calls to `Shutdown()` return nil; no call blocks after the first shutdown completes; no data race occurs",
+      "validates": [
+        "01-REQ-6.4",
+        "01-REQ-6.E3"
+      ]
+    },
+    {
+      "id": "01-PROP-6",
+      "title": "Config Defaults Completeness",
+      "for_any": "call to `LoadConfig()` where `config.toml` is absent",
+      "invariant": "all `*Config` fields are set to their documented defaults: port=8080, bind=`\"0.0.0.0\"`, external_url=`\"\"`, mount_point=`\"/api/v1\"`, max_body_size equivalent to 1MB, database path=`\"./data/apikit.db\"`, logging level=`\"info\"`",
+      "validates": [
+        "01-REQ-3.1",
+        "01-REQ-3.3"
+      ]
+    },
+    {
+      "id": "01-PROP-7",
+      "title": "UTC Timestamp Normalization",
+      "for_any": "call to `FormatUTC()` or `ParseUTC()` with a valid time value",
+      "invariant": "the resulting string or returned `time.Time` represents the equivalent UTC instant with no timezone offset; formatted strings end with the `Z` suffix",
+      "validates": [
+        "01-REQ-18.2",
+        "01-REQ-18.3"
+      ]
+    },
+    {
+      "id": "01-PROP-8",
+      "title": "Library Non-Termination",
+      "for_any": "error condition arising inside any apikit library function except `NewServer()` with nil cfg",
+      "invariant": "the library never calls `os.Exit()`; errors are signaled exclusively via return values so the calling process retains control",
+      "validates": [
+        "01-REQ-1.E2",
+        "01-REQ-6.6"
+      ]
+    },
+    {
+      "id": "01-PROP-9",
+      "title": "Drain Timeout is the Earlier Deadline",
+      "for_any": "call to `Shutdown(ctx)` with any caller-supplied context",
+      "invariant": "force-close occurs at whichever fires first: cancellation of the caller's context or expiry of the 15-second `drainTimeout`; neither source can cause force-close to be delayed beyond the `drainTimeout`",
+      "validates": [
+        "01-REQ-6.3",
+        "01-REQ-6.E1",
+        "01-REQ-6.E2"
+      ]
+    },
+    {
+      "id": "01-PROP-10",
+      "title": "Health Probe Log Suppression at Info Level",
+      "for_any": "GET request to `/healthz` or `/readyz` when configured log level is `info` or above",
+      "invariant": "no log entry is emitted for the health probe request at `info` level or above; when log level is `debug` or `trace`, a structurally identical log entry is emitted",
+      "validates": [
+        "01-REQ-11.2"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "01-PATH-1",
+      "title": "Zero-Config Server Startup",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "starts the binary without a `config.toml` present"
+        },
+        {
+          "actor": "`LoadConfig()`",
+          "action": "detects no config file, applies all defaults, returns `(*Config, nil)`"
+        },
+        {
+          "actor": "`NewServer()`",
+          "action": "constructs the Echo server with default config and nil `HealthChecker`; registers middleware chain and built-in routes"
+        },
+        {
+          "actor": "`Start()`",
+          "action": "binds to `0.0.0.0:8080`, begins serving requests"
+        },
+        {
+          "actor": "HTTP server",
+          "action": "accepts incoming connections and routes them through the middleware chain to registered handlers"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-2",
+      "title": "Kubernetes Readiness Probe with Injected HealthChecker",
+      "steps": [
+        {
+          "actor": "Consuming project",
+          "action": "calls `NewServer(cfg, dbHealthChecker)` where `dbHealthChecker` is a `func() error` that pings the database"
+        },
+        {
+          "actor": "`Start()`",
+          "action": "binds and begins serving"
+        },
+        {
+          "actor": "Kubernetes kubelet",
+          "action": "sends GET `/readyz`"
+        },
+        {
+          "actor": "HTTP server",
+          "action": "routes request through middleware chain; Logging middleware will emit at `debug` level"
+        },
+        {
+          "actor": "`/readyz` handler",
+          "action": "calls the injected `HealthChecker`"
+        },
+        {
+          "actor": "`HealthChecker`",
+          "action": "returns nil (database reachable)"
+        },
+        {
+          "actor": "`/readyz` handler",
+          "action": "returns HTTP 200 `{\"status\": \"ready\"}` with `Cache-Control: no-cache`"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-3",
+      "title": "Oversized Request Body Rejection",
+      "steps": [
+        {
+          "actor": "API client",
+          "action": "sends POST request with body larger than `max_body_size`"
+        },
+        {
+          "actor": "Request ID middleware",
+          "action": "assigns a UUID v4 and sets `X-Request-ID`"
+        },
+        {
+          "actor": "Body Size Limit middleware",
+          "action": "detects body exceeds `MaxBodyBytes()` limit"
+        },
+        {
+          "actor": "`APIError()`",
+          "action": "writes HTTP 413 JSON envelope with `Content-Type: application/json; charset=utf-8`"
+        },
+        {
+          "actor": "Logging middleware",
+          "action": "records log entry with `status: 413` and the assigned `request_id`"
+        },
+        {
+          "actor": "API client",
+          "action": "receives HTTP 413 with standard error envelope and `X-Request-ID` header"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-4",
+      "title": "Graceful Shutdown on SIGTERM",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "sends SIGTERM to the running server process"
+        },
+        {
+          "actor": "Signal handler",
+          "action": "calls `Shutdown(context.Background())`"
+        },
+        {
+          "actor": "`Shutdown()`",
+          "action": "uses `sync.Once` to ensure one-time execution; logs shutdown initiation at `info` level; derives context with `drainTimeout` (15 seconds)"
+        },
+        {
+          "actor": "Echo server",
+          "action": "stops accepting new connections; drains in-flight requests"
+        },
+        {
+          "actor": "In-flight requests",
+          "action": "complete normally and produce standard structured log entries"
+        },
+        {
+          "actor": "`Start()`",
+          "action": "returns `nil` after drain completes"
+        },
+        {
+          "actor": "Consuming `main()`",
+          "action": "receives nil from `Start()` and exits cleanly"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-5",
+      "title": "Integration Test with Ephemeral Port",
+      "steps": [
+        {
+          "actor": "Test function",
+          "action": "creates a `*Config` with `Port: 0` directly (no file I/O needed)"
+        },
+        {
+          "actor": "Test function",
+          "action": "calls `NewServer(cfg, nil)` and launches `server.Start()` in a goroutine"
+        },
+        {
+          "actor": "`Start()`",
+          "action": "binds to an OS-assigned ephemeral port"
+        },
+        {
+          "actor": "Test function",
+          "action": "calls `server.Addr()` to obtain the actual `host:port`"
+        },
+        {
+          "actor": "Test function",
+          "action": "constructs request URL from `Addr()` and sends GET `/healthz`"
+        },
+        {
+          "actor": "HTTP server",
+          "action": "returns HTTP 200 `{\"status\": \"ok\"}`"
+        },
+        {
+          "actor": "Test function",
+          "action": "calls `server.Shutdown(context.Background())` to stop the server"
+        },
+        {
+          "actor": "`Start()`",
+          "action": "returns nil; test goroutine completes"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-6",
+      "title": "Handler Panic Recovery",
+      "steps": [
+        {
+          "actor": "API client",
+          "action": "sends a GET request that triggers a registered handler"
+        },
+        {
+          "actor": "Request ID middleware",
+          "action": "assigns UUID v4 as `request_id`"
+        },
+        {
+          "actor": "Registered handler",
+          "action": "panics with an unhandled error"
+        },
+        {
+          "actor": "Panic Recovery middleware",
+          "action": "recovers the panic value; logs `error` level entry with `request_id`, `panic`, and `stack_trace` fields"
+        },
+        {
+          "actor": "`APIError()`",
+          "action": "writes HTTP 500 JSON envelope with `Content-Type: application/json; charset=utf-8`"
+        },
+        {
+          "actor": "Logging middleware",
+          "action": "records log entry with `status: 500` and `request_id`"
+        },
+        {
+          "actor": "API client",
+          "action": "receives HTTP 500 standard error envelope; server continues serving"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-7",
+      "title": "Conditional GET with ETag \u2014 304 Not Modified",
+      "steps": [
+        {
+          "actor": "API client",
+          "action": "sends GET request for a resource"
+        },
+        {
+          "actor": "Handler",
+          "action": "retrieves resource with `updated_at` timestamp; calls `SetETag(c, updatedAt)` to set `ETag: W/\"2026-07-17T14:30:00Z\"`"
+        },
+        {
+          "actor": "API client",
+          "action": "receives HTTP 200 with `ETag` header; stores ETag value"
+        },
+        {
+          "actor": "API client",
+          "action": "sends subsequent GET with `If-None-Match: W/\"2026-07-17T14:30:00Z\"`"
+        },
+        {
+          "actor": "Handler",
+          "action": "calls `CheckETag(c, updatedAt)`; ETag matches `If-None-Match`"
+        },
+        {
+          "actor": "`CheckETag()`",
+          "action": "returns `true`"
+        },
+        {
+          "actor": "Handler",
+          "action": "returns HTTP 304 Not Modified with no body"
+        },
+        {
+          "actor": "API client",
+          "action": "uses cached response; no body transferred"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-8",
+      "title": "Consumer Route Registration with Cache Override",
+      "steps": [
+        {
+          "actor": "Consuming project",
+          "action": "calls `apikit.LoadConfig()` and `apikit.NewServer(cfg, nil)`"
+        },
+        {
+          "actor": "Consuming project",
+          "action": "calls `server.APIGroup()` to obtain the Echo group at `mount_point`"
+        },
+        {
+          "actor": "Consuming project",
+          "action": "registers `api.GET(\"/providers\", listProviders, apikit.CacheMiddleware(apikit.CachePublic))`"
+        },
+        {
+          "actor": "Consuming project",
+          "action": "calls `server.Start()`"
+        },
+        {
+          "actor": "API client",
+          "action": "sends GET `<mount_point>/providers`"
+        },
+        {
+          "actor": "HTTP server",
+          "action": "applies per-route `CacheMiddleware(CachePublic)` which overrides the group-level `CacheNoStore`"
+        },
+        {
+          "actor": "HTTP server",
+          "action": "returns HTTP 200 with `Cache-Control: public, max-age=300`"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "01-ERR-1",
+      "condition": "`config.toml` exists but contains malformed TOML syntax",
+      "behavior": "`LoadConfig()` returns `(nil, error)` with a descriptive parse error; server does not start",
+      "requirement_id": "01-REQ-3.2"
+    },
+    {
+      "id": "01-ERR-2",
+      "condition": "`[server] port` is outside 0\u201365535 in `config.toml`",
+      "behavior": "`LoadConfig()` returns `(nil, error)` naming the invalid port value; server does not start",
+      "requirement_id": "01-REQ-3.E3"
+    },
+    {
+      "id": "01-ERR-3",
+      "condition": "`[logging] level` is not one of the accepted values",
+      "behavior": "`LoadConfig()` returns `(nil, error)` listing valid levels; server does not start",
+      "requirement_id": "01-REQ-3.E4"
+    },
+    {
+      "id": "01-ERR-4",
+      "condition": "`[server] max_body_size` has an invalid non-empty value (bad suffix, space, zero, negative)",
+      "behavior": "`LoadConfig()` returns `(nil, error)` describing the format error; server does not start",
+      "requirement_id": "01-REQ-3.E1"
+    },
+    {
+      "id": "01-ERR-5",
+      "condition": "The listen port is already in use when `Start()` is called",
+      "behavior": "`Start()` returns a non-nil error; does not call `os.Exit()`; calling `main()` is responsible for handling the error",
+      "requirement_id": "01-REQ-1.5"
+    },
+    {
+      "id": "01-ERR-6",
+      "condition": "`[server] bind` contains an address the OS rejects at bind time",
+      "behavior": "`Start()` returns a non-nil error promptly; does not panic; `main()` handles the error",
+      "requirement_id": "01-REQ-1.E2"
+    },
+    {
+      "id": "01-ERR-7",
+      "condition": "A handler or middleware panics during request processing",
+      "behavior": "Panic Recovery middleware recovers the panic, logs at `error` level with `request_id`, `panic`, and `stack_trace` fields, returns HTTP 500 via `APIError()`",
+      "requirement_id": "01-REQ-9.1"
+    },
+    {
+      "id": "01-ERR-8",
+      "condition": "Request body exceeds `MaxBodyBytes()` limit",
+      "behavior": "Body Size Limit middleware returns HTTP 413 via `APIError()` before further processing; response includes `X-Request-ID` and `Content-Type: application/json; charset=utf-8`",
+      "requirement_id": "01-REQ-13.1"
+    },
+    {
+      "id": "01-ERR-9",
+      "condition": "POST, PUT, or PATCH request has a non-JSON `Content-Type` header",
+      "behavior": "Content-Type Enforcement middleware returns HTTP 415 via `APIError()`; response includes `Content-Type: application/json; charset=utf-8`",
+      "requirement_id": "01-REQ-12.1"
+    },
+    {
+      "id": "01-ERR-10",
+      "condition": "`NewServer()` is called with a nil `cfg`",
+      "behavior": "`NewServer()` panics immediately with a descriptive message identifying nil config as a programming error; does not return a zero-value `*Server`",
+      "requirement_id": "01-REQ-1.4"
+    },
+    {
+      "id": "01-ERR-11",
+      "condition": "`Start()` is called a second time on the same `*Server` instance after shutdown",
+      "behavior": "`Start()` returns a non-nil error immediately with a message indicating the server has already been shut down; does not rebind or reinitialize",
+      "requirement_id": "01-REQ-6.E4"
+    },
+    {
+      "id": "01-ERR-12",
+      "condition": "`ParseUTC()` receives an invalid or non-RFC-3339 string",
+      "behavior": "Returns `(time.Time{}, error)` where error is non-nil; caller must check error before using the time value",
+      "requirement_id": "01-REQ-18.4"
+    },
+    {
+      "id": "01-ERR-13",
+      "condition": "In-flight requests do not complete within the 15-second `drainTimeout` during shutdown",
+      "behavior": "Server force-closes all connections after `drainTimeout` elapses; `Start()` returns",
+      "requirement_id": "01-REQ-6.E2"
+    },
+    {
+      "id": "01-ERR-14",
+      "condition": "Caller's context passed to `Shutdown()` is cancelled before `drainTimeout` elapses",
+      "behavior": "Force-close proceeds immediately at context cancellation without waiting for the drain timeout",
+      "requirement_id": "01-REQ-6.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4",
+      "symbols": [
+        {
+          "name": "Echo",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Echo struct { ... }",
+          "notes": "Core HTTP framework type; used as the underlying server engine"
+        },
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct { ... }",
+          "notes": "Route group returned by `APIGroup()`; consumers register handlers on this type"
+        },
+        {
+          "name": "MiddlewareFunc",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type MiddlewareFunc func(HandlerFunc) HandlerFunc",
+          "notes": "Function type returned by `CacheMiddleware()` and used throughout the middleware chain"
+        },
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface { ... }",
+          "notes": "Request/response context passed to handlers and `APIError()`"
+        },
+        {
+          "name": "(*Echo).Shutdown",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "func (e *Echo) Shutdown(ctx context.Context) error",
+          "notes": "Called inside `(*Server).Shutdown()` with the derived timeout context"
+        }
+      ]
+    },
+    {
+      "package": "github.com/BurntSushi/toml",
+      "version": "latest",
+      "symbols": [
+        {
+          "name": "Decode",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func Decode(data string, v interface{}) (MetaData, error)",
+          "notes": "Used by `internal/config.Load()` to parse TOML config file content"
+        }
+      ]
+    },
+    {
+      "package": "github.com/sirupsen/logrus",
+      "version": "latest",
+      "symbols": [
+        {
+          "name": "WithFields",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "func WithFields(fields Fields) *Entry",
+          "notes": "Used to produce structured log entries with `method`, `path`, `status`, `duration`, `request_id` fields"
+        },
+        {
+          "name": "SetFormatter",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "func SetFormatter(formatter Formatter)",
+          "notes": "Called at startup to configure JSON output format"
+        },
+        {
+          "name": "SetLevel",
+          "import_path": "github.com/sirupsen/logrus",
+          "signature": "func SetLevel(level Level)",
+          "notes": "Called at startup to apply the configured log level from `Config.Logging.Level`"
+        }
+      ]
+    },
+    {
+      "package": "github.com/google/uuid",
+      "version": "latest",
+      "symbols": [
+        {
+          "name": "Parse",
+          "import_path": "github.com/google/uuid",
+          "signature": "func Parse(s string) (UUID, error)",
+          "notes": "Used in Request ID middleware to validate incoming `X-Request-ID` header values"
+        },
+        {
+          "name": "New",
+          "import_path": "github.com/google/uuid",
+          "signature": "func New() UUID",
+          "notes": "Used to generate new UUID v4 request IDs"
+        }
+      ]
+    }
+  ]
+}

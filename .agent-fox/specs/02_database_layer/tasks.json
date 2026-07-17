@@ -1,0 +1,1427 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "database_layer",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/db/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: Open input validation, directory creation, and schema",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write TestOpen_EmptyPath and TestOpen_PathIsDirectory",
+          "details": [
+            "In internal/db/db_test.go, write TestOpen_EmptyPath: call Open(\"\"), assert db == nil and err.Error() == \"db: path must not be empty\", assert no filesystem side-effects.",
+            "Write TestOpen_PathIsDirectory: create dir via t.TempDir(), call Open(dir), assert db == nil and error contains dir and 'is a directory, not a file'.",
+            "Write edge-case variant with trailing path separator to cover TS-02-E1.",
+            "Assert that for both invalid-input cases no new filesystem entries are created (stat the temp root before and after)."
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-2",
+            "TS-02-3",
+            "TS-02-E1"
+          ],
+          "requirement_refs": [
+            "02-REQ-1.1",
+            "02-REQ-1.2",
+            "02-REQ-1.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write TestOpen_CreatesDirectory and directory mode assertion",
+          "details": [
+            "Write TestOpen_CreatesDirectory: construct path := filepath.Join(t.TempDir(), \"newsubdir\", \"apikit.db\"); call Open(path); assert err == nil and directoryExists(filepath.Dir(path)).",
+            "On runtime.GOOS != \"windows\", assert os.Stat(filepath.Dir(path)).Mode().Perm() == 0700.",
+            "Write a sub-test for the 'parent already exists' case (TS-02-6): use t.TempDir() directly, Open into it, assert success.",
+            "Write TS-02-E2 variant: skip on windows or root; attempt Open(\"/root/no-permission/apikit.db\"); assert err != nil and db == nil."
+          ],
+          "test_spec_refs": [
+            "TS-02-4",
+            "TS-02-5",
+            "TS-02-6",
+            "TS-02-E2"
+          ],
+          "requirement_refs": [
+            "02-REQ-2.1",
+            "02-REQ-2.2",
+            "02-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write TestOpen_CreatesSchema and TestOpen_Idempotent",
+          "details": [
+            "Write TestOpen_CreatesSchema: Open a fresh path in t.TempDir(); for each of the six table names query sqlite_master and assert the name is returned; close db.",
+            "For each DDL-specific test (TS-02-19 through TS-02-24) add sub-assertions: read the 'sql' column from sqlite_master and verify key DDL tokens (UNIQUE, REFERENCES, ON DELETE CASCADE, PRIMARY KEY) are present.",
+            "Write TestOpen_Idempotent: Open same path twice; assert both return nil error; insert a sentinel admin_config row on first open; assert it is still readable on second open.",
+            "Write TS-02-E7 (interrupted tx recovery): Open a path, close it, Open again; assert all six tables exist."
+          ],
+          "test_spec_refs": [
+            "TS-02-12",
+            "TS-02-19",
+            "TS-02-20",
+            "TS-02-21",
+            "TS-02-22",
+            "TS-02-23",
+            "TS-02-24",
+            "TS-02-25",
+            "TS-02-26",
+            "TS-02-54",
+            "TS-02-55",
+            "TS-02-E7"
+          ],
+          "requirement_refs": [
+            "02-REQ-6.1",
+            "02-REQ-6.2",
+            "02-REQ-6.3",
+            "02-REQ-6.4",
+            "02-REQ-6.5",
+            "02-REQ-6.6",
+            "02-REQ-6.7",
+            "02-REQ-6.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write TestOpen_WALMode and TestOpen_CorruptFile",
+          "details": [
+            "Write TestOpen_WALMode: Open a fresh db file; query PRAGMA journal_mode; assert mode == \"wal\"; close db.",
+            "Write a sub-test for TS-02-15/TS-02-56: assert that Open returns an error containing 'failed to enable WAL mode' for paths on non-WAL filesystems (verify error format via string check on a simulated path or document as logic-path verified).",
+            "Write TestOpen_CorruptFile (TS-02-57, TS-02-E5, TS-02-E6): write arbitrary bytes via os.WriteFile; call Open; assert db == nil, err contains file path, err contains 'failed to open database at', errors.Unwrap(err) != nil.",
+            "Write TestOpen_MemoryJournalMode (TS-02-16): call OpenMemory(); query PRAGMA journal_mode; assert mode == \"memory\"; assert no WAL error is returned.",
+            "Write TS-02-18: verify empty-path error does NOT contain 'failed to open database at'; verify corrupt-file error DOES contain it."
+          ],
+          "test_spec_refs": [
+            "TS-02-9",
+            "TS-02-14",
+            "TS-02-15",
+            "TS-02-16",
+            "TS-02-17",
+            "TS-02-18",
+            "TS-02-56",
+            "TS-02-57",
+            "TS-02-E5",
+            "TS-02-E6"
+          ],
+          "requirement_refs": [
+            "02-REQ-4.1",
+            "02-REQ-4.2",
+            "02-REQ-4.3",
+            "02-REQ-5.1",
+            "02-REQ-5.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write TestOpen_ForeignKeys and TestPing",
+          "details": [
+            "Write TestOpen_ForeignKeys: OpenMemory(); INSERT into api_keys with non-existent user_id; assert err != nil (FK violation).",
+            "Write ON DELETE CASCADE sub-test (TS-02-49): insert user, org, org_member; DELETE org; assert COUNT(*) FROM org_members WHERE org_id='org1' == 0.",
+            "Write TestPing: OpenMemory(); call db.Ping(context.Background()); assert err == nil.",
+            "Write TS-02-E8: OpenMemory(); create pre-cancelled context; call db.Ping(cancelledCtx); assert errors.Is(err, context.Canceled)."
+          ],
+          "test_spec_refs": [
+            "TS-02-48",
+            "TS-02-49",
+            "TS-02-58",
+            "TS-02-59",
+            "TS-02-E8"
+          ],
+          "requirement_refs": [
+            "02-REQ-12.1",
+            "02-REQ-12.2",
+            "02-REQ-7.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test functions compile without error: go test -c ./internal/db/...",
+          "Test functions reference correct table names, error message strings, and requirement IDs.",
+          "No implementation code is written yet; all test functions fail with 'undefined: Open' or similar linker errors confirming TDD order.",
+          "go vet ./internal/db/... reports no issues on test files."
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: WithTx, WrapError, sentinel errors, and timestamp helpers",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write TestWithTx_Commit, TestWithTx_Rollback, and context/BeginTx edge cases",
+          "details": [
+            "Write TestWithTx_Commit: OpenMemory(); call WithTx inserting into admin_config returning nil; query row after; assert value is visible.",
+            "Write TestWithTx_Rollback: OpenMemory(); call WithTx inserting then returning errors.New(\"fail\"); assert errors.Is(err, retErr); assert row NOT visible.",
+            "Write TS-02-33: WithTx returns exact sentinel error from fn unchanged (errors.Is check).",
+            "Write TS-02-36/TS-02-E10: pre-cancel ctx; WithTx with fn returning ctx.Err(); assert errors.Is(err, context.Canceled); assert no rows persisted.",
+            "Write TS-02-E11: Close db first; call WithTx; assert err != nil and fn was never called (use a bool flag).",
+            "Write TS-02-35: WithTx with nil TxOptions (DEFERRED) succeeds; verify via successful commit."
+          ],
+          "test_spec_refs": [
+            "TS-02-32",
+            "TS-02-33",
+            "TS-02-34",
+            "TS-02-35",
+            "TS-02-36",
+            "TS-02-60",
+            "TS-02-61",
+            "TS-02-E10",
+            "TS-02-E11"
+          ],
+          "requirement_refs": [
+            "02-REQ-8.1",
+            "02-REQ-8.2",
+            "02-REQ-8.3",
+            "02-REQ-8.4",
+            "02-REQ-8.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write TestWrapError_Conflict, TestWrapError_Locked, and TestWrapError_Passthrough",
+          "details": [
+            "Write TestWrapError_Conflict (TS-02-62): OpenMemory(); insert duplicate username; pass driver error to WrapError; assert errors.Is(result, ErrConflict).",
+            "Write TestWrapError_Locked (TS-02-63): construct synthetic SQLite error with SQLITE_BUSY code using the modernc.org/sqlite error type; pass to WrapError; assert errors.Is(result, ErrDatabaseLocked). No live database needed.",
+            "Write TestWrapError_Passthrough (TS-02-64): WrapError(errors.New(\"unknown\")); assert errors.Is(result, originalErr).",
+            "Write TS-02-39: WrapError(sql.ErrNoRows) returns sql.ErrNoRows unchanged, NOT ErrNotFound.",
+            "Write TS-02-40: assert ErrNotFound.Error(), ErrConflict.Error(), ErrDatabaseLocked.Error() match exact strings.",
+            "Write TS-02-E12: wrap synthetic UNIQUE error via fmt.Errorf(\"%w\", inner); WrapError returns ErrConflict.",
+            "Write TS-02-E15: FK violation on api_keys INSERT; WrapError maps to ErrConflict."
+          ],
+          "test_spec_refs": [
+            "TS-02-37",
+            "TS-02-38",
+            "TS-02-39",
+            "TS-02-40",
+            "TS-02-62",
+            "TS-02-63",
+            "TS-02-64",
+            "TS-02-E12",
+            "TS-02-E15"
+          ],
+          "requirement_refs": [
+            "02-REQ-9.1",
+            "02-REQ-9.2",
+            "02-REQ-9.3",
+            "02-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write TestFormatTime, TestParseTime, and timestamp edge cases",
+          "details": [
+            "Write TS-02-41: assert TimeFormat == \"2006-01-02T15:04:05Z\".",
+            "Write TestFormatTime (TS-02-42, TS-02-65): FormatTime on a time with sub-second nanos and non-UTC zone; assert result matches expected UTC string; assert !strings.Contains(result, \".\").",
+            "Write TS-02-E13: FormatTime(time in IST +05:30); assert result == \"2026-07-17T09:00:00Z\" and !strings.Contains(result, \"+\").",
+            "Write TestParseTime (TS-02-43): ParseTime(\"2026-07-17T14:30:00Z\"); assert fields correct and Location == time.UTC; ParseTime(\"not-a-timestamp\") returns non-nil error.",
+            "Write TS-02-E14: ParseTime(\"2026-07-17T14:30:00+05:30\") returns non-nil error and zero time.",
+            "Write TestParseTime round-trip (TS-02-44, TS-02-66): t := time.Now() with sub-second; parsed, err := ParseTime(FormatTime(t)); assert err == nil and parsed.Equal(t.Truncate(time.Second).UTC())."
+          ],
+          "test_spec_refs": [
+            "TS-02-41",
+            "TS-02-42",
+            "TS-02-43",
+            "TS-02-44",
+            "TS-02-65",
+            "TS-02-66",
+            "TS-02-E13",
+            "TS-02-E14"
+          ],
+          "requirement_refs": [
+            "02-REQ-10.1",
+            "02-REQ-10.2",
+            "02-REQ-10.3",
+            "02-REQ-10.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write connection pool, OpenMemory isolation, and DB.Close tests",
+          "details": [
+            "Write TS-02-45: Open a fresh db file; assert db.SqlDB.Stats().MaxOpenConnections == 1.",
+            "Write TS-02-46: OpenMemory(); assert MaxOpenConnections == 1 via Stats().",
+            "Write TS-02-47 isolation test: two OpenMemory calls; insert into db1.admin_config; query db2 for same key; assert empty result.",
+            "Write TS-02-29: two OpenMemory calls produce independent instances (same assertion as isolation); all six tables exist in each.",
+            "Write TS-02-30: OpenMemory(); db.Close(); subsequent db.SqlDB.Exec returns error.",
+            "Write TS-02-27: assert db.SqlDB != nil after OpenMemory or Open; assert no per-table methods (InsertUser, GetUser etc.) exist on DB type (static type check via compilation)."
+          ],
+          "test_spec_refs": [
+            "TS-02-27",
+            "TS-02-29",
+            "TS-02-30",
+            "TS-02-45",
+            "TS-02-46",
+            "TS-02-47"
+          ],
+          "requirement_refs": [
+            "02-REQ-11.1",
+            "02-REQ-11.2",
+            "02-REQ-11.3",
+            "02-REQ-7.1",
+            "02-REQ-7.3",
+            "02-REQ-7.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test functions in group 2 compile without error: go test -c ./internal/db/...",
+          "Test files reference correct sentinel error string values: 'db: not found', 'db: conflict', 'db: database locked'.",
+          "Synthetic SQLite error construction code is documented with the correct modernc.org/sqlite error type reference.",
+          "go vet ./internal/db/... reports no issues on test files."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write property and smoke tests",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write property tests for initDB shared initialization and schema idempotency",
+          "details": [
+            "Write TS-02-7: Open a file db and OpenMemory; call a helper verifyTablesExist(sqlDB) that checks all six tables via sqlite_master; assert both pass.",
+            "Write TS-02-8: after Open, db.SqlDB.Stats().MaxOpenConnections == 1.",
+            "Write TS-02-10: OpenMemory succeeds; verifyTablesExist passes; PRAGMA foreign_keys returns 1.",
+            "Write TS-02-11: after Open, query PRAGMA foreign_keys; assert result == 1.",
+            "Write TS-02-13: Open returns non-nil *DB and nil error; db.SqlDB != nil.",
+            "Write property test TS-02-P2 (idempotency): Open same path 3 times; insert sentinel after first open; assert sentinel readable on each subsequent open."
+          ],
+          "test_spec_refs": [
+            "TS-02-7",
+            "TS-02-8",
+            "TS-02-10",
+            "TS-02-11",
+            "TS-02-13"
+          ],
+          "requirement_refs": [
+            "02-REQ-3.1",
+            "02-REQ-3.2",
+            "02-REQ-3.5",
+            "02-REQ-3.6",
+            "02-REQ-6.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write property tests for FormatTime/ParseTime, WrapError purity, and WithTx atomicity",
+          "details": [
+            "Write TS-02-P3: iterate over a table of time.Time values spanning past/future, sub-second, non-UTC zones; for each, assert ParseTime(FormatTime(t)).Equal(t.Truncate(time.Second).UTC()).",
+            "Write TS-02-P4: call WrapError with nil, synthetic UNIQUE err, synthetic BUSY err, unknown err, and a fmt.Errorf wrapped UNIQUE err; assert deterministic outputs each time; verify no global state mutation by calling twice.",
+            "Write TS-02-P5: for each of several random key names, call WithTx that inserts into admin_config then returns an error; assert COUNT(*) FROM admin_config is unchanged after each failed WithTx."
+          ],
+          "test_spec_refs": [
+            "TS-02-P3",
+            "TS-02-P4",
+            "TS-02-P5"
+          ],
+          "requirement_refs": [
+            "02-REQ-10.4",
+            "02-REQ-9.2",
+            "02-REQ-8.1",
+            "02-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write property tests for Open/OpenMemory invariants and isolation",
+          "details": [
+            "Write TS-02-P6: call Open with valid path, empty path, directory path, and corrupt file path; assert: if err == nil then db != nil AND db.SqlDB != nil AND PRAGMA foreign_keys == 1 AND all six tables exist; if err != nil then db == nil.",
+            "Write TS-02-P7: call OpenMemory three times; write distinct rows to each; cross-check each pair for absence of the other's rows.",
+            "Write TS-02-P8: call Open with empty string and with an existing directory; assert each returns non-nil error and nil *DB; assert temp root directory listing is unchanged."
+          ],
+          "test_spec_refs": [
+            "TS-02-P6",
+            "TS-02-P7",
+            "TS-02-P8"
+          ],
+          "requirement_refs": [
+            "02-REQ-7.2",
+            "02-REQ-7.3",
+            "02-REQ-1.1",
+            "02-REQ-1.2",
+            "02-REQ-1.3",
+            "02-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write smoke tests exercising real execution paths",
+          "details": [
+            "Write TS-02-SMOKE-1: Open with missing parent dir; assert dir created (mode 0700 on non-Windows), PRAGMA journal_mode == 'wal', PRAGMA foreign_keys == 1, all 6 tables present, MaxOpenConnections == 1.",
+            "Write TS-02-SMOKE-2: OpenMemory; assert PRAGMA journal_mode == 'memory', FK ON, 6 tables present, MaxOpenConnections == 1; second OpenMemory call is isolated.",
+            "Write TS-02-SMOKE-3: write arbitrary bytes to temp file; Open; assert (nil, error) with path in error message and non-nil unwrapped error.",
+            "Write TS-02-SMOKE-4: WithTx commit smoke; insert admin_config row; verify visible after commit.",
+            "Write TS-02-SMOKE-5: WithTx rollback smoke; cause UNIQUE violation; WrapError returns ErrConflict; no rows visible."
+          ],
+          "test_spec_refs": [
+            "TS-02-SMOKE-1",
+            "TS-02-SMOKE-2",
+            "TS-02-SMOKE-3",
+            "TS-02-SMOKE-4",
+            "TS-02-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "02-REQ-7.2",
+            "02-REQ-7.3",
+            "02-REQ-5.1",
+            "02-REQ-8.1",
+            "02-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All property and smoke test functions compile: go test -c ./internal/db/...",
+          "Property tests cover at least 5 distinct time.Time inputs in the FormatTime/ParseTime table.",
+          "Smoke tests reference only real components (no mocks except where explicitly noted in test_spec).",
+          "go vet ./internal/db/... reports no issues on test files."
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Implement sentinel errors, timestamp helpers, and DB struct",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Implement sentinel errors in errors.go",
+          "details": [
+            "Create internal/db/errors.go in package db.",
+            "Declare: var ErrNotFound = errors.New(\"db: not found\"); var ErrConflict = errors.New(\"db: conflict\"); var ErrDatabaseLocked = errors.New(\"db: database locked\").",
+            "Add stub for WrapError: func WrapError(err error) error { panic(\"not implemented\") } — will be completed in task 4.2."
+          ],
+          "test_spec_refs": [
+            "TS-02-40"
+          ],
+          "requirement_refs": [
+            "02-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Implement WrapError in errors.go",
+          "details": [
+            "Import modernc.org/sqlite and use errors.As to extract the *sqlite.Error from the error chain.",
+            "Map error codes: sqlite.SQLITE_CONSTRAINT_UNIQUE and sqlite.SQLITE_CONSTRAINT_PRIMARYKEY → ErrConflict; sqlite.SQLITE_BUSY and sqlite.SQLITE_LOCKED → ErrDatabaseLocked.",
+            "If err is nil return nil. If no SQLite error code matches, return err unchanged.",
+            "WrapError must be a pure function: no I/O, no side effects, no database connections opened.",
+            "Verify the exact constant names (SQLITE_CONSTRAINT_UNIQUE etc.) against the installed modernc.org/sqlite version."
+          ],
+          "test_spec_refs": [
+            "TS-02-37",
+            "TS-02-38",
+            "TS-02-39",
+            "TS-02-E12"
+          ],
+          "requirement_refs": [
+            "02-REQ-9.1",
+            "02-REQ-9.2",
+            "02-REQ-9.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Implement timestamp helpers in timestamp.go",
+          "details": [
+            "Create internal/db/timestamp.go in package db.",
+            "Declare const TimeFormat = \"2006-01-02T15:04:05Z\".",
+            "Implement FormatTime(t time.Time) string: return t.Truncate(time.Second).UTC().Format(TimeFormat).",
+            "Implement ParseTime(s string) (time.Time, error): return time.Parse(TimeFormat, s).",
+            "Ensure round-trip: ParseTime(FormatTime(t)) == t.Truncate(time.Second).UTC() for any t."
+          ],
+          "test_spec_refs": [
+            "TS-02-41",
+            "TS-02-42",
+            "TS-02-43",
+            "TS-02-44",
+            "TS-02-65",
+            "TS-02-66",
+            "TS-02-E13",
+            "TS-02-E14"
+          ],
+          "requirement_refs": [
+            "02-REQ-10.1",
+            "02-REQ-10.2",
+            "02-REQ-10.3",
+            "02-REQ-10.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Implement DB struct and Close/Ping methods in db.go",
+          "details": [
+            "Create internal/db/db.go in package db.",
+            "Import _ \"modernc.org/sqlite\", \"database/sql\", \"context\".",
+            "Declare type DB struct { SqlDB *sql.DB }.",
+            "Implement func (db *DB) Close() error { return db.SqlDB.Close() }.",
+            "Implement func (db *DB) Ping(ctx context.Context) error { return db.SqlDB.PingContext(ctx) }.",
+            "Add stubs for Open, OpenMemory, WithTx, and initDB with panic(\"not implemented\") — will be completed in group 5."
+          ],
+          "test_spec_refs": [
+            "TS-02-27",
+            "TS-02-30",
+            "TS-02-31",
+            "TS-02-59",
+            "TS-02-E8"
+          ],
+          "requirement_refs": [
+            "02-REQ-7.1",
+            "02-REQ-7.4",
+            "02-REQ-7.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go build ./internal/db/... succeeds with no compilation errors.",
+          "Sentinel error string tests pass: go test ./internal/db/... -run TestWrapError_Passthrough -count=1",
+          "Timestamp helper tests pass: go test ./internal/db/... -run TestFormatTime -count=1 && go test ./internal/db/... -run TestParseTime -count=1",
+          "go vet ./internal/db/... reports no issues.",
+          "Requirements 02-REQ-9.4, 02-REQ-10.1 through 02-REQ-10.4 acceptance criteria met."
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement schema DDL, initDB, Open, OpenMemory, and WithTx",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement schema DDL in schema.go",
+          "details": [
+            "Create internal/db/schema.go in package db.",
+            "Define a package-level var (or const) schemaStatements []string containing all six CREATE TABLE IF NOT EXISTS statements verbatim as specified in the PRD DDL.",
+            "Order must be: users, api_keys, pats, orgs, org_members, admin_config (FK dependency order).",
+            "Include all constraints: UNIQUE (provider, provider_id) on users; REFERENCES users(id) on api_keys and pats; ON DELETE CASCADE on org_members.org_id."
+          ],
+          "test_spec_refs": [
+            "TS-02-19",
+            "TS-02-20",
+            "TS-02-21",
+            "TS-02-22",
+            "TS-02-23",
+            "TS-02-24"
+          ],
+          "requirement_refs": [
+            "02-REQ-6.1",
+            "02-REQ-6.2",
+            "02-REQ-6.3",
+            "02-REQ-6.4",
+            "02-REQ-6.5",
+            "02-REQ-6.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement shared private initDB function",
+          "details": [
+            "In db.go, implement func initDB(sqlDB *sql.DB, skipWAL bool) error.",
+            "Step 1: sqlDB.SetMaxOpenConns(1); sqlDB.SetMaxIdleConns(1).",
+            "Step 2 (if !skipWAL): execute 'PRAGMA journal_mode=WAL' via sqlDB.QueryRow and Scan the result into a string; if result != \"wal\", return fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", mode).",
+            "Step 3: sqlDB.Exec(\"PRAGMA foreign_keys = ON\"); return error on failure.",
+            "Step 4: begin a DEFERRED transaction via sqlDB.Begin(); iterate schemaStatements and exec each; commit on success, rollback on error.",
+            "Step 5: return nil on success.",
+            "OpenMemory will call initDB(sqlDB, true); Open will call initDB(sqlDB, false)."
+          ],
+          "test_spec_refs": [
+            "TS-02-7",
+            "TS-02-8",
+            "TS-02-9",
+            "TS-02-10",
+            "TS-02-11",
+            "TS-02-12",
+            "TS-02-13"
+          ],
+          "requirement_refs": [
+            "02-REQ-3.1",
+            "02-REQ-3.2",
+            "02-REQ-3.3",
+            "02-REQ-3.4",
+            "02-REQ-3.5",
+            "02-REQ-3.6",
+            "02-REQ-3.7",
+            "02-REQ-11.1",
+            "02-REQ-11.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Implement Open constructor with validation and directory creation",
+          "details": [
+            "Implement func Open(path string) (*DB, error) in db.go.",
+            "Validation (before any filesystem access): if path == \"\" return errors.New(\"db: path must not be empty\").",
+            "Validation: stat path; if err == nil and info.IsDir() return fmt.Errorf(\"db: path %q is a directory, not a file\", path).",
+            "Directory creation: os.MkdirAll(filepath.Dir(path), 0700); return error on failure.",
+            "Open connection: sqlDB, err := sql.Open(\"sqlite\", path); check err and return it.",
+            "Call initDB(sqlDB, false); if err != nil, sqlDB.Close() and return fmt.Errorf(\"db: failed to open database at %q: %w\", path, err).",
+            "Return &DB{SqlDB: sqlDB}, nil on success. Note: input validation and dir creation errors are returned as-is (no path wrapper)."
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-2",
+            "TS-02-3",
+            "TS-02-4",
+            "TS-02-5",
+            "TS-02-6",
+            "TS-02-28"
+          ],
+          "requirement_refs": [
+            "02-REQ-1.1",
+            "02-REQ-1.2",
+            "02-REQ-1.3",
+            "02-REQ-2.1",
+            "02-REQ-2.2",
+            "02-REQ-2.3",
+            "02-REQ-4.1",
+            "02-REQ-4.2",
+            "02-REQ-5.1",
+            "02-REQ-5.2",
+            "02-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Implement OpenMemory constructor",
+          "details": [
+            "Implement func OpenMemory() (*DB, error) in db.go.",
+            "Open connection: sqlDB, err := sql.Open(\"sqlite\", \":memory:\"); return error on failure.",
+            "Call initDB(sqlDB, true) — skipWAL=true skips WAL PRAGMA and validation.",
+            "If initDB returns error, close sqlDB and return the error.",
+            "Return &DB{SqlDB: sqlDB}, nil on success.",
+            "SetMaxOpenConns(1) inside initDB guarantees each :memory: DSN maps to exactly one private in-memory database instance."
+          ],
+          "test_spec_refs": [
+            "TS-02-16",
+            "TS-02-29",
+            "TS-02-47"
+          ],
+          "requirement_refs": [
+            "02-REQ-4.3",
+            "02-REQ-7.3",
+            "02-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Implement WithTx transaction helper",
+          "details": [
+            "Implement func (db *DB) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error in db.go.",
+            "Begin: tx, err := db.SqlDB.BeginTx(ctx, nil); if err != nil return err (fn is never called).",
+            "Call fnErr := fn(tx).",
+            "If fnErr != nil: tx.Rollback() (discard rollback error); return fnErr.",
+            "If fnErr == nil: return tx.Commit().",
+            "Do not wrap or transform errors returned by fn. WithTx does not install additional timeouts."
+          ],
+          "test_spec_refs": [
+            "TS-02-32",
+            "TS-02-33",
+            "TS-02-34",
+            "TS-02-35",
+            "TS-02-36",
+            "TS-02-E10",
+            "TS-02-E11"
+          ],
+          "requirement_refs": [
+            "02-REQ-8.1",
+            "02-REQ-8.2",
+            "02-REQ-8.3",
+            "02-REQ-8.4",
+            "02-REQ-8.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go build ./internal/db/... succeeds with no compilation errors.",
+          "Core initialization tests pass: go test ./internal/db/... -run 'TestOpen_CreatesSchema|TestOpen_Idempotent|TestOpen_WALMode|TestOpen_ForeignKeys|TestPing' -count=1 -v",
+          "WithTx tests pass: go test ./internal/db/... -run 'TestWithTx' -count=1 -v",
+          "No panic(\"not implemented\") stubs remain in db.go, schema.go, errors.go, or timestamp.go.",
+          "go vet ./internal/db/... reports no issues.",
+          "Requirements 02-REQ-3 through 02-REQ-8 acceptance criteria met."
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "checkpoint",
+      "title": "Checkpoint: full test suite passes and property tests verified",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Run full integration test suite and confirm all tests pass",
+          "details": [
+            "Run go test ./internal/db/... -count=1 -v and confirm zero failures.",
+            "Verify t.TempDir() is used for all file-based tests (no hardcoded /tmp paths).",
+            "Confirm TestOpen_EmptyPath, TestOpen_PathIsDirectory, TestOpen_CreatesDirectory, TestOpen_CreatesSchema, TestOpen_Idempotent, TestOpen_WALMode, TestOpen_CorruptFile, TestOpen_ForeignKeys all appear in output.",
+            "Confirm mode assertion is skipped on Windows (runtime.GOOS check is present in test code)."
+          ],
+          "test_spec_refs": [
+            "TS-02-51",
+            "TS-02-52",
+            "TS-02-53",
+            "TS-02-54",
+            "TS-02-55",
+            "TS-02-56",
+            "TS-02-57",
+            "TS-02-58"
+          ],
+          "requirement_refs": [
+            "02-REQ-13.1",
+            "02-REQ-13.2",
+            "02-REQ-13.3",
+            "02-REQ-13.4",
+            "02-REQ-13.5",
+            "02-REQ-13.6",
+            "02-REQ-13.7",
+            "02-REQ-13.8",
+            "02-REQ-13.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Run remaining integration and unit tests and confirm all pass",
+          "details": [
+            "Confirm TestPing, TestWithTx_Commit, TestWithTx_Rollback, TestWrapError_Conflict, TestWrapError_Locked, TestWrapError_Passthrough, TestFormatTime, TestParseTime all appear in test output.",
+            "TestWrapError_Locked must not require a live database lock — verify it uses synthetic error construction.",
+            "Run go test ./internal/db/... -count=1 -v -race to detect any race conditions introduced by goroutine use (none expected with SetMaxOpenConns(1))."
+          ],
+          "test_spec_refs": [
+            "TS-02-59",
+            "TS-02-60",
+            "TS-02-61",
+            "TS-02-62",
+            "TS-02-63",
+            "TS-02-64",
+            "TS-02-65",
+            "TS-02-66"
+          ],
+          "requirement_refs": [
+            "02-REQ-13.10",
+            "02-REQ-13.11",
+            "02-REQ-13.12",
+            "02-REQ-13.13",
+            "02-REQ-13.14",
+            "02-REQ-13.15",
+            "02-REQ-13.16",
+            "02-REQ-13.17"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Verify property tests and edge case tests pass",
+          "details": [
+            "Run go test ./internal/db/... -run 'Property|Edge' -count=1 -v and confirm all pass.",
+            "Confirm TS-02-P3 covers at least 5 distinct time.Time values in the table.",
+            "Confirm TS-02-P4 calls WrapError twice with same input to verify deterministic output.",
+            "Confirm TS-02-E9 (no os.Exit or panic in production code) is verified via grep or static review: grep -n 'os.Exit\\|log.Fatal' internal/db/*.go should return no matches."
+          ],
+          "test_spec_refs": [
+            "TS-02-E1",
+            "TS-02-E2",
+            "TS-02-E5",
+            "TS-02-E6",
+            "TS-02-E8",
+            "TS-02-E10",
+            "TS-02-E11",
+            "TS-02-E12",
+            "TS-02-E13",
+            "TS-02-E14",
+            "TS-02-E15",
+            "TS-02-P1",
+            "TS-02-P2",
+            "TS-02-P3",
+            "TS-02-P4"
+          ],
+          "requirement_refs": [
+            "02-REQ-1.E1",
+            "02-REQ-2.E1",
+            "02-REQ-4.E1",
+            "02-REQ-5.E1",
+            "02-REQ-7.E1",
+            "02-REQ-8.E1",
+            "02-REQ-8.E2",
+            "02-REQ-9.E1",
+            "02-REQ-10.E1",
+            "02-REQ-10.E2",
+            "02-REQ-12.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go test ./internal/db/... -count=1 -v exits with code 0 (zero failures).",
+          "go test ./internal/db/... -count=1 -race exits with code 0 (no data races).",
+          "go vet ./internal/db/... exits with code 0 (no vet warnings).",
+          "grep -rn 'panic(\"not implemented\")' internal/db/*.go returns no matches.",
+          "grep -n 'os.Exit\\|log.Fatal' internal/db/*.go returns no matches."
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Trace execution paths and verify call chains are complete",
+          "details": [
+            "Verify 02-PATH-1: Open → validates path → os.MkdirAll → sql.Open → initDB(sqlDB, false) → SetMaxOpenConns → SetMaxIdleConns → PRAGMA journal_mode=WAL (QueryRow+Scan+validate) → PRAGMA foreign_keys=ON → schema tx → return *DB. Confirm each step calls the next function with no gaps.",
+            "Verify 02-PATH-2: OpenMemory → sql.Open(':memory:') → initDB(sqlDB, true) → SetMaxOpenConns → SetMaxIdleConns → (WAL skipped) → PRAGMA foreign_keys=ON → schema tx → return *DB.",
+            "Verify 02-PATH-3: Open(corrupt) → validation passes → sql.Open succeeds → initDB fails → sqlDB.Close() called → error wrapped with path → returned to caller.",
+            "Confirm initDB is called from exactly two sites: Open and OpenMemory; no third call site exists."
+          ],
+          "test_spec_refs": [
+            "TS-02-SMOKE-1",
+            "TS-02-SMOKE-2"
+          ],
+          "requirement_refs": [
+            "02-REQ-3.1",
+            "02-REQ-7.2",
+            "02-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Verify return value propagation and error wrapping correctness",
+          "details": [
+            "Confirm that initDB error from Open is wrapped via fmt.Errorf(\"db: failed to open database at %q: %w\", path, err) — check that %w is used (not %v) so errors.Unwrap works.",
+            "Confirm input validation errors (empty path, is-directory) are returned as-is without the path wrapper.",
+            "Confirm WithTx returns the exact error from fn without wrapping (errors.Is check in tests).",
+            "Confirm rollback error in WithTx is discarded (no double-error return).",
+            "Confirm WAL mode error string matches exactly: fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", mode)."
+          ],
+          "test_spec_refs": [
+            "TS-02-SMOKE-3",
+            "TS-02-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "02-REQ-5.1",
+            "02-REQ-5.2",
+            "02-REQ-4.2",
+            "02-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run go test ./internal/db/... -run 'SMOKE' -count=1 -v and confirm all five smoke tests pass.",
+            "Confirm TS-02-SMOKE-1 asserts: dir created, mode 0700 (non-Windows), WAL mode, FK ON, 6 tables, MaxOpenConnections==1.",
+            "Confirm TS-02-SMOKE-2 asserts: journal_mode=='memory', FK ON, 6 tables, MaxOpenConnections==1, two OpenMemory instances are isolated.",
+            "Confirm TS-02-SMOKE-3 asserts: corrupt file returns (nil, error) with path in message and unwrappable driver error.",
+            "Confirm TS-02-SMOKE-4 and TS-02-SMOKE-5 assert commit visibility and rollback invisibility respectively."
+          ],
+          "test_spec_refs": [
+            "TS-02-SMOKE-1",
+            "TS-02-SMOKE-2",
+            "TS-02-SMOKE-3",
+            "TS-02-SMOKE-4",
+            "TS-02-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "02-REQ-7.2",
+            "02-REQ-7.3",
+            "02-REQ-8.1",
+            "02-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Stub and dead-code audit",
+          "details": [
+            "Run: grep -rn 'panic(\"not implemented\")' internal/db/*.go — expect zero matches.",
+            "Run: grep -rn '// TODO' internal/db/*.go — review any remaining TODOs; none should block functionality.",
+            "Run: grep -rn 'os.Exit\\|log.Fatal' internal/db/*.go — expect zero matches.",
+            "Inspect db.go for any bare 'return nil' in non-trivial function bodies that should return an error (e.g. initDB returning nil prematurely).",
+            "Confirm no unexported functions are exported by accident: go doc ./internal/db lists only Open, OpenMemory, WrapError, FormatTime, ParseTime, TimeFormat, ErrNotFound, ErrConflict, ErrDatabaseLocked, DB, DB.Close, DB.Ping, DB.WithTx."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "02-REQ-7.2",
+            "02-REQ-7.3",
+            "02-REQ-8.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.5",
+          "title": "Cross-spec entry point verification and full regression run",
+          "details": [
+            "Confirm that Open(path string) matches the signature expected by server_core (the caller per PRD Dependencies section): no context.Context argument, plain string path.",
+            "Confirm that OpenMemory() matches the signature expected by downstream test suites (handlers, auth packages).",
+            "Run go test ./... -count=1 to confirm no regressions in other packages that may import internal/db.",
+            "Run go build ./... to confirm the full project compiles after the db package implementation.",
+            "Document any gaps discovered: if initDB needs a context in the future, note it as a future enhancement rather than breaking the current API."
+          ],
+          "test_spec_refs": [
+            "TS-02-50"
+          ],
+          "requirement_refs": [
+            "02-REQ-7.2",
+            "02-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go test ./internal/db/... -count=1 -v exits with code 0 — all tests pass.",
+          "go test ./internal/db/... -count=1 -race exits with code 0 — no data races.",
+          "go test ./... -count=1 exits with code 0 — no regressions in dependent packages.",
+          "go build ./... exits with code 0 — full project compiles.",
+          "go vet ./... exits with code 0 — no vet warnings anywhere.",
+          "grep -rn 'panic(\"not implemented\")' internal/db/*.go returns no matches.",
+          "grep -n 'os.Exit\\|log.Fatal' internal/db/*.go returns no matches.",
+          "All five SMOKE tests (TS-02-SMOKE-1 through TS-02-SMOKE-5) appear in go test -v output and pass.",
+          "Requirements 02-REQ-1 through 02-REQ-13 acceptance criteria are all met as verified by the test suite."
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "02-REQ-1.1",
+      "test_spec_id": "TS-02-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1.2",
+      "test_spec_id": "TS-02-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1.3",
+      "test_spec_id": "TS-02-3",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1.E1",
+      "test_spec_id": "TS-02-E1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2.1",
+      "test_spec_id": "TS-02-4",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2.2",
+      "test_spec_id": "TS-02-5",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2.3",
+      "test_spec_id": "TS-02-6",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2.E1",
+      "test_spec_id": "TS-02-E2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.1",
+      "test_spec_id": "TS-02-7",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.2",
+      "test_spec_id": "TS-02-8",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.3",
+      "test_spec_id": "TS-02-9",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.4",
+      "test_spec_id": "TS-02-10",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.5",
+      "test_spec_id": "TS-02-11",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.6",
+      "test_spec_id": "TS-02-12",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3.7",
+      "test_spec_id": "TS-02-13",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4.1",
+      "test_spec_id": "TS-02-14",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4.2",
+      "test_spec_id": "TS-02-15",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4.3",
+      "test_spec_id": "TS-02-16",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4.E1",
+      "test_spec_id": "TS-02-E5",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5.1",
+      "test_spec_id": "TS-02-17",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5.2",
+      "test_spec_id": "TS-02-18",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5.E1",
+      "test_spec_id": "TS-02-E6",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.1",
+      "test_spec_id": "TS-02-19",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.2",
+      "test_spec_id": "TS-02-20",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.3",
+      "test_spec_id": "TS-02-21",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.4",
+      "test_spec_id": "TS-02-22",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.5",
+      "test_spec_id": "TS-02-23",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.6",
+      "test_spec_id": "TS-02-24",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.7",
+      "test_spec_id": "TS-02-25",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-6.8",
+      "test_spec_id": "TS-02-26",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.1",
+      "test_spec_id": "TS-02-27",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.2",
+      "test_spec_id": "TS-02-28",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.3",
+      "test_spec_id": "TS-02-29",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.4",
+      "test_spec_id": "TS-02-30",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.5",
+      "test_spec_id": "TS-02-31",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-7.E1",
+      "test_spec_id": "TS-02-E8",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.1",
+      "test_spec_id": "TS-02-32",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.2",
+      "test_spec_id": "TS-02-33",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.3",
+      "test_spec_id": "TS-02-34",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.4",
+      "test_spec_id": "TS-02-35",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.5",
+      "test_spec_id": "TS-02-36",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.E1",
+      "test_spec_id": "TS-02-E10",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-8.E2",
+      "test_spec_id": "TS-02-E11",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-9.1",
+      "test_spec_id": "TS-02-37",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-9.2",
+      "test_spec_id": "TS-02-38",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-9.3",
+      "test_spec_id": "TS-02-39",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-9.4",
+      "test_spec_id": "TS-02-40",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-9.E1",
+      "test_spec_id": "TS-02-E12",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.1",
+      "test_spec_id": "TS-02-41",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.2",
+      "test_spec_id": "TS-02-42",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.3",
+      "test_spec_id": "TS-02-43",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.4",
+      "test_spec_id": "TS-02-44",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.E1",
+      "test_spec_id": "TS-02-E13",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-10.E2",
+      "test_spec_id": "TS-02-E14",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-11.1",
+      "test_spec_id": "TS-02-45",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-11.2",
+      "test_spec_id": "TS-02-46",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-11.3",
+      "test_spec_id": "TS-02-47",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-12.1",
+      "test_spec_id": "TS-02-48",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-12.2",
+      "test_spec_id": "TS-02-49",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-12.E1",
+      "test_spec_id": "TS-02-E15",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.1",
+      "test_spec_id": "TS-02-50",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.2",
+      "test_spec_id": "TS-02-51",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.3",
+      "test_spec_id": "TS-02-52",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.4",
+      "test_spec_id": "TS-02-53",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.5",
+      "test_spec_id": "TS-02-54",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.6",
+      "test_spec_id": "TS-02-55",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.7",
+      "test_spec_id": "TS-02-56",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.8",
+      "test_spec_id": "TS-02-57",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.9",
+      "test_spec_id": "TS-02-58",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.10",
+      "test_spec_id": "TS-02-59",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.11",
+      "test_spec_id": "TS-02-60",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.12",
+      "test_spec_id": "TS-02-61",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.13",
+      "test_spec_id": "TS-02-62",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.14",
+      "test_spec_id": "TS-02-63",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.15",
+      "test_spec_id": "TS-02-64",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.16",
+      "test_spec_id": "TS-02-65",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-13.17",
+      "test_spec_id": "TS-02-66",
+      "task_id": "6.2",
+      "test_path": null
+    }
+  ]
+}

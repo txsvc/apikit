@@ -1,0 +1,202 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The OpenAPI Specification PRD is exceptionally well-written and comprehensive. It clearly defines its intent, a detailed and measurable set of goals, explicit non-goals, and rich technical requirements covering every endpoint, schema, and operational header. The four required spec sections (Intent, Goals, Non-Goals, Background) are all present, though the Background section is absent by name \u2014 its role is partially filled by the Source Reference and Dependencies sections. A few targeted gaps prevent an immediate \"ready\" verdict: (1) the relationship to the active `server_core` spec needs clarification since both touch handler registration and request lifecycle headers like X-Request-ID; (2) the Background section is structurally missing; (3) minor schema ambiguities exist (e.g., ETag derivation semantics, the full enumeration of valid PAT permissions, and the `PATCH /user` auth scope discrepancy). These are addressable with short answers.",
+      "gaps": [
+        "Missing a formal 'Background' section \u2014 context and motivation are implied through 'Source Reference' and 'Dependencies' but no dedicated Background block exists as required by the spec format.",
+        "Overlap with active spec 'server_core': server_core owns the handler registration API, request lifecycle middleware, structured logging, and error handling \u2014 all of which the OpenAPI spec documents (X-Request-ID header, error envelope, Content-Type constraints). The relationship between these two specs is not declared.",
+        "PATCH /user documents auth as 'API key or PAT with users:read' \u2014 this appears to be a copy-paste error; a write/update operation should likely require 'users:write' or similar, not 'users:read'.",
+        "The full enumerated set of valid PAT permission strings (e.g., 'users:read', 'keys:manage', 'orgs:read', etc.) is never exhaustively listed \u2014 the spec only gives examples, leaving the OpenAPI 'enum' values undefined.",
+        "ETag derivation is described as 'derived from updated_at timestamp' but the exact format or hashing mechanism is unspecified, which affects whether the Go validation test can assert ETag correctness.",
+        "GET /orgs/{id} and GET /orgs/{id}/members list 'Admin or member' as auth \u2014 but the PAT permission scope required for member access is not specified, unlike other endpoints that name the exact permission string.",
+        "No mention of the HTTP method or response for an unauthenticated request to a public-but-not-health endpoint like GET /auth/providers \u2014 specifically whether 401 can ever be returned or if it is always public.",
+        "The 'Technical Stack' table lists Go 1.25+ and build/test commands, but this spec produces a YAML artifact, not Go code \u2014 it is unclear why Go test infrastructure is listed here versus in a dependent implementation spec.",
+        "The owner field is empty, which may be an administrative gap depending on project governance requirements."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How should this spec relate to the active 'server_core' spec? Server Core owns the handler registration API, X-Request-ID middleware, error handling, and structured logging \u2014 all of which this OpenAPI spec documents as behavioral contracts. Should this spec declare a dependency on server_core, or does server_core depend on this spec as its contract source?",
+          "context": "Both specs describe overlapping concerns: server_core defines how X-Request-ID is injected and how errors are formatted, while this OpenAPI spec documents those same behaviors as the API contract. Without a declared relationship, implementors may get conflicting guidance.",
+          "options": [
+            "openapi_specification depends on server_core (server_core defines the mechanics; this spec documents the observable contract)",
+            "server_core depends on openapi_specification (this spec is written first; server_core implements it)",
+            "They are peers with no dependency \u2014 the OpenAPI spec documents the contract, server_core implements it independently",
+            "openapi_specification supersedes server_core's behavioral documentation"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Can you add a brief 'Background' section explaining the motivation for this spec and any prior art? Why is a hand-authored OpenAPI spec the right approach over code-first generation, and what problem does having a single source of truth solve for the apikit project?",
+          "context": "The spec format requires a Background section for context and motivation. The current PRD implies this through 'Source Reference' but does not provide a dedicated section, which is a structural gap in the required format.",
+          "options": [],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Is the auth scope for PATCH /user intentionally 'users:read', or should it be a write-level permission such as 'users:write' or 'users:manage'?",
+          "context": "PATCH /user modifies the authenticated user's profile (full_name), yet the documented auth requirement is 'API key or PAT with users:read'. All other mutating endpoints use manage/write-level permissions, making this appear to be a copy-paste error that would produce an incorrect OpenAPI security requirement.",
+          "options": [
+            "It should be 'users:write'",
+            "It should be 'users:manage'",
+            "It is intentionally 'users:read' (reads are sufficient to authorize self-updates)",
+            "A different permission string \u2014 please specify"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "What is the complete, exhaustive list of valid PAT permission strings that should appear as an enum in the OpenAPI spec? The PRD gives examples like 'users:read' and 'orgs:read' but never enumerates all allowed values.",
+          "context": "The OpenAPI spec needs to define the 'permissions' array items with either a string enum or a pattern. Without the full list, the spec cannot enforce valid permission values, and SDK generators cannot produce correct enums.",
+          "options": [
+            "Provide a closed enum list (e.g., users:read, users:write, keys:read, keys:manage, tokens:read, tokens:manage, orgs:read, orgs:manage)",
+            "Use an open string with a pattern constraint (e.g., ^[a-z]+:[a-z]+$) without enumerating values",
+            "Leave it as a free-form string array \u2014 permissions are validated at runtime only"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "What PAT permission scope, if any, is required for a regular member to access GET /orgs/{id} and GET /orgs/{id}/members? These endpoints list 'Admin or member' but don't name the specific PAT permission string the way other endpoints do.",
+          "context": "Every other authenticated endpoint explicitly names the PAT permission required (e.g., 'orgs:read'). The org member-access case is undefined, which means the OpenAPI security requirement for these endpoints cannot be fully specified.",
+          "options": [
+            "orgs:read",
+            "orgs:manage",
+            "No specific PAT permission \u2014 any valid PAT from a member is sufficient",
+            "Members can only access via API key, not PAT"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "How exactly is the ETag value derived from 'updated_at'? Is it a direct hex encoding of the timestamp string, an MD5/SHA hash, or something else?",
+          "context": "The spec states ETags are 'derived from updated_at timestamp' but doesn't specify the derivation algorithm. This matters for the Go validation test and for any client implementing conditional requests \u2014 different derivation methods produce different ETag values.",
+          "options": [
+            "Hex-encoded Unix timestamp (seconds)",
+            "MD5 hash of the RFC 3339 timestamp string",
+            "SHA-256 hash of the RFC 3339 timestamp string",
+            "The RFC 3339 timestamp string itself, quoted (e.g., \"2026-07-17T14:30:00Z\")",
+            "Defined elsewhere \u2014 leave it out of the OpenAPI spec and document in server_core"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "The PRD is comprehensive and well-structured, covering endpoints, schemas, authentication, caching, and operational headers with strong clarity. It is very close to spec-format quality but has several gaps that could cause ambiguity during implementation or validation. Key areas needing clarification include: the exact structure of the Go validation test, handling of 304 responses in the spec, missing error responses on some endpoints, PATCH request body constraints, and a few edge-case behavioral questions.",
+      "gaps": [
+        "The Go validation test (AC#12) is mentioned but not specified: where does it live, what package, what it asserts, and whether it uses a specific library or the general libopenapi-validator tooling referenced in the Technical Stack.",
+        "304 Not Modified response behavior is referenced for If-None-Match conditional requests, but there is no explicit schema or header documentation for 304 responses (e.g., whether X-Request-ID is returned on a 304, whether a body is present).",
+        "PATCH /user and PATCH /users/{id} request bodies only list `full_name` but the User schema also has `username` and `email` \u2014 it is unclear whether those fields are intentionally excluded from PATCH (i.e., immutable) or accidentally omitted.",
+        "Several admin endpoints (POST /users/{id}/promote, POST /users/{id}/demote, POST /users/{id}/block, POST /users/{id}/unblock, POST /orgs/{id}/block, POST /orgs/{id}/unblock, PUT /orgs/{id}/members/{user_id}) are missing explicit 401/403 error response documentation.",
+        "The `expires` field on POST /auth/callback and POST /user/tokens accepts values 0, 30, 60, or 90 \u2014 but the semantics of `0` are not defined (does it mean no expiry, immediate expiry, or something else?).",
+        "The error envelope uses `code` as an integer matching the HTTP status code, but it is not stated whether the `code` field is always equal to the HTTP status code or could differ (e.g., sub-codes for more granular errors).",
+        "The `GET /users` and `GET /orgs` endpoints list `include_blocked` as a query parameter, but there is no specification for what 'blocked' means for organizations in the listing context vs. individual org status \u2014 the Organization schema already includes `status`, so the filtering behavior should be clarified.",
+        "The spec says health probe endpoints use absolute paths outside the mount point, but does not clarify how these are to be documented in the OpenAPI spec (e.g., as a second server entry, or as x-tension paths, or listed under a separate servers block).",
+        "There is no mention of a maximum body size for the 413 Payload Too Large response \u2014 while the limit itself may be a server_core concern, the spec should note that this error can be triggered and reference that the threshold is configurable.",
+        "The `PUT /orgs/{id}/members/{user_id}` endpoint returns 204 but has no request body \u2014 it should be explicitly stated that no request body is required/expected, to avoid implementors guessing."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What are the exact semantics of `expires=0` in POST /auth/callback and POST /user/tokens? Does it mean 'no expiry' (token never expires), 'use server default', or something else?",
+          "context": "The PRD lists valid values as 0, 30, 60, or 90 days but does not define what 0 means. This affects schema validation (enum vs. integer with constraint) and client expectations for the `expires_at` field in responses.",
+          "options": [
+            "0 means no expiry (token/key is permanent, expires_at is null)",
+            "0 means use the server's configured default expiry",
+            "0 is not a valid value and should be removed from the list"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "For PATCH /user and PATCH /users/{id}, are `username` and `email` intentionally excluded from the updatable fields (i.e., they are immutable after creation)?",
+          "context": "The User object contains `username`, `email`, and `full_name`, but the PATCH request bodies only mention `full_name`. Clarifying immutability is important for both schema design and downstream SDK generation.",
+          "options": [
+            "Yes, only `full_name` can be updated via PATCH; `username` and `email` are immutable",
+            "No, `email` can also be updated via PATCH /users/{id} (admin only)",
+            "Both `email` and `full_name` can be updated via PATCH /users/{id} (admin only), but only `full_name` via PATCH /user"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should the X-Request-ID header be returned on 304 Not Modified responses (conditional GET with If-None-Match)?",
+          "context": "304 responses typically carry no body, but operational headers like X-Request-ID may still be important for tracing. This needs to be explicitly documented in the spec to avoid implementation inconsistency.",
+          "options": [
+            "Yes, X-Request-ID must be present on 304 responses",
+            "No, 304 responses carry no headers beyond standard HTTP cache headers",
+            "Yes, X-Request-ID and ETag are both present on 304 responses"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Where should the Go validation test live, and what library should it use? Should it be in `api/` or a dedicated test package like `internal/spectest`?",
+          "context": "Acceptance criterion #12 requires a Go validation test, and the Technical Stack references `libopenapi-validator`. Specifying the package path and assertion scope (e.g., just structural validity, or also operation-level checks) ensures consistency with the broader repository structure.",
+          "options": [
+            "Place in api/ directory as api_test.go, using libopenapi-validator",
+            "Place in internal/spectest/ package, using libopenapi-validator",
+            "Place in the root as openapi_test.go, using libopenapi-validator",
+            "Location is left to the implementor \u2014 only the assertion (valid OpenAPI 3.1) matters"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "How should the health probe endpoints (/healthz, /readyz, /version) be represented in the OpenAPI spec given they are outside the mount point?",
+          "context": "OpenAPI 3.1 allows path-level or operation-level `servers` overrides. Since health probes use absolute paths outside the `/api/v1` mount point, the spec needs a clear approach so validators and SDK generators handle them correctly.",
+          "options": [
+            "Use a path-level `servers` override on each health probe path with url: /",
+            "Add a second entry to the top-level `servers` block for absolute-path endpoints",
+            "Document health probes in a separate OpenAPI file",
+            "Use the root server URL / for health probes and /api/v1 only for authenticated endpoints as two servers entries"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now comprehensive and complete. All five previously identified ambiguities have been resolved: `expires=0` semantics are fully defined (no expiry, `expires_at=null`), PATCH field immutability is explicitly stated for `username` and `email`, 304 response headers are fully specified (`X-Request-ID` and `ETag` present, no body), the Go validation test is precisely located (`api/api_test.go`) and scoped (structural validity via libopenapi, no operation-level assertions), and health probe representation in the spec is defined using path-level `servers` overrides. All admin and authenticated endpoints now have complete 401/403 documentation. The `PUT /orgs/{id}/members/{user_id}` no-body requirement is explicit. The error envelope `code` semantics are clarified. The `include_blocked` filter behavior is defined for both users and orgs. The PRD meets spec-format quality standards and is ready for implementation.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "server_core depends on openapi_specification. This spec is the single source of truth for the API contract. It is written first and describes the observable behavior. server_core implements the contract defined here. This matches the PRD's design principle: 'OpenAPI-first \u2014 the OpenAPI 3.1 specification is the single source of truth for the API contract. The server implements it; the SDKs and documentation derive from it.' There is no active server_core spec yet \u2014 this is spec 01 of 15.",
+        "q2": "Background: apikit follows an OpenAPI-first design philosophy. The hand-authored OpenAPI 3.1 specification is the foundational artifact of the project \u2014 written before any server code, SDK, or CLI. This approach ensures a single, unambiguous source of truth for the API contract that all implementations derive from. Code-first generation is rejected because it inverts the dependency: the spec would reflect implementation details rather than defining the intended contract. A hand-authored spec forces deliberate API design decisions upfront. The master PRD (docs/PRD.md) defines the complete functional requirements; this spec extracts the API contract subset into a machine-readable format that tooling can validate, and from which SDKs and documentation can be generated.",
+        "q3": "It is intentionally users:read. The PRD's permission model only defines 'read' as an action for the 'users' resource type. There is no 'users:write' or 'users:manage' permission. A user updating their own full_name is a self-service operation that requires authentication (API key grants this inherently) but does not need elevated permissions beyond basic user access. When using a PAT, users:read is sufficient to authorize self-profile updates because the operation is scoped to the authenticated user's own data.",
+        "q4": "Use an open string with a pattern constraint. The PRD explicitly states: 'Consuming projects register additional resource types and actions via the apikit configuration. The permission model is extensible by design.' A closed enum would break extensibility. The built-in permissions are: users:read, orgs:read, keys:read, keys:manage, tokens:read, tokens:manage. These should be documented as examples in the description, but the schema should use a pattern like '^[a-z_]+:[a-z_]+$' to allow consuming projects to register their own resource types and actions.",
+        "q5": "orgs:read. Members access org endpoints with the orgs:read PAT permission, same as the user/orgs endpoint. This is consistent with the PRD's permission model.",
+        "q6": "Leave the ETag derivation algorithm out of the OpenAPI spec. The OpenAPI spec documents that ETags exist and that If-None-Match is supported, but the derivation mechanism is an implementation detail for the server spec. The OpenAPI spec only needs to document the ETag header as an opaque string in responses and the If-None-Match header as an optional request header."
+      },
+      "timestamp": "2026-07-17T09:52:30.736091+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "0 means no expiry (token/key is permanent, expires_at is null). This is explicitly stated in the master PRD: 'Expiry is calculated as exactly 24h x N from the creation timestamp. The expires_at field is nullable (null when expires is 0).' and 'expires accepts 0 (no expiry), 30, 60, or 90 (days).'",
+        "q2": "Yes, only full_name can be updated via PATCH. The PRD explicitly limits PATCH /user to 'Update my profile (full_name)' and PATCH /users/{id} to 'Update a user (full_name)'. Username and email are set at creation (via admin POST /users or OAuth upsert) and are immutable via PATCH. OAuth login may update username/email on re-authentication.",
+        "q3": "Yes, X-Request-ID and ETag are both present on 304 responses. X-Request-ID is a per-request operational header that must be present on every response for tracing. ETag is returned so the client knows the current version.",
+        "q4": "Place in api/ directory as api_test.go using libopenapi. The test is a simple structural validity check: load the YAML, parse it as OpenAPI 3.1, and assert no errors. It does not need to validate operations or responses \u2014 that is done by the spec tooling.",
+        "q5": "Use a path-level servers override on each health probe path with url: /. This is the cleanest OpenAPI 3.1 approach: the top-level servers block has url: /api/v1 for all authenticated endpoints, and each health probe path overrides with servers: [{url: /}] to indicate absolute paths. This avoids polluting the top-level servers list and keeps the mount point semantics clear."
+      },
+      "timestamp": "2026-07-17T09:55:01.439074+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

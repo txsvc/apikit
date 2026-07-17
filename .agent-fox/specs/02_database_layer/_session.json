@@ -1,0 +1,430 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `database_layer` PRD is thorough, well-structured, and covers all four required spec sections (Intent, Goals, Non-Goals, Background/Design Decisions) with high fidelity. The schema is fully specified, functional requirements are granular and ordered correctly, error handling is enumerated, and design rationale is clearly documented. One minor cross-spec concern exists: the PRD declares no upstream dependencies, yet `server_core` (an active spec) references configuration loading \u2014 the database path config (`[database] path`) may be consumed from the same config system defined there. This warrants a clarification but does not block readiness. No overlaps with archived specs are present in the landscape.",
+      "gaps": [
+        "The PRD declares 'no upstream dependencies', but the database path is read from `config.toml` which is loaded by the `server_core` spec. A dependency on `server_core` (or at minimum a note about the config contract) may be missing.",
+        "The `org_members` table specifies 'Cascade delete when the org is deleted' but no corresponding `ON DELETE CASCADE` clause is shown in the schema table definition, leaving the DDL implicit rather than normative.",
+        "The `pats.permissions` column stores a JSON array, but there is no validation rule or constraint specified for the format of permission strings (e.g., allowed `resource_type` and `action` values), which could lead to inconsistent data.",
+        "The `TimeFormat` constant `\"2006-01-02T15:04:05Z\"` drops sub-second precision. If any upstream system produces timestamps with milliseconds, silent truncation could occur. The truncation policy is not stated.",
+        "The `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON` are listed as per-connection requirements, but there is no specification of the `*sql.DB` connection pool settings (e.g., `SetMaxOpenConns`, `SetMaxIdleConns`) that would make WAL concurrency guarantees meaningful in practice."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The PRD declares no upstream dependencies, yet the database path is sourced from `config.toml`, which is loaded by the active `server_core` spec. Should `database_layer` declare a dependency on `server_core`, or is the config contract defined independently?",
+          "context": "Cross-spec consistency: `server_core` owns configuration loading. If `database_layer` relies on the same config system, it should either declare a dependency or clarify that it accepts the path as a plain function argument decoupled from config loading.",
+          "options": [
+            "Add `server_core` as an upstream dependency in the Dependencies section.",
+            "Specify that `Open(path string)` accepts the path directly, decoupling it from config loading (config wiring is the caller's responsibility).",
+            "Define a minimal config contract in `database_layer` independently of `server_core`."
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "The `org_members` table mentions 'Cascade delete when the org is deleted', but the schema table does not show the explicit `ON DELETE CASCADE` DDL clause. Should the normative DDL be included in the spec to make this unambiguous?",
+          "context": "Without the explicit DDL clause, implementors may miss the cascade behavior or implement it inconsistently. This is especially important since foreign key enforcement is being explicitly enabled via PRAGMA.",
+          "options": [
+            "Add explicit DDL snippets for all tables with foreign key constraints.",
+            "Add a note to the `org_members` row clarifying the ON DELETE CASCADE clause is required.",
+            "Leave as-is; the prose description is sufficient."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "The `pats.permissions` column stores a JSON array of `resource_type:action` strings. Are the valid values for `resource_type` and `action` defined somewhere (e.g., in the OpenAPI spec or another spec), and should a reference or validation rule be added here?",
+          "context": "Without enumerated valid values, the database layer cannot validate permissions on insert, and downstream consumers may receive malformed permission strings. The `openapi_specification` spec may already define these values.",
+          "options": [
+            "Reference the `openapi_specification` spec for the authoritative list of permission values.",
+            "Enumerate valid resource_type and action values directly in this spec.",
+            "Leave validation to the application layer; the database stores strings as-is."
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "The `TimeFormat` constant `\"2006-01-02T15:04:05Z\"` truncates sub-second precision. Should timestamps with millisecond or microsecond precision be truncated to whole seconds before storage, and should this truncation be explicit in the spec?",
+          "context": "If any component (e.g., OAuth tokens, audit logs) produces high-precision timestamps, silent truncation could cause subtle bugs or round-trip mismatches.",
+          "options": [
+            "Explicitly state that all timestamps are truncated to whole-second precision before storage.",
+            "Update the format to include sub-second precision (e.g., `\"2006-01-02T15:04:05.999Z\"`).",
+            "Leave as-is; whole-second precision is intentional and sufficient."
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "WAL mode provides concurrent read safety, but its effectiveness depends on `*sql.DB` connection pool settings (e.g., `SetMaxOpenConns`). Should the spec prescribe specific pool configuration values for the `*sql.DB` handle?",
+          "context": "Without `SetMaxOpenConns(1)` or similar, Go's connection pool may open multiple writers simultaneously, which SQLite does not support even in WAL mode and will result in 'database is locked' errors.",
+          "options": [
+            "Specify `SetMaxOpenConns(1)` with `SetMaxIdleConns(1)` to enforce single-writer safety.",
+            "Specify a recommended pool configuration with rationale.",
+            "Leave pool configuration to the caller; document the risk in Design Decisions."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a well-structured and detailed PRD covering the SQLite database layer. The schema, DDL, operational requirements, and design decisions are thorough and clearly written. However, several areas need clarification before this spec is fully implementation-ready: testing expectations are absent, the `DB` struct's exported fields/interface are underspecified, error type conventions are undefined, directory permission rationale is missing, and there are minor ambiguities around PRAGMA execution ordering and the WAL DSN approach.",
+      "gaps": [
+        "No testing requirements specified \u2014 unit tests, integration tests, and test helpers (e.g. in-memory SQLite setup) are not mentioned.",
+        "The `DB` struct interface is underspecified \u2014 it is unclear which methods beyond Open/Close/Ping/WithTx should be exposed, and whether the underlying *sql.DB should be accessible directly.",
+        "No error type conventions defined \u2014 the spec does not state whether custom sentinel errors (e.g. ErrNotFound) should be defined in this package or deferred to higher layers.",
+        "PRAGMA execution ordering is ambiguous \u2014 it is unspecified whether WAL mode and foreign_keys PRAGMAs are set before or after the schema creation transaction, and whether they must be re-applied per connection (relevant since SetMaxOpenConns(1) is used).",
+        "Directory creation mode (0750) is stated but not justified \u2014 downstream reviewers may question why 0750 vs 0755 or 0700, and whether this is configurable.",
+        "No explicit DSN format documented for modernc.org/sqlite \u2014 the spec says 'the file path' but does not clarify whether query parameters (e.g. ?_journal=WAL) are used or if PRAGMAs are always set programmatically.",
+        "Rollback failure logging is mentioned in the error table but no logging interface or package is specified.",
+        "The `pats.permissions` JSON structure is described only as 'JSON array of resource_type:action strings' \u2014 no example or schema is provided for the stored value.",
+        "No guidance on how the package should handle an already-initialized database (e.g. reopening an existing file) beyond idempotent CREATE TABLE IF NOT EXISTS.",
+        "The spec does not address what happens if WAL mode is already set on an existing database file (PRAGMA journal_mode returns the current mode; the return value is not validated)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What are the testing requirements for this package? Should it include unit tests, integration tests against a real SQLite file, or an in-memory helper (e.g. `OpenMemory() (*DB, error)`) for use by other test suites?",
+          "context": "Testing expectations are entirely absent from the spec. Knowing whether an in-memory test helper is required affects the public API surface of the package and is important for downstream consumers writing tests.",
+          "options": [
+            "Unit tests only (mock sql.DB)",
+            "Integration tests using a real SQLite file in a temp directory",
+            "In-memory helper function (e.g. OpenMemory) exported for use by other packages' tests",
+            "Both integration tests and an exported in-memory helper",
+            "No testing requirements in this spec \u2014 deferred to a separate test spec"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should the `DB` struct expose the underlying `*sql.DB` directly (e.g. via a `DB.DB` field or `Unwrap() *sql.DB` method), or should all database access be mediated through methods on the `DB` struct?",
+          "context": "Other packages in the codebase will need to execute queries. If they receive only a `*DB` handle, they either call methods defined on `*DB` or need access to the raw `*sql.DB`. This determines whether the DB struct acts as a thin wrapper or a full repository layer.",
+          "options": [
+            "Expose *sql.DB directly as a public field",
+            "Expose *sql.DB via an Unwrap() or Inner() method",
+            "All access mediated through methods on *DB (repository pattern)",
+            "Pass *sql.DB directly to other packages \u2014 *DB is only used internally during initialization"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should this package define sentinel errors (e.g. `ErrNotFound`, `ErrConflict`) for common database conditions, or should raw `database/sql` errors (including SQLite error codes) be returned and handled by callers?",
+          "context": "Defining sentinel errors in the db package allows callers to write clean error handling (errors.Is(err, db.ErrNotFound)) without depending on SQLite-specific error codes. However, if error classification is deferred to the handler layer, this package can stay simpler.",
+          "options": [
+            "Define sentinel errors in the db package (ErrNotFound, ErrConflict, etc.)",
+            "Return raw database/sql and SQLite errors \u2014 callers handle classification",
+            "Return wrapped errors with enough context for callers to inspect, but no sentinel types",
+            "Defer decision to a follow-on spec"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Are WAL mode and foreign_keys PRAGMAs set programmatically via `db.Exec` after opening, or via DSN query parameters (e.g. `file:apikit.db?_journal_mode=WAL&_foreign_keys=on`)? If programmatic, must they be re-executed on each new connection?",
+          "context": "With SetMaxOpenConns(1) only one connection is ever open, so per-connection re-execution is less of a concern. However, clarifying the approach (DSN vs programmatic) is important for implementation correctness and consistency with the modernc.org/sqlite driver's supported DSN parameters.",
+          "options": [
+            "Programmatic only \u2014 use db.Exec('PRAGMA ...') after Open",
+            "DSN query parameters only",
+            "DSN for WAL, programmatic for foreign_keys (since foreign_keys is per-connection)",
+            "Both \u2014 DSN parameters as defaults, programmatic as explicit confirmation"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should rollback failure logging use a specific logging package or interface (e.g. `log/slog`, a passed-in logger, or `log.Printf`)? Or should rollback errors be silently discarded?",
+          "context": "The error table states 'log rollback failure' but no logging interface is defined in this spec. The choice affects whether the db package takes a logger dependency, which could break its status as a pure infrastructure component.",
+          "options": [
+            "Use Go stdlib log.Printf (no added dependency)",
+            "Use log/slog (Go 1.21+ structured logging)",
+            "Accept a logger interface via Open() or DB struct",
+            "Silently discard rollback errors \u2014 only the original error is returned",
+            "Defer to whatever logging package is standardized across the project"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "What directory permission mode should be used when auto-creating the database directory, and is 0750 intentional? Should the mode be hardcoded or configurable?",
+          "context": "The spec states mode 0750 for directory creation. This means the group can read/execute but others have no access. If apikit runs as a dedicated service user with no shared group, 0700 might be more appropriate. If it runs behind a web server that needs read access, 0750 or 0755 may be needed.",
+          "options": [
+            "0750 \u2014 hardcoded, intentional (group read access)",
+            "0755 \u2014 hardcoded (world-readable directory)",
+            "0700 \u2014 hardcoded (owner only)",
+            "Configurable via Open() options or environment",
+            "Hardcoded 0750 is fine \u2014 add a comment explaining the rationale"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD for the Database Layer component. It is exceptionally detailed and covers all major dimensions: intent, goals, non-goals, schema (with normative DDL), public API signatures, error handling, testing requirements, design rationale, and a glossary. The document is largely implementation-ready with very few ambiguities. Minor gaps exist around edge-case behavior, concurrent `:memory:` DSN uniqueness, and sentinel error wrapping responsibility boundaries.",
+      "gaps": [
+        "The `OpenMemory` function uses `:memory:` as the DSN, but with `SetMaxOpenConns(1)`, each `:memory:` database is isolated per connection \u2014 this is correct but not explicitly stated. Documenting that isolation is guaranteed by the single-connection constraint would improve clarity.",
+        "The sentinel error wrapping responsibility is partially ambiguous: the PRD states the `db` package wraps SQLite errors 'where appropriate' but also says callers wrap at the query execution point. The exact boundary of where `ErrConflict`, `ErrNotFound`, and `ErrDatabaseLocked` are produced (inside `WithTx` vs. at the caller) is not fully resolved.",
+        "No explicit behavior is defined for `Open` called with an empty string path or a path that is a directory rather than a file.",
+        "The `Ping` method signature uses `context.Context` but the underlying `*sql.DB.PingContext` behavior on a single-connection pool under load is not discussed (e.g., whether it can block).",
+        "The test table lists `TestOpen_CreatesDirectory` as verifying mode 0700, but no mention of how the test verifies the mode on platforms that may not support Unix permissions (e.g., Windows).",
+        "There is no mention of whether `WithTx` accepts a transaction isolation level or uses the default SQLite isolation (DEFERRED). This could matter for callers needing IMMEDIATE or EXCLUSIVE transactions.",
+        "No explicit timeout or context propagation policy is defined for the schema creation transaction inside `Open`."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Where exactly is the responsibility boundary for wrapping raw SQLite errors into sentinel errors (`ErrConflict`, `ErrNotFound`, `ErrDatabaseLocked`)? Does `WithTx` wrap them automatically, or is wrapping always the caller's responsibility?",
+          "context": "The PRD currently says the `db` package wraps errors 'where appropriate' but also says callers wrap at query execution. This ambiguity could lead to inconsistent error handling across the codebase.",
+          "options": [
+            "`WithTx` automatically wraps all known SQLite error codes into sentinels before returning.",
+            "The `db` package exposes a standalone `WrapError(err error) error` helper; callers invoke it explicitly.",
+            "Wrapping is entirely the caller's responsibility; the `db` package only defines the sentinel vars.",
+            "A mix: `WithTx` wraps errors it can observe (e.g. unique constraint on commit), but callers handle `ErrNotFound` themselves."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should `WithTx` support configurable transaction behavior (e.g., IMMEDIATE or EXCLUSIVE locking) or always use SQLite's default DEFERRED mode?",
+          "context": "With a single-connection pool, DEFERRED transactions are usually sufficient, but some write-heavy operations may prefer IMMEDIATE to fail fast rather than deadlock. Knowing the intended behavior locks in the API surface.",
+          "options": [
+            "Always DEFERRED (SQLite default); no configuration needed.",
+            "Accept a `sql.TxOptions` parameter to allow callers to specify isolation/read-only hints.",
+            "Provide two variants: `WithTx` (DEFERRED) and `WithTxImmediate` (IMMEDIATE)."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What should `Open` do if given an empty string path or a path pointing to an existing directory (not a file)?",
+          "context": "These edge cases are not covered in the current error handling table. Defining the expected behavior prevents silent failures or confusing errors during misconfiguration.",
+          "options": [
+            "Return a descriptive error immediately before attempting to open.",
+            "Let the SQLite driver surface its own error for invalid paths.",
+            "No special handling needed; these are considered programmer errors (not user errors)."
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should the integration test `TestOpen_CreatesDirectory` verify the directory permission mode (0700), and if so, how should it handle platforms without Unix-style permissions (e.g., Windows)?",
+          "context": "The PRD mandates mode 0700 but the test table doesn't clarify whether the mode assertion is part of the test or skipped on unsupported platforms.",
+          "options": [
+            "Assert mode 0700 unconditionally; accept test failure on Windows as a known limitation.",
+            "Use `//go:build !windows` build tags to skip the permission check on Windows.",
+            "Skip the mode assertion entirely; the 0700 requirement is enforced by code review only.",
+            "Assert mode only when `runtime.GOOS != \"windows\"`."
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should `Open` (and the internal schema creation transaction) accept or propagate a `context.Context` for timeout/cancellation, or is a context-free signature intentional?",
+          "context": "Server bootstrap typically has a startup deadline. Without context support, a hung database open during boot cannot be cancelled. However, adding a context parameter changes the public API surface.",
+          "options": [
+            "Keep `Open(path string)` context-free; startup hangs are acceptable during init.",
+            "Add `Open(ctx context.Context, path string)` to allow startup timeouts.",
+            "Keep `Open` context-free but add an internal hard-coded timeout (e.g., 10s) for schema creation."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD for the Database Layer component. It is detailed, internally consistent, and implementation-ready. The spec covers all critical dimensions: public API signatures, schema DDL, initialization sequence, error handling, testing requirements, design rationale, and a glossary. The level of specificity (e.g., exact error message strings, PRAGMA ordering, connection pool settings, directory mode, Windows permission skip) is exemplary and leaves very little ambiguity for an implementer. No blocking gaps were found; only a small set of minor clarifying questions are raised below to further harden edge cases.",
+      "gaps": [
+        "No explicit specification of what happens if `PRAGMA journal_mode=WAL` is executed on a read-only filesystem or a database opened by another process that already holds a lock \u2014 the spec says the return value is not validated, but does not clarify whether a non-error response with an unexpected mode value (e.g., 'delete') should be treated as a failure.",
+        "The `WithTx` signature and semantics are fully specified, but there is no mention of context cancellation behavior mid-transaction \u2014 e.g., whether a cancelled context causes the in-flight `fn` to fail and trigger rollback, or whether callers are expected to propagate the context themselves inside `fn`.",
+        "The `Ping` method is specified to be used by the readiness probe, but the spec does not clarify whether `Ping` uses the passed `ctx` for cancellation/timeout or if it simply calls `db.SqlDB.PingContext(ctx)` directly.",
+        "No explicit guidance on whether `OpenMemory` should call the same internal initialization function as `Open` (i.e., code reuse requirement) or whether parallel implementations are acceptable.",
+        "The spec does not address what happens if the database file exists but is corrupt or not a valid SQLite file \u2014 the error is presumably surfaced from the driver, but this is not listed in the Error Handling table.",
+        "The `TestWrapError_Locked` test case requires triggering a real SQLITE_BUSY error, which is non-trivial in a single-connection pool setup. The spec does not describe the mechanism for producing this condition in tests (e.g., opening a second raw connection, using a mock, or injecting a synthetic error)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "If `PRAGMA journal_mode=WAL` succeeds without error but returns a mode value other than 'wal' (e.g., the filesystem does not support WAL and SQLite silently falls back to 'delete'), should `Open` treat this as a failure and return an error, or is the no-error return from `db.Exec` always considered sufficient?",
+          "context": "The spec currently states 'the return value is not validated; the PRAGMA is considered successful if no error is returned.' On some filesystems (e.g., network shares, certain Docker volumes), SQLite may silently ignore WAL mode. Clarifying this prevents silent misconfiguration in production.",
+          "options": [
+            "Return an error if the resulting journal mode is not 'wal' (validate the PRAGMA return value)",
+            "Accept any non-error result from db.Exec \u2014 do not validate the returned mode value (current spec behavior)",
+            "Log a warning but do not fail (not applicable \u2014 spec has no logger dependency)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should `Open` and `OpenMemory` share a single internal initialization function (e.g., a private `initDB(*sql.DB) error`), or is independent implementation of the two paths acceptable?",
+          "context": "The spec states OpenMemory applies 'the same initialization steps as Open,' which implies shared logic. Making this a normative code-reuse requirement prevents initialization drift between the two constructors over time.",
+          "options": [
+            "Normatively require a shared private init function \u2014 both Open and OpenMemory must call it",
+            "Leave it as a quality/style recommendation \u2014 independent implementations are acceptable as long as behavior matches"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "How should `TestWrapError_Locked` produce a SQLITE_BUSY error in practice, given that `SetMaxOpenConns(1)` prevents a second Go connection from being opened on the same database?",
+          "context": "Testing ErrDatabaseLocked requires a real or synthetic SQLITE_BUSY error. With a single-connection pool, the standard approach of opening two concurrent writers on the same file is blocked by Go's pool. The spec lists this test as required but does not specify the mechanism.",
+          "options": [
+            "Open a second raw *sql.DB handle (bypassing SetMaxOpenConns) on the same file to create a real lock conflict",
+            "Use a synthetic/fake SQLite error value that matches the SQLITE_BUSY error code, without requiring a real lock",
+            "Use a separate test helper that directly constructs the SQLite error code and passes it to WrapError"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should `Ping(ctx context.Context)` be implemented as a direct call to `db.SqlDB.PingContext(ctx)`, or does it perform any additional checks (e.g., executing a lightweight query like `SELECT 1`)?",
+          "context": "PingContext is the standard approach and is already cancellable via the context. However, some teams prefer a sentinel query to validate schema accessibility, not just connection liveness. Clarifying this prevents implementers from adding unnecessary complexity.",
+          "options": [
+            "Implement as db.SqlDB.PingContext(ctx) \u2014 connection liveness check only",
+            "Implement as a lightweight query (e.g., SELECT 1) for deeper validation",
+            "Either is acceptable as long as a non-nil error causes HTTP 503"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should a corrupt or non-SQLite database file at `path` be treated the same as any other driver error (surface the raw error from Open), or should it produce a specific wrapped error message?",
+          "context": "The Error Handling table does not list this case. In practice, modernc.org/sqlite returns an error if the file is not a valid SQLite database. Clarifying whether this should be wrapped with additional context (e.g., 'db: file at path X is not a valid SQLite database') improves operator experience.",
+          "options": [
+            "Surface the raw driver error unchanged",
+            "Wrap with additional context identifying the file path",
+            "Add to the Error Handling table as an explicit case with a descriptive error message"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD for a database layer component. It is thorough, internally consistent, and implementation-ready. The spec covers all critical areas: initialization sequence, public API contracts, error handling, schema DDL, testing requirements, design rationale, and a comprehensive glossary. The level of detail is appropriate for a senior Go engineer to implement without ambiguity. Only a few minor gaps were identified, none of which block implementation.",
+      "gaps": [
+        "The `initDB` signature and the mechanism by which WAL mode is conditionally skipped for OpenMemory is described in prose but not shown in a normative code stub. The phrase 'passes a flag or calls a variant' is slightly ambiguous \u2014 a boolean parameter vs. a separate private function are meaningfully different design choices.",
+        "The `DB` struct's `SqlDB` field is public, but there is no stated thread-safety guarantee or guidance on whether callers should treat the field as read-only after initialization.",
+        "`WrapError` is described as mapping SQLITE_CONSTRAINT_UNIQUE and SQLITE_CONSTRAINT_PRIMARYKEY to ErrConflict, but the exact mechanism for inspecting SQLite error codes (e.g., using `modernc.org/sqlite`'s error type assertion or a specific package API) is not specified, which could lead to implementation variance.",
+        "The testing table lists `TestOpen_WALMode` as asserting an error path 'by providing a path on a filesystem known not to support WAL, or by asserting the error-path logic directly' \u2014 this is underspecified and leaves the test approach ambiguous.",
+        "There is no explicit statement about whether `Close` on an already-closed `*DB` should return an error or be idempotent, which is a common edge case.",
+        "The spec does not clarify the behavior of `WithTx` if `BeginTx` itself fails (e.g., due to context cancellation before the transaction starts) \u2014 though this is implied to return the error, it is not explicit."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How should `initDB` conditionally skip WAL mode for `OpenMemory`? Should `initDB` accept a boolean parameter (e.g., `skipWAL bool`), or should there be two private variants (e.g., `initDB` and `initMemDB`)?",
+          "context": "The spec says OpenMemory 'passes a flag or calls a variant' but does not commit to either design. This is a normative code-reuse requirement, so the mechanism should be unambiguous for implementation.",
+          "options": [
+            "Add a boolean parameter to initDB: `initDB(sqlDB *sql.DB, skipWAL bool) error`",
+            "Define a separate private function for the memory path: `initMemDB(sqlDB *sql.DB) error`",
+            "Leave it as an implementation detail \u2014 either approach is acceptable"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How should `WrapError` inspect SQLite error codes? Should it use a type assertion to `modernc.org/sqlite`'s error type, or a more generic error code extraction approach?",
+          "context": "The spec says WrapError maps SQLITE_CONSTRAINT_UNIQUE, SQLITE_CONSTRAINT_PRIMARYKEY, SQLITE_BUSY, and SQLITE_LOCKED to sentinels, but does not specify the mechanism. The `modernc.org/sqlite` package exposes error codes via a specific type; knowing the expected pattern prevents implementation variance.",
+          "options": [
+            "Type-assert to `*sqlite.Error` and compare `.Code()` against sqlite3 constants",
+            "Use `errors.As` with the driver's error type to extract the error code",
+            "Leave as an implementation detail \u2014 the test coverage will validate correctness"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "For `TestOpen_WALMode`'s error path (verifying that Open returns an error if WAL mode cannot be set), what is the preferred test approach?",
+          "context": "Testing the WAL validation error path requires either a real filesystem that doesn't support WAL, or some form of injection/mocking. The current spec lists both options without choosing one, leaving test implementation ambiguous.",
+          "options": [
+            "Test only the happy path (assert journal_mode=wal after Open); skip the error path test as impractical in CI",
+            "Use a test-only hook or function variable to inject a mock QueryRow that returns a non-wal mode string",
+            "Document that the error path is covered by code review only, not automated tests",
+            "Create a pre-written corrupt/non-WAL SQLite file as a test fixture"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should `Close` on an already-closed `*DB` be idempotent (return nil) or return the underlying `*sql.DB` error?",
+          "context": "`database/sql`'s `(*sql.DB).Close()` returns an error if called more than once. The spec does not specify whether the `DB.Close()` wrapper should propagate this or suppress it, which matters for cleanup code using `t.Cleanup`.",
+          "options": [
+            "Propagate the underlying error from sql.DB.Close() \u2014 callers are responsible for not double-closing",
+            "Make Close idempotent \u2014 return nil if already closed",
+            "Leave as an implementation detail"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should the `SqlDB` field on the `DB` struct carry any documented thread-safety or mutability guidance (e.g., 'treat as read-only after Open returns')?",
+          "context": "Exposing a public pointer field without any documented contract can lead to callers replacing the pointer, which would break internal state. A brief note in the struct doc comment would prevent misuse.",
+          "options": [
+            "Add a doc comment noting SqlDB must not be replaced after initialization",
+            "Make SqlDB unexported and add a method DB() *sql.DB to expose it read-only",
+            "No change needed \u2014 the field name and context make its purpose clear"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Option 2: Open(path string) accepts the path directly, decoupling it from config loading. The database layer is a pure infrastructure component. The caller (server bootstrap code) reads the config and passes the path. This keeps the dependency graph clean.",
+        "q2": "Option 1: Add explicit DDL snippets for all tables with foreign key constraints. The DDL is the normative artifact for schema creation and should be unambiguous. Include ON DELETE CASCADE on org_members.org_id.",
+        "q3": "Option 3: Leave validation to the application layer. The database stores permission strings as-is. The database layer is not responsible for business-level validation of permission values. The handler/auth layer validates permissions before insertion.",
+        "q4": "Option 1: Explicitly state that all timestamps are truncated to whole-second precision before storage. This is intentional. Whole-second precision is sufficient for all apikit use cases (user records, token lifecycle, org membership). The FormatTime helper handles the truncation.",
+        "q5": "Option 1: Specify SetMaxOpenConns(1) with SetMaxIdleConns(1) to enforce single-writer safety. SQLite only supports one writer at a time even in WAL mode. Constraining the pool to a single connection avoids 'database is locked' errors. WAL still allows concurrent readers via separate read-only connections if needed later."
+      },
+      "timestamp": "2026-07-17T09:51:50.978509+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "Option 4: Both integration tests using a real SQLite file in a temp directory and an exported in-memory helper (OpenMemory) for use by other packages' test suites. The in-memory helper is essential since downstream packages (handlers, auth) need a quick way to set up a test database.",
+        "q2": "Option 1: Expose *sql.DB directly as a public field (DB.SqlDB or similar). The db package is a thin wrapper that handles initialization (PRAGMAs, schema). Other packages execute their own queries using the raw *sql.DB handle. This avoids turning the db package into a monolithic repository layer.",
+        "q3": "Option 1: Define sentinel errors in the db package (ErrNotFound, ErrConflict, ErrDatabaseLocked). This allows callers to write clean error handling with errors.Is without depending on SQLite-specific error codes. The db package wraps raw SQLite errors into these sentinels where appropriate.",
+        "q4": "Option 1: Programmatic only. Use db.Exec for both PRAGMAs after Open. With SetMaxOpenConns(1) there is only one connection, so per-connection re-execution is not a concern. Programmatic execution is explicit and easier to verify in tests.",
+        "q5": "Option 4: Silently discard rollback errors. The original error is the important one. The db package should not take a logger dependency. If logging is needed, callers can wrap WithTx and add their own logging.",
+        "q6": "Option 3: Use 0700 (owner only). This is more secure. The database directory contains sensitive data (hashed tokens, user records). Only the process owner needs access."
+      },
+      "timestamp": "2026-07-17T09:53:57.974364+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Option 2: The db package exposes a standalone WrapError(err error) error helper that callers invoke explicitly. This keeps WithTx simple (it just begins/commit/rollback) and gives callers control over error wrapping at the query level. The sentinel errors are defined in the db package, and WrapError maps known SQLite error codes (SQLITE_CONSTRAINT_UNIQUE, etc.) to the appropriate sentinel.",
+        "q2": "Option 1: Always DEFERRED (SQLite default). With SetMaxOpenConns(1) there is only one connection, so there is no contention. DEFERRED is sufficient.",
+        "q3": "Option 1: Return a descriptive error immediately before attempting to open. Validate that path is non-empty and not a directory.",
+        "q4": "Option 4: Assert mode only when runtime.GOOS != windows. This avoids build tag complexity while still testing on Unix systems.",
+        "q5": "Option 1: Keep Open(path string) context-free. Startup hangs during database initialization are acceptable during server bootstrap. The schema creation is deterministic and fast."
+      },
+      "timestamp": "2026-07-17T10:00:06.127350+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "Option 1: Return an error if the resulting journal mode is not 'wal'. Use PRAGMA journal_mode=WAL as a query (not exec) and validate the returned value. This prevents silent misconfiguration.",
+        "q2": "Option 1: Normatively require a shared private init function that both Open and OpenMemory call. This prevents initialization drift.",
+        "q3": "Option 3: Use a separate test helper that directly constructs the SQLite error code and passes it to WrapError. WrapError is a pure function that maps error codes to sentinels -- it can be tested without triggering real database locks.",
+        "q4": "Option 1: Implement as db.SqlDB.PingContext(ctx). Connection liveness check only. No need for a sentinel query.",
+        "q5": "Option 2: Wrap with additional context identifying the file path. This helps operators diagnose configuration issues."
+      },
+      "timestamp": "2026-07-17T10:03:12.942334+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

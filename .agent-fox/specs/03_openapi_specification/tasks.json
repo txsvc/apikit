@@ -1,0 +1,1696 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "openapi_specification",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./api/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write structural and file-level validation tests",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write test: api/openapi.yaml exists and parses as valid OpenAPI 3.1",
+          "details": [
+            "Create api/api_test.go with a Go test function TestOpenAPISpec.",
+            "Use os.ReadFile to read api/openapi.yaml; call t.Fatalf on read error (not panic/os.Exit).",
+            "Call libopenapi.NewDocument(bytes); call t.Fatalf if err != nil.",
+            "Call doc.BuildV3Model(); call t.Fatalf if len(errs) > 0 with error details.",
+            "Assert model is non-nil and Info is present. Do NOT assert on individual operations, ETags, or examples.",
+            "Add go.mod entry for github.com/pb33f/libopenapi."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-72",
+            "TS-03-73",
+            "TS-03-74"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.1",
+            "03-REQ-16.1",
+            "03-REQ-16.2",
+            "03-REQ-16.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write test: top-level servers block and health probe path-level overrides",
+          "details": [
+            "In api/api_test.go, add TestOpenAPIServers.",
+            "Parse spec; assert top-level Servers has exactly one entry with URL '/api/v1' and description 'Default mount point (configurable per deployment)'.",
+            "Assert path items for /healthz, /readyz, /version each have Servers[0].URL == '/'.",
+            "These checks are structural (path item existence), not semantic operation checks."
+          ],
+          "test_spec_refs": [
+            "TS-03-2",
+            "TS-03-3"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.2",
+            "03-REQ-1.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write test: all $ref targets resolve and openapi-validator exits 0",
+          "details": [
+            "Add TestOpenAPIRefResolution in api/api_test.go that calls BuildV3Model and asserts zero errors (covers unresolved refs).",
+            "Create or update Makefile with a 'check' target that runs: go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml",
+            "Make check target exits non-zero on validator errors.",
+            "TS-03-E1 and TS-03-75 are validated by the make check integration."
+          ],
+          "test_spec_refs": [
+            "TS-03-4",
+            "TS-03-E1",
+            "TS-03-75"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.4",
+            "03-REQ-1.E1",
+            "03-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write test: bearerAuth security scheme and public endpoint classification",
+          "details": [
+            "Add TestOpenAPISecurityScheme: assert components.securitySchemes.bearerAuth exists with type=http, scheme=bearer, description mentioning admin/API Key/PAT.",
+            "Add TestOpenAPIAuthenticatedEndpoints: enumerate all operations outside public paths; assert each has bearerAuth in security array.",
+            "Add TestOpenAPIPublicEndpoints: for /healthz, /readyz, /version, GET /auth/providers assert security is empty/absent and 401 not in responses."
+          ],
+          "test_spec_refs": [
+            "TS-03-5",
+            "TS-03-6",
+            "TS-03-7"
+          ],
+          "requirement_refs": [
+            "03-REQ-2.1",
+            "03-REQ-2.2",
+            "03-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write test: PAT permission pattern constraint and built-in permission documentation",
+          "details": [
+            "Add TestOpenAPIPATPermissions: for PatMetadata and Pat schemas, inspect permissions array items schema.",
+            "Assert pattern == '^[a-z_]+:[a-z_]+$' and no enum property.",
+            "Assert description contains all six built-in strings: users:read, orgs:read, keys:read, keys:manage, tokens:read, tokens:manage."
+          ],
+          "test_spec_refs": [
+            "TS-03-8",
+            "TS-03-9",
+            "TS-03-P4"
+          ],
+          "requirement_refs": [
+            "03-REQ-3.1",
+            "03-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write test: expires field enum and expires_at nullability",
+          "details": [
+            "Add TestOpenAPIExpiresField: for POST /auth/callback and POST /user/tokens, inspect expires property schema; assert enum=[0,30,60,90], default=90, description mentions 0=permanent/null.",
+            "Add TestOpenAPIExpiresAtNullable: for ApiKeyMetadata, ApiKey, PatMetadata, Pat schemas; assert expires_at is nullable (type includes null or nullable:true) with format=date-time."
+          ],
+          "test_spec_refs": [
+            "TS-03-10",
+            "TS-03-11",
+            "TS-03-P6"
+          ],
+          "requirement_refs": [
+            "03-REQ-4.1",
+            "03-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "go test ./api/... -count=1 -v passes (TestOpenAPISpec, TestOpenAPIServers, TestOpenAPIRefResolution, TestOpenAPISecurityScheme, TestOpenAPIAuthenticatedEndpoints, TestOpenAPIPublicEndpoints, TestOpenAPIPATPermissions, TestOpenAPIExpiresField, TestOpenAPIExpiresAtNullable all pass)",
+          "go vet ./... reports no issues in api/",
+          "make check target exists in Makefile and runs openapi-validator — currently may fail if api/openapi.yaml does not yet exist (acceptable at this stage)",
+          "Requirements 03-REQ-1.1, 03-REQ-1.2, 03-REQ-1.3, 03-REQ-1.4, 03-REQ-2.1, 03-REQ-2.2, 03-REQ-2.3, 03-REQ-3.1, 03-REQ-3.2, 03-REQ-4.1, 03-REQ-4.2 test harness is in place"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests for PATCH immutability, health probes, OAuth, and user self-service endpoints (part 1)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write test: PATCH /user and PATCH /users/{id} request body immutability",
+          "details": [
+            "Add TestOpenAPIPatchUserBody: parse PATCH /user request body schema; assert exactly one property 'full_name'; assert 'username' and 'email' absent.",
+            "Add TestOpenAPIPatchUsersIdBody: same assertion for PATCH /users/{id}.",
+            "Add TestOpenAPIPatchDescriptions: assert both PATCH operation descriptions contain 'immutable' or similar wording about username/email.",
+            "Property test TS-03-P5: enumerate all PATCH operations and run immutability assertion on each."
+          ],
+          "test_spec_refs": [
+            "TS-03-12",
+            "TS-03-13",
+            "TS-03-14",
+            "TS-03-P5"
+          ],
+          "requirement_refs": [
+            "03-REQ-5.1",
+            "03-REQ-5.2",
+            "03-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write test: GET /healthz, GET /readyz, GET /version endpoint structure",
+          "details": [
+            "Add TestOpenAPIHealthz: assert path-level servers url='/', no security, 200 body has status field, Cache-Control header defined, X-Request-ID header defined.",
+            "Add TestOpenAPIReadyz: same plus 503 response with status=unavailable; both responses have X-Request-ID.",
+            "Add TestOpenAPIVersion: assert 200 response body has version, build_time, commit, mount_point fields all typed as string.",
+            "Property test TS-03-P7: enumerate /healthz, /readyz, /version path items and assert servers[0].URL == '/'."
+          ],
+          "test_spec_refs": [
+            "TS-03-15",
+            "TS-03-16",
+            "TS-03-17",
+            "TS-03-P7"
+          ],
+          "requirement_refs": [
+            "03-REQ-6.1",
+            "03-REQ-6.2",
+            "03-REQ-6.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write test: GET /auth/providers and POST /auth/callback OAuth endpoints",
+          "details": [
+            "Add TestOpenAPIAuthProviders: assert GET /auth/providers has no security, no 401, 200 returns array of OAuthProvider objects with name+authorize_url, Cache-Control header references 'public,max-age=300'.",
+            "Add TestOpenAPIAuthCallback: assert POST /auth/callback requires provider/code/redirect_uri; expires is optional integer enum [0,30,60,90] default 90; 200 references AuthCallbackResponse; 400 defined with Error schema; Cache-Control:no-store; X-Request-ID on all responses."
+          ],
+          "test_spec_refs": [
+            "TS-03-18",
+            "TS-03-19"
+          ],
+          "requirement_refs": [
+            "03-REQ-7.1",
+            "03-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write test: GET /user and PATCH /user self-service endpoints",
+          "details": [
+            "Add TestOpenAPIGetUser: assert bearerAuth in security; 200 has User response and ETag header; 304 has X-Request-ID+ETag headers and no content, no Cache-Control on 304; 401 and 403 defined; Cache-Control:no-store on 200.",
+            "Add TestOpenAPIPatchUser: assert bearerAuth; request body has only full_name; 200, 400, 401, 403, 415 defined; Cache-Control:no-store; X-Request-ID on all responses.",
+            "Smoke test TS-03-SMOKE-3 covered via TestOpenAPIGetUser ETag/304 assertions."
+          ],
+          "test_spec_refs": [
+            "TS-03-20",
+            "TS-03-21",
+            "TS-03-SMOKE-3"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.1",
+            "03-REQ-8.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write test: GET /user/keys, POST /user/keys/{key_id}/refresh, DELETE /user/keys/{key_id}",
+          "details": [
+            "Add TestOpenAPIGetUserKeys: assert bearerAuth; 200 returns array of ApiKeyMetadata with nullable expires_at/revoked_at; 401, 403 defined.",
+            "Add TestOpenAPIRefreshKey: assert bearerAuth; 200 returns ApiKey schema with key/key_id/nullable expires_at; 401, 403, 404 defined.",
+            "Add TestOpenAPIDeleteUserKey: assert bearerAuth; 204 has no content; 401, 403, 404 defined."
+          ],
+          "test_spec_refs": [
+            "TS-03-22",
+            "TS-03-23",
+            "TS-03-24"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.3",
+            "03-REQ-8.4",
+            "03-REQ-8.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.6",
+          "title": "Write test: GET /user/tokens, POST /user/tokens, GET /user/tokens/{token_id}, DELETE /user/tokens/{token_id}, GET /user/orgs",
+          "details": [
+            "Add TestOpenAPIGetUserTokens: assert bearerAuth; 200 is array of PatMetadata; 401, 403 defined.",
+            "Add TestOpenAPICreateToken: assert bearerAuth; requires name+permissions; permissions items use pattern; expires optional enum; 201 returns Pat with token field; 400, 401, 403, 415 defined.",
+            "Add TestOpenAPIGetUserToken: assert bearerAuth; 200 has ETag; 304 has X-Request-ID+ETag no content; 401, 403, 404 defined.",
+            "Add TestOpenAPIDeleteUserToken: assert bearerAuth; 204 no content; 401, 403, 404 defined.",
+            "Add TestOpenAPIGetUserOrgs: assert bearerAuth; description mentions orgs:read; 200 is array of Organization; 401, 403 defined."
+          ],
+          "test_spec_refs": [
+            "TS-03-25",
+            "TS-03-26",
+            "TS-03-27",
+            "TS-03-28",
+            "TS-03-29",
+            "TS-03-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.6",
+            "03-REQ-8.7",
+            "03-REQ-8.8",
+            "03-REQ-8.9",
+            "03-REQ-8.10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "go test ./api/... -count=1 -v passes all new tests in this group (may be skipped/xfailed if spec file not yet present)",
+          "go vet ./... reports no issues",
+          "Requirements 03-REQ-5.1 through 03-REQ-8.10 test harness is in place",
+          "No test asserts on ETag derivation algorithm or individual operation-level semantics beyond structural schema presence"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests for admin user endpoints, org endpoints, schemas, errors, caching, and operational headers",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write test: admin user management endpoints (POST/GET /users, GET/PATCH /users/{id}, promote/demote/block/unblock)",
+          "details": [
+            "Add TestOpenAPIPostUsers: requires username/email/provider/provider_id; 201 User; 400,401,403,409,415 defined.",
+            "Add TestOpenAPIGetUsers: include_blocked boolean param default false; 200 User array; 401,403 defined.",
+            "Add TestOpenAPIGetUserById: ETag on 200; 304 with X-Request-ID+ETag no content; 401,403,404 defined.",
+            "Add TestOpenAPIPatchUsersById: only full_name in body; 200,401,403,404,415 defined.",
+            "Add TestOpenAPIPromoteDemoteBlockUnblock: each returns 200 User; demote has 409 for last-admin; all have 401,403,404."
+          ],
+          "test_spec_refs": [
+            "TS-03-30",
+            "TS-03-31",
+            "TS-03-32",
+            "TS-03-33",
+            "TS-03-34",
+            "TS-03-35",
+            "TS-03-36",
+            "TS-03-37",
+            "TS-03-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.1",
+            "03-REQ-9.2",
+            "03-REQ-9.3",
+            "03-REQ-9.4",
+            "03-REQ-9.5",
+            "03-REQ-9.6",
+            "03-REQ-9.7",
+            "03-REQ-9.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write test: admin user key/token management endpoints and org CRUD",
+          "details": [
+            "Add TestOpenAPIAdminUserKeys: GET /users/{id}/keys returns ApiKeyMetadata array; DELETE /users/{id}/keys/{key_id} returns 204; both have 401,403,404.",
+            "Add TestOpenAPIAdminUserTokens: GET /users/{id}/tokens returns PatMetadata array; DELETE /users/{id}/tokens/{token_id} returns 204; both have 401,403,404.",
+            "Add TestOpenAPIPostOrgs: requires name+slug; url optional; 201 Organization; 409 defined; 400,401,403,415 defined.",
+            "Add TestOpenAPIGetOrgs: include_blocked boolean param default false; 200 Organization array; 401,403 defined."
+          ],
+          "test_spec_refs": [
+            "TS-03-38",
+            "TS-03-39",
+            "TS-03-40",
+            "TS-03-41",
+            "TS-03-42",
+            "TS-03-43"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.9",
+            "03-REQ-9.10",
+            "03-REQ-9.11",
+            "03-REQ-9.12",
+            "03-REQ-10.1",
+            "03-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write test: GET/PATCH/DELETE /orgs/{id} and org block/unblock/members endpoints",
+          "details": [
+            "Add TestOpenAPIGetOrgById: dual-role auth note in description; ETag on 200; 304 with X-Request-ID+ETag no content; 401,403,404 defined.",
+            "Add TestOpenAPIPatchOrg: name+url optional (not in required); 200,401,403,404,409,415 defined.",
+            "Add TestOpenAPIDeleteOrg: 204 no content; cascade noted in description; 401,403,404 defined.",
+            "Add TestOpenAPIBlockUnblockOrg: block returns 200 Organization; unblock returns 200 Organization; both 401,403,404.",
+            "Add TestOpenAPIOrgMembers: GET /orgs/{id}/members has orgs:read in description, 200 User array; PUT /orgs/{id}/members/{user_id} no requestBody, 204; DELETE /orgs/{id}/members/{user_id} 204."
+          ],
+          "test_spec_refs": [
+            "TS-03-44",
+            "TS-03-45",
+            "TS-03-46",
+            "TS-03-47",
+            "TS-03-48",
+            "TS-03-49",
+            "TS-03-50",
+            "TS-03-51",
+            "TS-03-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "03-REQ-10.3",
+            "03-REQ-10.4",
+            "03-REQ-10.5",
+            "03-REQ-10.6",
+            "03-REQ-10.7",
+            "03-REQ-10.8",
+            "03-REQ-10.9",
+            "03-REQ-10.10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write test: components/schemas definitions (User, ApiKeyMetadata, ApiKey, PatMetadata, Pat, Organization, OAuthProvider, Error, AuthCallbackResponse)",
+          "details": [
+            "Add TestOpenAPIUserSchema: all fields present; full_name nullable; status enum active/blocked; role enum admin/user; id has format uuid.",
+            "Add TestOpenAPIKeySchemas: ApiKeyMetadata has key_id/created_at/nullable expires_at/nullable revoked_at; ApiKey has key/key_id/nullable expires_at.",
+            "Add TestOpenAPIPATSchemas: PatMetadata has all fields + pattern-constrained permissions; Pat has token/token_id/name/permissions/nullable expires_at.",
+            "Add TestOpenAPIOrgSchema: id/name/slug/nullable url/status enum/created_at/updated_at.",
+            "Add TestOpenAPIErrorSchema: error object with integer code and string message; description states code=HTTP status, no sub-codes.",
+            "Add TestOpenAPIAuthCallbackResponseSchema: user $ref to User; api_key with key/key_id/nullable expires_at."
+          ],
+          "test_spec_refs": [
+            "TS-03-52",
+            "TS-03-53",
+            "TS-03-54",
+            "TS-03-55",
+            "TS-03-56",
+            "TS-03-57",
+            "TS-03-58",
+            "TS-03-59",
+            "TS-03-60"
+          ],
+          "requirement_refs": [
+            "03-REQ-11.1",
+            "03-REQ-11.2",
+            "03-REQ-11.3",
+            "03-REQ-11.4",
+            "03-REQ-11.5",
+            "03-REQ-11.6",
+            "03-REQ-11.7",
+            "03-REQ-11.8",
+            "03-REQ-11.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write test: error response coverage, caching headers, and timestamp format",
+          "details": [
+            "Add TestOpenAPIErrorCoverage: enumerate operations; assert each has applicable error codes referencing Error schema.",
+            "Add TestOpenAPIAuthErrors (property test TS-03-P2): all bearerAuth operations have 401+403 with Error schema.",
+            "Add TestOpenAPI413Coverage: all operations with requestBody have 413 with Error schema.",
+            "Add TestOpenAPICachingHeaders: mutable resource ops have Cache-Control:no-store; health probes have no-cache; GET /auth/providers has public,max-age=300.",
+            "Add TestOpenAPITimestampFormat: all timestamp fields in all schemas use format=date-time."
+          ],
+          "test_spec_refs": [
+            "TS-03-61",
+            "TS-03-62",
+            "TS-03-63",
+            "TS-03-64",
+            "TS-03-65",
+            "TS-03-66",
+            "TS-03-71",
+            "TS-03-P2",
+            "TS-03-P8"
+          ],
+          "requirement_refs": [
+            "03-REQ-12.1",
+            "03-REQ-12.2",
+            "03-REQ-12.3",
+            "03-REQ-13.1",
+            "03-REQ-13.2",
+            "03-REQ-13.3",
+            "03-REQ-15.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.6",
+          "title": "Write test: X-Request-ID on all responses, ETag as opaque string, Content-Type constraints, and 304 conditional response completeness",
+          "details": [
+            "Add TestOpenAPIXRequestIDEverywhere (property test TS-03-P3): enumerate every (operation, statusCode, response); assert X-Request-ID header defined as string.",
+            "Add TestOpenAPIETagOpaque (property test TS-03-P1): for GET /user, GET /users/{id}, GET /user/tokens/{token_id}, GET /orgs/{id}; assert ETag on 200 has type=string, no format, no pattern, no derivation in description.",
+            "Add TestOpenAPIContentTypeConstraints: all requestBody use application/json; 204+304 have no content.",
+            "Add TestOpenAPI304Responses (property test TS-03-P9): four conditional GETs have 304 with X-Request-ID+ETag, no content, no Cache-Control on 304."
+          ],
+          "test_spec_refs": [
+            "TS-03-67",
+            "TS-03-68",
+            "TS-03-69",
+            "TS-03-70",
+            "TS-03-P1",
+            "TS-03-P3",
+            "TS-03-P9"
+          ],
+          "requirement_refs": [
+            "03-REQ-14.1",
+            "03-REQ-14.2",
+            "03-REQ-14.3",
+            "03-REQ-14.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "go test ./api/... -count=1 -v passes all tests in this group",
+          "go vet ./... reports no issues",
+          "Requirements 03-REQ-9.1 through 03-REQ-15.1 test harness is in place",
+          "Property tests TS-03-P1 through TS-03-P9 are all implemented as Go test functions",
+          "Edge case tests TS-03-E1, TS-03-E2, TS-03-E3 have test scaffolding in place"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Author api/openapi.yaml — top-level structure, servers, schemas, and security",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Create api/openapi.yaml with openapi version, info, and servers block",
+          "details": [
+            "Create api/openapi.yaml with openapi: '3.1.0', info block (title: apikit API, version: 0.1.0).",
+            "Add top-level servers: [{url: /api/v1, description: 'Default mount point (configurable per deployment)'}].",
+            "Validate YAML syntax before committing."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-2"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.1",
+            "03-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Define components/schemas: User, OAuthProvider, Error, AuthCallbackResponse",
+          "details": [
+            "Define User schema: id (string, format:uuid), username, email, full_name (nullable string), status (enum: active, blocked), role (enum: admin, user), provider, provider_id, created_at (string, format:date-time), updated_at (string, format:date-time). All required except full_name nullable.",
+            "Define OAuthProvider schema: name (string), authorize_url (string).",
+            "Define Error schema: required error object with code (integer, description: equals HTTP status code exactly, no sub-codes) and message (string).",
+            "Define AuthCallbackResponse schema: user ($ref: '#/components/schemas/User'), api_key (object with key string, key_id string, expires_at nullable date-time string).",
+            "All timestamps use type: string, format: date-time with description noting RFC 3339 UTC Z suffix."
+          ],
+          "test_spec_refs": [
+            "TS-03-52",
+            "TS-03-58",
+            "TS-03-59",
+            "TS-03-60"
+          ],
+          "requirement_refs": [
+            "03-REQ-11.1",
+            "03-REQ-11.7",
+            "03-REQ-11.8",
+            "03-REQ-11.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Define components/schemas: ApiKeyMetadata, ApiKey, PatMetadata, Pat, Organization",
+          "details": [
+            "Define ApiKeyMetadata: key_id (string), created_at (date-time), expires_at (nullable date-time), revoked_at (nullable date-time).",
+            "Define ApiKey: key (string, description: full key string including plaintext secret), key_id (string), expires_at (nullable date-time).",
+            "Define PatMetadata: token_id, name, permissions (array, items: {type: string, pattern: '^[a-z_]+:[a-z_]+$', description listing all 6 built-in permissions}), created_at, expires_at (nullable), revoked_at (nullable).",
+            "Define Pat: token (string, description: full token including plaintext secret, returned only at creation), token_id, name, permissions (same pattern array), expires_at (nullable).",
+            "Define Organization: id (uuid), name, slug, url (nullable string), status (enum: active, blocked), created_at, updated_at.",
+            "Use OpenAPI 3.1 null representation (type: [string, 'null'] or nullable: true depending on tooling compatibility)."
+          ],
+          "test_spec_refs": [
+            "TS-03-53",
+            "TS-03-54",
+            "TS-03-55",
+            "TS-03-56",
+            "TS-03-57"
+          ],
+          "requirement_refs": [
+            "03-REQ-11.2",
+            "03-REQ-11.3",
+            "03-REQ-11.4",
+            "03-REQ-11.5",
+            "03-REQ-11.6",
+            "03-REQ-3.1",
+            "03-REQ-3.2",
+            "03-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Define components/securitySchemes (bearerAuth) and reusable header/response components",
+          "details": [
+            "Define components/securitySchemes/bearerAuth: type: http, scheme: bearer, description covering all three credential formats (Admin Token: <prefix>_admin_<64 hex>, API Key: <prefix>_<key_id>_<secret>, PAT: <prefix>_pat_<token_id>_<secret>).",
+            "Define reusable components/headers/XRequestID: schema type: string, description: UUID present on every response for tracing.",
+            "Define reusable components/headers/ETag: schema type: string (no format, no pattern), description: Opaque string; derivation is an implementation detail of server_core.",
+            "Define reusable components/responses for common error codes (400, 401, 403, 404, 409, 413, 415, 500) each with Error schema and X-Request-ID header."
+          ],
+          "test_spec_refs": [
+            "TS-03-5",
+            "TS-03-67",
+            "TS-03-68"
+          ],
+          "requirement_refs": [
+            "03-REQ-2.1",
+            "03-REQ-14.1",
+            "03-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Define components/parameters and reusable request/response schemas for expires field",
+          "details": [
+            "Define reusable ExpiresParam schema: type: integer, enum: [0, 30, 60, 90], default: 90, description: Expiry in days. 0 = no expiry (permanent); expires_at will be null. 30/60/90 = expiry 24h×N from creation.",
+            "Define reusable IncludeBlockedParam: in: query, name: include_blocked, schema: {type: boolean, default: false}, description: When false (default), only status=active resources returned. When true, status=blocked resources included.",
+            "Reference these from POST /auth/callback, POST /user/tokens, GET /users, GET /orgs."
+          ],
+          "test_spec_refs": [
+            "TS-03-10",
+            "TS-03-31",
+            "TS-03-43"
+          ],
+          "requirement_refs": [
+            "03-REQ-4.1",
+            "03-REQ-9.2",
+            "03-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go test ./api/... -count=1 -v — TestOpenAPISpec, TestOpenAPIServers, component schema tests pass",
+          "go vet ./... reports no issues",
+          "make check (openapi-validator) exits 0 with the partial spec (schemas + security defined, paths may be partially populated)",
+          "Requirements 03-REQ-2.1, 03-REQ-3.1, 03-REQ-3.2, 03-REQ-4.1, 03-REQ-4.2, 03-REQ-11.1–03-REQ-11.9 acceptance criteria met for defined schemas"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Author health probe, OAuth, and authenticated user self-service path definitions",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Define health probe paths: /healthz, /readyz, /version",
+          "details": [
+            "For /healthz: path-level servers: [{url: /}]; GET op with no security; 200 body {status: string, enum: [ok]}; Cache-Control: no-cache header; X-Request-ID header; no 401/403.",
+            "For /readyz: same servers override; 200 body {status: ok}; 503 body {status: unavailable}; Cache-Control: no-cache; X-Request-ID on both responses.",
+            "For /version: path-level servers override; 200 body object with version, build_time, commit, mount_point (all strings); Cache-Control: no-cache; X-Request-ID.",
+            "None of the three paths have 500 response required (infrastructure returns it but not documented per PRD scope)."
+          ],
+          "test_spec_refs": [
+            "TS-03-3",
+            "TS-03-15",
+            "TS-03-16",
+            "TS-03-17"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.3",
+            "03-REQ-6.1",
+            "03-REQ-6.2",
+            "03-REQ-6.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Define OAuth paths: /auth/providers and /auth/callback",
+          "details": [
+            "GET /auth/providers: no security; 200 array of $ref OAuthProvider; Cache-Control: public, max-age=300 header; X-Request-ID header; no 401 defined.",
+            "POST /auth/callback: no security; requestBody required: provider (string), code (string), redirect_uri (string); expires: $ref ExpiresParam (optional); 200 $ref AuthCallbackResponse; 400 $ref Error response; 413 response; Cache-Control: no-store; X-Request-ID on all responses."
+          ],
+          "test_spec_refs": [
+            "TS-03-18",
+            "TS-03-19",
+            "TS-03-SMOKE-2"
+          ],
+          "requirement_refs": [
+            "03-REQ-7.1",
+            "03-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Define GET /user and PATCH /user",
+          "details": [
+            "GET /user: security: [bearerAuth]; 200 $ref User + ETag header + Cache-Control:no-store + X-Request-ID; 304 response with X-Request-ID+ETag headers, no content, no Cache-Control; 401, 403, 500 responses; description mentions If-None-Match conditional support and users:read PAT permission.",
+            "PATCH /user: security: [bearerAuth]; requestBody application/json with schema: {type: object, required: [full_name], properties: {full_name: {type: string}}}; description states username and email are immutable via PATCH; 200 $ref User; 400, 401, 403, 415, 413, 500 responses; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-20",
+            "TS-03-21"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.1",
+            "03-REQ-8.2",
+            "03-REQ-5.1",
+            "03-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Define GET/POST/DELETE /user/keys paths and GET/DELETE /user/tokens paths",
+          "details": [
+            "GET /user/keys: bearerAuth; 200 array $ref ApiKeyMetadata; 401, 403, 500; Cache-Control:no-store; X-Request-ID; description: requires keys:read PAT.",
+            "POST /user/keys/{key_id}/refresh: bearerAuth; no body; 200 $ref ApiKey; 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID; description: requires keys:manage PAT.",
+            "DELETE /user/keys/{key_id}: bearerAuth; 204 no content + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store; description: requires keys:manage PAT.",
+            "GET /user/tokens: bearerAuth; 200 array $ref PatMetadata; 401, 403, 500; Cache-Control:no-store; X-Request-ID; description: requires tokens:read PAT.",
+            "DELETE /user/tokens/{token_id}: bearerAuth; 204 + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store; description: requires tokens:manage PAT."
+          ],
+          "test_spec_refs": [
+            "TS-03-22",
+            "TS-03-23",
+            "TS-03-24",
+            "TS-03-25",
+            "TS-03-28"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.3",
+            "03-REQ-8.4",
+            "03-REQ-8.5",
+            "03-REQ-8.6",
+            "03-REQ-8.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Define POST /user/tokens, GET /user/tokens/{token_id}, and GET /user/orgs",
+          "details": [
+            "POST /user/tokens: bearerAuth; requestBody required name (string) + permissions (array pattern items); optional expires $ref ExpiresParam; 201 $ref Pat; 400, 401, 403, 413, 415, 500; Cache-Control:no-store; X-Request-ID; description: requires tokens:manage PAT.",
+            "GET /user/tokens/{token_id}: bearerAuth; 200 $ref PatMetadata + ETag header; 304 with X-Request-ID+ETag no content no Cache-Control; 401, 403, 404, 500; Cache-Control:no-store on 200; description: requires tokens:read PAT + If-None-Match support.",
+            "GET /user/orgs: bearerAuth; 200 array $ref Organization; 401, 403, 500; Cache-Control:no-store; X-Request-ID; description: requires orgs:read PAT."
+          ],
+          "test_spec_refs": [
+            "TS-03-26",
+            "TS-03-27",
+            "TS-03-29"
+          ],
+          "requirement_refs": [
+            "03-REQ-8.7",
+            "03-REQ-8.8",
+            "03-REQ-8.10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go test ./api/... -count=1 -v — all tests for groups 1 and 2 (health probe, OAuth, self-service user endpoints) pass",
+          "make check (openapi-validator) exits 0 with all paths defined so far",
+          "go vet ./... reports no issues",
+          "Requirements 03-REQ-1.3, 03-REQ-6.1–6.3, 03-REQ-7.1–7.2, 03-REQ-8.1–8.10 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Author admin user management path definitions",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Define POST /users and GET /users (admin endpoints)",
+          "details": [
+            "POST /users: bearerAuth; requestBody required username, email, provider, provider_id (all strings); 201 $ref User; 400, 401, 403, 409 (duplicate username or provider/provider_id), 413, 415, 500; Cache-Control:no-store; X-Request-ID.",
+            "GET /users: bearerAuth; query param include_blocked ($ref IncludeBlockedParam); 200 array $ref User; 401, 403, 500; Cache-Control:no-store; X-Request-ID; description: include_blocked=false returns only status=active users; include_blocked=true includes status=blocked."
+          ],
+          "test_spec_refs": [
+            "TS-03-30",
+            "TS-03-31"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.1",
+            "03-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Define GET /users/{id} and PATCH /users/{id} (admin endpoints)",
+          "details": [
+            "GET /users/{id}: bearerAuth; 200 $ref User + ETag header; 304 X-Request-ID+ETag no content no Cache-Control; 401, 403, 404, 500; Cache-Control:no-store on 200; X-Request-ID.",
+            "PATCH /users/{id}: bearerAuth; requestBody schema with only full_name (string, required); description: username and email are immutable via PATCH; 200 $ref User; 401, 403, 404, 413, 415, 500; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-32",
+            "TS-03-33"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.3",
+            "03-REQ-9.4",
+            "03-REQ-5.2",
+            "03-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Define POST /users/{id}/promote and POST /users/{id}/demote",
+          "details": [
+            "POST /users/{id}/promote: bearerAuth; no body; 200 $ref User (description: user.role=admin); 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "POST /users/{id}/demote: bearerAuth; no body; 200 $ref User (description: user.role=user); 401, 403, 404, 409 (cannot demote last admin), 500; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-34",
+            "TS-03-35"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.5",
+            "03-REQ-9.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Define POST /users/{id}/block, POST /users/{id}/unblock",
+          "details": [
+            "POST /users/{id}/block: bearerAuth; no body; 200 $ref User (description: user.status=blocked); 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "POST /users/{id}/unblock: bearerAuth; no body; 200 $ref User (description: user.status=active); 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-36",
+            "TS-03-37"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.7",
+            "03-REQ-9.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.5",
+          "title": "Define GET /users/{id}/keys, DELETE /users/{id}/keys/{key_id}, GET /users/{id}/tokens, DELETE /users/{id}/tokens/{token_id}",
+          "details": [
+            "GET /users/{id}/keys: bearerAuth; 200 array $ref ApiKeyMetadata; 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "DELETE /users/{id}/keys/{key_id}: bearerAuth; 204 + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store.",
+            "GET /users/{id}/tokens: bearerAuth; 200 array $ref PatMetadata; 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "DELETE /users/{id}/tokens/{token_id}: bearerAuth; 204 + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store."
+          ],
+          "test_spec_refs": [
+            "TS-03-38",
+            "TS-03-39",
+            "TS-03-40",
+            "TS-03-41"
+          ],
+          "requirement_refs": [
+            "03-REQ-9.9",
+            "03-REQ-9.10",
+            "03-REQ-9.11",
+            "03-REQ-9.12"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go test ./api/... -count=1 -v — all admin user endpoint tests (group 3 subset) pass",
+          "make check exits 0 with all admin user paths defined",
+          "go vet ./... reports no issues",
+          "Requirements 03-REQ-9.1 through 03-REQ-9.12 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Author organization management path definitions",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Define POST /orgs and GET /orgs",
+          "details": [
+            "POST /orgs: bearerAuth; requestBody required name (string), slug (string); optional url (string); 201 $ref Organization; 400, 401, 403, 409 (duplicate name or slug), 413, 415, 500; Cache-Control:no-store; X-Request-ID.",
+            "GET /orgs: bearerAuth; query param include_blocked ($ref IncludeBlockedParam); 200 array $ref Organization; 401, 403, 500; Cache-Control:no-store; X-Request-ID; description: include_blocked filtering behavior matches GET /users."
+          ],
+          "test_spec_refs": [
+            "TS-03-42",
+            "TS-03-43"
+          ],
+          "requirement_refs": [
+            "03-REQ-10.1",
+            "03-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Define GET /orgs/{id} and PATCH /orgs/{id}",
+          "details": [
+            "GET /orgs/{id}: bearerAuth; description: accepts admin credentials or member with orgs:read PAT permission; 200 $ref Organization + ETag header; 304 X-Request-ID+ETag no content no Cache-Control; 401, 403, 404, 500; Cache-Control:no-store on 200.",
+            "PATCH /orgs/{id}: bearerAuth; requestBody optional name (string), url (string) — neither in required array; 200 $ref Organization; 401, 403, 404, 409 (duplicate name), 413, 415, 500; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-44",
+            "TS-03-45"
+          ],
+          "requirement_refs": [
+            "03-REQ-10.3",
+            "03-REQ-10.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Define DELETE /orgs/{id}, POST /orgs/{id}/block, POST /orgs/{id}/unblock",
+          "details": [
+            "DELETE /orgs/{id}: bearerAuth; 204 + X-Request-ID; description: cascades membership deletions; 401, 403, 404, 500; Cache-Control:no-store.",
+            "POST /orgs/{id}/block: bearerAuth; 200 $ref Organization (description: status=blocked); 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "POST /orgs/{id}/unblock: bearerAuth; 200 $ref Organization (description: status=active); 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID."
+          ],
+          "test_spec_refs": [
+            "TS-03-46",
+            "TS-03-47",
+            "TS-03-48"
+          ],
+          "requirement_refs": [
+            "03-REQ-10.5",
+            "03-REQ-10.6",
+            "03-REQ-10.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Define GET /orgs/{id}/members, PUT /orgs/{id}/members/{user_id}, DELETE /orgs/{id}/members/{user_id}",
+          "details": [
+            "GET /orgs/{id}/members: bearerAuth; description: accepts admin or member with orgs:read PAT; 200 array $ref User; 401, 403, 404, 500; Cache-Control:no-store; X-Request-ID.",
+            "PUT /orgs/{id}/members/{user_id}: bearerAuth; NO requestBody defined; 204 + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store; description: user ID conveyed via path parameter only.",
+            "DELETE /orgs/{id}/members/{user_id}: bearerAuth; 204 + X-Request-ID; 401, 403, 404, 500; Cache-Control:no-store."
+          ],
+          "test_spec_refs": [
+            "TS-03-49",
+            "TS-03-50",
+            "TS-03-51"
+          ],
+          "requirement_refs": [
+            "03-REQ-10.8",
+            "03-REQ-10.9",
+            "03-REQ-10.10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go test ./api/... -count=1 -v — all organization endpoint tests pass",
+          "make check exits 0 with complete spec (all paths defined)",
+          "go vet ./... reports no issues",
+          "Requirements 03-REQ-10.1 through 03-REQ-10.10 acceptance criteria met",
+          "PUT /orgs/{id}/members/{user_id} has no requestBody defined (TS-03-50 passes)"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "checkpoint",
+      "title": "Full spec validation checkpoint — all paths, schemas, and headers complete",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Run full test suite and openapi-validator against complete api/openapi.yaml",
+          "details": [
+            "Run go test ./api/... -count=1 -v; confirm all tests pass.",
+            "Run make check; confirm openapi-validator exits 0.",
+            "Confirm no unresolved $ref errors reported.",
+            "Confirm all 17 requirements have at least one passing test."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-4",
+            "TS-03-75"
+          ],
+          "requirement_refs": [
+            "03-REQ-1.1",
+            "03-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Audit X-Request-ID presence on all response codes across all operations",
+          "details": [
+            "Run TestOpenAPIXRequestIDEverywhere property test; confirm zero failures.",
+            "Manually spot-check 204, 304, and 5xx responses on at least three operations.",
+            "Fix any missing X-Request-ID header definitions in api/openapi.yaml."
+          ],
+          "test_spec_refs": [
+            "TS-03-67",
+            "TS-03-P3"
+          ],
+          "requirement_refs": [
+            "03-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Audit 401+403 completeness on all authenticated endpoints",
+          "details": [
+            "Run TestOpenAPIAuthErrors property test; confirm zero failures.",
+            "Manually verify that every operation with bearerAuth security has both 401 and 403 with the Error schema.",
+            "Fix any gaps in api/openapi.yaml."
+          ],
+          "test_spec_refs": [
+            "TS-03-62",
+            "TS-03-P2"
+          ],
+          "requirement_refs": [
+            "03-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Audit 413 presence on all request-body endpoints",
+          "details": [
+            "Run TestOpenAPI413Coverage; confirm zero failures.",
+            "Enumerate all operations with requestBody defined; confirm 413 response with Error schema present on each.",
+            "Fix any missing 413 responses in api/openapi.yaml."
+          ],
+          "test_spec_refs": [
+            "TS-03-63"
+          ],
+          "requirement_refs": [
+            "03-REQ-12.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.5",
+          "title": "Audit PATCH body immutability, ETag opaqueness, and 304 response completeness",
+          "details": [
+            "Run TestOpenAPIPatchImmutability (TS-03-P5): confirm PATCH /user and PATCH /users/{id} have exactly {full_name} in request body schema.",
+            "Run TestOpenAPIETagOpaque (TS-03-P1): confirm ETag schemas on 4 endpoints have type=string, no format/pattern/derivation description.",
+            "Run TestOpenAPI304Responses (TS-03-P9): confirm 304 responses on 4 conditional GET endpoints have X-Request-ID+ETag headers, no content, no Cache-Control."
+          ],
+          "test_spec_refs": [
+            "TS-03-P5",
+            "TS-03-P1",
+            "TS-03-P9"
+          ],
+          "requirement_refs": [
+            "03-REQ-5.1",
+            "03-REQ-5.2",
+            "03-REQ-14.2",
+            "03-REQ-14.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "go test ./... -count=1 exits 0 — entire test suite green",
+          "make check exits 0 — openapi-validator reports no errors",
+          "go vet ./... reports no issues",
+          "All 22 acceptance criteria from the PRD are covered by passing tests",
+          "All 9 correctness properties (03-PROP-1 through 03-PROP-9) have passing property tests"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "wiring_verification",
+      "title": "End-to-end wiring verification — spec, validation harness, and tooling integration",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Trace execution paths: go test ./... discovers and executes api/api_test.go",
+          "details": [
+            "Run go test ./... from repository root; confirm api package appears in output with PASS.",
+            "Confirm TestOpenAPISpec calls os.ReadFile → libopenapi.NewDocument → BuildV3Model → asserts len(errs)==0.",
+            "Confirm no panic/os.Exit usage in api/api_test.go — only t.Fatalf on errors (03-PATH-1).",
+            "Confirm no stubs remain: search api/api_test.go for 'panic(\"not implemented\")', '// TODO', bare 'return nil' in non-trivial paths."
+          ],
+          "test_spec_refs": [
+            "TS-03-SMOKE-1",
+            "TS-03-72",
+            "TS-03-74"
+          ],
+          "requirement_refs": [
+            "03-REQ-16.1",
+            "03-REQ-16.2",
+            "03-REQ-16.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Trace execution path: make check invokes openapi-validator and propagates exit code",
+          "details": [
+            "Run make check with valid spec; confirm exit code 0.",
+            "Temporarily introduce a bad $ref; run make check; confirm non-zero exit and validator error in output.",
+            "Restore spec to valid state; confirm make check returns 0.",
+            "Confirm Makefile check target uses the exact validator command from the PRD tech stack."
+          ],
+          "test_spec_refs": [
+            "TS-03-75"
+          ],
+          "requirement_refs": [
+            "03-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Run smoke tests: POST /auth/callback, conditional GET, PAT creation, admin lifecycle, org filtering",
+          "details": [
+            "TS-03-SMOKE-2: validate POST /auth/callback operation definition — required fields, expires enum, AuthCallbackResponse, Cache-Control:no-store.",
+            "TS-03-SMOKE-3: validate GET /user ETag/304 conditional support — ETag on 200, 304 with X-Request-ID+ETag no body no Cache-Control.",
+            "TS-03-SMOKE-4: validate admin user lifecycle endpoints — POST /users 409, promote, demote 409.",
+            "TS-03-SMOKE-5: validate POST /user/tokens and GET /user/orgs — pattern permissions, Pat schema with token, orgs:read documented.",
+            "TS-03-SMOKE-6: validate GET /orgs include_blocked parameter behavior documented."
+          ],
+          "test_spec_refs": [
+            "TS-03-SMOKE-2",
+            "TS-03-SMOKE-3",
+            "TS-03-SMOKE-4",
+            "TS-03-SMOKE-5",
+            "TS-03-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "03-REQ-7.2",
+            "03-REQ-8.1",
+            "03-REQ-8.7",
+            "03-REQ-9.1",
+            "03-REQ-9.6",
+            "03-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Verify return value propagation in api/api_test.go error handling",
+          "details": [
+            "Confirm file-read error path: temporarily remove api/openapi.yaml; run go test ./api/... and confirm non-zero exit with FAIL message (not panic). Restore file.",
+            "Confirm parser error path: temporarily corrupt api/openapi.yaml with invalid YAML; run go test ./api/... and confirm t.Fatalf fires with error details. Restore file.",
+            "Confirm all error return values from NewDocument and BuildV3Model are checked — no discarded errors.",
+            "Search for any unchecked error returns (e.g. '_' assignment) in api/api_test.go."
+          ],
+          "test_spec_refs": [
+            "TS-03-E2",
+            "TS-03-E3"
+          ],
+          "requirement_refs": [
+            "03-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.5",
+          "title": "Stub and dead-code audit across all spec artifacts",
+          "details": [
+            "Search api/ directory for Go stub markers: grep -rn 'panic(\"not implemented\")' api/; grep -rn '// TODO' api/; grep -rn 'panic(' api/.",
+            "Confirm api/openapi.yaml has no placeholder values (e.g. 'TODO', 'FIXME', '<placeholder>') in any field.",
+            "Confirm all $ref targets in api/openapi.yaml resolve (make check passes with 0 errors).",
+            "Confirm no operation is missing its summary or description field.",
+            "No cross-spec entry points to verify — this spec has no upstream dependencies (spec is self-contained)."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-73"
+          ],
+          "requirement_refs": [
+            "03-REQ-16.1",
+            "03-REQ-16.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "go test ./... -count=1 exits 0 — all tests pass including all smoke tests and property tests",
+          "make check exits 0 — openapi-validator confirms api/openapi.yaml is valid OpenAPI 3.1",
+          "go vet ./... reports no issues in any package",
+          "No panic('not implemented') or TODO stubs found in api/ directory",
+          "All 6 execution paths (03-PATH-1 through 03-PATH-6) are representable by the completed spec without stubs",
+          "All 22 PRD acceptance criteria are verified by passing go test assertions",
+          "All 12 error handling entries (03-ERR-1 through 03-ERR-12) are covered by the spec responses and test assertions"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "03-REQ-1.1",
+      "test_spec_id": "TS-03-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1.2",
+      "test_spec_id": "TS-03-2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1.3",
+      "test_spec_id": "TS-03-3",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1.4",
+      "test_spec_id": "TS-03-4",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1.E1",
+      "test_spec_id": "TS-03-E1",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2.1",
+      "test_spec_id": "TS-03-5",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2.2",
+      "test_spec_id": "TS-03-6",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2.3",
+      "test_spec_id": "TS-03-7",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3.1",
+      "test_spec_id": "TS-03-8",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3.2",
+      "test_spec_id": "TS-03-9",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-4.1",
+      "test_spec_id": "TS-03-10",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-4.2",
+      "test_spec_id": "TS-03-11",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-5.1",
+      "test_spec_id": "TS-03-12",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-5.2",
+      "test_spec_id": "TS-03-13",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-5.3",
+      "test_spec_id": "TS-03-14",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-6.1",
+      "test_spec_id": "TS-03-15",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-6.2",
+      "test_spec_id": "TS-03-16",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-6.3",
+      "test_spec_id": "TS-03-17",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7.1",
+      "test_spec_id": "TS-03-18",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7.2",
+      "test_spec_id": "TS-03-19",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.1",
+      "test_spec_id": "TS-03-20",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.2",
+      "test_spec_id": "TS-03-21",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.3",
+      "test_spec_id": "TS-03-22",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.4",
+      "test_spec_id": "TS-03-23",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.5",
+      "test_spec_id": "TS-03-24",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.6",
+      "test_spec_id": "TS-03-25",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.7",
+      "test_spec_id": "TS-03-26",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.8",
+      "test_spec_id": "TS-03-27",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.9",
+      "test_spec_id": "TS-03-28",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8.10",
+      "test_spec_id": "TS-03-29",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.1",
+      "test_spec_id": "TS-03-30",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.2",
+      "test_spec_id": "TS-03-31",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.3",
+      "test_spec_id": "TS-03-32",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.4",
+      "test_spec_id": "TS-03-33",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.5",
+      "test_spec_id": "TS-03-34",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.6",
+      "test_spec_id": "TS-03-35",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.7",
+      "test_spec_id": "TS-03-36",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.8",
+      "test_spec_id": "TS-03-37",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.9",
+      "test_spec_id": "TS-03-38",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.10",
+      "test_spec_id": "TS-03-39",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.11",
+      "test_spec_id": "TS-03-40",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-9.12",
+      "test_spec_id": "TS-03-41",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.1",
+      "test_spec_id": "TS-03-42",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.2",
+      "test_spec_id": "TS-03-43",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.3",
+      "test_spec_id": "TS-03-44",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.4",
+      "test_spec_id": "TS-03-45",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.5",
+      "test_spec_id": "TS-03-46",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.6",
+      "test_spec_id": "TS-03-47",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.7",
+      "test_spec_id": "TS-03-48",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.8",
+      "test_spec_id": "TS-03-49",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.9",
+      "test_spec_id": "TS-03-50",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-10.10",
+      "test_spec_id": "TS-03-51",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.1",
+      "test_spec_id": "TS-03-52",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.2",
+      "test_spec_id": "TS-03-53",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.3",
+      "test_spec_id": "TS-03-54",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.4",
+      "test_spec_id": "TS-03-55",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.5",
+      "test_spec_id": "TS-03-56",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.6",
+      "test_spec_id": "TS-03-57",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.7",
+      "test_spec_id": "TS-03-58",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.8",
+      "test_spec_id": "TS-03-59",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-11.9",
+      "test_spec_id": "TS-03-60",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-12.1",
+      "test_spec_id": "TS-03-61",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-12.2",
+      "test_spec_id": "TS-03-62",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-12.3",
+      "test_spec_id": "TS-03-63",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-13.1",
+      "test_spec_id": "TS-03-64",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-13.2",
+      "test_spec_id": "TS-03-65",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-13.3",
+      "test_spec_id": "TS-03-66",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-14.1",
+      "test_spec_id": "TS-03-67",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-14.2",
+      "test_spec_id": "TS-03-68",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-14.3",
+      "test_spec_id": "TS-03-69",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-14.4",
+      "test_spec_id": "TS-03-70",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-15.1",
+      "test_spec_id": "TS-03-71",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-16.1",
+      "test_spec_id": "TS-03-72",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-16.2",
+      "test_spec_id": "TS-03-73",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-16.3",
+      "test_spec_id": "TS-03-74",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-16.1",
+      "test_spec_id": "TS-03-E2",
+      "task_id": "9.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-16.1",
+      "test_spec_id": "TS-03-E3",
+      "task_id": "9.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-17.1",
+      "test_spec_id": "TS-03-75",
+      "task_id": "1.3",
+      "test_path": null
+    }
+  ]
+}

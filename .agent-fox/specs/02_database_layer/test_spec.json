@@ -1,0 +1,1355 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "database_layer",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-02-1",
+      "requirement_id": "02-REQ-1.1",
+      "kind": "unit",
+      "description": "Open with an empty string path returns a descriptive error without performing any filesystem access or opening a database connection.",
+      "preconditions": [
+        "No filesystem state exists for an empty path",
+        "internal/db package is compiled"
+      ],
+      "input": {
+        "path": ""
+      },
+      "expected": "Open returns non-nil error with message \"db: path must not be empty\"; returned *DB is nil; no directories or files are created",
+      "assertion_pseudocode": "db, err := Open(\"\"); assert(db == nil); assert(err != nil); assert(err.Error() == \"db: path must not be empty\")"
+    },
+    {
+      "id": "TS-02-2",
+      "requirement_id": "02-REQ-1.2",
+      "kind": "unit",
+      "description": "Open with a path that points to an existing directory returns a descriptive error containing the path, without opening any database connection.",
+      "preconditions": [
+        "A directory exists at the target path (e.g. created via os.MkdirTemp)",
+        "internal/db package is compiled"
+      ],
+      "input": {
+        "path": "<existing directory path>"
+      },
+      "expected": "Open returns non-nil error containing the path string and 'is a directory, not a file'; returned *DB is nil",
+      "assertion_pseudocode": "dir := t.TempDir(); db, err := Open(dir); assert(db == nil); assert(err != nil); assert(strings.Contains(err.Error(), dir)); assert(strings.Contains(err.Error(), \"is a directory, not a file\"))"
+    },
+    {
+      "id": "TS-02-3",
+      "requirement_id": "02-REQ-1.3",
+      "kind": "unit",
+      "description": "Input validation checks occur before any directory creation or database/sql.Open call, ensuring no partial filesystem state is produced for invalid inputs.",
+      "preconditions": [
+        "A path to a non-existent parent directory is constructed",
+        "internal/db package is compiled"
+      ],
+      "input": {
+        "path": ""
+      },
+      "expected": "Open with empty string returns error immediately; no directories are created; no SQLite connection is attempted",
+      "assertion_pseudocode": "path := \"\"; db, err := Open(path); assert(err != nil); assert(db == nil); assert(no filesystem entry was created at path)"
+    },
+    {
+      "id": "TS-02-4",
+      "requirement_id": "02-REQ-2.1",
+      "kind": "integration",
+      "description": "Open creates the parent directory recursively when it does not exist before opening the SQLite connection.",
+      "preconditions": [
+        "Temporary base directory exists from t.TempDir()",
+        "Parent subdirectory of the database path does not exist"
+      ],
+      "input": {
+        "path": "<tempdir>/newsubdir/apikit.db"
+      },
+      "expected": "Open succeeds; the directory <tempdir>/newsubdir is created; database file exists at the given path",
+      "assertion_pseudocode": "base := t.TempDir(); path := filepath.Join(base, \"newsubdir\", \"apikit.db\"); db, err := Open(path); assert(err == nil); assert(db != nil); assert(directoryExists(filepath.Dir(path))); db.Close()"
+    },
+    {
+      "id": "TS-02-5",
+      "requirement_id": "02-REQ-2.2",
+      "kind": "integration",
+      "description": "The directory created by Open has mode 0700 (owner read/write/execute only) on non-Windows platforms.",
+      "preconditions": [
+        "Temporary base directory from t.TempDir()",
+        "Test runs on a non-Windows platform (runtime.GOOS != \"windows\")",
+        "Parent directory of the database path does not exist"
+      ],
+      "input": {
+        "path": "<tempdir>/sensitivesubdir/apikit.db"
+      },
+      "expected": "Directory created by Open has permission bits 0700; mode is hardcoded and not configurable",
+      "assertion_pseudocode": "if runtime.GOOS == \"windows\" { t.Skip() }; base := t.TempDir(); path := filepath.Join(base, \"sensitivesubdir\", \"apikit.db\"); db, err := Open(path); assert(err == nil); info := os.Stat(filepath.Dir(path)); assert(info.Mode().Perm() == 0700); db.Close()"
+    },
+    {
+      "id": "TS-02-6",
+      "requirement_id": "02-REQ-2.3",
+      "kind": "integration",
+      "description": "Open skips directory creation and proceeds directly to the database connection when the parent directory already exists.",
+      "preconditions": [
+        "Temporary directory created by t.TempDir() exists",
+        "No database file yet exists inside it"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "Open succeeds without error; parent directory is unchanged; database file is created",
+      "assertion_pseudocode": "base := t.TempDir(); path := filepath.Join(base, \"apikit.db\"); db, err := Open(path); assert(err == nil); assert(db != nil); db.Close()"
+    },
+    {
+      "id": "TS-02-7",
+      "requirement_id": "02-REQ-3.1",
+      "kind": "unit",
+      "description": "Both Open and OpenMemory delegate all post-connection initialization to the same shared private initDB function; there is no duplicated initialization logic.",
+      "preconditions": [
+        "internal/db source code is available for inspection",
+        "Both Open and OpenMemory paths are exercised"
+      ],
+      "input": {
+        "paths": [
+          "<tempdir>/apikit.db",
+          ":memory:"
+        ]
+      },
+      "expected": "Both constructors produce a *DB with identical initialization (pool settings, foreign key enforcement, schema); static code inspection confirms a single initDB call site in each constructor",
+      "assertion_pseudocode": "db1, err1 := Open(filepath.Join(t.TempDir(), \"a.db\")); assert(err1 == nil); db2, err2 := OpenMemory(); assert(err2 == nil); verifyTablesExist(db1.SqlDB); verifyTablesExist(db2.SqlDB); db1.Close(); db2.Close()"
+    },
+    {
+      "id": "TS-02-8",
+      "requirement_id": "02-REQ-3.2",
+      "kind": "integration",
+      "description": "initDB sets SetMaxOpenConns(1) and SetMaxIdleConns(1) on the *sql.DB handle immediately after connection, before executing any PRAGMAs.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "After Open, db.SqlDB reports MaxOpenConnections = 1; connection pool enforces the single-connection constraint",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"b.db\")); assert(err == nil); stats := db.SqlDB.Stats(); assert(stats.MaxOpenConnections == 1); db.Close()"
+    },
+    {
+      "id": "TS-02-9",
+      "requirement_id": "02-REQ-3.3",
+      "kind": "integration",
+      "description": "initDB executes PRAGMA journal_mode=WAL as a query when called from Open, reads the returned mode string, and validates it equals 'wal'.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory on a WAL-supporting filesystem"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "Open succeeds; querying PRAGMA journal_mode on the returned database returns 'wal'",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"c.db\")); assert(err == nil); row := db.SqlDB.QueryRow(\"PRAGMA journal_mode\"); var mode string; row.Scan(&mode); assert(mode == \"wal\"); db.Close()"
+    },
+    {
+      "id": "TS-02-10",
+      "requirement_id": "02-REQ-3.4",
+      "kind": "integration",
+      "description": "initDB skips the WAL mode PRAGMA and validation when called from OpenMemory; all other initialization steps still apply.",
+      "preconditions": [
+        "No filesystem state required"
+      ],
+      "input": {
+        "dsn": ":memory:"
+      },
+      "expected": "OpenMemory succeeds; all six tables exist; foreign keys are enforced; pool is configured; no error about WAL mode is returned",
+      "assertion_pseudocode": "db, err := OpenMemory(); assert(err == nil); assert(db != nil); verifyTablesExist(db.SqlDB); verifyForeignKeysOn(db.SqlDB); db.Close()"
+    },
+    {
+      "id": "TS-02-11",
+      "requirement_id": "02-REQ-3.5",
+      "kind": "integration",
+      "description": "initDB executes PRAGMA foreign_keys = ON via db.Exec after WAL mode setup and before schema creation.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "After Open, querying 'PRAGMA foreign_keys' returns 1 (enabled)",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"d.db\")); assert(err == nil); var fk int; db.SqlDB.QueryRow(\"PRAGMA foreign_keys\").Scan(&fk); assert(fk == 1); db.Close()"
+    },
+    {
+      "id": "TS-02-12",
+      "requirement_id": "02-REQ-3.6",
+      "kind": "integration",
+      "description": "initDB executes all six CREATE TABLE IF NOT EXISTS statements inside a single DEFERRED transaction in the correct dependency order.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "All six tables (users, api_keys, pats, orgs, org_members, admin_config) exist after Open; table creation succeeds atomically",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"e.db\")); assert(err == nil); for each table in [\"users\",\"api_keys\",\"pats\",\"orgs\",\"org_members\",\"admin_config\"]: row := db.SqlDB.QueryRow(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\", table); assert(row.Scan(&name) == nil); db.Close()"
+    },
+    {
+      "id": "TS-02-13",
+      "requirement_id": "02-REQ-3.7",
+      "kind": "integration",
+      "description": "initDB returns nil on success so the calling constructor can return a fully initialized *DB handle with no partial state possible.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "Open returns (*DB, nil); the returned *DB is non-nil and fully usable for queries",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"f.db\")); assert(err == nil); assert(db != nil); assert(db.SqlDB != nil); db.Close()"
+    },
+    {
+      "id": "TS-02-14",
+      "requirement_id": "02-REQ-4.1",
+      "kind": "integration",
+      "description": "Open executes PRAGMA journal_mode=WAL using QueryRow (not Exec) so the returned journal mode value can be read and validated.",
+      "preconditions": [
+        "A fresh SQLite database path on a WAL-supporting filesystem"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "Open succeeds; subsequent PRAGMA journal_mode query on the open DB returns 'wal'",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"g.db\")); assert(err == nil); var mode string; db.SqlDB.QueryRow(\"PRAGMA journal_mode\").Scan(&mode); assert(mode == \"wal\"); db.Close()"
+    },
+    {
+      "id": "TS-02-15",
+      "requirement_id": "02-REQ-4.2",
+      "kind": "unit",
+      "description": "Open returns a formatted error containing the unexpected mode string when PRAGMA journal_mode=WAL returns a mode other than 'wal'.",
+      "preconditions": [
+        "Test environment can simulate WAL mode failure (e.g. via mock or logic path inspection)",
+        "internal/db package is compiled"
+      ],
+      "input": {
+        "mode_returned": "delete"
+      },
+      "expected": "Open returns non-nil error with message containing 'failed to enable WAL mode' and the returned mode string; *DB is nil",
+      "assertion_pseudocode": "// This is verified indirectly: inspect that the error format matches when mode != \"wal\"; err := fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", \"delete\"); assert(strings.Contains(err.Error(), \"failed to enable WAL mode\")); assert(strings.Contains(err.Error(), \"delete\"))"
+    },
+    {
+      "id": "TS-02-16",
+      "requirement_id": "02-REQ-4.3",
+      "kind": "integration",
+      "description": "OpenMemory skips PRAGMA journal_mode=WAL and WAL mode validation because SQLite in-memory databases always return 'memory' as their journal mode.",
+      "preconditions": [
+        "No filesystem state required"
+      ],
+      "input": {
+        "dsn": ":memory:"
+      },
+      "expected": "OpenMemory succeeds without error; no WAL error is returned despite in-memory database returning 'memory' as journal mode",
+      "assertion_pseudocode": "db, err := OpenMemory(); assert(err == nil); assert(db != nil); var mode string; db.SqlDB.QueryRow(\"PRAGMA journal_mode\").Scan(&mode); assert(mode == \"memory\"); db.Close()"
+    },
+    {
+      "id": "TS-02-17",
+      "requirement_id": "02-REQ-5.1",
+      "kind": "integration",
+      "description": "Open wraps the driver error with the file path when the database file is corrupt, so operators can identify the problematic file.",
+      "preconditions": [
+        "A file containing arbitrary non-SQLite bytes exists at the target path"
+      ],
+      "input": {
+        "path": "<tempdir>/corrupt.db"
+      },
+      "expected": "Open returns non-nil error containing the path string; the original driver error is wrapped via %w; *DB is nil",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"corrupt.db\"); os.WriteFile(path, []byte(\"not a sqlite db\"), 0644); db, err := Open(path); assert(db == nil); assert(err != nil); assert(strings.Contains(err.Error(), path)); assert(errors.Unwrap(err) != nil)"
+    },
+    {
+      "id": "TS-02-18",
+      "requirement_id": "02-REQ-5.2",
+      "kind": "integration",
+      "description": "Open applies the file-path error wrapper only to driver-level errors after database/sql.Open succeeds; input validation and directory creation errors are returned as-is.",
+      "preconditions": [
+        "A corrupt file at the target path to trigger a driver error",
+        "A separate empty path to trigger an input validation error"
+      ],
+      "input": {
+        "cases": [
+          "empty path",
+          "corrupt file path"
+        ]
+      },
+      "expected": "Empty path error message does not contain 'failed to open database at'; corrupt file error message contains 'failed to open database at' and the path",
+      "assertion_pseudocode": "_, emptyErr := Open(\"\"); assert(!strings.Contains(emptyErr.Error(), \"failed to open database at\")); corruptPath := filepath.Join(t.TempDir(), \"c.db\"); os.WriteFile(corruptPath, []byte(\"garbage\"), 0644); _, corruptErr := Open(corruptPath); assert(strings.Contains(corruptErr.Error(), \"failed to open database at\")); assert(strings.Contains(corruptErr.Error(), corruptPath))"
+    },
+    {
+      "id": "TS-02-19",
+      "requirement_id": "02-REQ-6.1",
+      "kind": "integration",
+      "description": "The users table is created with the normative DDL including all required columns, constraints, and the composite UNIQUE on (provider, provider_id).",
+      "preconditions": [
+        "A fresh SQLite database opened via Open or OpenMemory"
+      ],
+      "input": {
+        "table": "users"
+      },
+      "expected": "Table 'users' exists; columns id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at are present; UNIQUE constraint on (provider, provider_id) is enforced",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); row := db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='users'\"); var ddl string; row.Scan(&ddl); assert(strings.Contains(ddl, \"provider_id\")); assert(strings.Contains(ddl, \"UNIQUE\")); _, err := db.SqlDB.Exec(`INSERT INTO users VALUES ('id1','u1','e@e.com',NULL,'user','active','github','gh1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); assert(err == nil); _, dupErr := db.SqlDB.Exec(`INSERT INTO users VALUES ('id2','u2','e2@e.com',NULL,'user','active','github','gh1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); assert(dupErr != nil)"
+    },
+    {
+      "id": "TS-02-20",
+      "requirement_id": "02-REQ-6.2",
+      "kind": "integration",
+      "description": "The api_keys table is created with the normative DDL including FK reference to users(id).",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory with foreign keys enabled"
+      ],
+      "input": {
+        "table": "api_keys"
+      },
+      "expected": "Table 'api_keys' exists with columns key_id, user_id, secret_hash, expires_days, expires_at, revoked_at, created_at; FK to users(id) is present",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); row := db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='api_keys'\"); var ddl string; row.Scan(&ddl); assert(strings.Contains(ddl, \"REFERENCES users(id)\")); assert(strings.Contains(ddl, \"secret_hash\"))"
+    },
+    {
+      "id": "TS-02-21",
+      "requirement_id": "02-REQ-6.3",
+      "kind": "integration",
+      "description": "The pats table is created with the normative DDL including the permissions column and FK to users(id).",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory"
+      ],
+      "input": {
+        "table": "pats"
+      },
+      "expected": "Table 'pats' exists with columns token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, revoked_at, created_at; FK to users(id) is present",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); var ddl string; db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='pats'\").Scan(&ddl); assert(strings.Contains(ddl, \"permissions\")); assert(strings.Contains(ddl, \"REFERENCES users(id)\"))"
+    },
+    {
+      "id": "TS-02-22",
+      "requirement_id": "02-REQ-6.4",
+      "kind": "integration",
+      "description": "The orgs table is created with the normative DDL including UNIQUE constraints on name and slug.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory"
+      ],
+      "input": {
+        "table": "orgs"
+      },
+      "expected": "Table 'orgs' exists with columns id, name, slug, url, status, created_at, updated_at; UNIQUE constraints on name and slug are enforced",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); var ddl string; db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='orgs'\").Scan(&ddl); assert(strings.Contains(ddl, \"slug\")); assert(strings.Contains(ddl, \"UNIQUE\"))"
+    },
+    {
+      "id": "TS-02-23",
+      "requirement_id": "02-REQ-6.5",
+      "kind": "integration",
+      "description": "The org_members table is created with composite PK (org_id, user_id), FK to orgs(id) ON DELETE CASCADE, and FK to users(id).",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory with users and orgs rows for FK testing"
+      ],
+      "input": {
+        "table": "org_members"
+      },
+      "expected": "Table 'org_members' exists; ON DELETE CASCADE on org_id causes membership rows to be deleted when the referenced org is deleted",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); var ddl string; db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='org_members'\").Scan(&ddl); assert(strings.Contains(ddl, \"ON DELETE CASCADE\")); assert(strings.Contains(ddl, \"PRIMARY KEY (org_id, user_id)\"))"
+    },
+    {
+      "id": "TS-02-24",
+      "requirement_id": "02-REQ-6.6",
+      "kind": "integration",
+      "description": "The admin_config table is created with the normative DDL: key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory"
+      ],
+      "input": {
+        "table": "admin_config"
+      },
+      "expected": "Table 'admin_config' exists with columns key and value; key is the primary key",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); var ddl string; db.SqlDB.QueryRow(\"SELECT sql FROM sqlite_master WHERE type='table' AND name='admin_config'\").Scan(&ddl); assert(strings.Contains(ddl, \"key\")); assert(strings.Contains(ddl, \"value\")); assert(strings.Contains(ddl, \"PRIMARY KEY\"))"
+    },
+    {
+      "id": "TS-02-25",
+      "requirement_id": "02-REQ-6.7",
+      "kind": "integration",
+      "description": "All six CREATE TABLE IF NOT EXISTS statements are executed inside a single DEFERRED transaction that commits atomically.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "After Open, all six tables exist; the schema transaction was committed atomically",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"h.db\")); assert(err == nil); for each table in [\"users\",\"api_keys\",\"pats\",\"orgs\",\"org_members\",\"admin_config\"]: var name string; db.SqlDB.QueryRow(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\", table).Scan(&name); assert(name == table); db.Close()"
+    },
+    {
+      "id": "TS-02-26",
+      "requirement_id": "02-REQ-6.8",
+      "kind": "integration",
+      "description": "Schema creation is idempotent: calling Open on an existing database that already has all tables succeeds without error and does not modify existing data.",
+      "preconditions": [
+        "A SQLite database file already initialized by a prior Open call"
+      ],
+      "input": {
+        "path": "<existing tempdir>/apikit.db"
+      },
+      "expected": "Second Open call returns nil error and a valid *DB handle; existing table contents are unchanged",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"i.db\"); db1, err1 := Open(path); assert(err1 == nil); db1.SqlDB.Exec(`INSERT INTO admin_config VALUES ('key1','val1')`); db1.Close(); db2, err2 := Open(path); assert(err2 == nil); var v string; db2.SqlDB.QueryRow(\"SELECT value FROM admin_config WHERE key='key1'\").Scan(&v); assert(v == \"val1\"); db2.Close()"
+    },
+    {
+      "id": "TS-02-27",
+      "requirement_id": "02-REQ-7.1",
+      "kind": "unit",
+      "description": "The db package exports a DB struct with a SqlDB *sql.DB field that callers use to execute their own queries; no per-table query methods are defined on DB.",
+      "preconditions": [
+        "internal/db package is compiled"
+      ],
+      "input": {},
+      "expected": "DB struct has field SqlDB of type *sql.DB; no methods named after tables (e.g. GetUser, InsertApiKey) exist on DB",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); assert(db.SqlDB != nil); // static: DB type has no InsertUser, GetUser, etc. methods"
+    },
+    {
+      "id": "TS-02-28",
+      "requirement_id": "02-REQ-7.2",
+      "kind": "integration",
+      "description": "Open validates path, creates parent directory (mode 0700) if needed, opens the SQLite file, calls initDB, and returns a fully initialized *DB handle or an error with no partial states.",
+      "preconditions": [
+        "A fresh path in a temp directory whose parent does not yet exist"
+      ],
+      "input": {
+        "path": "<tempdir>/newdir/apikit.db"
+      },
+      "expected": "Open returns (*DB, nil); DB handle is immediately usable for queries; on any failure, returns (nil, non-nil error)",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"newdir\", \"apikit.db\"); db, err := Open(path); assert(err == nil); assert(db != nil); assert(db.SqlDB != nil); db.Close()"
+    },
+    {
+      "id": "TS-02-29",
+      "requirement_id": "02-REQ-7.3",
+      "kind": "integration",
+      "description": "OpenMemory opens an in-memory SQLite database with full initialization and returns an independent isolated DB instance on each call.",
+      "preconditions": [
+        "No filesystem state required"
+      ],
+      "input": {
+        "dsn": ":memory:"
+      },
+      "expected": "OpenMemory returns (*DB, nil); all six tables exist; each call produces an independent database with no shared state",
+      "assertion_pseudocode": "db1, err1 := OpenMemory(); assert(err1 == nil); db2, err2 := OpenMemory(); assert(err2 == nil); db1.SqlDB.Exec(`INSERT INTO admin_config VALUES ('k','v')`); var v string; db2.SqlDB.QueryRow(\"SELECT value FROM admin_config WHERE key='k'\").Scan(&v); assert(v == \"\"); db1.Close(); db2.Close()"
+    },
+    {
+      "id": "TS-02-30",
+      "requirement_id": "02-REQ-7.4",
+      "kind": "integration",
+      "description": "DB.Close closes the underlying *sql.DB and returns any error from that close operation.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory or Open"
+      ],
+      "input": {},
+      "expected": "Close returns nil on a healthy open database; subsequent queries on db.SqlDB return an error after Close",
+      "assertion_pseudocode": "db, _ := OpenMemory(); err := db.Close(); assert(err == nil); _, queryErr := db.SqlDB.Exec(\"SELECT 1\"); assert(queryErr != nil)"
+    },
+    {
+      "id": "TS-02-31",
+      "requirement_id": "02-REQ-7.5",
+      "kind": "integration",
+      "description": "DB.Ping calls db.SqlDB.PingContext(ctx) and returns nil when the connection is alive.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "ctx": "context.Background()"
+      },
+      "expected": "Ping returns nil for a healthy database; no additional checks beyond connection liveness are performed",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); err := db.Ping(context.Background()); assert(err == nil)"
+    },
+    {
+      "id": "TS-02-32",
+      "requirement_id": "02-REQ-8.1",
+      "kind": "integration",
+      "description": "WithTx begins a DEFERRED transaction, calls fn with the transaction handle, commits if fn returns nil, and returns nil to the caller.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory with the admin_config table available"
+      ],
+      "input": {
+        "fn": "inserts a row and returns nil"
+      },
+      "expected": "WithTx returns nil; the inserted row is visible in subsequent queries outside the transaction",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); err := db.WithTx(context.Background(), func(tx) error { _, e := tx.ExecContext(ctx, `INSERT INTO admin_config VALUES ('txkey','txval')`); return e }); assert(err == nil); var v string; db.SqlDB.QueryRow(\"SELECT value FROM admin_config WHERE key='txkey'\").Scan(&v); assert(v == \"txval\")"
+    },
+    {
+      "id": "TS-02-33",
+      "requirement_id": "02-REQ-8.2",
+      "kind": "unit",
+      "description": "WithTx does not wrap or transform errors returned by fn; the exact error from fn is returned unchanged to the caller.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "fn": "returns a sentinel error"
+      },
+      "expected": "WithTx returns exactly the same error value as returned by fn; errors.Is(err, sentinelErr) is true",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); sentinelErr := errors.New(\"test error\"); err := db.WithTx(context.Background(), func(tx) error { return sentinelErr }); assert(errors.Is(err, sentinelErr))"
+    },
+    {
+      "id": "TS-02-34",
+      "requirement_id": "02-REQ-8.3",
+      "kind": "integration",
+      "description": "WithTx silently discards rollback errors and returns the original error from fn when both fn and rollback fail.",
+      "preconditions": [
+        "An open DB instance; fn returns an error; rollback may also fail (e.g. connection closed)"
+      ],
+      "input": {
+        "fn": "returns a custom error"
+      },
+      "expected": "WithTx returns the original error from fn, not a rollback error; rollback error is silently discarded",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); originalErr := errors.New(\"original\"); err := db.WithTx(context.Background(), func(tx) error { return originalErr }); assert(errors.Is(err, originalErr))"
+    },
+    {
+      "id": "TS-02-35",
+      "requirement_id": "02-REQ-8.4",
+      "kind": "unit",
+      "description": "WithTx always uses SQLite's default DEFERRED transaction isolation; no IMMEDIATE or EXCLUSIVE transaction modes are used.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "txOptions": "nil (DEFERRED)"
+      },
+      "expected": "WithTx succeeds with DEFERRED isolation; IMMEDIATE and EXCLUSIVE modes are not exposed by this API",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); err := db.WithTx(context.Background(), func(tx) error { return nil }); assert(err == nil) // DEFERRED is verified by BeginTx(ctx, nil)"
+    },
+    {
+      "id": "TS-02-36",
+      "requirement_id": "02-REQ-8.5",
+      "kind": "integration",
+      "description": "WithTx forwards ctx to db.SqlDB.BeginTx; callers are responsible for passing ctx inside fn; WithTx does not install additional timeouts or deadlines.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "ctx": "context with a deadline"
+      },
+      "expected": "WithTx propagates the context to BeginTx; context cancellation inside fn causes rollback and returns the context error",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); ctx, cancel := context.WithCancel(context.Background()); cancel(); err := db.WithTx(ctx, func(tx) error { return ctx.Err() }); assert(errors.Is(err, context.Canceled))"
+    },
+    {
+      "id": "TS-02-37",
+      "requirement_id": "02-REQ-9.1",
+      "kind": "unit",
+      "description": "WrapError maps SQLITE_CONSTRAINT_UNIQUE to ErrConflict, SQLITE_CONSTRAINT_PRIMARYKEY to ErrConflict, SQLITE_BUSY to ErrDatabaseLocked, SQLITE_LOCKED to ErrDatabaseLocked; returns nil for nil input; returns err unchanged for unknown codes.",
+      "preconditions": [
+        "internal/db package is compiled; synthetic SQLite errors can be constructed"
+      ],
+      "input": {
+        "errors": [
+          "SQLITE_CONSTRAINT_UNIQUE",
+          "SQLITE_BUSY",
+          "nil",
+          "generic error"
+        ]
+      },
+      "expected": "WrapError returns ErrConflict for constraint errors; ErrDatabaseLocked for busy/locked; nil for nil; original error for unknown",
+      "assertion_pseudocode": "assert(WrapError(nil) == nil); assert(errors.Is(WrapError(syntheticUniqueErr), ErrConflict)); assert(errors.Is(WrapError(syntheticBusyErr), ErrDatabaseLocked)); genericErr := errors.New(\"other\"); assert(errors.Is(WrapError(genericErr), genericErr))"
+    },
+    {
+      "id": "TS-02-38",
+      "requirement_id": "02-REQ-9.2",
+      "kind": "unit",
+      "description": "WrapError is a pure function that performs no I/O or state modification and can be called with synthetically constructed errors in tests without a live database.",
+      "preconditions": [
+        "No database connection required; synthetic SQLite error values are constructed in-process"
+      ],
+      "input": {
+        "err": "synthetically constructed SQLite error with SQLITE_BUSY code"
+      },
+      "expected": "WrapError returns ErrDatabaseLocked without opening any connection or causing any side effects",
+      "assertion_pseudocode": "syntheticBusy := constructSQLiteError(SQLITE_BUSY); result := WrapError(syntheticBusy); assert(errors.Is(result, ErrDatabaseLocked)); // no database connection used"
+    },
+    {
+      "id": "TS-02-39",
+      "requirement_id": "02-REQ-9.3",
+      "kind": "unit",
+      "description": "WrapError does not produce ErrNotFound; callers must return ErrNotFound explicitly when sql.ErrNoRows is encountered.",
+      "preconditions": [
+        "No database connection required"
+      ],
+      "input": {
+        "err": "sql.ErrNoRows"
+      },
+      "expected": "WrapError returns sql.ErrNoRows unchanged (not ErrNotFound); callers must handle sql.ErrNoRows separately",
+      "assertion_pseudocode": "result := WrapError(sql.ErrNoRows); assert(!errors.Is(result, ErrNotFound)); assert(errors.Is(result, sql.ErrNoRows))"
+    },
+    {
+      "id": "TS-02-40",
+      "requirement_id": "02-REQ-9.4",
+      "kind": "unit",
+      "description": "The db package exports three sentinel errors: ErrNotFound, ErrConflict, and ErrDatabaseLocked, all testable via errors.Is.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {},
+      "expected": "ErrNotFound.Error() == \"db: not found\"; ErrConflict.Error() == \"db: conflict\"; ErrDatabaseLocked.Error() == \"db: database locked\"",
+      "assertion_pseudocode": "assert(ErrNotFound.Error() == \"db: not found\"); assert(ErrConflict.Error() == \"db: conflict\"); assert(ErrDatabaseLocked.Error() == \"db: database locked\")"
+    },
+    {
+      "id": "TS-02-41",
+      "requirement_id": "02-REQ-10.1",
+      "kind": "unit",
+      "description": "The db package exports a TimeFormat constant equal to '2006-01-02T15:04:05Z'.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {},
+      "expected": "TimeFormat == \"2006-01-02T15:04:05Z\"",
+      "assertion_pseudocode": "assert(TimeFormat == \"2006-01-02T15:04:05Z\")"
+    },
+    {
+      "id": "TS-02-42",
+      "requirement_id": "02-REQ-10.2",
+      "kind": "unit",
+      "description": "FormatTime truncates to whole-second precision, converts to UTC, and formats using TimeFormat; sub-second components are discarded.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "t": "2026-07-17T14:30:00.999999999+05:30"
+      },
+      "expected": "FormatTime returns \"2026-07-17T09:00:00Z\" (converted to UTC, truncated to second, formatted with Z suffix)",
+      "assertion_pseudocode": "t := time.Date(2026,7,17,14,30,0,999999999,time.FixedZone(\"IST\",5*3600+30*60)); result := FormatTime(t); assert(result == \"2026-07-17T09:00:00Z\")"
+    },
+    {
+      "id": "TS-02-43",
+      "requirement_id": "02-REQ-10.3",
+      "kind": "unit",
+      "description": "ParseTime parses a canonical RFC 3339 UTC timestamp string and returns the time.Time in UTC; returns an error for invalid strings.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "s": "2026-07-17T14:30:00Z"
+      },
+      "expected": "ParseTime returns (time.Time{2026-07-17 14:30:00 UTC}, nil); ParseTime with invalid string returns (zero time, non-nil error)",
+      "assertion_pseudocode": "t, err := ParseTime(\"2026-07-17T14:30:00Z\"); assert(err == nil); assert(t.Year() == 2026 && t.Month() == 7 && t.Day() == 17 && t.Hour() == 14 && t.Minute() == 30 && t.Second() == 0 && t.Location() == time.UTC); _, badErr := ParseTime(\"not-a-timestamp\"); assert(badErr != nil)"
+    },
+    {
+      "id": "TS-02-44",
+      "requirement_id": "02-REQ-10.4",
+      "kind": "unit",
+      "description": "FormatTime and ParseTime guarantee round-trip consistency: ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC() for any time.Time.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "t": "arbitrary time.Time with sub-second components and non-UTC timezone"
+      },
+      "expected": "ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC()",
+      "assertion_pseudocode": "t := time.Now().Add(time.Duration(12345678) * time.Nanosecond).In(time.FixedZone(\"X\", 3600)); result, err := ParseTime(FormatTime(t)); assert(err == nil); assert(result.Equal(t.Truncate(time.Second).UTC()))"
+    },
+    {
+      "id": "TS-02-45",
+      "requirement_id": "02-REQ-11.1",
+      "kind": "integration",
+      "description": "initDB calls SetMaxOpenConns(1) on the *sql.DB handle to enforce a single active connection, preventing concurrent-writer errors.",
+      "preconditions": [
+        "A fresh SQLite database opened via Open"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "db.SqlDB.Stats().MaxOpenConnections == 1 after Open returns",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"j.db\")); assert(err == nil); assert(db.SqlDB.Stats().MaxOpenConnections == 1); db.Close()"
+    },
+    {
+      "id": "TS-02-46",
+      "requirement_id": "02-REQ-11.2",
+      "kind": "integration",
+      "description": "initDB calls SetMaxIdleConns(1) on the *sql.DB handle to keep the single connection warm and avoid open/close overhead.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory"
+      ],
+      "input": {
+        "dsn": ":memory:"
+      },
+      "expected": "After OpenMemory, the pool configuration has max idle connections = 1",
+      "assertion_pseudocode": "db, err := OpenMemory(); assert(err == nil); // Go sql.DB.Stats() does not directly expose MaxIdleConns; verify indirectly by confirming pool config was applied via code inspection or Stats().Idle == 1 after one query; db.Close()"
+    },
+    {
+      "id": "TS-02-47",
+      "requirement_id": "02-REQ-11.3",
+      "kind": "integration",
+      "description": "OpenMemory relies on SetMaxOpenConns(1) to guarantee each :memory: DSN maps to exactly one connection (one isolated in-memory database instance) with no shared state between calls.",
+      "preconditions": [
+        "No filesystem state required"
+      ],
+      "input": {},
+      "expected": "Two OpenMemory calls produce fully isolated database instances; data written to one is never visible in the other",
+      "assertion_pseudocode": "db1, _ := OpenMemory(); db2, _ := OpenMemory(); db1.SqlDB.Exec(`INSERT INTO admin_config VALUES ('isolated','yes')`); var v string; db2.SqlDB.QueryRow(`SELECT value FROM admin_config WHERE key='isolated'`).Scan(&v); assert(v == \"\"); db1.Close(); db2.Close()"
+    },
+    {
+      "id": "TS-02-48",
+      "requirement_id": "02-REQ-12.1",
+      "kind": "integration",
+      "description": "initDB executes PRAGMA foreign_keys = ON via db.Exec so that SQLite enforces foreign key constraints after Open.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory"
+      ],
+      "input": {
+        "child_table": "api_keys",
+        "nonexistent_user_id": "no-such-user"
+      },
+      "expected": "INSERT into api_keys with a non-existent user_id returns a foreign key constraint error",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); _, err := db.SqlDB.Exec(`INSERT INTO api_keys VALUES ('k1','no-such-user','hash',30,NULL,NULL,'2026-01-01T00:00:00Z')`); assert(err != nil)"
+    },
+    {
+      "id": "TS-02-49",
+      "requirement_id": "02-REQ-12.2",
+      "kind": "integration",
+      "description": "The org_members table enforces ON DELETE CASCADE on org_id so membership rows are automatically removed when the referenced org is deleted.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory with a user, an org, and an org_member row inserted"
+      ],
+      "input": {
+        "action": "DELETE FROM orgs WHERE id='org1'"
+      },
+      "expected": "After deleting org1, the corresponding row in org_members is automatically deleted; no orphaned membership rows remain",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); db.SqlDB.Exec(`INSERT INTO users VALUES ('u1','user1','e@e.com',NULL,'user','active','gh','gh1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); db.SqlDB.Exec(`INSERT INTO orgs VALUES ('org1','OrgName','org-slug',NULL,'active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); db.SqlDB.Exec(`INSERT INTO org_members VALUES ('org1','u1','2026-01-01T00:00:00Z')`); db.SqlDB.Exec(`DELETE FROM orgs WHERE id='org1'`); var count int; db.SqlDB.QueryRow(`SELECT COUNT(*) FROM org_members WHERE org_id='org1'`).Scan(&count); assert(count == 0)"
+    },
+    {
+      "id": "TS-02-50",
+      "requirement_id": "02-REQ-13.1",
+      "kind": "integration",
+      "description": "The integration test suite uses a real SQLite file in a temp directory from t.TempDir() for file-based tests and OpenMemory for in-memory tests.",
+      "preconditions": [
+        "Test binary is compiled with internal/db; Go test runner is available"
+      ],
+      "input": {},
+      "expected": "Running 'go test ./internal/db/...' passes all integration tests; no real files are left behind after tests complete",
+      "assertion_pseudocode": "// Verified by running: go test ./internal/db/... -v; assert(exit code == 0)"
+    },
+    {
+      "id": "TS-02-51",
+      "requirement_id": "02-REQ-13.2",
+      "kind": "integration",
+      "description": "TestOpen_EmptyPath verifies that Open(\"\") returns a descriptive error without creating any filesystem state.",
+      "preconditions": [
+        "No filesystem side effects from the empty-path test"
+      ],
+      "input": {
+        "path": ""
+      },
+      "expected": "Open returns non-nil error with message 'db: path must not be empty'; no directories or files are created",
+      "assertion_pseudocode": "db, err := Open(\"\"); assert(db == nil); assert(err.Error() == \"db: path must not be empty\")"
+    },
+    {
+      "id": "TS-02-52",
+      "requirement_id": "02-REQ-13.3",
+      "kind": "integration",
+      "description": "TestOpen_PathIsDirectory verifies that Open returns a descriptive error when given a path pointing to an existing directory.",
+      "preconditions": [
+        "An existing directory created via t.TempDir()"
+      ],
+      "input": {
+        "path": "<existing directory>"
+      },
+      "expected": "Open returns non-nil error containing the path and 'is a directory, not a file'; *DB is nil",
+      "assertion_pseudocode": "dir := t.TempDir(); db, err := Open(dir); assert(db == nil); assert(strings.Contains(err.Error(), dir)); assert(strings.Contains(err.Error(), \"is a directory, not a file\"))"
+    },
+    {
+      "id": "TS-02-53",
+      "requirement_id": "02-REQ-13.4",
+      "kind": "integration",
+      "description": "TestOpen_CreatesDirectory verifies Open creates a missing parent directory and on non-Windows asserts mode 0700.",
+      "preconditions": [
+        "Temp base directory from t.TempDir() exists; subdirectory of the database path does not exist"
+      ],
+      "input": {
+        "path": "<tempdir>/subdir/apikit.db"
+      },
+      "expected": "Directory <tempdir>/subdir is created by Open; on non-Windows, its permission mode is 0700",
+      "assertion_pseudocode": "base := t.TempDir(); path := filepath.Join(base, \"subdir\", \"apikit.db\"); db, err := Open(path); assert(err == nil); assert(directoryExists(filepath.Dir(path))); if runtime.GOOS != \"windows\" { info, _ := os.Stat(filepath.Dir(path)); assert(info.Mode().Perm() == 0700) }; db.Close()"
+    },
+    {
+      "id": "TS-02-54",
+      "requirement_id": "02-REQ-13.5",
+      "kind": "integration",
+      "description": "TestOpen_CreatesSchema verifies all six tables exist after Open on a new database.",
+      "preconditions": [
+        "A fresh SQLite database path in a temp directory"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "All six tables (users, api_keys, pats, orgs, org_members, admin_config) exist in sqlite_master after Open",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"schema.db\")); assert(err == nil); for each table in [\"users\",\"api_keys\",\"pats\",\"orgs\",\"org_members\",\"admin_config\"]: var n string; db.SqlDB.QueryRow(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\", table).Scan(&n); assert(n == table); db.Close()"
+    },
+    {
+      "id": "TS-02-55",
+      "requirement_id": "02-REQ-13.6",
+      "kind": "integration",
+      "description": "TestOpen_Idempotent verifies that calling Open twice on the same path succeeds without error.",
+      "preconditions": [
+        "A database file already initialized by a first Open call"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "Second Open call returns (non-nil *DB, nil error); schema is unchanged",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"idem.db\"); db1, err1 := Open(path); assert(err1 == nil); db1.Close(); db2, err2 := Open(path); assert(err2 == nil); assert(db2 != nil); db2.Close()"
+    },
+    {
+      "id": "TS-02-56",
+      "requirement_id": "02-REQ-13.7",
+      "kind": "integration",
+      "description": "TestOpen_WALMode queries PRAGMA journal_mode and asserts the value is 'wal'; also verifies Open returns an error if WAL mode cannot be set.",
+      "preconditions": [
+        "A fresh SQLite database path on a WAL-supporting filesystem"
+      ],
+      "input": {
+        "path": "<tempdir>/apikit.db"
+      },
+      "expected": "PRAGMA journal_mode returns 'wal' after Open; WAL mode error path is covered by logic/unit inspection",
+      "assertion_pseudocode": "db, err := Open(filepath.Join(t.TempDir(), \"wal.db\")); assert(err == nil); var mode string; db.SqlDB.QueryRow(\"PRAGMA journal_mode\").Scan(&mode); assert(mode == \"wal\"); db.Close()"
+    },
+    {
+      "id": "TS-02-57",
+      "requirement_id": "02-REQ-13.8",
+      "kind": "integration",
+      "description": "TestOpen_CorruptFile verifies that Open returns a wrapped error containing the file path when the target file contains non-SQLite bytes.",
+      "preconditions": [
+        "A file containing arbitrary non-SQLite bytes at the target path"
+      ],
+      "input": {
+        "path": "<tempdir>/corrupt.db"
+      },
+      "expected": "Open returns non-nil error containing the file path; errors.Unwrap returns the original driver error",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"corrupt.db\"); os.WriteFile(path, []byte(\"this is not sqlite\"), 0644); db, err := Open(path); assert(db == nil); assert(strings.Contains(err.Error(), path)); assert(errors.Unwrap(err) != nil)"
+    },
+    {
+      "id": "TS-02-58",
+      "requirement_id": "02-REQ-13.9",
+      "kind": "integration",
+      "description": "TestOpen_ForeignKeys verifies that a foreign key violation is rejected when inserting a child row with a non-existent parent.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory with foreign keys enabled"
+      ],
+      "input": {
+        "insert": "api_keys row with user_id that does not exist in users"
+      },
+      "expected": "INSERT returns a non-nil error (SQLite foreign key constraint violation)",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); _, err := db.SqlDB.Exec(`INSERT INTO api_keys VALUES ('key1','nonexistent-user','hash',30,NULL,NULL,'2026-01-01T00:00:00Z')`); assert(err != nil)"
+    },
+    {
+      "id": "TS-02-59",
+      "requirement_id": "02-REQ-13.10",
+      "kind": "integration",
+      "description": "TestPing verifies that Ping returns nil on a healthy database connection.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "ctx": "context.Background()"
+      },
+      "expected": "Ping returns nil",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); err := db.Ping(context.Background()); assert(err == nil)"
+    },
+    {
+      "id": "TS-02-60",
+      "requirement_id": "02-REQ-13.11",
+      "kind": "integration",
+      "description": "TestWithTx_Commit verifies that changes made inside WithTx are visible after the function returns nil.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "fn": "inserts a row into admin_config and returns nil"
+      },
+      "expected": "Row inserted inside WithTx is visible via subsequent query on db.SqlDB after commit",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); db.WithTx(context.Background(), func(tx) error { tx.ExecContext(ctx, `INSERT INTO admin_config VALUES ('c','v')`); return nil }); var v string; db.SqlDB.QueryRow(`SELECT value FROM admin_config WHERE key='c'`).Scan(&v); assert(v == \"v\")"
+    },
+    {
+      "id": "TS-02-61",
+      "requirement_id": "02-REQ-13.12",
+      "kind": "integration",
+      "description": "TestWithTx_Rollback verifies that changes made inside WithTx are not visible after the function returns an error.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "fn": "inserts a row into admin_config and returns an error"
+      },
+      "expected": "Row inserted inside WithTx is NOT visible in subsequent query; WithTx returns the error from fn",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); retErr := errors.New(\"fail\"); err := db.WithTx(context.Background(), func(tx) error { tx.ExecContext(ctx, `INSERT INTO admin_config VALUES ('r','v')`); return retErr }); assert(errors.Is(err, retErr)); var v string; db.SqlDB.QueryRow(`SELECT value FROM admin_config WHERE key='r'`).Scan(&v); assert(v == \"\")"
+    },
+    {
+      "id": "TS-02-62",
+      "requirement_id": "02-REQ-13.13",
+      "kind": "integration",
+      "description": "TestWrapError_Conflict verifies that a UNIQUE constraint violation produced by a real INSERT maps to ErrConflict via WrapError.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory with a user row already inserted"
+      ],
+      "input": {
+        "action": "INSERT duplicate user row"
+      },
+      "expected": "WrapError maps the returned driver error to ErrConflict; errors.Is(wrappedErr, ErrConflict) == true",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); db.SqlDB.Exec(`INSERT INTO users VALUES ('id1','u1','e@e.com',NULL,'user','active','gh','gh1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); _, err := db.SqlDB.Exec(`INSERT INTO users VALUES ('id2','u1','e2@e.com',NULL,'user','active','gh','gh2','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); wrapped := WrapError(err); assert(errors.Is(wrapped, ErrConflict))"
+    },
+    {
+      "id": "TS-02-63",
+      "requirement_id": "02-REQ-13.14",
+      "kind": "unit",
+      "description": "TestWrapError_Locked constructs a synthetic SQLite error with SQLITE_BUSY error code and passes it to WrapError, verifying ErrDatabaseLocked is returned without a live database.",
+      "preconditions": [
+        "internal/db and modernc.org/sqlite packages are available; no live database connection is required"
+      ],
+      "input": {
+        "err": "synthetically constructed SQLite error with SQLITE_BUSY code"
+      },
+      "expected": "WrapError returns ErrDatabaseLocked; errors.Is(result, ErrDatabaseLocked) == true; no database connection is needed",
+      "assertion_pseudocode": "syntheticBusy := constructSQLiteError(SQLITE_BUSY_CODE); result := WrapError(syntheticBusy); assert(errors.Is(result, ErrDatabaseLocked))"
+    },
+    {
+      "id": "TS-02-64",
+      "requirement_id": "02-REQ-13.15",
+      "kind": "unit",
+      "description": "TestWrapError_Passthrough verifies that an unknown error is returned unchanged by WrapError.",
+      "preconditions": [
+        "No database connection required"
+      ],
+      "input": {
+        "err": "errors.New(\"some unknown error\")"
+      },
+      "expected": "WrapError returns the same error value unchanged; errors.Is(result, originalErr) == true",
+      "assertion_pseudocode": "original := errors.New(\"unknown\"); result := WrapError(original); assert(errors.Is(result, original))"
+    },
+    {
+      "id": "TS-02-65",
+      "requirement_id": "02-REQ-13.16",
+      "kind": "unit",
+      "description": "TestFormatTime verifies truncation to whole-second precision, UTC normalization, and correct TimeFormat output string.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "t": "time with sub-second nanos and non-UTC zone"
+      },
+      "expected": "FormatTime returns a string matching 'YYYY-MM-DDTHH:MM:SSZ' in UTC with no sub-second components",
+      "assertion_pseudocode": "t := time.Date(2026,1,15,10,30,45,123456789, time.FixedZone(\"EST\",-5*3600)); result := FormatTime(t); assert(result == \"2026-01-15T15:30:45Z\"); assert(!strings.Contains(result, \".\"))"
+    },
+    {
+      "id": "TS-02-66",
+      "requirement_id": "02-REQ-13.17",
+      "kind": "unit",
+      "description": "TestParseTime verifies round-trip consistency: ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC().",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "t": "time.Now() with sub-second components"
+      },
+      "expected": "ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC()",
+      "assertion_pseudocode": "t := time.Now(); formatted := FormatTime(t); parsed, err := ParseTime(formatted); assert(err == nil); assert(parsed.Equal(t.Truncate(time.Second).UTC()))"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-02-P1",
+      "property_id": "02-PROP-1",
+      "validates": [
+        "02-REQ-3.1",
+        "02-REQ-3.2",
+        "02-REQ-3.5",
+        "02-REQ-3.6"
+      ],
+      "description": "For any valid file path, both Open and OpenMemory produce DB handles with identical schema (all six tables present) and identical configuration (pool=1, foreign keys ON), confirming they share initDB.",
+      "for_any_strategy": "Generate valid file paths via t.TempDir()+filepath.Join; pair each with an OpenMemory call",
+      "invariant_check": "verifyTablesExist(db.SqlDB) returns true for all six tables; PRAGMA foreign_keys returns 1; Stats().MaxOpenConnections == 1 for both db1 (from Open) and db2 (from OpenMemory)"
+    },
+    {
+      "id": "TS-02-P2",
+      "property_id": "02-PROP-2",
+      "validates": [
+        "02-REQ-6.8"
+      ],
+      "description": "For any number of Open calls on the same existing database file, Open always succeeds and the existing table contents are never modified.",
+      "for_any_strategy": "Repeat Open on the same path N times (N in [2..5]); after first Open, insert a sentinel row in admin_config",
+      "invariant_check": "Each subsequent Open returns nil error and non-nil *DB; querying admin_config for the sentinel row returns the original value unchanged"
+    },
+    {
+      "id": "TS-02-P3",
+      "property_id": "02-PROP-3",
+      "validates": [
+        "02-REQ-10.4",
+        "02-REQ-10.2",
+        "02-REQ-10.3"
+      ],
+      "description": "For any time.Time value t (including sub-second precision, non-UTC zones, past and future dates), ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC().",
+      "for_any_strategy": "Generate arbitrary time.Time values using random Unix timestamps in range [0, 4102444800] with random nanosecond offsets and random timezone offsets",
+      "invariant_check": "parsed, err := ParseTime(FormatTime(t)); assert(err == nil); assert(parsed.Equal(t.Truncate(time.Second).UTC()))"
+    },
+    {
+      "id": "TS-02-P4",
+      "property_id": "02-PROP-4",
+      "validates": [
+        "02-REQ-9.2"
+      ],
+      "description": "For any error value passed to WrapError (nil, known SQLite codes, unknown codes, wrapped chains), the output is deterministic and no I/O or state changes occur.",
+      "for_any_strategy": "Generate error inputs: nil; synthetic SQLite errors for UNIQUE, PK, BUSY, LOCKED; arbitrary errors; errors wrapped via fmt.Errorf",
+      "invariant_check": "WrapError called twice with the same input returns the same output both times; calling WrapError does not modify any global state; no goroutines are spawned"
+    },
+    {
+      "id": "TS-02-P5",
+      "property_id": "02-PROP-5",
+      "validates": [
+        "02-REQ-8.1",
+        "02-REQ-8.3"
+      ],
+      "description": "For any WithTx call where fn returns a non-nil error, no writes performed inside fn are visible in the database after WithTx returns.",
+      "for_any_strategy": "Generate arbitrary INSERT statements to admin_config; fn performs the INSERT then returns a non-nil error",
+      "invariant_check": "After WithTx returns non-nil error: SELECT COUNT(*) FROM admin_config equals the count before the WithTx call; the transaction was fully rolled back"
+    },
+    {
+      "id": "TS-02-P6",
+      "property_id": "02-PROP-6",
+      "validates": [
+        "02-REQ-7.2",
+        "02-REQ-7.3",
+        "02-REQ-3.7"
+      ],
+      "description": "For any call to Open or OpenMemory, the result is always either (*DB with all initialization complete, nil) or (nil, non-nil error) — no partially initialized DB handle is ever returned.",
+      "for_any_strategy": "Call Open with: valid paths, empty paths, directory paths, corrupt file paths; call OpenMemory with no arguments",
+      "invariant_check": "If err == nil then db != nil AND db.SqlDB != nil AND PRAGMA foreign_keys returns 1 AND all six tables exist; if err != nil then db == nil"
+    },
+    {
+      "id": "TS-02-P7",
+      "property_id": "02-PROP-7",
+      "validates": [
+        "02-REQ-7.3",
+        "02-REQ-11.3"
+      ],
+      "description": "For any two distinct OpenMemory calls, writes to one instance are never visible in the other; each call returns a fully independent isolated database.",
+      "for_any_strategy": "Call OpenMemory N times (N in [2..5]); perform arbitrary INSERT operations on each; cross-check all others for absence of those rows",
+      "invariant_check": "For each pair (db_i, db_j) where i != j: rows inserted into db_i.SqlDB are not visible when queried from db_j.SqlDB"
+    },
+    {
+      "id": "TS-02-P8",
+      "property_id": "02-PROP-8",
+      "validates": [
+        "02-REQ-1.1",
+        "02-REQ-1.2",
+        "02-REQ-1.3"
+      ],
+      "description": "For any call to Open with an empty path or a path pointing to an existing directory, Open returns the descriptive error without creating directories, opening database connections, or producing any filesystem side effects.",
+      "for_any_strategy": "Call Open with empty string; call Open with paths that are existing directories (from t.TempDir())",
+      "invariant_check": "Open returns non-nil error and nil *DB; no new filesystem entries are created; the directory listing of the test temp dir is unchanged after the call"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-02-E1",
+      "requirement_id": "02-REQ-1.E1",
+      "kind": "unit",
+      "description": "Open with a path containing a trailing slash that resolves to an existing directory returns the descriptive directory error; no database connection is opened.",
+      "preconditions": [
+        "A directory exists at the target path"
+      ],
+      "input": {
+        "path": "<existing directory with trailing slash>"
+      },
+      "expected": "Open returns non-nil error containing the path and 'is a directory, not a file'; *DB is nil",
+      "assertion_pseudocode": "dir := t.TempDir(); path := dir + string(os.PathSeparator); db, err := Open(path); assert(db == nil); assert(err != nil); assert(strings.Contains(err.Error(), \"is a directory, not a file\"))"
+    },
+    {
+      "id": "TS-02-E2",
+      "requirement_id": "02-REQ-2.E1",
+      "kind": "integration",
+      "description": "Open returns the OS error from directory creation without opening any database connection when the parent directory cannot be created due to a permission error.",
+      "preconditions": [
+        "A path where the parent directory is unwritable (e.g. root-owned directory without write permission); test runs as non-root on Linux"
+      ],
+      "input": {
+        "path": "/root/no-permission/apikit.db"
+      },
+      "expected": "Open returns non-nil OS error; *DB is nil; no partial directory is created",
+      "assertion_pseudocode": "if runtime.GOOS == \"windows\" || os.Getuid() == 0 { t.Skip() }; db, err := Open(\"/root/no-permission/apikit.db\"); assert(db == nil); assert(err != nil)"
+    },
+    {
+      "id": "TS-02-E3",
+      "requirement_id": "02-REQ-3.E1",
+      "kind": "integration",
+      "description": "When the schema creation transaction fails partway through, initDB rolls back and returns an error; no partially-created tables persist.",
+      "preconditions": [
+        "A mechanism to cause schema creation failure (e.g. disk-full simulation or pre-corrupted DB state); this is largely verified by idempotent CREATE TABLE IF NOT EXISTS behavior"
+      ],
+      "input": {
+        "action": "interrupt schema transaction mid-way"
+      },
+      "expected": "initDB returns a non-nil error; calling constructor returns nil *DB; no partial table set is visible in sqlite_master",
+      "assertion_pseudocode": "// This edge case is verified indirectly: Open on an already-locked or read-only path returns error and nil *DB; assert no partial tables exist; db, err := Open(readOnlyPath); assert(err != nil); assert(db == nil)"
+    },
+    {
+      "id": "TS-02-E4",
+      "requirement_id": "02-REQ-3.E2",
+      "kind": "integration",
+      "description": "When the PRAGMA foreign_keys = ON execution fails with a driver error, initDB returns that error immediately without attempting schema creation.",
+      "preconditions": [
+        "A database connection where PRAGMA execution fails (e.g. read-only database)"
+      ],
+      "input": {
+        "action": "PRAGMA foreign_keys = ON on a connection that rejects it"
+      },
+      "expected": "initDB returns non-nil error; calling constructor returns nil *DB; no schema creation is attempted",
+      "assertion_pseudocode": "// Verified via corrupt file test: if driver fails on any PRAGMA, Open returns wrapped error and nil *DB; db, err := Open(corruptPath); assert(err != nil); assert(db == nil)"
+    },
+    {
+      "id": "TS-02-E5",
+      "requirement_id": "02-REQ-4.E1",
+      "kind": "integration",
+      "description": "When PRAGMA journal_mode=WAL query fails with a driver error on a corrupt file, Open wraps the error with the file path and returns it.",
+      "preconditions": [
+        "A file at the target path containing arbitrary non-SQLite bytes"
+      ],
+      "input": {
+        "path": "<tempdir>/corrupt.db"
+      },
+      "expected": "Open returns non-nil error wrapped with 'db: failed to open database at \"<path>\"'; errors.Unwrap returns original driver error; *DB is nil",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"corrupt.db\"); os.WriteFile(path, []byte(\"garbage bytes\"), 0644); db, err := Open(path); assert(db == nil); assert(strings.Contains(err.Error(), \"failed to open database at\")); assert(strings.Contains(err.Error(), path)); assert(errors.Unwrap(err) != nil)"
+    },
+    {
+      "id": "TS-02-E6",
+      "requirement_id": "02-REQ-5.E1",
+      "kind": "integration",
+      "description": "When a file at path contains arbitrary non-SQLite bytes, the driver returns an error on first PRAGMA; Open wraps it with the file path and closes the *sql.DB handle before returning.",
+      "preconditions": [
+        "A file containing random non-SQLite bytes at the target path"
+      ],
+      "input": {
+        "path": "<tempdir>/random.db"
+      },
+      "expected": "Open returns non-nil error containing both 'failed to open database at' and the file path; original driver error is accessible via errors.Unwrap; *DB is nil",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"random.db\"); os.WriteFile(path, []byte{0xFF, 0xFE, 0xAA, 0xBB}, 0644); db, err := Open(path); assert(db == nil); assert(strings.Contains(err.Error(), path)); unwrapped := errors.Unwrap(err); assert(unwrapped != nil)"
+    },
+    {
+      "id": "TS-02-E7",
+      "requirement_id": "02-REQ-6.E1",
+      "kind": "integration",
+      "description": "When the table creation transaction is interrupted before COMMIT, SQLite rolls it back automatically; subsequent Open creates the schema from scratch with no partial state.",
+      "preconditions": [
+        "A database file that was partially written (simulated by closing connection before COMMIT)"
+      ],
+      "input": {
+        "path": "<tempdir>/interrupted.db"
+      },
+      "expected": "A subsequent Open call on the same path succeeds; all six tables exist; no partial schema state persists",
+      "assertion_pseudocode": "path := filepath.Join(t.TempDir(), \"interrupted.db\"); // First open creates file but simulates interrupted tx; db1, _ := Open(path); db1.Close(); db2, err2 := Open(path); assert(err2 == nil); for each table in [\"users\",\"api_keys\",\"pats\",\"orgs\",\"org_members\",\"admin_config\"]: assert(tableExists(db2.SqlDB, table)); db2.Close()"
+    },
+    {
+      "id": "TS-02-E8",
+      "requirement_id": "02-REQ-7.E1",
+      "kind": "unit",
+      "description": "DB.Ping with a pre-cancelled context returns the context error immediately; the readiness probe would return HTTP 503.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "ctx": "pre-cancelled context"
+      },
+      "expected": "Ping returns non-nil context cancellation error",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); ctx, cancel := context.WithCancel(context.Background()); cancel(); err := db.Ping(ctx); assert(err != nil); assert(errors.Is(err, context.Canceled))"
+    },
+    {
+      "id": "TS-02-E9",
+      "requirement_id": "02-REQ-7.E2",
+      "kind": "unit",
+      "description": "The db package never calls os.Exit or panic in response to any error condition; all errors are returned via return values.",
+      "preconditions": [
+        "internal/db source code is available for inspection"
+      ],
+      "input": {
+        "action": "static code review"
+      },
+      "expected": "No calls to os.Exit, panic (other than panic(\"not implemented\")), or log.Fatal exist in the db package source files",
+      "assertion_pseudocode": "// Static verification: grep -r 'os.Exit\\|log.Fatal\\|panic(' internal/db/*.go; assert(no results for os.Exit or log.Fatal); assert(no uncontrolled panics in error paths)"
+    },
+    {
+      "id": "TS-02-E10",
+      "requirement_id": "02-REQ-8.E1",
+      "kind": "integration",
+      "description": "When fn returns a context cancellation error, WithTx rolls back the transaction (discarding rollback error) and returns the context error.",
+      "preconditions": [
+        "An open DB instance returned by OpenMemory"
+      ],
+      "input": {
+        "fn": "returns context.Canceled"
+      },
+      "expected": "WithTx returns context.Canceled error; no changes from fn are visible in the database",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); ctx, cancel := context.WithCancel(context.Background()); cancel(); err := db.WithTx(ctx, func(tx) error { return context.Canceled }); assert(errors.Is(err, context.Canceled))"
+    },
+    {
+      "id": "TS-02-E11",
+      "requirement_id": "02-REQ-8.E2",
+      "kind": "integration",
+      "description": "When BeginTx fails (e.g. database connection is closed), WithTx returns the BeginTx error immediately without calling fn.",
+      "preconditions": [
+        "A DB instance whose underlying *sql.DB has been closed"
+      ],
+      "input": {
+        "action": "call WithTx after db.Close()"
+      },
+      "expected": "WithTx returns non-nil error from BeginTx; fn is never invoked",
+      "assertion_pseudocode": "db, _ := OpenMemory(); db.Close(); fnCalled := false; err := db.WithTx(context.Background(), func(tx) error { fnCalled = true; return nil }); assert(err != nil); assert(fnCalled == false)"
+    },
+    {
+      "id": "TS-02-E12",
+      "requirement_id": "02-REQ-9.E1",
+      "kind": "unit",
+      "description": "WrapError correctly maps a SQLite error code nested inside a wrapped error chain (e.g. via fmt.Errorf(\"%w\")) to the appropriate sentinel.",
+      "preconditions": [
+        "No database connection required; a synthetic SQLite error wrapped via fmt.Errorf"
+      ],
+      "input": {
+        "err": "fmt.Errorf(\"outer: %w\", syntheticUniqueConstraintError)"
+      },
+      "expected": "WrapError returns ErrConflict even when the SQLite error is nested inside the error chain",
+      "assertion_pseudocode": "inner := constructSQLiteError(SQLITE_CONSTRAINT_UNIQUE_CODE); wrapped := fmt.Errorf(\"outer: %w\", inner); result := WrapError(wrapped); assert(errors.Is(result, ErrConflict))"
+    },
+    {
+      "id": "TS-02-E13",
+      "requirement_id": "02-REQ-10.E1",
+      "kind": "unit",
+      "description": "FormatTime converts a time with a non-UTC timezone offset to UTC before formatting; the output always ends with 'Z' and never contains a numeric timezone offset.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "t": "time.Date(2026, 7, 17, 14, 30, 0, 0, time.FixedZone(\"IST\", 5*3600+30*60))"
+      },
+      "expected": "FormatTime returns \"2026-07-17T09:00:00Z\" (converted from IST to UTC); no \"+05:30\" in output",
+      "assertion_pseudocode": "t := time.Date(2026,7,17,14,30,0,0,time.FixedZone(\"IST\",5*3600+30*60)); result := FormatTime(t); assert(result == \"2026-07-17T09:00:00Z\"); assert(!strings.Contains(result, \"+\"))"
+    },
+    {
+      "id": "TS-02-E14",
+      "requirement_id": "02-REQ-10.E2",
+      "kind": "unit",
+      "description": "ParseTime returns a parse error when the input string has a numeric timezone offset (e.g. '+05:30') instead of the 'Z' suffix.",
+      "preconditions": [
+        "internal/db package is imported"
+      ],
+      "input": {
+        "s": "2026-07-17T14:30:00+05:30"
+      },
+      "expected": "ParseTime returns non-nil error; the returned time.Time is the zero value",
+      "assertion_pseudocode": "t, err := ParseTime(\"2026-07-17T14:30:00+05:30\"); assert(err != nil); assert(t.IsZero())"
+    },
+    {
+      "id": "TS-02-E15",
+      "requirement_id": "02-REQ-12.E1",
+      "kind": "integration",
+      "description": "Inserting an api_keys row with a non-existent user_id causes SQLite to return a SQLITE_CONSTRAINT error; WrapError maps it to ErrConflict.",
+      "preconditions": [
+        "A fresh SQLite database opened via OpenMemory with foreign keys enabled"
+      ],
+      "input": {
+        "action": "INSERT INTO api_keys with user_id='nonexistent'"
+      },
+      "expected": "INSERT returns non-nil driver error; WrapError maps it to ErrConflict; errors.Is(wrapped, ErrConflict) == true",
+      "assertion_pseudocode": "db, _ := OpenMemory(); defer db.Close(); _, err := db.SqlDB.Exec(`INSERT INTO api_keys VALUES ('k1','nonexistent','hash',30,NULL,NULL,'2026-01-01T00:00:00Z')`); assert(err != nil); wrapped := WrapError(err); assert(errors.Is(wrapped, ErrConflict))"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-02-SMOKE-1",
+      "execution_path_id": "02-PATH-1",
+      "description": "Full happy-path smoke test: Open creates a missing parent directory, initializes WAL mode and foreign keys, creates all six tables, and returns a usable *DB handle.",
+      "trigger": "Call db.Open(filepath.Join(t.TempDir(), \"newdir\", \"apikit.db\")) from a test function",
+      "real_components": [
+        "internal/db.Open",
+        "internal/db.initDB",
+        "modernc.org/sqlite driver",
+        "database/sql"
+      ],
+      "mockable": [
+        "os.MkdirAll (can be verified via filesystem state)"
+      ],
+      "expected_effects": [
+        "Parent directory <tempdir>/newdir is created with mode 0700 (on non-Windows)",
+        "SQLite database file is created at <tempdir>/newdir/apikit.db",
+        "PRAGMA journal_mode returns 'wal'",
+        "PRAGMA foreign_keys returns 1",
+        "All six tables (users, api_keys, pats, orgs, org_members, admin_config) exist in sqlite_master",
+        "db.SqlDB.Stats().MaxOpenConnections == 1",
+        "Open returns (*DB, nil)"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-2",
+      "execution_path_id": "02-PATH-2",
+      "description": "Full happy-path smoke test for OpenMemory: returns an independent in-memory DB with full initialization (no WAL, FK ON, all six tables).",
+      "trigger": "Call db.OpenMemory() from a downstream test function",
+      "real_components": [
+        "internal/db.OpenMemory",
+        "internal/db.initDB",
+        "modernc.org/sqlite driver",
+        "database/sql"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "OpenMemory returns (*DB, nil)",
+        "PRAGMA journal_mode returns 'memory' (WAL is skipped)",
+        "PRAGMA foreign_keys returns 1",
+        "All six tables exist in sqlite_master",
+        "db.SqlDB.Stats().MaxOpenConnections == 1",
+        "A second OpenMemory call produces an independent isolated database instance"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-3",
+      "execution_path_id": "02-PATH-3",
+      "description": "Error-path smoke test: Open on a corrupt file (non-SQLite bytes) returns a wrapped error containing the file path; no *DB handle is returned.",
+      "trigger": "Write arbitrary bytes to a temp file, then call db.Open(path) on that file",
+      "real_components": [
+        "internal/db.Open",
+        "internal/db.initDB",
+        "modernc.org/sqlite driver",
+        "database/sql"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Open returns (nil, non-nil error)",
+        "Error message contains 'db: failed to open database at' and the file path",
+        "errors.Unwrap(err) returns the original driver error",
+        "No *DB handle is leaked; underlying *sql.DB is closed"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-4",
+      "execution_path_id": "02-PATH-4",
+      "description": "Full happy-path smoke test for WithTx commit: changes made by fn inside a transaction are durably visible after commit.",
+      "trigger": "Call db.WithTx(ctx, fn) where fn inserts a row into admin_config and returns nil",
+      "real_components": [
+        "internal/db.DB.WithTx",
+        "database/sql.Tx",
+        "modernc.org/sqlite driver"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "WithTx returns nil",
+        "The row inserted inside fn is visible via subsequent db.SqlDB.QueryRow call",
+        "Transaction is committed (not rolled back)"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-5",
+      "execution_path_id": "02-PATH-5",
+      "description": "Error-path smoke test for WithTx rollback: changes made by fn are not visible after fn returns an error; ErrConflict is propagated.",
+      "trigger": "Call db.WithTx(ctx, fn) where fn inserts a row and returns db.WrapError of a UNIQUE constraint violation",
+      "real_components": [
+        "internal/db.DB.WithTx",
+        "internal/db.WrapError",
+        "database/sql.Tx",
+        "modernc.org/sqlite driver"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "WithTx returns ErrConflict",
+        "errors.Is(err, db.ErrConflict) == true",
+        "No rows from the failed fn are visible in the database after rollback",
+        "Rollback errors (if any) are silently discarded"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

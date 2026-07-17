@@ -1,0 +1,1244 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "database_layer",
+  "schema_version": 1,
+  "introduction": "This specification defines the SQLite database layer for apikit (`internal/db`), covering connection management, schema creation, foreign key enforcement, WAL mode validation, error wrapping, timestamp helpers, and the in-memory test helper. Note: requirements referencing `modernc.org/sqlite` APIs are based on PRD descriptions and should be cross-checked against the installed library version before implementation.",
+  "glossary": {
+    "CGo": "Go's mechanism for calling C code. Avoided in this project by using a pure-Go SQLite driver.",
+    "DEFERRED": "SQLite's default transaction isolation mode. Locks are acquired lazily (on first read or write). Used exclusively by WithTx.",
+    "DSN": "Data Source Name \u2014 the connection string used to open a database. For modernc.org/sqlite, this is the bare file path or ':memory:' with no query parameters.",
+    "ErrConflict": "Sentinel error returned when an INSERT or UPDATE violates a UNIQUE or PRIMARY KEY constraint.",
+    "ErrDatabaseLocked": "Sentinel error returned when SQLite returns SQLITE_BUSY or SQLITE_LOCKED.",
+    "ErrNotFound": "Sentinel error returned by callers when a query produces no rows (sql.ErrNoRows).",
+    "FormatTime": "Helper function that truncates a time.Time to whole-second precision, converts to UTC, and formats using TimeFormat.",
+    "ON DELETE CASCADE": "A referential action that automatically deletes child rows when the referenced parent row is deleted. Applied to org_members.org_id.",
+    "Open": "The public constructor that validates path, creates the parent directory if needed, opens the SQLite file, and calls initDB.",
+    "OpenMemory": "An exported constructor that opens an in-memory SQLite database with full initialization (via the shared initDB function, minus the WAL step). Used by downstream test suites.",
+    "PRAGMA": "SQLite configuration command that sets database-level options (e.g. journal mode, foreign key enforcement).",
+    "ParseTime": "Helper function that parses a canonical RFC 3339 UTC timestamp string back to a time.Time.",
+    "RFC 3339": "A date/time format standard. apikit uses the UTC variant with 'Z' suffix and whole-second precision: '2006-01-02T15:04:05Z'.",
+    "SQLITE_BUSY": "SQLite error code indicating the database is locked by another connection.",
+    "SQLITE_CONSTRAINT_PRIMARYKEY": "SQLite error code indicating a PRIMARY KEY constraint violation.",
+    "SQLITE_CONSTRAINT_UNIQUE": "SQLite error code indicating a UNIQUE constraint violation.",
+    "SQLITE_LOCKED": "SQLite error code indicating a table or row is locked within the same connection.",
+    "Sentinel error": "A package-level var error value that callers test with errors.Is. Used to abstract driver-specific error codes.",
+    "SetMaxIdleConns": "Go sql.DB method that limits the number of idle connections kept in the pool; set to 1 to keep the single connection warm.",
+    "SetMaxOpenConns": "Go sql.DB method that limits the number of open connections to the database; set to 1 for SQLite single-writer enforcement.",
+    "SqlDB": "The *sql.DB field exposed on the DB struct, used by callers to execute their own queries.",
+    "TimeFormat": "The canonical timestamp format constant: '2006-01-02T15:04:05Z'.",
+    "WAL mode": "Write-Ahead Logging \u2014 a SQLite journal mode that allows concurrent readers and a single writer without blocking.",
+    "WithTx": "A method on DB that begins a DEFERRED transaction, calls a caller-supplied function, and commits or rolls back based on the result.",
+    "WrapError": "A standalone pure-function helper exported by the db package that maps raw SQLite error codes to sentinel errors. Called explicitly by callers at the query execution point.",
+    "admin_config": "SQLite table storing singleton server state such as admin_token_hash and admin_email.",
+    "api_keys": "SQLite table storing API keys with hashed secrets and optional expiry.",
+    "initDB": "A private function shared by Open and OpenMemory that applies all post-connection initialization: pool settings, PRAGMAs (WAL for file DBs only), and schema creation.",
+    "org_members": "SQLite table storing organization membership, with a composite primary key on (org_id, user_id) and ON DELETE CASCADE on org_id.",
+    "orgs": "SQLite table storing organization records.",
+    "pats": "SQLite table storing Personal Access Tokens with permissions stored as a JSON array string.",
+    "users": "SQLite table storing user records including OAuth provider information.",
+    "SetMaxOpenConns(1)": "Call to sql.DB.SetMaxOpenConns with argument 1, limiting the connection pool to a single open connection for SQLite single-writer enforcement.",
+    "SetMaxIdleConns(1)": "Call to sql.DB.SetMaxIdleConns with argument 1, keeping the single connection warm in the pool.",
+    "SqlDB *sql.DB": "The public field declaration on the DB struct exposing the underlying *sql.DB handle for direct query access by callers.",
+    "DB.Close": "Method on the DB struct that delegates to the underlying *sql.DB.Close(), releasing the database connection.",
+    "DB.Ping": "Method on the DB struct that delegates to *sql.DB.PingContext(ctx) for health/readiness checks.",
+    "DB.WithTx": "Method on the DB struct that begins a DEFERRED transaction, calls a caller-supplied function, and commits or rolls back.",
+    "db": "The Go package name for the database layer, located at internal/db.",
+    "internal/db": "The Go package path for the database layer. Internal packages are not importable by consuming projects.",
+    "modernc.org/sqlite": "A pure-Go SQLite driver that implements database/sql interfaces without requiring CGo."
+  },
+  "requirements": [
+    {
+      "id": "02-REQ-1",
+      "title": "Open constructor \u2014 input validation",
+      "user_story": {
+        "role": "server bootstrap code",
+        "goal": "receive a descriptive error immediately when Open is called with an invalid path",
+        "benefit": "misconfigured deployments fail fast before any filesystem state is created"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-1.1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "returns errors.New(\"db: path must not be empty\") without performing any filesystem access or opening any database connection",
+          "return_contract": "non-nil error with message \"db: path must not be empty\"; *DB is nil",
+          "error_condition": "path argument is an empty string"
+        },
+        {
+          "id": "02-REQ-1.2",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "returns fmt.Errorf(\"db: path %q is a directory, not a file\", path) without performing any filesystem access beyond the stat check or opening any database connection",
+          "return_contract": "non-nil error containing the path string; *DB is nil",
+          "error_condition": "path argument refers to an existing filesystem entry that is a directory"
+        },
+        {
+          "id": "02-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Open`",
+          "action": "performs input validation checks before directory creation and before database/sql.Open is called, ensuring no partial filesystem state is created for invalid inputs",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "stat check detects the directory and returns the descriptive directory error; no database connection is opened",
+          "return_contract": "non-nil error containing the path string",
+          "error_condition": "path is a non-empty string that resolves to a directory with a trailing slash"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-2",
+      "title": "Open constructor \u2014 directory auto-creation",
+      "user_story": {
+        "role": "server bootstrap code",
+        "goal": "have the parent directory of the database file created automatically if it does not exist",
+        "benefit": "operators do not need to pre-create directories before starting the server"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "`Open`",
+          "action": "creates the directory recursively using os.MkdirAll with mode 0700 before opening the SQLite connection",
+          "return_contract": null,
+          "trigger": "the parent directory of the configured database path does not exist"
+        },
+        {
+          "id": "02-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Open`",
+          "action": "hardcodes directory creation mode to 0700 (owner read/write/execute only); the mode is not configurable",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-2.3",
+          "ears_pattern": "state_driven",
+          "system": "`Open`",
+          "action": "skips directory creation and proceeds directly to opening the database connection",
+          "return_contract": null,
+          "state": "the parent directory already exists"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "returns the OS error from `Open` without opening any database connection; no partial directory state is left beyond what the OS may have created",
+          "return_contract": "non-nil error from directory creation; *DB is nil",
+          "error_condition": "parent directory cannot be created due to a permission error or other OS error"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-3",
+      "title": "Shared initDB initialization sequence",
+      "user_story": {
+        "role": "database layer developer",
+        "goal": "have a single private initDB function used by both Open and OpenMemory for all post-connection initialization",
+        "benefit": "initialization logic is consistent across both constructors and future changes only need to be made in one place"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "applies connection pool settings, WAL mode (for file databases only), foreign key PRAGMA, and schema creation in that fixed order; parallel reimplementations of this sequence in Open and OpenMemory are not acceptable",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-3.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "sets `SetMaxOpenConns(1)` and `SetMaxIdleConns(1)` on the *sql.DB handle immediately after receiving it, before executing any PRAGMAs",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "`initDB`",
+          "action": "executes PRAGMA journal_mode=WAL as a query, reads the returned journal mode string, and validates it equals \"wal\"; if not, returns fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", mode)",
+          "return_contract": "non-nil error if WAL validation fails",
+          "trigger": "called from `Open` (file database path)"
+        },
+        {
+          "id": "02-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "`initDB`",
+          "action": "skips the WAL mode PRAGMA and WAL mode validation step entirely; all other initialization steps (pool settings, foreign key PRAGMA, schema creation) are applied identically",
+          "return_contract": null,
+          "trigger": "called from `OpenMemory` (in-memory database)"
+        },
+        {
+          "id": "02-REQ-3.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "executes PRAGMA foreign_keys = ON via db.Exec after WAL mode setup; this is required because SQLite does not enforce foreign keys by default",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-3.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "executes all six CREATE TABLE IF NOT EXISTS statements in a single DEFERRED transaction after PRAGMAs are set; table creation order is: `users`, `api_keys`, `pats`, `orgs`, `org_members`, `admin_config`",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-3.7",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "on success, returns nil so that the calling constructor (`Open` or `OpenMemory`) can return the fully initialized *DB handle; no partial states are possible",
+          "return_contract": "nil error on success"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "`initDB`",
+          "action": "rolls back the schema transaction and returns the error; the calling constructor returns the error to the caller; no partially-created tables persist",
+          "return_contract": "non-nil error; *DB is nil from the calling constructor",
+          "error_condition": "schema creation transaction fails partway through (e.g. disk full mid-transaction)"
+        },
+        {
+          "id": "02-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "`initDB`",
+          "action": "returns the driver error immediately; schema creation is not attempted; the calling constructor returns the error",
+          "return_contract": "non-nil error; *DB is nil from the calling constructor",
+          "error_condition": "foreign key PRAGMA execution fails with a driver error"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-4",
+      "title": "WAL mode validation",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have Open fail with a clear error if WAL mode cannot be enabled on the target filesystem",
+        "benefit": "silent misconfiguration on network shares or Docker volumes where WAL is unsupported is prevented"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Open`",
+          "action": "executes PRAGMA journal_mode=WAL as a query (using QueryRow, not Exec) so that the returned journal mode value can be read and validated",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-4.2",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "returns fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", mode); the database connection is closed before returning",
+          "return_contract": "non-nil error containing the unexpected mode string; *DB is nil",
+          "error_condition": "PRAGMA journal_mode=WAL returns a mode string other than \"wal\""
+        },
+        {
+          "id": "02-REQ-4.3",
+          "ears_pattern": "state_driven",
+          "system": "`OpenMemory`",
+          "action": "skips PRAGMA journal_mode=WAL and WAL mode validation because SQLite always returns \"memory\" as the journal mode for in-memory databases",
+          "return_contract": null,
+          "state": "opening an in-memory SQLite database"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "returns the driver error wrapped with the file path context: fmt.Errorf(\"db: failed to open database at %q: %w\", path, err)",
+          "return_contract": "non-nil error containing the file path; *DB is nil",
+          "error_condition": "PRAGMA journal_mode=WAL query itself fails with a driver-level error (e.g. corrupt file detected at query time)"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-5",
+      "title": "Corrupt or invalid database file handling",
+      "user_story": {
+        "role": "server operator",
+        "goal": "receive an error message that identifies the problematic file path when the database file is corrupt",
+        "benefit": "operators can identify the failing file without inspecting stack traces"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-5.1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "wraps the driver error with the file path: fmt.Errorf(\"db: failed to open database at %q: %w\", path, err) and returns it",
+          "return_contract": "non-nil wrapped error containing the file path; *DB is nil",
+          "error_condition": "the database file at path exists but is corrupt or is not a valid SQLite database, causing a driver-level error after database/sql.Open succeeds (e.g. during PRAGMA execution or schema creation)"
+        },
+        {
+          "id": "02-REQ-5.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Open`",
+          "action": "applies the file-path wrapper only to driver-level errors encountered after database/sql.Open succeeds and before initDB returns; input validation errors and directory creation errors are returned as-is (they already contain sufficient context)",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Open`",
+          "action": "driver returns an error on first PRAGMA execution; Open wraps it with fmt.Errorf(\"db: failed to open database at %q: %w\", path, err) and returns; the *sql.DB handle is closed before returning",
+          "return_contract": "non-nil error containing the file path and the original driver error via %w",
+          "error_condition": "file at path contains arbitrary non-SQLite bytes (e.g. random data written by another process)"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-6",
+      "title": "Database schema \u2014 six tables created on boot",
+      "user_story": {
+        "role": "server bootstrap code",
+        "goal": "have all required tables exist after Open completes",
+        "benefit": "all other components can execute queries immediately after receiving the DB handle without additional setup"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `users` table using CREATE TABLE IF NOT EXISTS with the normative DDL: id TEXT NOT NULL PRIMARY KEY, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL, full_name TEXT, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active', provider TEXT NOT NULL, provider_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (provider, provider_id)",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `api_keys` table using CREATE TABLE IF NOT EXISTS with the normative DDL: key_id TEXT NOT NULL PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), secret_hash TEXT NOT NULL, expires_days INTEGER NOT NULL, expires_at TEXT, revoked_at TEXT, created_at TEXT NOT NULL",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `pats` table using CREATE TABLE IF NOT EXISTS with the normative DDL: token_id TEXT NOT NULL PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, secret_hash TEXT NOT NULL, permissions TEXT NOT NULL, expires_days INTEGER NOT NULL, expires_at TEXT, revoked_at TEXT, created_at TEXT NOT NULL",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `orgs` table using CREATE TABLE IF NOT EXISTS with the normative DDL: id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL UNIQUE, slug TEXT NOT NULL UNIQUE, url TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `org_members` table using CREATE TABLE IF NOT EXISTS with the normative DDL: org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, PRIMARY KEY (org_id, user_id)",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "creates the `admin_config` table using CREATE TABLE IF NOT EXISTS with the normative DDL: key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.7",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "executes all six CREATE TABLE IF NOT EXISTS statements inside a single DEFERRED transaction; the transaction is committed atomically or rolled back entirely on error",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-6.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "schema creation is idempotent \u2014 calling `Open` on an existing database file that already has all tables succeeds without error",
+          "return_contract": "nil error; fully initialized *DB handle"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "`initDB`",
+          "action": "SQLite rolls back the transaction automatically on connection close; on next `Open`, CREATE TABLE IF NOT EXISTS is retried from scratch; no partial schema state persists",
+          "return_contract": null,
+          "error_condition": "table creation transaction is interrupted (e.g. process receives a signal after BEGIN but before COMMIT)"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-7",
+      "title": "Public DB struct and Open/OpenMemory/Close/Ping API",
+      "user_story": {
+        "role": "server bootstrap code and downstream packages",
+        "goal": "use a stable, minimal public API to open, close, and health-check the database",
+        "benefit": "packages can initialize and manage the database lifecycle without depending on SQLite internals"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "the `db` package",
+          "action": "exports a DB struct with a single field `SqlDB *sql.DB` that is used by callers to execute their own queries; the db package does not define per-table query methods",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "`Open`",
+          "action": "validates path, creates parent directory (mode 0700) if needed, opens the SQLite file via database/sql, calls initDB, and returns a fully initialized *DB handle or an error; no partial states are returned",
+          "return_contract": "(*DB, nil) on success; (nil, non-nil error) on any failure",
+          "trigger": "called with a valid file path"
+        },
+        {
+          "id": "02-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "`OpenMemory`",
+          "action": "opens an in-memory SQLite database using the ':memory:' DSN, calls initDB (skipping WAL mode), and returns a fully initialized *DB handle; each call returns an independent isolated database instance guaranteed by `SetMaxOpenConns(1)`",
+          "return_contract": "(*DB, nil) on success; (nil, non-nil error) on failure",
+          "trigger": "called by a downstream test suite"
+        },
+        {
+          "id": "02-REQ-7.4",
+          "ears_pattern": "event_driven",
+          "system": "`DB.Close`",
+          "action": "closes the underlying *sql.DB and returns any error from that close operation",
+          "return_contract": "nil on success; non-nil error if the underlying close fails",
+          "trigger": "called by the server shutdown sequence"
+        },
+        {
+          "id": "02-REQ-7.5",
+          "ears_pattern": "event_driven",
+          "system": "`DB.Ping`",
+          "action": "calls db.SqlDB.PingContext(ctx) and returns its result; a non-nil error causes the readiness probe to return HTTP 503; no additional checks beyond connection liveness are performed",
+          "return_contract": "nil if the connection is alive; non-nil error otherwise",
+          "trigger": "called by the readiness probe"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "`DB.Ping`",
+          "action": "PingContext returns the context error immediately; Ping returns it to the caller; readiness probe returns HTTP 503",
+          "return_contract": "non-nil context error",
+          "error_condition": "context passed to Ping is already cancelled when Ping is called"
+        },
+        {
+          "id": "02-REQ-7.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "the `db` package",
+          "action": "never calls os.Exit or panic in response to any error condition; all errors are signaled via return values to the caller",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-8",
+      "title": "WithTx transaction helper",
+      "user_story": {
+        "role": "downstream package caller",
+        "goal": "use a transaction helper that commits on success and rolls back on failure without needing to manage transaction lifecycle directly",
+        "benefit": "callers avoid boilerplate transaction management and guarantee rollback on error"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "`DB.WithTx`",
+          "action": "begins a DEFERRED transaction via db.SqlDB.BeginTx(ctx, nil), calls fn with the transaction handle, commits if fn returns nil, and rolls back if fn returns a non-nil error; returns the original error from fn on rollback",
+          "return_contract": "nil on successful commit; the original error from fn on rollback; transaction begin error if BeginTx fails",
+          "trigger": "called with a context and a function fn"
+        },
+        {
+          "id": "02-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`DB.WithTx`",
+          "action": "does not wrap or transform errors returned by fn; callers are responsible for wrapping SQLite errors via `WrapError` before or after calling `WithTx`",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-8.3",
+          "ears_pattern": "unwanted",
+          "system": "`DB.WithTx`",
+          "action": "silently discards the rollback error and returns the original error from fn",
+          "return_contract": "the original error from fn (not the rollback error)",
+          "error_condition": "fn returns an error and the subsequent rollback also fails"
+        },
+        {
+          "id": "02-REQ-8.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`DB.WithTx`",
+          "action": "always uses SQLite's default DEFERRED transaction isolation; IMMEDIATE and EXCLUSIVE modes are not supported by this API",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-8.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`DB.WithTx`",
+          "action": "forwards ctx to db.SqlDB.BeginTx; callers are responsible for passing ctx to individual query calls inside fn (e.g. tx.ExecContext, tx.QueryContext); WithTx does not install additional timeouts or deadlines",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "`DB.WithTx`",
+          "action": "fn returns a context error; `WithTx` rolls back the transaction (discarding any rollback error) and returns the context error from fn to the caller",
+          "return_contract": "context cancellation error from fn",
+          "error_condition": "context is cancelled before fn returns"
+        },
+        {
+          "id": "02-REQ-8.E2",
+          "ears_pattern": "unwanted",
+          "system": "`DB.WithTx`",
+          "action": "returns the error from BeginTx immediately; fn is never called",
+          "return_contract": "non-nil error from BeginTx; fn is not invoked",
+          "error_condition": "BeginTx fails (e.g. database connection is closed)"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-9",
+      "title": "WrapError helper and sentinel errors",
+      "user_story": {
+        "role": "downstream package caller",
+        "goal": "map raw SQLite error codes to sentinel errors using a pure function without depending on SQLite-specific error types",
+        "benefit": "callers use errors.Is for clean error handling and test WrapError in isolation with synthetic errors"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`WrapError`",
+          "action": "maps SQLITE_CONSTRAINT_UNIQUE and SQLITE_CONSTRAINT_PRIMARYKEY error codes to `ErrConflict`; maps SQLITE_BUSY and SQLITE_LOCKED error codes to `ErrDatabaseLocked`; returns nil if err is nil; returns err unchanged if it does not match any known SQLite error code",
+          "return_contract": "`ErrConflict`, `ErrDatabaseLocked`, nil, or the original error depending on the input"
+        },
+        {
+          "id": "02-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`WrapError`",
+          "action": "is a pure function: it inspects only the error code of the given error and performs no I/O, opens no database connections, and has no side effects; it can be called with a synthetically constructed error in tests",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-9.3",
+          "ears_pattern": "ubiquitous",
+          "system": "the `db` package",
+          "action": "does not produce `ErrNotFound` from `WrapError`; callers must return `ErrNotFound` explicitly when sql.ErrNoRows is encountered during row scanning",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-9.4",
+          "ears_pattern": "ubiquitous",
+          "system": "the `db` package",
+          "action": "exports three sentinel errors: `ErrNotFound` (errors.New(\"db: not found\")), `ErrConflict` (errors.New(\"db: conflict\")), and `ErrDatabaseLocked` (errors.New(\"db: database locked\")); callers use errors.Is to check these values",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "`WrapError`",
+          "action": "WrapError unwraps the error chain using errors.As or equivalent to locate the SQLite error code and maps it to the appropriate sentinel; if no SQLite error is found in the chain, returns err unchanged",
+          "return_contract": "sentinel error or original error",
+          "error_condition": "err is a wrapped error chain where the SQLite error code is nested inside (e.g. wrapped by fmt.Errorf(\"%w\"))"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-10",
+      "title": "Timestamp helpers \u2014 FormatTime and ParseTime",
+      "user_story": {
+        "role": "downstream package caller",
+        "goal": "use canonical timestamp helpers that produce and consume RFC 3339 UTC whole-second strings consistently",
+        "benefit": "all packages store and retrieve timestamps in the same format, preventing round-trip mismatches"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "the `db` package",
+          "action": "exports a constant `TimeFormat` = \"2006-01-02T15:04:05Z\" used as the canonical format for all database timestamp strings",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`FormatTime`",
+          "action": "truncates t to whole-second precision using time.Truncate(time.Second), converts to UTC, then formats using `TimeFormat`; sub-second components are intentionally discarded",
+          "return_contract": "a string of the form \"2006-01-02T15:04:05Z\" in UTC with no sub-second components"
+        },
+        {
+          "id": "02-REQ-10.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`ParseTime`",
+          "action": "parses the input string using `TimeFormat` and returns the resulting time.Time in UTC; returns an error if the string does not match the format",
+          "return_contract": "(time.Time in UTC, nil) on success; (zero time.Time, non-nil error) on parse failure"
+        },
+        {
+          "id": "02-REQ-10.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`FormatTime` and `ParseTime`",
+          "action": "guarantee round-trip consistency: ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC() for any time.Time t",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-10.E1",
+          "ears_pattern": "event_driven",
+          "system": "`FormatTime`",
+          "action": "converts the time to UTC before formatting; the output string always ends with 'Z' and never contains a numeric timezone offset",
+          "return_contract": "UTC timestamp string ending with 'Z'",
+          "trigger": "called with a time.Time that has a non-UTC timezone offset"
+        },
+        {
+          "id": "02-REQ-10.E2",
+          "ears_pattern": "unwanted",
+          "system": "`ParseTime`",
+          "action": "returns a parse error because the string does not match `TimeFormat`; callers must normalize timestamps to UTC with 'Z' suffix before storage",
+          "return_contract": "non-nil parse error",
+          "error_condition": "input string has a timezone offset (e.g. \"+05:30\") instead of 'Z' suffix"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-11",
+      "title": "Connection pool single-connection enforcement",
+      "user_story": {
+        "role": "database layer",
+        "goal": "enforce a single active SQLite connection to prevent concurrent-writer errors",
+        "benefit": "SQLite single-writer constraint is satisfied even under concurrent Go goroutine access"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "calls `SetMaxOpenConns(1)` on the *sql.DB handle to enforce a single active connection, preventing concurrent-writer errors since SQLite supports only one writer at a time even in WAL mode",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "calls `SetMaxIdleConns(1)` on the *sql.DB handle to keep the single connection warm and avoid repeated open/close overhead",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`OpenMemory`",
+          "action": "relies on `SetMaxOpenConns(1)` to guarantee that each ':memory:' DSN maps to exactly one connection, which in SQLite corresponds to a distinct private in-memory database instance with no shared state between `OpenMemory` calls",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "02-REQ-12",
+      "title": "Foreign key enforcement",
+      "user_story": {
+        "role": "downstream package caller",
+        "goal": "have SQLite enforce foreign key constraints on all tables",
+        "benefit": "data integrity violations (e.g. inserting a child row with a non-existent parent) are caught at the database level"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`initDB`",
+          "action": "executes PRAGMA foreign_keys = ON via db.Exec after WAL mode setup and before schema creation; this is required because SQLite does not enforce foreign keys by default and the setting is not persistent across connections",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "the `org_members` table",
+          "action": "enforces ON DELETE CASCADE on org_id so that membership rows are automatically removed when the referenced org is deleted; no cascade is applied on user_id \u2014 deleting a user requires explicit membership cleanup at the application layer",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-12.E1",
+          "ears_pattern": "unwanted",
+          "system": "`initDB`",
+          "action": "SQLite returns a SQLITE_CONSTRAINT error; `WrapError` maps it to `ErrConflict`; the insert is rejected and no row is written",
+          "return_contract": "`ErrConflict` sentinel from WrapError",
+          "error_condition": "an attempt is made to insert a child row referencing a non-existent parent (e.g. inserting an `api_keys` row with a user_id that does not exist in `users`)"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-13",
+      "title": "Integration test coverage",
+      "user_story": {
+        "role": "developer",
+        "goal": "have a comprehensive integration test suite in db_test.go that verifies all initialization behaviors with a real SQLite file",
+        "benefit": "regressions in initialization, schema creation, and error handling are caught automatically in CI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "uses a real SQLite file in a temporary directory created by t.TempDir() for all file-based tests; in-memory tests use `OpenMemory`",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_EmptyPath verifying that Open(\"\") returns a descriptive error without creating any filesystem state",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.3",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_PathIsDirectory verifying that Open returns a descriptive error when given a path that points to an existing directory",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.4",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_CreatesDirectory verifying that Open creates a missing parent directory; on non-Windows platforms (runtime.GOOS != \"windows\") also asserts the directory has mode 0700; the mode assertion is skipped on Windows",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.5",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_CreatesSchema verifying all six tables exist after Open on a new database",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.6",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_Idempotent verifying that calling Open twice on the same path succeeds without error",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.7",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_WALMode that queries PRAGMA journal_mode and asserts the value is \"wal\", and verifies that Open returns an error if WAL mode cannot be set",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.8",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_CorruptFile verifying that Open returns a wrapped error containing the file path when the target file exists but is not a valid SQLite database",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.9",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestOpen_ForeignKeys verifying that a foreign key violation is rejected (insert a child row with a non-existent parent)",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.10",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestPing verifying Ping returns nil on a healthy database",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.11",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestWithTx_Commit verifying that changes made inside `WithTx` are visible after the function returns nil",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.12",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestWithTx_Rollback verifying that changes made inside `WithTx` are not visible after the function returns an error",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.13",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestWrapError_Conflict verifying that a UNIQUE constraint violation is mapped to `ErrConflict` by `WrapError`",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.14",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestWrapError_Locked that constructs a synthetic SQLite error with the SQLITE_BUSY error code and passes it directly to `WrapError`, verifying it returns `ErrDatabaseLocked`; no real database lock is required",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.15",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestWrapError_Passthrough verifying that an unknown error is returned unchanged by `WrapError`",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.16",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestFormatTime verifying truncation to whole-second precision, UTC normalization, and correct `TimeFormat` output",
+          "return_contract": null
+        },
+        {
+          "id": "02-REQ-13.17",
+          "ears_pattern": "ubiquitous",
+          "system": "the integration test suite",
+          "action": "includes TestParseTime verifying round-trip consistency: ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC()",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "02-PROP-1",
+      "title": "initDB initialization is shared and identical for Open and OpenMemory",
+      "for_any": "call to `Open` with a valid file path and any call to `OpenMemory`",
+      "invariant": "both constructors call the same private `initDB` function for all post-connection initialization; the only behavioral difference is that `OpenMemory` skips the WAL PRAGMA and validation step; all other steps (pool settings, foreign key PRAGMA, schema creation) are applied identically",
+      "validates": [
+        "02-REQ-3.1",
+        "02-REQ-3.2",
+        "02-REQ-3.5",
+        "02-REQ-3.6"
+      ]
+    },
+    {
+      "id": "02-PROP-2",
+      "title": "Schema creation is idempotent",
+      "for_any": "call to `Open` on a database file that already contains all six tables",
+      "invariant": "Open succeeds without error and the existing table contents are not modified; CREATE TABLE IF NOT EXISTS is a no-op when the table already exists",
+      "validates": [
+        "02-REQ-6.8"
+      ]
+    },
+    {
+      "id": "02-PROP-3",
+      "title": "FormatTime/ParseTime round-trip consistency",
+      "for_any": "any time.Time value t",
+      "invariant": "ParseTime(FormatTime(t)) equals t.Truncate(time.Second).UTC(); no information beyond whole-second precision is retained",
+      "validates": [
+        "02-REQ-10.4",
+        "02-REQ-10.2",
+        "02-REQ-10.3"
+      ]
+    },
+    {
+      "id": "02-PROP-4",
+      "title": "WrapError is a pure function with no side effects",
+      "for_any": "any error value err passed to `WrapError`",
+      "invariant": "`WrapError` produces a deterministic output based solely on the SQLite error code of err; it performs no I/O, modifies no state, and can be called with synthetic errors in unit tests without a live database",
+      "validates": [
+        "02-REQ-9.2"
+      ]
+    },
+    {
+      "id": "02-PROP-5",
+      "title": "WithTx atomicity \u2014 no partial writes on error",
+      "for_any": "any call to `WithTx` where fn returns a non-nil error",
+      "invariant": "no changes made by fn are visible in the database after `WithTx` returns; the transaction is always rolled back when fn returns an error",
+      "validates": [
+        "02-REQ-8.1",
+        "02-REQ-8.3"
+      ]
+    },
+    {
+      "id": "02-PROP-6",
+      "title": "Open returns fully initialized handle or error \u2014 no partial states",
+      "for_any": "any call to `Open` or `OpenMemory`",
+      "invariant": "the constructor returns either a fully initialized *DB handle (with WAL mode set, foreign keys enabled, schema created, pool configured) or a non-nil error with *DB nil; no partially initialized handle is ever returned",
+      "validates": [
+        "02-REQ-7.2",
+        "02-REQ-7.3",
+        "02-REQ-3.7"
+      ]
+    },
+    {
+      "id": "02-PROP-7",
+      "title": "OpenMemory isolation \u2014 independent instances per call",
+      "for_any": "any two distinct calls to `OpenMemory`",
+      "invariant": "each call returns an independent *DB instance backed by a separate in-memory SQLite database; writes to one instance are never visible in another instance",
+      "validates": [
+        "02-REQ-7.3",
+        "02-REQ-11.3"
+      ]
+    },
+    {
+      "id": "02-PROP-8",
+      "title": "Input validation precedes all filesystem access in Open",
+      "for_any": "any call to `Open` with an empty path or a path pointing to an existing directory",
+      "invariant": "`Open` returns the descriptive error without creating directories, opening database connections, or producing any filesystem side effects",
+      "validates": [
+        "02-REQ-1.1",
+        "02-REQ-1.2",
+        "02-REQ-1.3"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "02-PATH-1",
+      "title": "Happy path: Open new database file and return initialized DB handle",
+      "steps": [
+        {
+          "actor": "Server bootstrap (server_core)",
+          "action": "reads database path from config and calls db.Open(path)"
+        },
+        {
+          "actor": "`Open`",
+          "action": "validates path is non-empty and not an existing directory"
+        },
+        {
+          "actor": "`Open`",
+          "action": "creates parent directory recursively with mode 0700 if it does not exist"
+        },
+        {
+          "actor": "`Open`",
+          "action": "calls database/sql.Open with the modernc.org/sqlite driver and bare file path DSN"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "sets `SetMaxOpenConns(1)` and `SetMaxIdleConns(1)` on the *sql.DB handle"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "executes PRAGMA journal_mode=WAL as a query and reads the returned mode string"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "validates returned mode is \"wal\"; proceeds if valid"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "executes PRAGMA foreign_keys = ON via db.Exec"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "executes all six CREATE TABLE IF NOT EXISTS statements inside a single DEFERRED transaction and commits"
+        },
+        {
+          "actor": "`Open`",
+          "action": "returns the fully initialized *DB handle to the server bootstrap code"
+        },
+        {
+          "actor": "Server bootstrap (server_core)",
+          "action": "stores the *DB handle for use by handlers, auth, and other components"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-2",
+      "title": "Happy path: OpenMemory for downstream test suite",
+      "steps": [
+        {
+          "actor": "Downstream test (handler or auth package)",
+          "action": "calls db.OpenMemory() at the start of a test function"
+        },
+        {
+          "actor": "`OpenMemory`",
+          "action": "calls database/sql.Open with the modernc.org/sqlite driver and ':memory:' DSN"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "sets `SetMaxOpenConns(1)` and `SetMaxIdleConns(1)` on the *sql.DB handle"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "skips WAL mode PRAGMA and validation (not applicable for in-memory databases)"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "executes PRAGMA foreign_keys = ON via db.Exec"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "executes all six CREATE TABLE IF NOT EXISTS statements in a single DEFERRED transaction and commits"
+        },
+        {
+          "actor": "`OpenMemory`",
+          "action": "returns the fully initialized *DB handle to the test"
+        },
+        {
+          "actor": "Downstream test",
+          "action": "registers db.Close() via t.Cleanup and uses db.SqlDB for query execution in the test"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-3",
+      "title": "Error path: Open fails with corrupt database file",
+      "steps": [
+        {
+          "actor": "Server bootstrap (server_core)",
+          "action": "calls db.Open(path) where path points to an existing file containing arbitrary non-SQLite bytes"
+        },
+        {
+          "actor": "`Open`",
+          "action": "validates path passes non-empty and non-directory checks"
+        },
+        {
+          "actor": "`Open`",
+          "action": "parent directory exists; no directory creation needed"
+        },
+        {
+          "actor": "`Open`",
+          "action": "calls database/sql.Open which succeeds (driver defers actual connection validation)"
+        },
+        {
+          "actor": "`initDB`",
+          "action": "sets pool limits; attempts PRAGMA journal_mode=WAL query; driver returns an error on first use of the corrupt file"
+        },
+        {
+          "actor": "`Open`",
+          "action": "wraps the driver error: fmt.Errorf(\"db: failed to open database at %q: %w\", path, err) and closes the *sql.DB handle"
+        },
+        {
+          "actor": "Server bootstrap (server_core)",
+          "action": "receives non-nil error containing the file path; logs the error and terminates server startup"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-4",
+      "title": "Happy path: WithTx commit on success",
+      "steps": [
+        {
+          "actor": "Downstream caller (handler or repository code)",
+          "action": "calls db.WithTx(ctx, fn) with a function that performs database writes"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "calls db.SqlDB.BeginTx(ctx, nil) to begin a DEFERRED transaction"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "calls fn(tx) passing the transaction handle to the caller-supplied function"
+        },
+        {
+          "actor": "Caller fn",
+          "action": "executes SQL statements using tx.ExecContext or tx.QueryContext and returns nil"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "calls tx.Commit() and returns nil to the caller"
+        },
+        {
+          "actor": "Downstream caller",
+          "action": "observes committed changes visible in subsequent queries"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-5",
+      "title": "Error path: WithTx rollback on function error",
+      "steps": [
+        {
+          "actor": "Downstream caller (handler or repository code)",
+          "action": "calls db.WithTx(ctx, fn) with a function that encounters an error"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "calls db.SqlDB.BeginTx(ctx, nil) to begin a DEFERRED transaction"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "calls fn(tx); fn encounters a UNIQUE constraint violation and calls db.WrapError(err) returning ErrConflict"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "receives non-nil error from fn; calls tx.Rollback(); discards any rollback error silently"
+        },
+        {
+          "actor": "`WithTx`",
+          "action": "returns the original error (`ErrConflict`) to the caller"
+        },
+        {
+          "actor": "Downstream caller",
+          "action": "checks errors.Is(err, db.ErrConflict) and returns an appropriate HTTP 409 response"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "02-ERR-1",
+      "condition": "path argument to Open is an empty string",
+      "behavior": "Open returns errors.New(\"db: path must not be empty\") immediately without any filesystem access or database connection attempt",
+      "requirement_id": "02-REQ-1.1"
+    },
+    {
+      "id": "02-ERR-2",
+      "condition": "path argument to Open points to an existing directory",
+      "behavior": "Open returns fmt.Errorf(\"db: path %q is a directory, not a file\", path) immediately without any filesystem access beyond the stat check",
+      "requirement_id": "02-REQ-1.2"
+    },
+    {
+      "id": "02-ERR-3",
+      "condition": "parent directory of the database path cannot be created",
+      "behavior": "Open returns the OS error from directory creation without opening any database connection",
+      "requirement_id": "02-REQ-2.E1"
+    },
+    {
+      "id": "02-ERR-4",
+      "condition": "PRAGMA journal_mode=WAL returns a mode string other than \"wal\"",
+      "behavior": "Open returns fmt.Errorf(\"db: failed to enable WAL mode: journal_mode is %q\", mode) and closes the database connection",
+      "requirement_id": "02-REQ-4.2"
+    },
+    {
+      "id": "02-ERR-5",
+      "condition": "database file at path is corrupt or not a valid SQLite database, causing a driver error after database/sql.Open succeeds",
+      "behavior": "Open wraps the error as fmt.Errorf(\"db: failed to open database at %q: %w\", path, err) and closes the database connection before returning",
+      "requirement_id": "02-REQ-5.1"
+    },
+    {
+      "id": "02-ERR-6",
+      "condition": "PRAGMA foreign_keys = ON execution fails with a driver error",
+      "behavior": "initDB returns the driver error immediately; schema creation is not attempted; the calling constructor returns the error with *DB nil",
+      "requirement_id": "02-REQ-3.E2"
+    },
+    {
+      "id": "02-ERR-7",
+      "condition": "schema creation transaction fails (e.g. disk full mid-transaction)",
+      "behavior": "initDB rolls back the transaction and returns the error; no partially-created tables persist; the calling constructor returns the error with *DB nil",
+      "requirement_id": "02-REQ-3.E1"
+    },
+    {
+      "id": "02-ERR-8",
+      "condition": "WithTx: BeginTx fails",
+      "behavior": "WithTx returns the error from BeginTx immediately; fn is never called",
+      "requirement_id": "02-REQ-8.E2"
+    },
+    {
+      "id": "02-ERR-9",
+      "condition": "WithTx: fn returns an error and subsequent rollback also fails",
+      "behavior": "WithTx silently discards the rollback error and returns the original error from fn",
+      "requirement_id": "02-REQ-8.3"
+    },
+    {
+      "id": "02-ERR-10",
+      "condition": "UNIQUE or PRIMARY KEY constraint violation from an INSERT or UPDATE",
+      "behavior": "Caller passes the driver error to WrapError which returns ErrConflict; callers check errors.Is(err, db.ErrConflict)",
+      "requirement_id": "02-REQ-9.1"
+    },
+    {
+      "id": "02-ERR-11",
+      "condition": "SQLite returns SQLITE_BUSY or SQLITE_LOCKED",
+      "behavior": "Caller passes the driver error to WrapError which returns ErrDatabaseLocked; callers check errors.Is(err, db.ErrDatabaseLocked)",
+      "requirement_id": "02-REQ-9.1"
+    },
+    {
+      "id": "02-ERR-12",
+      "condition": "Query produces no rows (sql.ErrNoRows from row.Scan)",
+      "behavior": "Caller explicitly returns db.ErrNotFound; WrapError is not involved in this mapping",
+      "requirement_id": "02-REQ-9.3"
+    },
+    {
+      "id": "02-ERR-13",
+      "condition": "Ping is called with a cancelled context",
+      "behavior": "PingContext returns the context error immediately; Ping returns it to the caller; readiness probe returns HTTP 503",
+      "requirement_id": "02-REQ-7.E1"
+    },
+    {
+      "id": "02-ERR-14",
+      "condition": "ParseTime is called with a string that does not match TimeFormat (e.g. has a numeric timezone offset)",
+      "behavior": "ParseTime returns a non-nil parse error; the caller must normalize timestamps to UTC with Z suffix before storage",
+      "requirement_id": "02-REQ-10.E2"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "modernc.org/sqlite",
+      "version": "unverified \u2014 cross-check installed version before implementation",
+      "symbols": [
+        {
+          "name": "sqlite driver registration",
+          "import_path": "modernc.org/sqlite",
+          "signature": "import _ \"modernc.org/sqlite\"",
+          "notes": "Pure-Go SQLite driver. Registers itself as the 'sqlite' driver name for database/sql. No CGo required. Exact driver name string should be verified against the installed package version."
+        }
+      ]
+    },
+    {
+      "package": "database/sql",
+      "version": "Go 1.25+",
+      "symbols": [
+        {
+          "name": "Open",
+          "import_path": "database/sql",
+          "signature": "func Open(driverName, dataSourceName string) (*sql.DB, error)",
+          "notes": "Opens a database using the named driver. For modernc.org/sqlite, driverName is the registered name and dataSourceName is the bare file path or ':memory:'."
+        },
+        {
+          "name": "DB.SetMaxOpenConns",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) SetMaxOpenConns(n int)",
+          "notes": "Set to 1 to enforce single-connection constraint for SQLite."
+        },
+        {
+          "name": "DB.SetMaxIdleConns",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) SetMaxIdleConns(n int)",
+          "notes": "Set to 1 to keep the single connection warm."
+        },
+        {
+          "name": "DB.QueryRow",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) QueryRow(query string, args ...any) *sql.Row",
+          "notes": "Used to execute PRAGMA journal_mode=WAL and read the returned mode value."
+        },
+        {
+          "name": "DB.Exec",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) Exec(query string, args ...any) (sql.Result, error)",
+          "notes": "Used to execute PRAGMA foreign_keys = ON."
+        },
+        {
+          "name": "DB.BeginTx",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)",
+          "notes": "Used by WithTx to begin a DEFERRED transaction. Pass nil for opts to use default (DEFERRED) isolation."
+        },
+        {
+          "name": "DB.PingContext",
+          "import_path": "database/sql",
+          "signature": "func (db *sql.DB) PingContext(ctx context.Context) error",
+          "notes": "Used by DB.Ping to verify connection liveness."
+        },
+        {
+          "name": "Tx.Commit",
+          "import_path": "database/sql",
+          "signature": "func (tx *sql.Tx) Commit() error",
+          "notes": "Called by WithTx when fn returns nil."
+        },
+        {
+          "name": "Tx.Rollback",
+          "import_path": "database/sql",
+          "signature": "func (tx *sql.Tx) Rollback() error",
+          "notes": "Called by WithTx when fn returns non-nil error; rollback errors are silently discarded."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,852 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The `server_core` PRD is exceptionally well-written overall \u2014 Intent, Goals, Non-Goals, Background/Source, and Functional Requirements are all present and detailed. The Go interfaces are clearly specified, the configuration table is thorough, and the middleware behaviours are precisely defined. However, several gaps prevent a \"ready\" verdict: (1) a potential dependency/overlap with the active `database_layer` spec is not declared despite `/readyz` performing a database ping; (2) the drain timeout is hardcoded to 15 seconds in the body but the Goals say \"configurable\" \u2014 this is an inconsistency; (3) a few edge cases and operational details are underspecified (e.g., what constitutes \"body-expecting\" endpoints for Content-Type enforcement, and the exact format/fields of the `/version` endpoint build string); and (4) the owner field is empty.",
+      "gaps": [
+        "Undeclared dependency on `database_layer` spec: The `/readyz` health probe explicitly 'pings the database', but the Dependencies section states 'None. This is a foundation spec with no upstream dependencies.' If `database_layer` provides the DB connection abstraction, `server_core` has a runtime dependency on it and this must be reconciled.",
+        "Drain timeout inconsistency: The Goals section states 'graceful shutdown with a configurable drain timeout', but the Functional Requirements hardcode 15 seconds with no corresponding configuration key in the config table. Either a `[server] drain_timeout` setting must be added to the config schema, or the Goals should be corrected to say 'fixed drain timeout'.",
+        "Content-Type enforcement scope is ambiguous: The spec says 'endpoints that expect a request body' are subject to 415 enforcement, but does not define how the framework or middleware distinguishes body-expecting endpoints (e.g., all POST/PUT/PATCH, an explicit opt-in annotation, or something else). This is needed for implementation and testing.",
+        "Build string format for `/version` is unspecified: The response shape shows a `build` field as `<string>` but does not define what this string contains (e.g., git SHA, tag, timestamp, or a combination) or how it is injected at build time (another `-ldflags` variable?). Without this, the field cannot be reliably implemented or tested.",
+        "Cache-Control category assignment mechanism is underspecified: The spec says 'the handler registration API allows consuming projects to specify which cache category applies to their registered handlers' but the `APIGroup()` interface returns a plain `*echo.Group` with no mechanism to pass a cache category. No enum, option, or alternative registration method is defined.",
+        "Owner field is empty: The spec metadata has `owner: ''`, which violates project governance expectations and makes accountability unclear."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The `/readyz` probe pings the database, yet the Dependencies section declares 'None.' Does `server_core` depend on the active `database_layer` spec for its DB connection interface? Should a dependency on `database_layer` be declared, or will `server_core` own its own minimal DB ping abstraction independently of that spec?",
+          "context": "An undeclared dependency on an active spec is a blocking gap. If `server_core` calls into the `database_layer`'s connection management, it must list that spec as a dependency; if it owns a self-contained ping, the readyz behaviour should be clarified to avoid future overlap.",
+          "options": [
+            "Declare a dependency on `database_layer`; the readyz probe uses that spec's connection API.",
+            "`server_core` owns a minimal, self-contained DB ping (e.g., open + SELECT 1) with no reference to `database_layer` types.",
+            "The readyz probe should be moved into a separate spec or into `database_layer` itself."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should the graceful shutdown drain timeout be configurable via `config.toml` (as implied by the Goals), or is 15 seconds a fixed, non-configurable value (as implied by the Functional Requirements)?",
+          "context": "The Goals promise a 'configurable drain timeout' but no `[server] drain_timeout` key appears in the configuration table, and the Functional Requirements hardcode 15 s. This inconsistency must be resolved before implementation.",
+          "options": [
+            "Add `[server] drain_timeout` (default: 15s) to the config schema \u2014 make it configurable.",
+            "Keep 15 seconds as a fixed compile-time constant and remove 'configurable' from the Goals."
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "How should the middleware determine which endpoints are 'body-expecting' for Content-Type enforcement? What mechanism selects those routes?",
+          "context": "The spec enforces HTTP 415 on body-expecting endpoints with a non-JSON Content-Type, but does not define how the middleware identifies such endpoints. Without this, the enforcement boundary is ambiguous for implementers and testers.",
+          "options": [
+            "Apply to all POST, PUT, and PATCH requests automatically (HTTP method-based).",
+            "Opt-in per route via a custom Echo middleware or route metadata flag.",
+            "Apply globally to all requests that include a non-empty body (Content-Length > 0 or Transfer-Encoding)."
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "What does the `build` field in the `/version` response contain, and how is it injected at build time?",
+          "context": "The `/version` response shape exposes a `build` field as an opaque string, but the spec does not define its format or the injection mechanism. This is required to write the Makefile linker flags, implement the variable, and write deterministic tests.",
+          "options": [
+            "Git commit SHA only (e.g., `abc1234`), injected via `-ldflags '-X main.Build=...'`.",
+            "Git tag + SHA (e.g., `v1.2.3-abc1234`), injected via `-ldflags`.",
+            "ISO 8601 build timestamp, injected at compile time.",
+            "Combination of tag, SHA, and timestamp (e.g., `v1.2.3+abc1234.20260717`)."
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "How does the handler registration API expose cache-category control to consuming projects? The current `APIGroup()` signature returns a plain `*echo.Group` with no mechanism for specifying a cache category.",
+          "context": "The spec states that consuming projects can specify which cache category applies to their handlers via the registration API, but the only exposed interface is `APIGroup() *echo.Group`, which carries no such metadata. An additional registration method or option pattern is needed.",
+          "options": [
+            "Add an overloaded registration method, e.g., `server.RegisterHandler(method, path string, handler echo.HandlerFunc, cache CacheCategory)`.",
+            "Provide per-category Echo groups, e.g., `server.MutableGroup()` and `server.StaticGroup()`.",
+            "Expose a middleware constructor, e.g., `apikit.CacheMiddleware(CacheCategory)`, that consumers apply themselves.",
+            "Drop the cache-category feature from the handler registration API; consumers set headers manually."
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "Who is the owner of this spec?",
+          "context": "The `owner` field in the spec metadata is empty. A named owner is required for accountability and review routing.",
+          "options": [],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "The PRD is well-structured and covers a solid breadth of foundational server concerns. The technical stack, functional requirements, and public interfaces are clearly articulated. However, several gaps remain that could cause ambiguity during implementation: startup failure behavior, config validation rules, middleware ordering, testing strategy, observability expectations, and a few edge cases in the handler registration API and ETag derivation need clarification before this can be considered implementation-ready.",
+      "gaps": [
+        "Startup failure behavior is unspecified \u2014 what happens if config.toml is missing or malformed, or if the port is already in use?",
+        "Config validation rules are absent \u2014 which fields are required vs optional, and what are acceptable value ranges (e.g. port range, valid log levels, max_body_size parsing)?",
+        "Middleware execution order is not defined \u2014 the order in which middleware (request ID, logging, content-type enforcement, body size limit) wraps each request is ambiguous and can affect behavior.",
+        "No testing strategy or coverage expectations are documented \u2014 unit vs integration tests, what should be mocked, minimum coverage targets.",
+        "The ETag derivation from updated_at is underspecified \u2014 is it a hash of the timestamp, the raw timestamp string, or some other encoding? Weak vs strong ETag?",
+        "Observability beyond structured logging is not addressed \u2014 no mention of metrics (Prometheus), tracing (OpenTelemetry), or profiling endpoints.",
+        "The behavior of APIGroup() if called before Start() (or after Shutdown()) is not defined.",
+        "There is no mention of how config.toml defaults are applied \u2014 are they Go struct defaults, TOML defaults, or applied programmatically in Load()?",
+        "MaxBodySize is a string (e.g. '1MB') but no parsing/validation rules are specified for acceptable formats.",
+        "No security hardening defaults are specified (e.g. HTTP header hardening like X-Content-Type-Options, X-Frame-Options beyond Cache-Control).",
+        "The /version endpoint's version field source is unspecified \u2014 is it also an ldflags variable, hardcoded, or read from config?"
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What should happen if config.toml is missing or malformed at startup?",
+          "context": "Implementers need to know whether to fall back to defaults, exit with a fatal error, or return an error to the caller. This affects the contract of Load() and NewServer().",
+          "options": [
+            "Exit immediately with a descriptive fatal log message",
+            "Return an error from Load(); NewServer() panics or returns nil if config is nil",
+            "Fall back to all defaults if the file is missing; error only on malformed TOML",
+            "Fall back to all defaults silently in all cases"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "What is the exact middleware execution order for a request hitting a registered handler?",
+          "context": "Middleware order affects behavior \u2014 e.g. body size limiting before content-type checking means you get 413 before 415. This needs to be deterministic for testing and debugging.",
+          "options": [
+            "Request ID \u2192 Body Size Limit \u2192 Content-Type Enforcement \u2192 Logging \u2192 Handler",
+            "Request ID \u2192 Logging \u2192 Body Size Limit \u2192 Content-Type Enforcement \u2192 Handler",
+            "Request ID \u2192 Content-Type Enforcement \u2192 Body Size Limit \u2192 Logging \u2192 Handler",
+            "Other (please specify)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "How is the ETag value derived from the updated_at timestamp?",
+          "context": "The spec says 'the ETag value is derived from the resource's updated_at timestamp' but does not specify the encoding. Implementations may differ, breaking client caching.",
+          "options": [
+            "Raw RFC 3339 UTC string, quoted (e.g. ETag: \"2026-07-17T14:30:00Z\")",
+            "MD5 or SHA-1 hash of the RFC 3339 UTC string",
+            "Unix epoch integer as a string",
+            "Weak ETag (W/) of the RFC 3339 UTC string"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Where does the version string in the /version endpoint come from?",
+          "context": "The build field is documented as an ldflags variable, but the version field source is unspecified. Is it also injected via ldflags, hardcoded in the package, or read from a file?",
+          "options": [
+            "Also injected via -ldflags at build time (e.g. -X main.Version=1.0.0)",
+            "Hardcoded as a constant in the package, bumped manually per release",
+            "Read from a VERSION file in the repository root",
+            "Derived from a go module version tag"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "What is the acceptable format for the max_body_size config value, and how should invalid values be handled?",
+          "context": "MaxBodySize is typed as a string (e.g. '1MB') in the config struct. Without parsing rules, implementations may differ (e.g. is '1mb', '1 MB', '1048576' all valid?).",
+          "options": [
+            "Numeric suffixes only: KB, MB, GB (case-insensitive, no spaces)",
+            "Raw byte integer string only (e.g. '1048576')",
+            "Both numeric suffixes and raw byte integers are accepted",
+            "Reject at startup with a fatal error if the format is unrecognized"
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "Should the server apply any HTTP security headers beyond Cache-Control (e.g. X-Content-Type-Options, X-Frame-Options, Referrer-Policy)?",
+          "context": "Many production HTTP servers set defensive headers by default. If these are in scope, they should be specified now to avoid retrofitting later.",
+          "options": [
+            "Yes \u2014 set a standard hardening set (X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer)",
+            "No \u2014 explicitly out of scope for Server Core; consuming projects add as needed",
+            "Only X-Content-Type-Options: nosniff is required"
+          ],
+          "required": false
+        },
+        {
+          "id": "q7",
+          "text": "Is there a minimum testing strategy or coverage expectation for Server Core?",
+          "context": "Without a stated testing strategy, teams may under-test critical middleware or lifecycle behavior. Even a brief statement (e.g. 'unit tests for all middleware, integration test for startup/shutdown') helps align expectations.",
+          "options": [
+            "Unit tests for all middleware and utility functions; integration test for full startup/shutdown cycle",
+            "No formal coverage target; tests are at implementer discretion",
+            "Minimum 80% line coverage enforced by CI",
+            "Table-driven unit tests for all public functions; no integration tests required"
+          ],
+          "required": false
+        },
+        {
+          "id": "q8",
+          "text": "What should happen if the listen port is already in use when Start() is called?",
+          "context": "This is a common operational failure mode. The spec should state whether Start() returns an error, panics, or logs and exits.",
+          "options": [
+            "Start() returns a non-nil error; the caller is responsible for handling it",
+            "The server logs a fatal message and calls os.Exit(1)",
+            "The server retries with exponential backoff up to a configurable limit"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a well-structured, detailed PRD with clear intent, strong functional requirements, and a solid public API definition. The middleware ordering, config validation rules, error handling, and testing strategy are all thorough. A few gaps remain: the `NewServer()` signature shown in the \"Interfaces\" section uses positional args but the \"Handler Registration API\" section shows it differently; the `X-Request-ID` reuse behavior needs a validation/truncation policy; the `/version` endpoint's cache category is unspecified; the `maxBodyBytes` field accessibility pattern needs clarification; and there are minor ambiguities around concurrent handler registration safety and what \"undefined behavior\" means post-shutdown.",
+      "gaps": [
+        "The `/version` endpoint has no assigned Cache-Control category \u2014 it is not listed under any of the three named categories, leaving implementers to guess.",
+        "The X-Request-ID passthrough behavior (reusing an incoming header) lacks a validation/sanitization policy: maximum length, allowed characters, and what happens if the value is malformed or excessively long are undefined.",
+        "The `maxBodyBytes` field in `ServerConfig` is unexported (lowercase) but the `Config` struct is in `internal/config` \u2014 it is unclear how consuming code (e.g., the middleware) accesses the parsed byte value. A public accessor method or a separate exported field should be specified.",
+        "The `NewServer()` function signature differs between two sections: the Interfaces section shows `NewServer(cfg *config.Config, checker HealthChecker)` but the Handler Registration API example also passes `nil` for the checker \u2014 these are consistent, but the variadic-vs-positional pattern for optional `HealthChecker` is not fully resolved (e.g., could be `...HealthChecker` for true optionality).",
+        "Concurrent safety of `APIGroup()` handler registration is not specified \u2014 it is stated callers must not register after shutdown, but whether concurrent registration before `Start()` is safe is unaddressed.",
+        "The `Shutdown()` method signature requires a `context.Context` parameter, but the graceful shutdown described is internally triggered by signal handling. It is unclear whether `Shutdown()` is also intended to be called externally (e.g., in tests) and how the passed context interacts with the fixed 15-second drain timeout.",
+        "No behavior is specified for what happens when `Load()` is called and `XDG_CONFIG_HOME` points to a directory that exists but the `apikit/config.toml` file is absent \u2014 should it fall back to `./config.toml` or apply defaults?",
+        "The `CacheNoStore` category is described as the default for endpoints under the mount point, but it is not specified whether this default is applied automatically to all consumer-registered routes or only when explicitly passed via `CacheMiddleware()`.",
+        "There is no mention of how the server handles panics inside handlers \u2014 whether Echo's default panic recovery is enabled, disabled, or replaced with a custom one that emits the structured error envelope."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What Cache-Control category should the `/version` endpoint use?",
+          "context": "The three named cache categories are defined and applied to health probes and mutable API routes, but `/version` is not assigned to any category. This leaves implementers without a clear directive.",
+          "options": [
+            "CacheNoCache (same as health probes \u2014 no-cache)",
+            "CachePublic (public, max-age=300 \u2014 it is static build info)",
+            "CacheNoStore (no-store \u2014 conservative default)",
+            "A new fourth category with a custom max-age (e.g. max-age=3600)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "What validation/sanitization rules apply to an incoming `X-Request-ID` header when the server reuses it instead of generating a new UUID?",
+          "context": "Passing through arbitrary client-supplied header values without validation is a security risk (log injection, oversized values). The spec needs to define accepted character set, maximum length, and fallback behavior for invalid values.",
+          "options": [
+            "Accept any non-empty string up to 128 characters; truncate silently if longer",
+            "Accept only UUID v4 format (36-char hex with dashes); generate a new UUID if the value doesn't match",
+            "Accept any printable ASCII string up to 256 characters; reject and generate new UUID if non-printable characters are present",
+            "Pass through the value as-is with no validation (trust the client)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "How should the parsed `maxBodyBytes` int64 value be exposed from `ServerConfig` so middleware can access it?",
+          "context": "The field is declared as unexported (`maxBodyBytes int64`) in the `ServerConfig` struct inside `internal/config`. Middleware in the server package needs to read this value. The access pattern should be explicit in the spec.",
+          "options": [
+            "Add a public getter method: `func (c *ServerConfig) MaxBodyBytes() int64`",
+            "Export the field directly: rename to `MaxBodyBytes int64` with a `toml:\"-\"` tag to exclude it from serialization",
+            "Store the parsed value in a separate exported field alongside the raw string: `MaxBodySizeBytes int64`",
+            "Parse the string in the middleware at runtime (do not store the parsed value in Config)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "When `XDG_CONFIG_HOME` is set but `$XDG_CONFIG_HOME/apikit/config.toml` does not exist, should the server fall back to `./config.toml` or apply defaults directly?",
+          "context": "The current spec says 'if config.toml is absent, defaults are applied' but only describes the non-XDG case. If XDG_CONFIG_HOME is set and the file is missing at the XDG path, the fallback behavior is ambiguous.",
+          "options": [
+            "Apply defaults directly \u2014 do not fall back to ./config.toml (XDG path is authoritative when the env var is set)",
+            "Fall back to ./config.toml, then apply defaults if that is also absent",
+            "Return an error \u2014 if XDG_CONFIG_HOME is explicitly set, the config file is expected to exist there"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Should `CacheNoStore` be applied automatically to all consumer-registered routes under the mount point, or only when explicitly passed via `CacheMiddleware()`?",
+          "context": "The spec says CacheNoStore is the default for mutable endpoints, but it is unclear if this is enforced automatically (opt-out model) or requires the consumer to explicitly attach `CacheMiddleware(CacheNoStore)` (opt-in model). This significantly affects the consumer API contract.",
+          "options": [
+            "Opt-in: no Cache-Control header is set on consumer routes unless they explicitly attach CacheMiddleware()",
+            "Opt-out: CacheNoStore is applied to all routes under the mount point by default; consumers override per-route with CacheMiddleware()",
+            "Automatic for the mount-point group but overridable: the APIGroup() has CacheNoStore middleware pre-attached"
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "Is panic recovery middleware enabled, and if so, does it use Echo's default recovery or a custom one that emits the standard JSON error envelope?",
+          "context": "Echo includes a built-in Recovery middleware that catches panics and returns a 500. If enabled, its default response may not match the standard error envelope defined in this spec. The spec should be explicit about this.",
+          "options": [
+            "Use Echo's default Recovery middleware as-is (response format may not match the error envelope)",
+            "Use a custom panic recovery middleware that returns the standard JSON error envelope with HTTP 500",
+            "Disable panic recovery entirely \u2014 panics propagate and crash the server (not recommended)",
+            "Not applicable \u2014 panic recovery is out of scope for this spec"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a high-quality, well-structured PRD with strong coverage of functional requirements, interfaces, middleware ordering, and testing strategy. The spec is precise, internally consistent, and production-minded. A few targeted gaps remain: the `NewServer()` signature lacks clarity on variadic/options pattern vs. fixed parameters, there is no explicit behavior defined for `Shutdown()` called multiple times (idempotency), the `/version` endpoint response does not specify behavior when ldflags are not set at build time for the consuming project's binary, and there is no explicit contract on whether `Start()` is blocking or can return before shutdown. Additionally, the spec is silent on how config validation errors are surfaced during `NewServer()` vs. `Load()` \u2014 the caller flow is implied but not explicit. Minor gaps also exist around test environment concerns (e.g., port collision handling in integration tests) and whether `APIGroup()` panics or returns an error if called post-shutdown.",
+      "gaps": [
+        "NewServer() signature uses a fixed two-parameter form (cfg, checker) but the spec does not address whether future extensibility is handled via functional options or versioned constructors \u2014 this matters for API stability.",
+        "The spec does not define idempotency behavior for Shutdown(): if called twice concurrently or sequentially, is the second call a no-op, does it return an error, or is behavior undefined?",
+        "Start() is described as blocking ('blocks until shutdown') in comments but this is only in the interface doc, not in the Functional Requirements section \u2014 the blocking contract should be explicit and cross-referenced.",
+        "The caller flow between Load() and NewServer() is implied but not made explicit: the spec does not state whether NewServer() calls Load() internally or requires the caller to call Load() first and pass the result. The interface shows NewServer(cfg *config.Config, ...) suggesting the caller must call Load() separately, but this is never stated as a usage contract.",
+        "No behavior is defined for APIGroup() called after Shutdown() has returned \u2014 the spec says 'undefined behavior' but does not state whether the server panics, returns nil, or returns the stale group.",
+        "The /version endpoint description does not clarify behavior when the consuming project's own binary does not set ldflags \u2014 only the apikit library's defaults are mentioned, but version/build variables declared in cmd/apikit/main.go may not be the same variables used by a consuming project's main package.",
+        "Integration test strategy does not address port allocation (e.g., random ephemeral port for tests) to prevent flakiness from port collisions in CI environments.",
+        "No explicit statement on whether the structured log entry is written on every request including health probe requests, or whether health probe logging is suppressed/filtered to reduce noise."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the intended behavior when Shutdown() is called more than once \u2014 for example, if SIGTERM is received and a test also calls Shutdown() concurrently? Should the second call be a no-op (return nil), return an error, or block until the first shutdown completes?",
+          "context": "Without a defined idempotency contract, concurrent or sequential double-shutdown can cause panics or unexpected behavior in tests and production. This is especially important given the spec explicitly supports external Shutdown() calls from tests.",
+          "options": [
+            "Second call is a no-op and returns nil immediately",
+            "Second call blocks until the first shutdown completes, then returns nil",
+            "Second call returns a sentinel error (e.g. ErrAlreadyShutdown)",
+            "Behavior is explicitly undefined \u2014 callers must synchronize externally"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Is the caller responsible for calling config.Load() and passing the result to NewServer(), or does NewServer() call Load() internally? Please confirm the intended usage pattern and whether NewServer() can ever trigger config loading itself.",
+          "context": "The public interface shows NewServer(cfg *config.Config, checker HealthChecker) which implies the caller must call Load() first, but this contract is never stated explicitly in the Functional Requirements. Clarifying this prevents misuse and determines whether NewServer() can return a config-related error.",
+          "options": [
+            "Caller always calls Load() first; NewServer() never loads config itself",
+            "NewServer() calls Load() internally if cfg is nil; explicit cfg takes precedence",
+            "NewServer() always calls Load() internally; the cfg parameter is removed"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should structured request logs be emitted for health probe endpoints (/healthz, /readyz) on every request, or should health probe traffic be excluded or sampled to reduce log noise in production?",
+          "context": "Kubernetes liveness/readiness probes can fire every few seconds, producing hundreds of log lines per minute that obscure meaningful application logs. Many production servers suppress or rate-limit health probe logging. The spec is currently silent on this.",
+          "options": [
+            "Log every health probe request at the configured log level (same as all other routes)",
+            "Log health probe requests only at debug or trace level regardless of configured level",
+            "Suppress health probe request logs entirely (no log entry for /healthz and /readyz)",
+            "Make health probe logging configurable via config.toml"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "How should integration tests handle port allocation to avoid collisions when tests run in parallel or in CI? Should the server support binding to port 0 (OS-assigned ephemeral port), and if so, how does the caller discover the actual bound port after Start()?",
+          "context": "Hard-coded ports in integration tests are a common source of CI flakiness. Supporting port 0 and exposing the actual bound address (e.g. via a Server.Addr() method) is a standard Go pattern, but it requires an API addition.",
+          "options": [
+            "Support port 0 in config; add Server.Addr() string method that returns the actual bound address after Start()",
+            "Support port 0 but do not add an Addr() method; tests must infer the port another way",
+            "Do not support port 0; integration tests are responsible for picking a free port before calling NewServer()",
+            "Port allocation strategy for tests is out of scope for this spec"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "For consuming projects that import apikit as a library, how should the Version and Build variables work? The spec declares them in cmd/apikit/main.go, but a consuming project's main package is separate. Should Version and Build be package-level vars in the root apikit module (injectable by the consumer's ldflags), or is the /version endpoint only meaningful for the reference binary?",
+          "context": "If Version and Build live in cmd/apikit/main.go they are scoped to that binary only. A consuming project that builds its own binary cannot inject into those vars. If the goal is for consumers to expose their own version via /version, the vars need to live at the module root or be supplied via NewServer().",
+          "options": [
+            "Move Version and Build to the root apikit package so consumers can override via ldflags pointing to github.com/txsvc/apikit.Version etc.",
+            "Accept Version and Build as parameters to NewServer() so each consumer supplies them explicitly",
+            "Keep Version and Build in cmd/apikit/main.go \u2014 /version is only meaningful for the reference binary, consumers should register their own /version handler",
+            "Provide a SetVersion(version, build string) function consumers call before NewServer()"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD for the Server Core component. It demonstrates exceptional thoroughness across functional requirements, interface definitions, middleware ordering, error handling, configuration, and testing strategy. The spec is internally consistent and sufficiently detailed for an engineering team to implement without significant ambiguity. Only a handful of minor gaps and clarifying questions remain.",
+      "gaps": [
+        "No explicit contract defined for what happens when `APIGroup()` is called *after* `Shutdown()` has completed \u2014 the spec says it is 'undefined behavior' but does not specify whether the library should log a warning, panic, or silently allow it. A production-grade library typically makes this explicit.",
+        "The `Shutdown(ctx context.Context)` parameter semantics are slightly ambiguous: the spec says the passed `ctx` detects external cancellation, but it does not clarify whether the caller's context deadline/timeout is ignored in favor of the internal 15-second timeout, or whether the *earlier* of the two wins.",
+        "No mention of whether the structured log entry for a panicking request includes the panic value itself (in addition to the stack trace), which could be important for debugging.",
+        "The ETag utility section mentions `updated_at` timestamp-based weak ETags, but does not describe what handlers should do when the resource has no `updated_at` (e.g., newly created resources or synthetic/computed responses).",
+        "The `DatabaseConfig.Path` field is included in the Config struct but the spec says database concerns are out of scope. It would benefit from a note explaining why this field lives in Server Core's config (e.g., 'consumed by the database layer spec at startup').",
+        "No mention of how `Load()` behaves when `XDG_DATA_HOME` is set but the `apikit/` subdirectory does not exist \u2014 should it auto-create the directory, return an error, or simply store the path and defer creation to the database layer?",
+        "The Makefile is referenced for build/test/lint commands but no details are given about how `-ldflags` are injected for `Version`, `Build`, or `TokenPrefix` in the Makefile targets \u2014 this could be a source of confusion for contributors.",
+        "No explicit content-type specified for error responses (e.g., HTTP 413, 415, 500) \u2014 the spec states all responses set `Content-Type: application/json; charset=utf-8` in the Content-Type section, but this should be explicitly confirmed to apply to error responses produced by middleware as well.",
+        "The `ParseUTC` utility function's behavior on invalid input beyond returning `(time.Time, error)` is not described \u2014 specifically, whether it returns `time.Time{}` (zero value) or some other sentinel on error."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "When `APIGroup()` is called after `Shutdown()` has completed, should the library take any explicit action (e.g., log a warning, return nil, panic), or is silent undefined behavior acceptable for this spec?",
+          "context": "The spec currently says this is 'undefined behavior' \u2014 but for a library meant to be consumed by other projects, a more explicit contract (even if just 'no guarantee, caller's problem') would prevent ambiguous bugs and improve testability.",
+          "options": [
+            "Return the group silently (no-op, current behavior)",
+            "Log a warning at warn level and return the group",
+            "Return nil to signal the server is no longer accepting registrations",
+            "Panic with a descriptive message",
+            "Leave as undefined \u2014 document clearly in godoc only"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "For `Shutdown(ctx context.Context)`, if the caller's context has a shorter deadline than the internal 15-second drain timeout, which wins \u2014 the caller's deadline or the internal timeout?",
+          "context": "The spec says the passed ctx 'detects external cancellation' and that 'if ctx is cancelled before the drain completes, shutdown proceeds to force-close immediately.' This implies the caller's cancellation always wins over the 15-second timeout. Confirming this prevents implementation ambiguity.",
+          "options": [
+            "The earlier of the two wins (caller's deadline OR 15 seconds, whichever comes first)",
+            "The internal 15-second timeout always wins; the caller ctx is only for pre-shutdown cancellation (before drain begins)",
+            "The caller's ctx deadline is ignored entirely; only cancellation signals are observed"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the panic recovery middleware include the panic value itself in the structured log entry (in addition to the stack trace), and if so, under what field name?",
+          "context": "Logging the panic value alongside the stack trace is standard practice and critical for debugging production incidents. Not specifying this leaves implementations inconsistent across contributors.",
+          "options": [
+            "Yes \u2014 log panic value as a `panic` field in the JSON log entry alongside `stack_trace`",
+            "Yes \u2014 include panic value in the `error` field",
+            "No \u2014 stack trace alone is sufficient",
+            "Yes \u2014 log panic value as part of the message string, not a separate field"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "When `XDG_DATA_HOME` is set but the `$XDG_DATA_HOME/apikit/` directory does not exist, what should `Load()` do?",
+          "context": "The spec states the database path resolves relative to `$XDG_DATA_HOME/apikit/` but does not describe what happens if that directory doesn't exist. Since directory creation is a side effect, this needs a clear policy.",
+          "options": [
+            "Store the resolved path string only; defer directory creation to the database layer (recommended for separation of concerns)",
+            "Create the directory during Load() if it does not exist",
+            "Return an error if the directory does not exist",
+            "Log a warning but continue with the resolved path"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should error responses produced by middleware (HTTP 413, 415, 500 from panic recovery) explicitly set `Content-Type: application/json; charset=utf-8`, consistent with the stated policy that all responses carry this header?",
+          "context": "The spec states all responses set JSON content-type in the Content-Type Enforcement section, but it's worth confirming this applies to error responses generated by middleware before a handler runs \u2014 since the content-type middleware may not have run yet at that point in the chain.",
+          "options": [
+            "Yes \u2014 all error responses from any middleware must set Content-Type: application/json; charset=utf-8 explicitly within APIError()",
+            "Yes \u2014 the Security Headers middleware ensures it for all responses regardless",
+            "No \u2014 content-type on error responses is left to Echo's default behavior"
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "What should `ParseUTC` return as the `time.Time` value when parsing fails \u2014 the zero value (`time.Time{}`), or some other sentinel?",
+          "context": "Documenting the zero-value-on-error contract is standard Go practice and prevents callers from accidentally using an uninitialized time value.",
+          "options": [
+            "Return time.Time{} (zero value) on error \u2014 standard Go convention",
+            "Return time.Now().UTC() as a safe fallback",
+            "The return value on error is unspecified; callers must check the error"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD that meets and exceeds spec-format quality standards. It demonstrates thorough coverage of all foundational server infrastructure concerns with precise, implementable detail. The document is internally consistent, clearly scoped, and contains concrete interface definitions, validation rules, behavioral contracts, and a comprehensive testing strategy. Very few gaps exist; those identified are minor edge cases or clarifications that would not block implementation.",
+      "gaps": [
+        "The `[server] bind` field has no documented validation rule in the Config Validation Rules section \u2014 it is unclear whether invalid bind addresses (e.g. malformed IP strings) are caught at Load() time or only at Start() time when the listener fails to bind.",
+        "The `[server] external_url` field has no documented validation rule (e.g. must be a valid URL, or is any string accepted). It is listed as optional with no description of how it is validated or used within Server Core itself.",
+        "The ETag section states weak ETags are used 'because the server does not guarantee byte-for-byte identical response representations' but does not specify what happens if `SetETag` is called with the zero value of `time.Time` \u2014 whether that is an error, silently skipped, or produces a defined ETag string.",
+        "The `/version` endpoint response shape does not document what happens when `Version` or `Build` variables are unset at link time (though the default 'dev' is mentioned elsewhere, the endpoint behavior section does not cross-reference this).",
+        "The structured log entry fields for health probe requests are described as identical to normal requests, but it is not specified whether the `duration` field is included for health probe entries logged at debug level.",
+        "There is no specification of what `APIError()` returns at the Go level (i.e. whether it returns the result of `c.JSON()` or wraps it) \u2014 the godoc comment describes the HTTP response but not the Go return value semantics.",
+        "The `TokenPrefix` variable is declared and documented but its actual usage within Server Core is not described \u2014 it is mentioned for 'token parsing' but no token parsing happens in Server Core (auth is a separate spec). A brief note on why it lives here would prevent confusion.",
+        "No explicit statement about whether `NewServer()` panics or returns an error if `cfg` is nil \u2014 the contract states it never does file I/O but does not specify nil-cfg behavior."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What validation, if any, does `Load()` apply to the `[server] bind` address? Is an invalid bind address (e.g. `bind = 'not-an-ip'`) caught at `Load()` time as a validation error, or only at `Start()` time when the OS rejects the bind?",
+          "context": "The Config Validation Rules section lists port, log level, and max_body_size validation but omits bind. Implementations need to know whether to validate the bind address string format eagerly in Load() or lazily at Start().",
+          "options": [
+            "Load() validates the bind address is a valid IP or hostname; invalid values return (nil, error)",
+            "Load() performs no validation on bind; any failure surfaces as a Start() error",
+            "Load() accepts any non-empty string; empty string is replaced with the default 0.0.0.0"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What validation does `Load()` apply to `[server] external_url`? Must it be a well-formed URL, or is any string accepted since Server Core does not use it directly?",
+          "context": "external_url is listed in the config table as optional with no required flag and no validation rule. It is described as used for OAuth redirect URIs (a separate spec). Clarifying whether Load() validates its format prevents ambiguity at the boundary between Server Core and the OAuth spec.",
+          "options": [
+            "Load() validates it is a well-formed absolute URL (scheme + host); invalid values return (nil, error)",
+            "Load() performs no validation; it is stored as-is and validation is the OAuth spec's responsibility",
+            "Load() accepts any non-empty string; empty string is valid and means no external URL is configured"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What should `SetETag()` do if called with the zero value of `time.Time` (i.e. `time.Time{}`)? Should it silently skip setting the header, set a defined 'zero' ETag string, or is this considered a caller programming error?",
+          "context": "The spec says handlers that cannot derive a stable timestamp 'should not call SetETag', but does not define the behavior if they do call it with a zero time. Defining this makes the utility more robust and the test coverage requirements clearer.",
+          "options": [
+            "SetETag silently does nothing (no-op) when called with the zero time.Time",
+            "SetETag sets the ETag to W/\"0001-01-01T00:00:00Z\" \u2014 the zero-time formatted per the spec's rules",
+            "SetETag is undefined/panic behavior for zero time \u2014 callers must not call it with a zero value (documented precondition)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What is the Go-level return value semantics of `APIError()`? Does it return the error returned by `c.JSON()`, always return nil, or always return a non-nil sentinel error?",
+          "context": "The current signature is `func APIError(c echo.Context, code int, message string) error`. Handlers typically `return APIError(...)` directly to Echo. Specifying whether APIError propagates c.JSON()'s error or always returns nil is important for consistent error handling in callers and for testing.",
+          "options": [
+            "APIError returns the error from c.JSON() directly (propagates write errors to Echo's error handler)",
+            "APIError always returns nil (swallows the write error, which is already logged or ignored)",
+            "APIError returns a custom sentinel error that wraps both the HTTP status and any write error"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What is the behavior of `NewServer()` when `cfg` is nil? Should it panic, return a zero-value Server, or is passing nil cfg explicitly a precondition violation with undefined behavior?",
+          "context": "The caller usage contract states cfg comes from config.Load(), which returns nil on error. A guard on NewServer() for nil cfg would make the library more defensive. Without specifying this, implementations may diverge.",
+          "options": [
+            "NewServer() panics with a descriptive message if cfg is nil (fail-fast, documented precondition)",
+            "NewServer() silently applies all defaults as if Load() had returned a default config",
+            "Passing nil cfg to NewServer() is undefined behavior \u2014 the spec does not need to address it"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Can you clarify the intended role of `TokenPrefix` within Server Core? Since token parsing/authentication is handled by the auth spec, why does `TokenPrefix` live in the root apikit package rather than the auth package?",
+          "context": "The spec states TokenPrefix is 'used throughout the server for token parsing' but all auth is deferred to the auth spec. Understanding why it belongs in Server Core (e.g. shared by multiple specs, needs to be overridable at a single root ldflags path) prevents implementers from questioning the design.",
+          "options": [
+            "TokenPrefix lives in the root package so it is overridable via a single -ldflags target regardless of which spec uses it; the auth spec imports it from the root package",
+            "Server Core itself does perform some lightweight token prefix stripping (e.g. in middleware) before the auth spec validates the full token",
+            "TokenPrefix is declared here purely for organizational convention; the auth spec re-exports it"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD that demonstrates exceptional depth and clarity. The document covers the foundational Server Core spec comprehensively, with precise interface definitions, detailed behavioral contracts, thorough edge-case handling, and a robust testing strategy. It is implementation-ready with very few gaps. Minor questions remain around observability during shutdown, the `cmd/apikit` example binary scope, and a couple of API surface clarifications, but none block implementation.",
+      "gaps": [
+        "The `cmd/apikit` example binary entry point is mentioned in the repository layout but its scope, purpose, and expected behavior are not described. It is unclear whether it is a minimal reference implementation, a functional CLI tool, or something else.",
+        "The `/version` endpoint's `Cache-Control: public, max-age=300` header is tested in integration tests, but there is no corresponding unit test for the `CachePublic` middleware behavior in isolation (only `CacheNoStore` and `CacheNoCache` are implied by health probe tests).",
+        "The structured log entry format specifies a minimum set of fields (`method`, `path`, `status`, `duration`, `request_id`), but does not specify the exact key names or value types (e.g., is `duration` in milliseconds as an integer, a float, or a string like `\"12ms\"`).",
+        "The `Shutdown()` method signature accepts a `context.Context`, but the OS signal handler path (SIGTERM/SIGINT) internally creates its own context \u2014 the PRD does not specify what context (e.g., `context.Background()`) is used internally for signal-triggered shutdown.",
+        "There is no specification for what happens if `Start()` is called more than once on the same `Server` instance (e.g., after a clean shutdown). It is unclear whether this is a programming error (panic), returns an error, or is supported.",
+        "The `internal/config` package path implies the config package is unexported at the module level, yet `NewServer(cfg *config.Config, ...)` exposes `*config.Config` in the public API. The tension between `internal/` placement and public API surface is not resolved.",
+        "There is no specification for logging behavior during the shutdown drain period \u2014 specifically, whether in-flight requests that complete during the drain window produce normal log entries."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the intended scope and behavior of the `cmd/apikit` example binary? Is it a minimal 'hello world' demonstrating the usage contract, a functional server with no business handlers, or something else? Should it be covered by this spec or a separate one?",
+          "context": "The repository layout lists `cmd/apikit/` as the example server binary entry point, but the spec provides no description of what it does, what endpoints it exposes (beyond the built-ins), or how it is expected to behave when run. This affects what 'make build' produces and whether any integration tests target it.",
+          "options": [
+            "Minimal reference binary demonstrating the caller usage contract (config.Load \u2192 NewServer \u2192 Start) with no additional handlers",
+            "Functional server with a /ping or similar smoke-test handler registered",
+            "Out of scope for this spec; documented separately"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What is the exact format and type of the `duration` field in structured log entries \u2014 e.g., an integer milliseconds value, a float64 seconds value, or a formatted string like `\"12.3ms\"`?",
+          "context": "The spec states that every log entry includes a `duration` field but does not specify its unit, type, or formatting. This matters for log parsing, dashboards, and test assertions (the integration test verifies the `duration` field is present in health probe debug entries).",
+          "options": [
+            "Integer milliseconds (e.g., 12)",
+            "Float64 seconds (e.g., 0.0123)",
+            "Formatted string using Go's time.Duration.String() (e.g., \"12.345ms\")"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What context is passed to Echo's shutdown when the server shuts down due to an OS signal (SIGTERM/SIGINT), as opposed to an external `Shutdown(ctx)` call?",
+          "context": "The spec defines that `Shutdown(ctx context.Context)` uses context.WithTimeout(ctx, drainTimeout) internally. But when the signal handler triggers shutdown, it presumably calls Shutdown() itself \u2014 the spec does not clarify what context is used in that internal call (e.g., context.Background(), a pre-created root context, or a context derived from Start()).",
+          "options": [
+            "context.Background() \u2014 the signal handler calls Shutdown(context.Background())",
+            "A root context created in Start() that is cancelled when Start() returns",
+            "A dedicated signal-handler context stored on the Server struct"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What should happen if `Start()` is called a second time on the same `Server` instance \u2014 for example, after a clean graceful shutdown?",
+          "context": "The spec defines Start() as a blocking call that returns after shutdown, and Shutdown() as idempotent. But it does not address whether Start() can be called again on the same instance. In most HTTP server frameworks, this is a programming error. Clarifying this prevents ambiguity for consumers and test authors.",
+          "options": [
+            "Returns a non-nil error immediately (server already shut down)",
+            "Panics with a descriptive message (programming error, not a runtime condition)",
+            "Restarts the server (re-binds the listener) \u2014 supported use case",
+            "Undefined / not a supported use case; no guarantee either way"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "The config package is placed under `internal/config/`, which restricts import to within the module. Yet `NewServer(cfg *config.Config, ...)` exposes `*config.Config` in the root module's public API. Is the intent that external consumers (importing `github.com/txsvc/apikit`) call `config.Load()` from within the same module only, or should the config package be moved/re-exported so external consumers can call `Load()` themselves?",
+          "context": "Go's `internal/` directory restriction means that packages outside `github.com/txsvc/apikit` cannot import `github.com/txsvc/apikit/internal/config`. This would prevent external consumers from calling `config.Load()` \u2014 which is a required step in the caller usage contract. If external use is intended, the config package must be at a non-internal path (e.g., `github.com/txsvc/apikit/config`).",
+          "options": [
+            "Move config to a non-internal path (e.g., `config/`) so external consumers can import and call Load()",
+            "Re-export Load() and Config from the root apikit package so internal/ placement is an implementation detail",
+            "The module is always used as the root binary (not imported externally); internal/ is correct and intentional"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD. It is comprehensive, internally consistent, and demonstrates a high level of engineering rigor. The document covers all critical dimensions of a foundation server spec: caller usage contract, configuration loading with XDG support, middleware ordering, lifecycle management (including shutdown idempotency, drain semantics, and port-0 support), public API surface with full Go signatures, error handling, caching, ETag support, structured logging, build-time variables, and a thorough testing strategy. The non-goals are clearly scoped, dependencies are explicitly stated, and edge cases are addressed with precision. Only a few minor gaps or clarification opportunities were identified.",
+      "gaps": [
+        "The `[server] external_url` field has no documented default value in the Configuration Settings table (the dash '\u2014' is used), but it is unclear whether an absent value results in an empty string or is omitted from the Config struct. The behavior when `NewServer()` receives a Config with an empty `ExternalURL` should be explicitly documented (even if it is 'stored as empty string, no effect on Server Core').",
+        "The `config.toml` example is referenced throughout but no sample file is included in the PRD. A minimal example `config.toml` showing all supported keys with their defaults would improve developer onboarding and reduce ambiguity.",
+        "The `[server] max_body_size` default of `1MB` is stated, but it is not documented what happens when `max_body_size` is present in the config file with an empty string value (e.g. `max_body_size = \"\"`). Is it treated as absent (default applied) or as an error?",
+        "The middleware execution order (step 5) mentions 'appropriate Cache-Control header' under Security Headers, but does not explicitly state whether the Cache-Control header is set by this middleware step or by a separate per-route/group middleware. The relationship between the Security Headers middleware and the Cache middleware needs clarification \u2014 specifically, which middleware 'wins' if both attempt to set Cache-Control.",
+        "There is no documented behavior for the case where `APIGroup()` is called before `NewServer()` completes (i.e., concurrent construction and registration). The concurrent safety note covers post-construction use, but the construction phase is not addressed.",
+        "The `ParseUTC` function signature returns `(time.Time, error)` but there is no documented behavior for timezone-offset inputs (e.g., `2026-07-17T14:30:00+05:00`). The spec says 'incoming timestamps with offsets are converted to UTC before storage' but it is unclear whether `ParseUTC` itself performs this conversion or whether that is the caller's responsibility.",
+        "The `/version` endpoint response schema does not document what happens when `Version` or `Build` are overridden via `-ldflags` to an empty string. Should the endpoint return an empty string, or should there be a fallback to `\"dev\"`?",
+        "The Makefile `LDFLAGS` snippet is included, but there is no documentation of what happens when the binary is built outside a git repository (e.g., `git describe --tags` or `git rev-parse --short HEAD` fail). Should the Makefile fall back to `dev`, or is this undefined behavior?"
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the exact stored value for `Config.Server.ExternalURL` when the field is absent from `config.toml`? Is it an empty string `\"\"`? And does Server Core take any action (log, warn, etc.) when it is empty?",
+          "context": "The Configuration Settings table shows '\u2014' as the default for `external_url`, which is ambiguous. Clarifying the zero value and Server Core's behavior when it is absent prevents misuse by downstream consumers (e.g., the OAuth spec).",
+          "options": [
+            "Empty string `\"\"` stored; Server Core takes no action (OAuth spec is responsible for detecting absence)",
+            "Empty string `\"\"` stored; Server Core logs a debug-level warning that external_url is not set",
+            "The field is omitted from the struct entirely when absent (pointer type `*string`)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should a `config.toml` with `max_body_size = \"\"` (empty string) be treated as absent (default `1MB` applied) or as a validation error?",
+          "context": "The MaxBodySize format section defines valid and invalid formats but does not cover the empty string case. This edge case needs to be handled deterministically by `LoadConfig()` to avoid ambiguity in tests and consumer behavior.",
+          "options": [
+            "Treated as absent \u2014 default `1MB` is applied, no error returned",
+            "Treated as a validation error \u2014 `LoadConfig()` returns `(nil, error)`"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Which middleware is responsible for setting the `Cache-Control` header: the Security Headers middleware (step 5) or a separate Cache middleware? If both can set it, which one takes precedence?",
+          "context": "The middleware execution order lists Security Headers (step 5) as setting 'the appropriate Cache-Control header,' but the Cache-Control Headers section describes a separate `CacheMiddleware` constructor. It is unclear whether these are the same middleware or two separate ones, and whether a per-route `CacheMiddleware` overrides what Security Headers sets.",
+          "options": [
+            "Security Headers middleware sets Cache-Control; CacheMiddleware is how the Security Headers middleware is parameterized \u2014 they are the same middleware with different config",
+            "They are separate middleware; CacheMiddleware runs after Security Headers and overwrites the Cache-Control header (per-route middleware wins)",
+            "Security Headers middleware sets a baseline Cache-Control; CacheMiddleware is applied separately and always wins via response header overwrite"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Does `ParseUTC` normalize a valid RFC 3339 timestamp with a non-UTC timezone offset (e.g., `2026-07-17T14:30:00+05:00`) to UTC and return it, or does it return an error for non-UTC inputs?",
+          "context": "The Timestamp Normalization section says 'Incoming timestamps with offsets are converted to UTC before storage,' but it is unclear whether this conversion is performed inside `ParseUTC` itself or is the caller's responsibility after receiving the parsed `time.Time`.",
+          "options": [
+            "ParseUTC accepts any valid RFC 3339 timestamp (including offset-based) and normalizes it to UTC before returning \u2014 conversion is inside ParseUTC",
+            "ParseUTC accepts any valid RFC 3339 timestamp and returns the time.Time as-is (Go's time.Parse preserves the offset); the caller is responsible for calling .UTC() before storage",
+            "ParseUTC returns an error for any timestamp that is not already in UTC (Z suffix required)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "When the binary is built outside a git repository (so `git describe --tags` or `git rev-parse --short HEAD` fail), what should the Makefile do for `Version` and `Build`?",
+          "context": "The Makefile LDFLAGS snippet assumes a git repository is present. CI environments, release archives, or vendor builds may not have git history. Defining the fallback behavior prevents broken builds.",
+          "options": [
+            "Fall back to `\"dev\"` for both `Version` and `Build` when git commands fail (the package-level variable defaults already handle this)",
+            "Fail the build (`make build` exits non-zero) if git metadata is unavailable",
+            "Use a hardcoded version file (e.g., `VERSION` file in the repo root) as a fallback when git is unavailable"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should a minimal example `config.toml` showing all supported keys with their defaults be included in the PRD?",
+          "context": "The PRD references `config.toml` extensively but never shows a concrete example. A sample file would improve developer onboarding and serve as documentation-by-example alongside the reference binary.",
+          "options": [
+            "Yes \u2014 include a minimal annotated example `config.toml` in the Server Configuration section",
+            "No \u2014 the Configuration Settings table is sufficient; a sample file belongs in the repository README, not the PRD"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written and thorough PRD. It demonstrates senior-level requirements engineering with precise behavioral specifications, clear separation of concerns, explicit non-goals, well-defined interfaces, and a comprehensive testing strategy. The document is internally consistent, covers edge cases explicitly (zero-time ETags, nil config panic, ephemeral port support, shutdown idempotency, XDG fallback behavior), and leaves very little ambiguity for implementers. Only a small number of minor gaps and clarification opportunities exist.",
+      "gaps": [
+        "The `[server] max_body_size` validation section states '0MB (zero or negative)' is invalid, but does not specify the behavior for negative integers (e.g., `-1MB`) \u2014 is the negative sign part of the parse regex or caught as an invalid format?",
+        "The `SecurityHeaders` middleware spec lists three headers but does not explicitly state the exact string values for `X-Frame-Options` (DENY) and `Referrer-Policy` (no-referrer) in a machine-readable table format within the interfaces section \u2014 they appear only in the prose table under 'Security Hardening Headers'. This is minor since both sections are present.",
+        "The `CacheMiddleware` applied to the `APIGroup()` group is described as 'group-level middleware', but the spec does not clarify whether Echo's group-level middleware runs before or after per-route middleware in the final middleware chain \u2014 this could affect the actual `Cache-Control` header value when a consumer overrides it.",
+        "The spec does not define what happens if `APIGroup()` is called before `NewServer()` has returned (race condition during construction) beyond saying it is 'not supported and would be a programming error' \u2014 no panic or error contract is specified for this case.",
+        "The `Makefile` LDFLAGS section is described but there is no specification of whether the Makefile is part of the repository layout or whether consuming projects are expected to replicate this pattern. This is a minor documentation gap.",
+        "The integration test for 'bind = not-an-ip' is listed, but no unit test is specified for the case where `LoadConfig()` receives a non-empty bind string \u2014 only the integration-level OS rejection is covered. This is consistent with the stated design but could be called out more explicitly in the testing section.",
+        "The `duration` field in structured logging is specified as float64 milliseconds, but there is no specification of the JSON key name casing convention (snake_case is implied but not explicitly stated as a rule for future fields)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For `max_body_size` parsing: should a negative integer (e.g., `-1MB`) be treated as an invalid format (rejected by the regex/parser before the zero-check) or as a separate validation error with a distinct message?",
+          "context": "The spec says '0MB (zero or negative)' is invalid but does not clarify whether the parser accepts a leading minus sign at all, or whether negative values are caught by a range check after parsing. This affects the implementation of the size parser and its test cases.",
+          "options": [
+            "Reject at parse time \u2014 the format regex requires a positive integer, so a leading minus makes the entire value an invalid format (returns a generic format error)",
+            "Accept the negative integer during parsing, then reject it with a specific 'must be positive' error message (two-phase validation)",
+            "Treat it identically to zero \u2014 any value \u2264 0 returns the same error regardless of how it was written"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "When a consumer overrides `Cache-Control` on a specific route via `CacheMiddleware(CachePublic)`, does the per-route middleware run *after* the group-level `CacheNoStore` middleware (overwriting it), or does Echo guarantee that only the most-specific middleware's header write wins?",
+          "context": "If both group-level and per-route middleware write `Cache-Control`, the final header value depends on execution order. The spec states 'per-route middleware takes precedence' but does not specify whether this is achieved by Echo's natural execution order (per-route runs last, overwrites) or requires an explicit header-clear before writing.",
+          "options": [
+            "Echo executes group middleware before per-route middleware, so per-route CacheMiddleware simply overwrites the group-level value \u2014 no explicit clear needed",
+            "The CacheMiddleware implementation must explicitly call c.Response().Header().Set() (which overwrites), and the spec should note this is safe because Set() replaces rather than appends",
+            "The spec should be updated to clarify this is a standard Echo behavior and link to the relevant Echo documentation"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the structured log entry's JSON key naming convention (snake_case, e.g. `request_id`, `stack_trace`) be explicitly documented as a project-wide rule, or is it sufficient that the required field names are enumerated individually in the spec?",
+          "context": "Future specs (auth, database, business logic) will add their own log fields. Without an explicit naming convention, different authors may use camelCase or other styles, creating inconsistent log schemas that break log aggregation queries.",
+          "options": [
+            "Add an explicit rule: all structured log field names use snake_case. Document it in the Structured JSON Logging section.",
+            "Leave it implicit \u2014 the examples already use snake_case and that is sufficient guidance.",
+            "Define it in a separate logging style guide document referenced from this spec."
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "The spec states `APIGroup()` called before `NewServer()` returns is 'not supported and would be a programming error', but does not specify whether this causes a panic, a nil return, or undefined behavior. Should a specific contract be stated?",
+          "context": "Implementers need to know whether to add a guard (e.g., initialize the group field before NewServer returns so a concurrent call at worst gets an initialized group) or whether this is truly undefined behavior that requires no defensive code.",
+          "options": [
+            "Define it as undefined behavior \u2014 no guard required; callers violating this contract get whatever Go's memory model produces (data race)",
+            "Specify that NewServer() fully initializes the group before returning, so a concurrent call to APIGroup() during construction is a data race but will not panic or return nil once NewServer() completes",
+            "Add a note that the race detector will catch this in tests and no runtime guard is needed"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Is the `cmd/apikit` reference binary intended to be included in module releases (i.e., `go install github.com/txsvc/apikit/cmd/apikit@latest` should work), or is it strictly an internal development/smoke-test tool that is not part of the public release surface?",
+          "context": "If the binary is installable via `go install`, it becomes part of the public API contract and must be maintained across versions. If it is internal-only, the module's documentation and release notes should make this clear to avoid confusion.",
+          "options": [
+            "It is publicly installable via `go install` \u2014 treat it as a supported artifact",
+            "It is internal only \u2014 add a comment or build tag to prevent it from appearing in pkg.go.dev documentation",
+            "No decision needed now \u2014 leave it as-is and decide when the first release is tagged"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "server_core owns a minimal, self-contained DB ping. The readyz handler accepts a health-check function (func() error) injected at server creation. When no checker is provided, readyz always returns 200. This avoids a dependency on any database spec while allowing the database layer to plug in later.",
+        "q2": "Keep 15 seconds as a fixed compile-time constant. Remove 'configurable' from the Goals. The drain timeout is an operational constant, not user-facing configuration.",
+        "q3": "Apply to all POST, PUT, and PATCH requests automatically based on HTTP method. GET, DELETE, HEAD, and OPTIONS never require a body. This is simple, predictable, and matches HTTP semantics.",
+        "q4": "Git commit SHA (short form, e.g. abc1234), injected via -ldflags '-X main.Build=...'. A build-time variable var Build = \"dev\" is the default for non-release builds.",
+        "q5": "Expose a middleware constructor: apikit.CacheMiddleware(CacheCategory) that returns Echo middleware. Consumers apply it to their routes or groups themselves. Three categories: CacheNoStore, CacheNoCache, CachePublic. Built-in routes use these internally.",
+        "q6": "Michael Kuehl"
+      },
+      "timestamp": "2026-07-17T09:51:40.740785+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "Fall back to all defaults if the file is missing; return an error only on malformed TOML. This allows zero-config development use while failing loudly on syntax errors. Load() returns (*Config, error) \u2014 nil error with defaults when file is absent, non-nil error when file exists but is malformed.",
+        "q2": "Request ID -> Body Size Limit -> Content-Type Enforcement -> Logging -> Handler. Request ID is assigned first so all subsequent middleware and the log entry have it. Body size is checked before content type to reject oversized payloads early. Logging wraps the handler to capture status and duration.",
+        "q3": "Weak ETag of the RFC 3339 UTC string, e.g. W/\"2026-07-17T14:30:00Z\". Weak ETags are appropriate because the server does not guarantee byte-for-byte identical representations. Simple, debuggable, and deterministic.",
+        "q4": "Also injected via -ldflags at build time: -X main.Version=.... Default value is var Version = \"dev\". Same pattern as Build.",
+        "q5": "Numeric suffixes only: KB, MB, GB (case-insensitive, no spaces). Examples: 1MB, 512KB, 2GB. Invalid values cause Load() to return an error. The parsed value is stored internally as int64 bytes.",
+        "q6": "Yes \u2014 set a standard hardening set: X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer. These are low-cost, universally appropriate defaults.",
+        "q7": "Unit tests for all middleware and utility functions; integration test for full startup/shutdown cycle. No formal coverage percentage target, but all public functions and middleware must have test coverage.",
+        "q8": "Start() returns a non-nil error; the caller is responsible for handling it. The server does not call os.Exit() \u2014 that is the responsibility of main(). This keeps the library composable."
+      },
+      "timestamp": "2026-07-17T09:53:49.193840+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "CachePublic (public, max-age=300). The /version endpoint returns static build-time information that does not change while the server is running. Same category as static discovery endpoints.",
+        "q2": "Accept only UUID v4 format (36-char hex with dashes); generate a new UUID if the incoming value does not match. This is the safest option \u2014 prevents log injection and ensures consistent format across all request IDs.",
+        "q3": "Add a public getter method: func (c *ServerConfig) MaxBodyBytes() int64. The raw string MaxBodySize is the TOML-facing field; the parsed int64 is computed once during Load() and stored privately; the getter exposes it cleanly.",
+        "q4": "Apply defaults directly \u2014 do not fall back to ./config.toml. When XDG_CONFIG_HOME is set, it is authoritative. Looking for config in the working directory after XDG is set would be confusing and violate the XDG contract.",
+        "q5": "Opt-out: CacheNoStore is applied to all routes under the mount point by default via the APIGroup() middleware. Consumers can override per-route by attaching CacheMiddleware() with a different category to specific routes.",
+        "q6": "Use a custom panic recovery middleware that returns the standard JSON error envelope with HTTP 500. All error responses must be consistent, including panic recovery."
+      },
+      "timestamp": "2026-07-17T09:56:37.133489+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "Second call is a no-op and returns nil immediately. The server tracks its shutdown state with a sync.Once or similar mechanism. This is the safest and most idiomatic Go pattern.",
+        "q2": "Caller always calls Load() first; NewServer() never loads config itself. This separation of concerns makes testing straightforward (pass a test config directly) and keeps NewServer() focused on server construction, not file I/O.",
+        "q3": "Log health probe requests only at debug or trace level regardless of configured level. Health probes fire frequently and should not pollute production logs, but should be visible when debugging connectivity issues.",
+        "q4": "Support port 0 in config; add Server.Addr() string method that returns the actual bound address after Start() begins listening. This is standard Go practice and essential for reliable integration tests.",
+        "q5": "Move Version and Build to the root apikit package so consumers can override via ldflags pointing to github.com/txsvc/apikit.Version and github.com/txsvc/apikit.Build. This makes /version work correctly for all consuming projects without requiring them to register a custom handler."
+      },
+      "timestamp": "2026-07-17T09:59:56.020514+00:00"
+    },
+    {
+      "assessment_index": 4,
+      "answers": {
+        "q1": "Return the group silently. APIGroup() returns the already-constructed Echo group. It is the caller's responsibility not to register handlers after shutdown. No panic, no nil \u2014 just return what exists. Document in godoc.",
+        "q2": "The earlier of the two wins. If the caller's context is cancelled or its deadline expires before the 15-second internal timeout, shutdown proceeds to force-close immediately. This is standard Go context behavior.",
+        "q3": "Yes \u2014 log panic value as a 'panic' field in the JSON log entry alongside 'stack_trace'. Both are needed for incident response.",
+        "q4": "Store the resolved path string only; defer directory creation to the database layer. Config loading should not have filesystem side effects beyond reading the config file.",
+        "q5": "Yes \u2014 all error responses from any middleware must set Content-Type: application/json; charset=utf-8. The APIError() helper function handles this, and all middleware error paths must use APIError().",
+        "q6": "Return time.Time{} (zero value) on error \u2014 standard Go convention. Callers must always check the error before using the time value."
+      },
+      "timestamp": "2026-07-17T10:03:52.240577+00:00"
+    },
+    {
+      "assessment_index": 5,
+      "answers": {
+        "q1": "Load() accepts any non-empty string; empty string is replaced with the default 0.0.0.0. Bind validation happens at Start() time when the OS rejects the address. Eagerly validating bind addresses adds complexity without value since the OS is the authoritative validator.",
+        "q2": "Load() performs no validation on external_url; it is stored as-is and validation is the OAuth spec's responsibility. Server Core only stores and passes through this value.",
+        "q3": "SetETag silently does nothing (no-op) when called with the zero time.Time. This is the safest behavior and avoids panics from edge-case callers.",
+        "q4": "APIError returns the error from c.JSON() directly. This propagates write errors to Echo's error handler, which is the standard Echo pattern. Handlers return the result: return APIError(c, 404, \"not found\").",
+        "q5": "NewServer() panics with a descriptive message if cfg is nil. This is a programming error, not a runtime condition. Fail-fast with a clear message.",
+        "q6": "TokenPrefix lives in the root package so it is overridable via a single -ldflags target regardless of which spec uses it. The auth spec, CLI, and any other consumer import it from the root package. This avoids duplication and ensures all components use the same prefix."
+      },
+      "timestamp": "2026-07-17T10:08:17.916066+00:00"
+    },
+    {
+      "assessment_index": 6,
+      "answers": {
+        "q1": "Minimal reference binary demonstrating the caller usage contract (config.Load -> NewServer -> Start) with no additional handlers. It serves as both a smoke test and documentation-by-example.",
+        "q2": "Float64 milliseconds (e.g., 12.345). This gives sub-millisecond precision while keeping the value numeric for aggregation in log analysis tools.",
+        "q3": "context.Background() \u2014 the signal handler calls Shutdown(context.Background()). The 15-second drain timeout is applied inside Shutdown() via context.WithTimeout.",
+        "q4": "Returns a non-nil error immediately. A server that has been shut down cannot be restarted. Create a new Server instance instead.",
+        "q5": "Re-export Load() and Config from the root apikit package so internal/ placement is an implementation detail. External consumers call apikit.LoadConfig() which delegates to internal/config.Load(). The Config type is re-exported as apikit.Config. This keeps the internal implementation private while providing a clean public API."
+      },
+      "timestamp": "2026-07-17T10:13:07.811838+00:00"
+    },
+    {
+      "assessment_index": 7,
+      "answers": {
+        "q1": "Empty string stored; Server Core takes no action. OAuth spec is responsible for detecting absence and using it for redirect URI validation. Server Core merely stores the configured value.",
+        "q2": "Treated as absent \u2014 default 1MB is applied, no error returned. An empty string is equivalent to omitting the key entirely.",
+        "q3": "They are separate mechanisms. The Security Headers middleware (step 5) sets security-related headers only (X-Content-Type-Options, X-Frame-Options, Referrer-Policy). Cache-Control is set by a default CacheNoStore middleware on the APIGroup, CacheNoCache on health probes, and CachePublic on discovery/version routes. The per-route CacheMiddleware overrides the group default. Security Headers does NOT set Cache-Control.",
+        "q4": "ParseUTC accepts any valid RFC 3339 timestamp including offset-based and normalizes it to UTC before returning. The conversion happens inside ParseUTC \u2014 callers get a UTC time.Time back guaranteed.",
+        "q5": "Fall back to 'dev' for both Version and Build when git commands fail. The package-level variable defaults already handle this case at runtime; the Makefile should use shell conditionals to fall back gracefully.",
+        "q6": "Yes \u2014 include a minimal annotated example config.toml in the Server Configuration section. It serves as documentation-by-example."
+      },
+      "timestamp": "2026-07-17T10:18:38.126201+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

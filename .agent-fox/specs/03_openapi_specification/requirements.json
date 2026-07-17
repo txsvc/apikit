@@ -1,0 +1,1266 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "openapi_specification",
+  "schema_version": 1,
+  "introduction": "This specification defines the requirements for authoring and validating the OpenAPI 3.1 specification file (`api/openapi.yaml`) for the apikit project \u2014 the single source of truth for every built-in API endpoint, schema, authentication scheme, error envelope, and caching behavior from which all SDKs, documentation, and server implementations derive. Note: requirements referencing the `libopenapi` library API are based on PRD descriptions and should be cross-checked against the installed library version before implementation.",
+  "glossary": {
+    "API Key": "A user-scoped credential granting full access to own resources, identified by the format `<prefix>_<key_id>_<secret>`.",
+    "Admin Token": "A break-glass emergency credential with global scope, identified by the format `<prefix>_admin_<64 hex chars>`.",
+    "ETag": "An opaque string response header returned on single-resource GET endpoints, used to support conditional requests via If-None-Match.",
+    "If-None-Match": "An HTTP request header sent by clients to perform conditional GET requests; if the value matches the current ETag the server responds with 304 Not Modified.",
+    "PAT": "Personal Access Token \u2014 a fine-grained credential with per-permission access, identified by the format `<prefix>_pat_<token_id>_<secret>`.",
+    "X-Request-ID": "A UUID response header present on every response (including 304s and 204s) for distributed tracing, matching the ID emitted in server logs.",
+    "api/api_test.go": "The Go test file that loads and structurally validates api/openapi.yaml using libopenapi as part of `go test ./...`.",
+    "api/openapi.yaml": "The hand-authored OpenAPI 3.1 specification file at the root of the apikit repository; the canonical source of truth for the API contract.",
+    "bearerAuth": "The single OpenAPI security scheme defined in the spec covering all three credential types: Admin Token, API Key, and PAT.",
+    "components/schemas": "The OpenAPI 3.1 reusable schema definitions section under `#/components/schemas` referenced via `$ref` throughout the spec.",
+    "error envelope": "The standard JSON error response shape `{\"error\": {\"code\": <int>, \"message\": <string>}}` returned by all endpoints on failure.",
+    "expires": "An integer field on `POST /auth/callback` and `POST /user/tokens` specifying token/key lifetime in days; `0` means no expiry (permanent).",
+    "expires_at": "A nullable RFC 3339 UTC timestamp field in response objects indicating when a token or key expires; `null` when `expires=0`.",
+    "full_name": "An optional, nullable display name field on the User object that is the only field updatable via PATCH on user endpoints.",
+    "include_blocked": "A boolean query parameter on `GET /users` and `GET /orgs` that controls whether resources with `status=blocked` are included in the response.",
+    "keys:manage": "PAT permission string granting ability to refresh or revoke the authenticated user's API keys.",
+    "keys:read": "PAT permission string granting read access to the authenticated user's API key listing.",
+    "libopenapi": "The Go library `github.com/pb33f/libopenapi` used to parse and validate OpenAPI 3.1 documents in the Go validation test.",
+    "make check": "The repository build target that includes spec validation as part of the standard build pipeline.",
+    "mount point": "The configurable URL prefix under which all authenticated and admin endpoints are served; defaults to `/api/v1`.",
+    "openapi-validator": "The CLI tool `go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest` used to validate the spec against the OpenAPI 3.1 standard.",
+    "orgs:read": "PAT permission string granting read access to organization records and membership lists.",
+    "path-level servers override": "An OpenAPI 3.1 feature allowing individual path items to specify their own `servers` block, overriding the top-level servers for that path.",
+    "provider": "The name of the OAuth identity provider (e.g. `github`, `google`) associated with a user account.",
+    "provider_id": "The unique user identifier assigned by the OAuth provider, used together with `provider` to uniquely identify a user's external identity.",
+    "slug": "A URL-safe identifier string for an organization, unique within the system.",
+    "tokens:manage": "PAT permission string granting ability to create or revoke the authenticated user's PATs.",
+    "tokens:read": "PAT permission string granting read access to the authenticated user's PATs.",
+    "users:read": "PAT permission string granting read access to the authenticated user's own profile and sufficient for self-profile updates.",
+    "GET /users/{id}": "API endpoint to retrieve a single user by ID (admin only).",
+    "0": "Integer value representing no expiry (permanent) when used as the expires parameter.",
+    "Cache-Control: no-cache": "Cache directive used on health probe responses; clients may cache but must revalidate.",
+    "Pat": "OpenAPI schema component name for the PAT object returned at creation, including the plaintext secret.",
+    "GET /healthz": "Liveness probe endpoint that always returns 200 (public, outside mount point).",
+    "status=active": "Resource status value after an unblock operation.",
+    "include_blocked=false": "Default query parameter behavior on list endpoints: blocked resources are excluded.",
+    "POST /auth/callback": "API endpoint to exchange an OAuth authorization code for a user record and API key.",
+    "commit": "Field in the version response containing the git commit hash of the server build.",
+    "^[a-z_]+:[a-z_]+$": "Regular expression pattern constraining PAT permission strings to resource_type:action format.",
+    "key_id": "The random 8-character alphanumeric identifier portion of an API key.",
+    "created_at": "Timestamp field recording when a resource was created (RFC 3339, UTC).",
+    "token": "Field in Pat containing the full PAT credential string including the plaintext secret.",
+    "GET /user/keys": "API endpoint listing the authenticated user's API key(s).",
+    "30": "Integer value representing a 30-day expiry period for API keys and PATs.",
+    "build_time": "Field in the version response containing the server binary build timestamp.",
+    "status": "Field on users and organizations indicating active or blocked state.",
+    "GET /orgs/{id}/members": "API endpoint listing members of an organization (admin or member).",
+    "Z": "The UTC timezone designator suffix used in RFC 3339 timestamps.",
+    "authorize_url": "Field in OAuthProvider containing the URL to initiate the OAuth authorization flow.",
+    "POST /users/{id}/block": "API endpoint to block a user (admin only).",
+    "token_id": "The random identifier portion of a personal access token.",
+    "blocked": "Status value for users and organizations indicating suspended access.",
+    "role": "User field indicating access level: admin or user.",
+    "OAuthProvider": "OpenAPI schema component name for OAuth provider objects with name and authorize_url fields.",
+    "GET /user/tokens/{token_id}": "API endpoint to retrieve metadata for a specific PAT owned by the authenticated user.",
+    "include_blocked=true": "Query parameter value to include blocked resources in list endpoint responses.",
+    "os.Exit": "Go standard library function for process termination; tests must not call this.",
+    "DELETE /orgs/{id}": "API endpoint to delete an organization (admin only), cascading membership removal.",
+    "Error": "OpenAPI schema component name for the standard error envelope with code and message fields.",
+    "[0,30,60,90]": "The set of valid integer values for the expires parameter (days).",
+    "url: /api/v1": "Server URL value for the default API mount point.",
+    "AuthCallbackResponse": "OpenAPI schema component name for the POST /auth/callback response containing user and api_key objects.",
+    "GET /orgs/{id}": "API endpoint to retrieve a single organization by ID (admin or member).",
+    "Default mount point (configurable per deployment)": "Description text for the servers block entry in the OpenAPI spec.",
+    "servers": "OpenAPI specification block defining base URLs for API endpoints.",
+    "POST /users/{id}/demote": "API endpoint to revoke the admin role from a user (admin only).",
+    "$ref": "JSON Reference syntax used in OpenAPI specifications to reference reusable schema components defined elsewhere in the document.",
+    "Content-Type: application/json; charset=utf-8": "The Content-Type header value set on all API responses.",
+    "user": "User role value (default) with access limited to own resources.",
+    "PatMetadata": "OpenAPI schema component name for PAT metadata returned in listings (no plaintext secret).",
+    "POST /users": "API endpoint to create a new user (admin only).",
+    "components/securitySchemes": "OpenAPI specification section where authentication schemes are defined.",
+    "email": "User field for email address; set at creation, immutable via PATCH.",
+    "mount_point": "Field in the version response showing the configured API mount point path.",
+    "{\"status\": \"ok\"}": "JSON response body for successful health probe and readiness probe responses.",
+    "false": "Boolean value; the default for the include_blocked query parameter.",
+    "servers: [{url: /}]": "Path-level servers override placing health probe endpoints at the server root.",
+    "message": "Field in the error envelope containing a human-readable error description.",
+    "PATCH /orgs/{id}": "API endpoint to update an organization's name or URL (admin only).",
+    "Organization": "OpenAPI schema component name for the organization resource object.",
+    "POST /users/{id}/unblock": "API endpoint to unblock a user (admin only).",
+    "GET /users/{id}/keys": "API endpoint listing a specific user's API keys (admin only).",
+    "/orgs/*": "Wildcard reference to all organization-related API endpoint paths under the /orgs prefix.",
+    "GET /users/{id}/tokens": "API endpoint listing a specific user's PATs (admin only).",
+    "60": "Integer value representing a 60-day expiry period for API keys and PATs.",
+    "error": "Top-level field in the error envelope wrapping the code and message.",
+    "DELETE /user/keys/{key_id}": "API endpoint to revoke the authenticated user's own API key.",
+    "90": "Integer value representing a 90-day expiry period (the default) for API keys and PATs.",
+    "<prefix>_admin_<64 hex chars>": "The format pattern for admin token credentials.",
+    "GET /auth/providers": "API endpoint listing configured OAuth providers (public, no authentication required).",
+    "pattern: ^[a-z_]+:[a-z_]+$": "OpenAPI schema annotation applying the permission string regex pattern constraint.",
+    "GET /version": "Version info endpoint returning server version, build info, and mount point (public, outside mount point).",
+    "updated_at": "Timestamp field recording when a resource was last modified (RFC 3339, UTC).",
+    "null": "JSON null value; used for expires_at when a credential has no expiry, and for optional fields.",
+    "DELETE /user/tokens/{token_id}": "API endpoint to revoke one of the authenticated user's own PATs.",
+    "version": "Field in the version response containing the server version string.",
+    "PUT /orgs/{id}/members/{user_id}": "API endpoint to add a member to an organization (admin only, no request body).",
+    "Cache-Control: no-store": "Cache directive used on mutable resource responses; responses must not be cached.",
+    "username": "User field for display name; set at creation, immutable via PATCH.",
+    "t.Fatalf": "Go testing function to log a fatal error and stop the current test.",
+    "GET /user/tokens": "API endpoint listing the authenticated user's PATs.",
+    "/readyz": "The readiness probe endpoint path, served outside the API mount point at the server root.",
+    "PATCH /user": "API endpoint to update the authenticated user's own profile (full_name only).",
+    "POST /orgs/{id}/block": "API endpoint to block an organization (admin only).",
+    "api_key": "Field name in the AuthCallbackResponse containing the issued API key object.",
+    "id": "UUID field identifying a user or organization resource.",
+    "Content-Type: application/json": "The required Content-Type header value for request bodies.",
+    "role=admin": "User role value after a promote operation.",
+    "url": "Optional field on organizations for an associated URL.",
+    "admin": "User role value granting full access to all endpoints and resources.",
+    "/healthz": "The liveness probe endpoint path, served outside the API mount point at the server root.",
+    "url: /": "Server URL value placing endpoints at the server root path.",
+    "POST /user/keys/{key_id}/refresh": "API endpoint to refresh the authenticated user's API key with a new secret.",
+    "DELETE /orgs/{id}/members/{user_id}": "API endpoint to remove a member from an organization (admin only).",
+    "2026-07-17T14:30:00Z": "Example RFC 3339 timestamp in UTC with Z suffix, illustrating the required timestamp format.",
+    "GET /orgs": "API endpoint listing all organizations (admin only).",
+    "status=blocked": "Resource status value after a block operation.",
+    "<prefix>_<key_id>_<secret>": "The format pattern for API key credentials, where prefix is configurable.",
+    "revoked_at": "Nullable timestamp field recording when a credential was revoked.",
+    "DELETE /users/{id}/keys/{key_id}": "API endpoint to revoke a specific user's API key (admin only).",
+    "ApiKey": "OpenAPI schema component name for the API key object returned at creation/refresh, including the plaintext secret.",
+    "enum": "OpenAPI/JSON Schema keyword restricting a field to a fixed set of allowed values.",
+    "/version": "The version info endpoint path, served outside the API mount point at the server root.",
+    "ApiKeyMetadata": "OpenAPI schema component name for the API key metadata object returned in listings (no plaintext secret).",
+    "github.com/pb33f/libopenapi": "Go module path for the libopenapi library used to parse and validate OpenAPI specifications.",
+    "User": "OpenAPI schema component name for the user resource object.",
+    "name": "Field name used for human-readable labels on PATs and organization display names.",
+    "POST /orgs/{id}/unblock": "API endpoint to unblock an organization (admin only).",
+    "Cache-Control: public, max-age=300": "Cache directive used on static discovery endpoints; cacheable for 5 minutes.",
+    "format: date-time": "OpenAPI/JSON Schema format annotation for RFC 3339 timestamp strings.",
+    "/users/*": "Wildcard reference to all admin user management endpoint paths under the /users prefix.",
+    "code": "Field in the error envelope containing the integer HTTP status code.",
+    "POST /orgs": "API endpoint to create a new organization (admin only).",
+    "GET /user": "API endpoint to retrieve the authenticated user's own profile.",
+    "24h \u00d7 N": "Expiry calculation formula: the number of days N multiplied by 24 hours.",
+    "permissions": "Array field on PATs containing granted resource_type:action permission strings.",
+    "go test ./...": "Go test command to run all tests in the module recursively.",
+    "GET /user/orgs": "API endpoint listing the authenticated user's organization memberships.",
+    "role=user": "User role value after a demote operation.",
+    "<prefix>_pat_<token_id>_<secret>": "The format pattern for personal access token credentials.",
+    "redirect_uri": "Field in the auth callback request containing the OAuth redirect URI for validation.",
+    "go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml": "Command to validate the OpenAPI spec using the libopenapi-validator CLI tool.",
+    "POST /users/{id}/promote": "API endpoint to grant the admin role to a user (admin only).",
+    "expires=0": "The expires parameter value meaning no expiry (permanent credential, expires_at is null).",
+    "POST /user/tokens": "API endpoint to create a new PAT for the authenticated user.",
+    "active": "The default status value for users and organizations, indicating normal operational state.",
+    "GET /users": "API endpoint listing all users (admin only).",
+    "key": "Field in ApiKey containing the full credential string including the plaintext secret.",
+    "GET /readyz": "Readiness probe endpoint that pings the database (public, outside mount point).",
+    "Cache-Control": "HTTP response header that specifies caching directives for the response.",
+    "/user": "The authenticated user endpoint path prefix for self-service operations.",
+    "PATCH /users/{id}": "API endpoint to update a user's profile by ID (admin only, full_name only).",
+    "{\"status\": \"unavailable\"}": "JSON response body for failed readiness probe (database unreachable).",
+    "DELETE /users/{id}/tokens/{token_id}": "API endpoint to revoke a specific user's PAT (admin only)."
+  },
+  "requirements": [
+    {
+      "id": "03-REQ-1",
+      "title": "OpenAPI 3.1 file location and top-level structure",
+      "user_story": {
+        "role": "developer integrating with apikit",
+        "goal": "find a single, valid OpenAPI 3.1 specification at a well-known path",
+        "benefit": "I can generate SDKs, validate implementations, and understand the full API contract from one source of truth"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "exists at the repository root, uses OpenAPI 3.1.0 format with YAML syntax, and is parseable by standard OpenAPI tooling without errors",
+          "return_contract": "No parse or structural errors reported by `openapi-validator` or `libopenapi`"
+        },
+        {
+          "id": "03-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines a top-level `servers` block with exactly one entry: `url: /api/v1` with description `Default mount point (configurable per deployment)`",
+          "return_contract": "Spec passes OpenAPI 3.1 structural validation with the servers block present"
+        },
+        {
+          "id": "03-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines health probe paths `/healthz`, `/readyz`, and `/version` each with a path-level `servers: [{url: /}]` override so they resolve as absolute paths outside the `mount point`",
+          "return_contract": "Each health probe path item contains a `servers` block overriding the top-level servers"
+        },
+        {
+          "id": "03-REQ-1.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "uses `$ref` references to `components/schemas` for all reusable schema objects to avoid duplication",
+          "return_contract": "All `$ref` targets resolve without errors"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "api/openapi.yaml",
+          "action": "the OpenAPI validator reports an unresolved reference error, causing `make check` and `go test ./...` to fail",
+          "return_contract": "Non-zero exit code from validator; test failure reported by Go test runner",
+          "error_condition": "a `$ref` target in the spec points to a schema that does not exist in `components/schemas`"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-2",
+      "title": "Authentication security scheme definition",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "understand which credential types are accepted and how to authenticate",
+        "benefit": "I can correctly authenticate requests using Admin Token, API Key, or PAT credentials"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines a single `bearerAuth` HTTP bearer security scheme under `components/securitySchemes` with a description covering all three credential types: `Admin Token` (format `<prefix>_admin_<64 hex chars>`), `API Key` (format `<prefix>_<key_id>_<secret>`), and `PAT` (format `<prefix>_pat_<token_id>_<secret>`)",
+          "return_contract": "Security scheme present and valid in parsed spec"
+        },
+        {
+          "id": "03-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "applies the `bearerAuth` security scheme to all authenticated and admin endpoints, and explicitly documents which credential types and PAT permissions are accepted per endpoint",
+          "return_contract": "Each authenticated operation lists `bearerAuth` in its `security` array"
+        },
+        {
+          "id": "03-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents health probe endpoints (`/healthz`, `/readyz`, `/version`) and `GET /auth/providers` as public \u2014 no `bearerAuth` security requirement and no 401 response defined",
+          "return_contract": "Public endpoints have empty or absent `security` arrays; no 401 response schema on those operations"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-3",
+      "title": "PAT permission model schema",
+      "user_story": {
+        "role": "developer consuming the apikit spec",
+        "goal": "understand the permission string format and built-in permissions without being constrained to a closed enum",
+        "benefit": "I can extend the permission model in my consuming project while the spec validates the pattern correctly"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines the PAT `permissions` array item schema using a string pattern constraint `^[a-z_]+:[a-z_]+$` and documents built-in permission strings (`users:read`, `orgs:read`, `keys:read`, `keys:manage`, `tokens:read`, `tokens:manage`) as examples in the schema description rather than as a closed enum",
+          "return_contract": "Schema uses `pattern` property; no `enum` property on the permissions item schema"
+        },
+        {
+          "id": "03-REQ-3.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents each built-in permission string with its granted access in the schema description: `users:read` grants read own profile and self-profile updates, `orgs:read` grants read org records and membership lists, `keys:read` grants list own API keys, `keys:manage` grants refresh or revoke own API keys, `tokens:read` grants list own PATs, `tokens:manage` grants create or revoke own PATs",
+          "return_contract": "Description field on the permissions item schema is non-empty and references all six built-in permissions"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-4",
+      "title": "Expiry semantics for tokens and API keys",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "understand how the `expires` field controls token and key lifetime",
+        "benefit": "I can create permanent or time-bounded tokens with predictable behavior"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents the `expires` field on `POST /auth/callback` and `POST /user/tokens` request bodies as an optional integer with valid values `0`, `30`, `60`, `90` defined as an enum, default `90`, where `0` means no expiry (permanent, `expires_at` will be `null`) and other values mean expiry in that many days calculated as exactly `24h \u00d7 N` from creation timestamp",
+          "return_contract": "Schema uses `enum: [0, 30, 60, 90]`, `default: 90`, and description stating `0` means permanent with `expires_at: null`"
+        },
+        {
+          "id": "03-REQ-4.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents the `expires_at` field in all response objects (API Key Metadata, API Key Object, PAT Metadata, PAT Object, Auth Callback Response) as nullable: an RFC 3339 UTC timestamp when `expires` is non-zero, and `null` when `expires` is `0`",
+          "return_contract": "All `expires_at` fields use `nullable: true` (or `type: [string, null]` in OpenAPI 3.1) with `format: date-time`"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-5",
+      "title": "PATCH endpoint field immutability",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "understand exactly which fields are updatable via PATCH on user endpoints",
+        "benefit": "I know that `username` and `email` are immutable and only `full_name` can be changed, preventing mistakes in client implementations"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines the request body schema for `PATCH /user` with only the `full_name` field (string, required) and explicitly excludes `username` and `email` \u2014 the schema must not contain those fields",
+          "return_contract": "Request body schema for `PATCH /user` has exactly one property: `full_name`"
+        },
+        {
+          "id": "03-REQ-5.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines the request body schema for `PATCH /users/{id}` with only the `full_name` field (string, required) and explicitly excludes `username` and `email` \u2014 the schema must not contain those fields",
+          "return_contract": "Request body schema for `PATCH /users/{id}` has exactly one property: `full_name`"
+        },
+        {
+          "id": "03-REQ-5.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents in the description of both PATCH operations that `username` and `email` are immutable via PATCH \u2014 they are set at creation time and cannot be changed through the update endpoints",
+          "return_contract": "Operation description for both PATCH endpoints explicitly states field immutability"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-6",
+      "title": "Health probe endpoints",
+      "user_story": {
+        "role": "operations engineer",
+        "goal": "inspect health probe endpoint definitions in the spec",
+        "benefit": "I can configure load balancers and orchestration systems based on the documented liveness, readiness, and version endpoints"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /healthz` with a path-level `servers: [{url: /}]` override, no authentication, response 200 body `{\"status\": \"ok\"}`, `Cache-Control: no-cache` header, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct response schema, headers, and no security requirement"
+        },
+        {
+          "id": "03-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /readyz` with a path-level `servers: [{url: /}]` override, no authentication, response 200 body `{\"status\": \"ok\"}`, response 503 body `{\"status\": \"unavailable\"}`, `Cache-Control: no-cache` header, and `X-Request-ID` response header",
+          "return_contract": "Operation present with both 200 and 503 response schemas, headers, and no security requirement"
+        },
+        {
+          "id": "03-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /version` with a path-level `servers: [{url: /}]` override, no authentication, response 200 body object containing `version`, `build_time`, `commit`, and `mount_point` fields (all strings), `Cache-Control: no-cache` header, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct four-field response schema, headers, and no security requirement"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-7",
+      "title": "OAuth endpoints",
+      "user_story": {
+        "role": "API consumer implementing OAuth login",
+        "goal": "find complete request and response schemas for the OAuth provider listing and callback endpoints",
+        "benefit": "I can implement the OAuth flow correctly without consulting additional documentation"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /auth/providers` as public (no auth), response 200 returns an array of OAuth Provider Objects each with `name` (string) and `authorize_url` (string), `Cache-Control: public, max-age=300` header, `X-Request-ID` response header, and no 401 response defined",
+          "return_contract": "Operation present with correct array response schema, caching header, and no security or 401"
+        },
+        {
+          "id": "03-REQ-7.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /auth/callback` with required request body fields `provider` (string), `code` (string), `redirect_uri` (string), optional `expires` (integer enum `[0,30,60,90]`, default `90`); response 200 returns Auth Callback Response Object with `user` (User Object) and `api_key` object containing `key`, `key_id`, and nullable `expires_at`; response 400 for invalid request; `Cache-Control: no-store` header; `X-Request-ID` response header",
+          "return_contract": "Operation present with correct request and response schemas including all documented status codes"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-8",
+      "title": "Authenticated user self-service endpoints",
+      "user_story": {
+        "role": "authenticated API user",
+        "goal": "find complete definitions for all self-service endpoints in the spec",
+        "benefit": "I can manage my own profile, API keys, PATs, and organization memberships using the documented contract"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /user` with `bearerAuth` security (API key or PAT with `users:read`), response 200 returning User Object, responses 401 and 403, `Cache-Control: no-store`, `X-Request-ID` and `ETag` response headers, and 304 response with `X-Request-ID` and `ETag` headers and no body for `If-None-Match` conditional support",
+          "return_contract": "Operation present with all documented response codes, headers, and conditional 304 response"
+        },
+        {
+          "id": "03-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `PATCH /user` with `bearerAuth` security (API key or PAT with `users:read`), request body containing only `full_name` (string, required), responses 200 (Updated User Object), 400, 401, 403, 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with all documented response codes and restricted request body"
+        },
+        {
+          "id": "03-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /user/keys` with `bearerAuth` security (API key or PAT with `keys:read`), response 200 returning array of API Key Metadata Objects (`key_id`, `created_at`, nullable `expires_at`, nullable `revoked_at`), responses 401, 403, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct array response schema"
+        },
+        {
+          "id": "03-REQ-8.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /user/keys/{key_id}/refresh` with `bearerAuth` security (API key or PAT with `keys:manage`), response 200 returning API Key Object with `key`, `key_id`, and nullable `expires_at`, responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct response schema including plaintext secret in `key` field"
+        },
+        {
+          "id": "03-REQ-8.5",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /user/keys/{key_id}` with `bearerAuth` security (API key or PAT with `keys:manage`), response 204 (no body), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response and all error codes"
+        },
+        {
+          "id": "03-REQ-8.6",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /user/tokens` with `bearerAuth` security (API key or PAT with `tokens:read`), response 200 returning array of PAT Metadata Objects (`token_id`, `name`, `permissions`, `created_at`, nullable `expires_at`, nullable `revoked_at`), responses 401, 403, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct PAT Metadata array response schema"
+        },
+        {
+          "id": "03-REQ-8.7",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /user/tokens` with `bearerAuth` security (API key or PAT with `tokens:manage`), request body with `name` (string, required), `permissions` (array of pattern-constrained strings, required), `expires` (integer enum `[0,30,60,90]`, optional, default `90`); response 201 returning PAT Object including `token` (plaintext secret, returned only at creation), `token_id`, `name`, `permissions`, nullable `expires_at`; responses 400, 401, 403, 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 201 response schema and restricted request body"
+        },
+        {
+          "id": "03-REQ-8.8",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /user/tokens/{token_id}` with `bearerAuth` security (API key or PAT with `tokens:read`), response 200 returning PAT Metadata Object, responses 401, 403, 404, `Cache-Control: no-store`, `X-Request-ID` and `ETag` response headers, and 304 response with `X-Request-ID` and `ETag` headers and no body",
+          "return_contract": "Operation present with all response codes, ETag header, and conditional 304 response"
+        },
+        {
+          "id": "03-REQ-8.9",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /user/tokens/{token_id}` with `bearerAuth` security (API key or PAT with `tokens:manage`), response 204 (no body), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response"
+        },
+        {
+          "id": "03-REQ-8.10",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /user/orgs` with `bearerAuth` security (API key or PAT with `orgs:read`), response 200 returning array of Organization Objects, responses 401, 403, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct Organization array response schema"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-9",
+      "title": "Admin user management endpoints",
+      "user_story": {
+        "role": "system administrator",
+        "goal": "find complete definitions for all admin user management endpoints in the spec",
+        "benefit": "I can manage all users, their roles, statuses, API keys, and PATs using the documented contract"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /users` with admin `bearerAuth` security, request body requiring `username`, `email`, `provider`, `provider_id` (all strings), responses 201 (Created User Object), 400, 401, 403, 409 (duplicate `username` or (`provider`, `provider_id`)), 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 201 response and all documented error codes including 409"
+        },
+        {
+          "id": "03-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /users` with admin `bearerAuth` security, optional boolean query parameter `include_blocked` (default `false`), response 200 returning array of User Objects, responses 401, 403, `Cache-Control: no-store`, and `X-Request-ID` response header; documents that `include_blocked=false` returns only `status=active` users while `include_blocked=true` includes `status=blocked` users",
+          "return_contract": "Operation present with `include_blocked` query parameter schema and documented behavior"
+        },
+        {
+          "id": "03-REQ-9.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /users/{id}` with admin `bearerAuth` security, responses 200 (User Object), 401, 403, 404, `Cache-Control: no-store`, `X-Request-ID` and `ETag` response headers, and 304 response with `X-Request-ID` and `ETag` headers and no body",
+          "return_contract": "Operation present with ETag, conditional 304, and all documented response codes"
+        },
+        {
+          "id": "03-REQ-9.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `PATCH /users/{id}` with admin `bearerAuth` security, request body containing only `full_name` (string, required), responses 200 (Updated User Object), 401, 403, 404, 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct restricted request body and all response codes"
+        },
+        {
+          "id": "03-REQ-9.5",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /users/{id}/promote` with admin `bearerAuth` security, responses 200 (User Object with `role=admin`), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 200 User Object response"
+        },
+        {
+          "id": "03-REQ-9.6",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /users/{id}/demote` with admin `bearerAuth` security, responses 200 (User Object with `role=user`), 401, 403, 404, 409 (cannot demote last admin), `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 409 response documented for last-admin constraint"
+        },
+        {
+          "id": "03-REQ-9.7",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /users/{id}/block` with admin `bearerAuth` security, responses 200 (User Object with `status=blocked`), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 200 response"
+        },
+        {
+          "id": "03-REQ-9.8",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /users/{id}/unblock` with admin `bearerAuth` security, responses 200 (User Object with `status=active`), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 200 response"
+        },
+        {
+          "id": "03-REQ-9.9",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /users/{id}/keys` with admin `bearerAuth` security, responses 200 (array of API Key Metadata Objects), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct API Key Metadata array response"
+        },
+        {
+          "id": "03-REQ-9.10",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /users/{id}/keys/{key_id}` with admin `bearerAuth` security, response 204 (no body), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response"
+        },
+        {
+          "id": "03-REQ-9.11",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /users/{id}/tokens` with admin `bearerAuth` security, responses 200 (array of PAT Metadata Objects), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct PAT Metadata array response"
+        },
+        {
+          "id": "03-REQ-9.12",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /users/{id}/tokens/{token_id}` with admin `bearerAuth` security, response 204 (no body), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-10",
+      "title": "Organization management endpoints",
+      "user_story": {
+        "role": "system administrator",
+        "goal": "find complete definitions for all organization management endpoints in the spec",
+        "benefit": "I can create, update, block, delete organizations and manage their memberships using the documented contract"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /orgs` with admin `bearerAuth` security, request body with `name` (string, required), `slug` (string, required), `url` (string, optional); responses 201 (Created Organization Object), 400, 401, 403, 409 (duplicate `name` or `slug`), 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 201 response and all documented error codes including 409"
+        },
+        {
+          "id": "03-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /orgs` with admin `bearerAuth` security, optional boolean query parameter `include_blocked` (default `false`), response 200 returning array of Organization Objects, responses 401, 403, `Cache-Control: no-store`, and `X-Request-ID` response header; documents `include_blocked` behavior identically to `GET /users`",
+          "return_contract": "Operation present with `include_blocked` query parameter and documented filtering behavior"
+        },
+        {
+          "id": "03-REQ-10.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /orgs/{id}` with `bearerAuth` security accepting admin credentials or member with `orgs:read` PAT permission, responses 200 (Organization Object), 401, 403, 404, `Cache-Control: no-store`, `X-Request-ID` and `ETag` response headers, and 304 response with `X-Request-ID` and `ETag` headers and no body",
+          "return_contract": "Operation present with dual-role auth documented, ETag, conditional 304, and all response codes"
+        },
+        {
+          "id": "03-REQ-10.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `PATCH /orgs/{id}` with admin `bearerAuth` security, request body with optional `name` (string) and optional `url` (string); responses 200 (Updated Organization Object), 401, 403, 404, 409 (duplicate `name`), 415, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with all-optional request body and 409 conflict response"
+        },
+        {
+          "id": "03-REQ-10.5",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /orgs/{id}` with admin `bearerAuth` security, response 204 (no body, cascades memberships), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response and cascade behavior noted in description"
+        },
+        {
+          "id": "03-REQ-10.6",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /orgs/{id}/block` with admin `bearerAuth` security, responses 200 (Organization Object with `status=blocked`), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 200 response"
+        },
+        {
+          "id": "03-REQ-10.7",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `POST /orgs/{id}/unblock` with admin `bearerAuth` security, responses 200 (Organization Object with `status=active`), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with correct 200 response"
+        },
+        {
+          "id": "03-REQ-10.8",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `GET /orgs/{id}/members` with `bearerAuth` security accepting admin credentials or member with `orgs:read` PAT permission, responses 200 (array of User Objects representing members), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with dual-role auth documented and User array response schema"
+        },
+        {
+          "id": "03-REQ-10.9",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `PUT /orgs/{id}/members/{user_id}` with admin `bearerAuth` security, no request body (user ID conveyed entirely via path parameter), responses 204 (member added, no body), 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with no request body defined and 204 no-body response"
+        },
+        {
+          "id": "03-REQ-10.10",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines `DELETE /orgs/{id}/members/{user_id}` with admin `bearerAuth` security, response 204 (member removed, no body), responses 401, 403, 404, `Cache-Control: no-store`, and `X-Request-ID` response header",
+          "return_contract": "Operation present with 204 no-body response"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-11",
+      "title": "Schema component definitions",
+      "user_story": {
+        "role": "developer reading or generating code from the spec",
+        "goal": "find all schema objects fully defined under `components/schemas` with correct types and constraints",
+        "benefit": "I can rely on `$ref` references throughout the spec without duplication and generate correct model types"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines a `User` schema in `components/schemas` with properties: `id` (UUID string), `username` (string), `email` (string), `full_name` (nullable string), `status` (enum: `active`, `blocked`), `role` (enum: `admin`, `user`), `provider` (string), `provider_id` (string), `created_at` (RFC 3339 UTC string), `updated_at` (RFC 3339 UTC string); all fields required except `full_name` is nullable",
+          "return_contract": "Schema present, parseable, all field types correct, `full_name` nullable"
+        },
+        {
+          "id": "03-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `ApiKeyMetadata` schema in `components/schemas` with properties: `key_id` (string), `created_at` (RFC 3339 timestamp string), `expires_at` (nullable RFC 3339 timestamp), `revoked_at` (nullable RFC 3339 timestamp)",
+          "return_contract": "Schema present with correct nullable fields"
+        },
+        {
+          "id": "03-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `ApiKey` schema in `components/schemas` for creation/refresh responses with properties: `key` (string, full key including plaintext secret), `key_id` (string), `expires_at` (nullable RFC 3339 timestamp)",
+          "return_contract": "Schema present with `key` field documented as containing the plaintext secret"
+        },
+        {
+          "id": "03-REQ-11.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines a `PatMetadata` schema in `components/schemas` with properties: `token_id` (string), `name` (string), `permissions` (array of pattern-constrained strings `^[a-z_]+:[a-z_]+$`), `created_at` (RFC 3339 timestamp), `expires_at` (nullable RFC 3339 timestamp), `revoked_at` (nullable RFC 3339 timestamp)",
+          "return_contract": "Schema present with correct `permissions` array using pattern constraint"
+        },
+        {
+          "id": "03-REQ-11.5",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines a `Pat` schema in `components/schemas` for creation responses with properties: `token` (string, full token including plaintext secret), `token_id` (string), `name` (string), `permissions` (array of pattern-constrained strings), `expires_at` (nullable RFC 3339 timestamp)",
+          "return_contract": "Schema present with `token` field documented as containing the plaintext secret, returned only at creation"
+        },
+        {
+          "id": "03-REQ-11.6",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `Organization` schema in `components/schemas` with properties: `id` (UUID string), `name` (string), `slug` (string), `url` (nullable string), `status` (enum: `active`, `blocked`), `created_at` (RFC 3339 timestamp), `updated_at` (RFC 3339 timestamp)",
+          "return_contract": "Schema present with all fields, `url` nullable"
+        },
+        {
+          "id": "03-REQ-11.7",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `OAuthProvider` schema in `components/schemas` with properties: `name` (string) and `authorize_url` (string)",
+          "return_contract": "Schema present with exactly two string properties"
+        },
+        {
+          "id": "03-REQ-11.8",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `Error` schema in `components/schemas` representing the standard `error envelope` with a required `error` object containing `code` (integer, equals HTTP status code) and `message` (string); documents that `code` mirrors the HTTP status exactly with no sub-codes",
+          "return_contract": "Schema present; description states `code` equals HTTP status code and is not a sub-code"
+        },
+        {
+          "id": "03-REQ-11.9",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "defines an `AuthCallbackResponse` schema in `components/schemas` with properties: `user` (`$ref` to `User`) and `api_key` object with `key` (string), `key_id` (string), and `expires_at` (nullable RFC 3339 timestamp)",
+          "return_contract": "Schema present with correct nested structure"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-12",
+      "title": "Error response documentation",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "find all error status codes and their meanings documented consistently across endpoints",
+        "benefit": "I can implement consistent error handling in client code without endpoint-specific exceptions"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents the `Error` schema response for every applicable error code: 400 (bad request), 401 (unauthorized), 403 (forbidden), 404 (not found), 409 (conflict), 413 (payload too large), 415 (unsupported media type), 500 (internal server error) on all endpoints where those errors can occur",
+          "return_contract": "Each operation lists all applicable error responses using the `Error` schema `$ref`"
+        },
+        {
+          "id": "03-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents all authenticated endpoints with explicit 401 (missing/invalid/expired/revoked credential) and 403 (valid credential but insufficient permissions or user is blocked) responses",
+          "return_contract": "Every authenticated operation has both 401 and 403 response entries using the `Error` schema"
+        },
+        {
+          "id": "03-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents 413 Payload Too Large as a possible response on all endpoints that accept a request body, noting that the threshold is a server_core configuration concern; the spec documents the error response only",
+          "return_contract": "413 response present on all request-body endpoints using `Error` schema"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-13",
+      "title": "Caching headers documentation",
+      "user_story": {
+        "role": "API consumer implementing a caching layer",
+        "goal": "find the correct Cache-Control policy documented per endpoint category",
+        "benefit": "I can implement correct caching without trial and error"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents `Cache-Control: no-store` on all mutable resource endpoints: all `/user`, `/users/*`, `/orgs/*`, key, and token endpoints",
+          "return_contract": "All mutable resource operations include `Cache-Control` response header definition with value `no-store`"
+        },
+        {
+          "id": "03-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents `Cache-Control: no-cache` on health probe endpoints `GET /healthz`, `GET /readyz`, and `GET /version`",
+          "return_contract": "All three health probe operations include `Cache-Control` response header definition with value `no-cache`"
+        },
+        {
+          "id": "03-REQ-13.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents `Cache-Control: public, max-age=300` on `GET /auth/providers`",
+          "return_contract": "`GET /auth/providers` operation includes `Cache-Control` response header with value `public, max-age=300`"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-14",
+      "title": "Operational headers documentation",
+      "user_story": {
+        "role": "API consumer or operations engineer",
+        "goal": "find all operational headers (X-Request-ID, ETag, Content-Type) documented on every response",
+        "benefit": "I can implement distributed tracing, conditional requests, and content negotiation correctly"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents `X-Request-ID` (UUID string) as a response header on every response across all endpoints, including 204, 304, and error responses",
+          "return_contract": "`X-Request-ID` header definition present on all operations' all response codes"
+        },
+        {
+          "id": "03-REQ-14.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents `ETag` as an opaque string response header on single-resource GET endpoints: `GET /user`, `GET /users/{id}`, `GET /user/tokens/{token_id}`, `GET /orgs/{id}`; no ETag derivation algorithm is specified \u2014 it is treated as an opaque string",
+          "return_contract": "`ETag` header definition present on all four specified operations; schema type is string with no format or pattern constraint"
+        },
+        {
+          "id": "03-REQ-14.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents that requests with a body must use `Content-Type: application/json` or receive 415; response bodies always use `Content-Type: application/json; charset=utf-8`; 204 and 304 responses carry no body and no Content-Type",
+          "return_contract": "Content-Type constraints documented in operation descriptions and response media type definitions"
+        },
+        {
+          "id": "03-REQ-14.4",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents 304 Not Modified responses on the four conditional GET endpoints (`GET /user`, `GET /users/{id}`, `GET /user/tokens/{token_id}`, `GET /orgs/{id}`) with `X-Request-ID` and `ETag` headers present, no body, and no `Cache-Control` header on the 304 response itself",
+          "return_contract": "304 response defined on all four endpoints with exactly `X-Request-ID` and `ETag` headers and no response body or content"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-15",
+      "title": "Timestamp format convention",
+      "user_story": {
+        "role": "developer parsing API responses",
+        "goal": "find the timestamp format consistently documented across all schema fields",
+        "benefit": "I can write a single timestamp parser for all fields without special-casing"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-15.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "documents all timestamp fields across all schema objects as RFC 3339 format strings normalized to UTC with `Z` suffix (e.g. `2026-07-17T14:30:00Z`), using `format: date-time` in the schema, and states that timezone offsets are never produced",
+          "return_contract": "All timestamp fields use `type: string`, `format: date-time`; description states UTC with Z suffix; no timezone offset examples"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "03-REQ-16",
+      "title": "Go structural validation test",
+      "user_story": {
+        "role": "developer contributing to the apikit repository",
+        "goal": "have a lightweight automated check that catches structural errors in the spec on every `go test ./...` run",
+        "benefit": "I detect YAML syntax errors, missing `$ref` targets, and OpenAPI 3.1 schema violations early without running the full external validator"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-16.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/api_test.go",
+          "action": "exists and contains a Go test that reads `api/openapi.yaml` from disk, parses and validates it as an OpenAPI 3.1 document using `libopenapi` (`github.com/pb33f/libopenapi`), and asserts that no structural or schema errors are returned by the parser",
+          "return_contract": "Test passes when spec is valid; test fails with descriptive error when spec has structural issues"
+        },
+        {
+          "id": "03-REQ-16.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/api_test.go",
+          "action": "does NOT validate individual operations, request/response examples, or `ETag` derivation \u2014 scope is limited to structural OpenAPI 3.1 parsing correctness only",
+          "return_contract": "Test does not assert on any operation-level semantics beyond structural parsing"
+        },
+        {
+          "id": "03-REQ-16.3",
+          "ears_pattern": "event_driven",
+          "system": "api/api_test.go",
+          "action": "executes the OpenAPI structural validation test as part of the standard test suite",
+          "return_contract": "Test is included in normal `go test ./...` output; non-zero exit on failure",
+          "trigger": "a developer runs `go test ./...` from the repository root"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-16.E1",
+          "ears_pattern": "unwanted",
+          "system": "api/api_test.go",
+          "action": "the test calls `t.Fatalf` with the error details, causing the test to fail immediately with a descriptive message identifying the structural problem",
+          "return_contract": "Non-zero `go test` exit code; error message includes parser error details",
+          "error_condition": "the `libopenapi` parser returns an error or reports structural violations when loading `api/openapi.yaml`"
+        },
+        {
+          "id": "03-REQ-16.E2",
+          "ears_pattern": "unwanted",
+          "system": "api/api_test.go",
+          "action": "the test calls `t.Fatalf` with the file read error, failing the test immediately rather than panicking or terminating the process; errors are signaled via test failure, not `os.Exit`",
+          "return_contract": "Non-zero `go test` exit code; error message states the file could not be read",
+          "error_condition": "`api/openapi.yaml` cannot be read from disk (file missing or unreadable)"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-17",
+      "title": "Spec validation tooling integration",
+      "user_story": {
+        "role": "developer running the build pipeline",
+        "goal": "have the OpenAPI spec validated by the external `openapi-validator` tool as part of `make check`",
+        "benefit": "I catch specification-level violations beyond structural parsing before merging changes"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-17.1",
+          "ears_pattern": "event_driven",
+          "system": "make check",
+          "action": "executes `go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml` (or equivalent) and fails the build if the validator reports any errors",
+          "return_contract": "Non-zero exit code from `make check` when `openapi-validator` reports errors; zero exit code on success",
+          "trigger": "a developer runs `make check`"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "03-PROP-1",
+      "title": "ETag documented as opaque string with no derivation algorithm",
+      "for_any": "endpoint in the spec that returns an `ETag` response header",
+      "invariant": "the `ETag` schema type is string with no format, pattern, or description specifying a derivation algorithm; the derivation mechanism is explicitly delegated to server_core",
+      "validates": [
+        "03-REQ-14.2"
+      ]
+    },
+    {
+      "id": "03-PROP-2",
+      "title": "All authenticated endpoints document both 401 and 403",
+      "for_any": "endpoint in the spec that requires `bearerAuth` authentication",
+      "invariant": "the operation defines both a 401 response (missing/invalid/expired/revoked credential) and a 403 response (valid credential but insufficient permissions or user blocked), each using the `Error` schema",
+      "validates": [
+        "03-REQ-12.2",
+        "03-REQ-8.1",
+        "03-REQ-8.2",
+        "03-REQ-9.1",
+        "03-REQ-9.2"
+      ]
+    },
+    {
+      "id": "03-PROP-3",
+      "title": "X-Request-ID present on every response",
+      "for_any": "response in the spec across all operations and all status codes",
+      "invariant": "the response defines an `X-Request-ID` header of type string (UUID), including 204, 304, and error responses",
+      "validates": [
+        "03-REQ-14.1"
+      ]
+    },
+    {
+      "id": "03-PROP-4",
+      "title": "PAT permissions schema uses pattern not enum",
+      "for_any": "schema in the spec that models PAT permission strings",
+      "invariant": "the schema uses `pattern: ^[a-z_]+:[a-z_]+$` and does not use an `enum` property, ensuring extensibility for consuming projects",
+      "validates": [
+        "03-REQ-3.1"
+      ]
+    },
+    {
+      "id": "03-PROP-5",
+      "title": "PATCH request bodies contain only full_name",
+      "for_any": "PATCH operation in the spec (`PATCH /user` and `PATCH /users/{id}`)",
+      "invariant": "the request body schema defines exactly one property, `full_name`, and does not define `username` or `email` properties",
+      "validates": [
+        "03-REQ-5.1",
+        "03-REQ-5.2"
+      ]
+    },
+    {
+      "id": "03-PROP-6",
+      "title": "expires_at nullable when expires=0",
+      "for_any": "schema in the spec that contains an `expires_at` field",
+      "invariant": "the field is declared nullable (allowing `null` values) with `format: date-time`, and the parent schema or operation description states that `expires_at` is `null` when `expires=0`",
+      "validates": [
+        "03-REQ-4.2"
+      ]
+    },
+    {
+      "id": "03-PROP-7",
+      "title": "Health probe paths use path-level servers override",
+      "for_any": "health probe path (`/healthz`, `/readyz`, `/version`) in the spec",
+      "invariant": "the path item defines a `servers` block with `url: /`, overriding the top-level `servers` block, so the path resolves as absolute rather than relative to the `mount point`",
+      "validates": [
+        "03-REQ-1.3",
+        "03-REQ-6.1",
+        "03-REQ-6.2",
+        "03-REQ-6.3"
+      ]
+    },
+    {
+      "id": "03-PROP-8",
+      "title": "Error envelope code mirrors HTTP status",
+      "for_any": "error response in the spec",
+      "invariant": "the `Error` schema `code` field is an integer and description states it equals the HTTP response status code exactly with no sub-codes or internal error codes",
+      "validates": [
+        "03-REQ-11.8",
+        "03-REQ-12.1"
+      ]
+    },
+    {
+      "id": "03-PROP-9",
+      "title": "304 responses have no body and no Cache-Control",
+      "for_any": "304 Not Modified response on conditional GET endpoints (`GET /user`, `GET /users/{id}`, `GET /user/tokens/{token_id}`, `GET /orgs/{id}`)",
+      "invariant": "the 304 response defines no content/body, includes `X-Request-ID` and `ETag` headers, and does not define a `Cache-Control` header",
+      "validates": [
+        "03-REQ-14.4"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "03-PATH-1",
+      "title": "Developer validates spec changes via go test",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "edits `api/openapi.yaml` and runs `go test ./...` from the repository root"
+        },
+        {
+          "actor": "Go test runner",
+          "action": "discovers and executes the test in `api/api_test.go`"
+        },
+        {
+          "actor": "api/api_test.go",
+          "action": "reads `api/openapi.yaml` from disk using Go's `os.ReadFile`"
+        },
+        {
+          "actor": "api/api_test.go",
+          "action": "passes the YAML bytes to `libopenapi` to parse and validate as an OpenAPI 3.1 document"
+        },
+        {
+          "actor": "libopenapi",
+          "action": "returns a parsed document model and any structural errors found"
+        },
+        {
+          "actor": "api/api_test.go",
+          "action": "asserts no structural errors were returned; calls `t.Fatalf` with error details if any exist"
+        },
+        {
+          "actor": "Go test runner",
+          "action": "reports PASS or FAIL with exit code 0 or non-zero respectively, giving the developer immediate feedback on spec validity"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-2",
+      "title": "OAuth login flow \u2014 callback produces user and API key",
+      "steps": [
+        {
+          "actor": "Client application",
+          "action": "sends `POST /auth/callback` with `provider`, `code`, `redirect_uri`, and optional `expires` in the request body"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the request body schema requiring `provider`, `code`, `redirect_uri` (all required strings) and `expires` (optional integer enum `[0,30,60,90]`, default `90`)"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the 200 response as an `AuthCallbackResponse` containing a `User` object and an `api_key` object with `key`, `key_id`, and nullable `expires_at`"
+        },
+        {
+          "actor": "Client application",
+          "action": "receives the 200 response body with the User object and API key including plaintext secret, and the `X-Request-ID` response header for tracing"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-3",
+      "title": "Conditional GET with ETag \u2014 304 Not Modified flow",
+      "steps": [
+        {
+          "actor": "Client application",
+          "action": "sends `GET /user` without `If-None-Match`; receives 200 response with `ETag` and `X-Request-ID` headers and User object body"
+        },
+        {
+          "actor": "Client application",
+          "action": "stores the `ETag` value and sends a subsequent `GET /user` with `If-None-Match` header set to the stored `ETag` value"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies that when `If-None-Match` matches the current `ETag`, the server responds with 304 Not Modified with `X-Request-ID` and `ETag` headers and no body, and no `Cache-Control` header"
+        },
+        {
+          "actor": "Client application",
+          "action": "receives the 304 response, confirms the resource is unchanged, and uses its cached copy without re-parsing a response body"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-4",
+      "title": "Admin creates and then demotes a user",
+      "steps": [
+        {
+          "actor": "Administrator",
+          "action": "sends `POST /users` with `username`, `email`, `provider`, `provider_id` in the request body and a valid admin credential in the `Authorization` header"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the 201 response returning the created `User` object with `role=user` and `status=active`, and `X-Request-ID` header"
+        },
+        {
+          "actor": "Administrator",
+          "action": "sends `POST /users/{id}/promote` to grant the admin role; receives 200 with User object where `role=admin`"
+        },
+        {
+          "actor": "Administrator",
+          "action": "sends `POST /users/{id}/demote` to revoke the admin role; receives 200 with User object where `role=user`, or 409 if the target is the last admin"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-5",
+      "title": "PAT creation and use for scoped access",
+      "steps": [
+        {
+          "actor": "Authenticated user",
+          "action": "sends `POST /user/tokens` with `name`, `permissions` array (e.g. `[\"users:read\", \"orgs:read\"]`), and optional `expires` value using a valid API key credential"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the 201 response returning a `Pat` object with `token` (plaintext secret, returned only at creation), `token_id`, `name`, `permissions`, and nullable `expires_at`"
+        },
+        {
+          "actor": "Authenticated user",
+          "action": "stores the plaintext `token` value (it will not be returned again) and uses it as a bearer credential on `GET /user/orgs`"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies that `GET /user/orgs` accepts `bearerAuth` with `orgs:read` PAT permission and returns 200 with an array of Organization Objects, or 403 if the PAT lacks `orgs:read`"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-6",
+      "title": "Admin lists and filters blocked organizations",
+      "steps": [
+        {
+          "actor": "Administrator",
+          "action": "sends `GET /orgs` without `include_blocked` query parameter"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the default behavior: `include_blocked=false` returns only organizations with `status=active`"
+        },
+        {
+          "actor": "Administrator",
+          "action": "sends `GET /orgs?include_blocked=true` to retrieve all organizations including blocked ones"
+        },
+        {
+          "actor": "api/openapi.yaml",
+          "action": "specifies the 200 response as an array of Organization Objects including those with `status=blocked` when `include_blocked=true`"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "03-ERR-1",
+      "condition": "A request with a body is received with `Content-Type` other than `application/json`",
+      "behavior": "The spec documents a 415 Unsupported Media Type response using the `Error` schema on all endpoints that accept a request body",
+      "requirement_id": "03-REQ-12.1"
+    },
+    {
+      "id": "03-ERR-2",
+      "condition": "A request is received with missing, invalid, expired, or revoked credentials on an authenticated endpoint",
+      "behavior": "The spec documents a 401 Unauthorized response using the `Error` schema on all authenticated endpoints",
+      "requirement_id": "03-REQ-12.2"
+    },
+    {
+      "id": "03-ERR-3",
+      "condition": "A request is received with valid credentials that have insufficient permissions, or the user is blocked",
+      "behavior": "The spec documents a 403 Forbidden response using the `Error` schema on all authenticated endpoints",
+      "requirement_id": "03-REQ-12.2"
+    },
+    {
+      "id": "03-ERR-4",
+      "condition": "`POST /users` receives a `username` or (`provider`, `provider_id`) combination that already exists",
+      "behavior": "The spec documents a 409 Conflict response using the `Error` schema on `POST /users`",
+      "requirement_id": "03-REQ-9.1"
+    },
+    {
+      "id": "03-ERR-5",
+      "condition": "`POST /users/{id}/demote` targets the last remaining admin user",
+      "behavior": "The spec documents a 409 Conflict response using the `Error` schema on `POST /users/{id}/demote`",
+      "requirement_id": "03-REQ-9.6"
+    },
+    {
+      "id": "03-ERR-6",
+      "condition": "`POST /orgs` receives a `name` or `slug` that already exists",
+      "behavior": "The spec documents a 409 Conflict response using the `Error` schema on `POST /orgs`",
+      "requirement_id": "03-REQ-10.1"
+    },
+    {
+      "id": "03-ERR-7",
+      "condition": "`PATCH /orgs/{id}` receives a `name` that conflicts with an existing organization",
+      "behavior": "The spec documents a 409 Conflict response using the `Error` schema on `PATCH /orgs/{id}`",
+      "requirement_id": "03-REQ-10.4"
+    },
+    {
+      "id": "03-ERR-8",
+      "condition": "A request body exceeds the server's configured size limit",
+      "behavior": "The spec documents a 413 Payload Too Large response using the `Error` schema on all endpoints that accept a request body; the threshold is noted as a server_core configuration concern",
+      "requirement_id": "03-REQ-12.3"
+    },
+    {
+      "id": "03-ERR-9",
+      "condition": "`api/openapi.yaml` is missing or unreadable when the Go validation test runs",
+      "behavior": "The test in `api/api_test.go` calls `t.Fatalf` with the file read error, failing the test without terminating the process via `os.Exit`",
+      "requirement_id": "03-REQ-16.E2"
+    },
+    {
+      "id": "03-ERR-10",
+      "condition": "`libopenapi` returns structural errors when parsing `api/openapi.yaml` in the Go validation test",
+      "behavior": "The test in `api/api_test.go` calls `t.Fatalf` with the parser error details, causing `go test ./...` to exit with a non-zero code",
+      "requirement_id": "03-REQ-16.E1"
+    },
+    {
+      "id": "03-ERR-11",
+      "condition": "A `$ref` in `api/openapi.yaml` points to a non-existent target in `components/schemas`",
+      "behavior": "The OpenAPI validator reports an unresolved reference error causing `make check` to fail with a non-zero exit code",
+      "requirement_id": "03-REQ-1.E1"
+    },
+    {
+      "id": "03-ERR-12",
+      "condition": "A resource (user, key, token, organization) is not found by ID on an endpoint that requires it",
+      "behavior": "The spec documents a 404 Not Found response using the `Error` schema on all endpoints that address resources by ID",
+      "requirement_id": "03-REQ-12.1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/pb33f/libopenapi",
+      "version": "latest (as referenced in PRD; exact version unverified \u2014 check installed version before implementation)",
+      "symbols": [
+        {
+          "name": "NewDocument",
+          "import_path": "github.com/pb33f/libopenapi",
+          "signature": "NewDocument(data []byte) (Document, error)",
+          "notes": "Parses a YAML or JSON OpenAPI document from bytes. Signature unverified \u2014 cross-check against installed library version before use in api/api_test.go."
+        },
+        {
+          "name": "Document",
+          "import_path": "github.com/pb33f/libopenapi",
+          "signature": "interface { BuildV3Model() (*DocumentModel[v3.Document], []error) }",
+          "notes": "Returned by NewDocument; BuildV3Model returns the parsed OpenAPI 3.x model and any structural errors. Signature unverified \u2014 cross-check against installed library version."
+        }
+      ]
+    },
+    {
+      "package": "github.com/pb33f/libopenapi-validator",
+      "version": "latest (as referenced in PRD; exact version unverified)",
+      "symbols": [
+        {
+          "name": "openapi-validator CLI",
+          "import_path": "github.com/pb33f/libopenapi-validator/cmd/openapi-validator",
+          "signature": "go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest <file>",
+          "notes": "Command-line tool invoked via `make check` to validate the spec against OpenAPI 3.1 standard. Exit code non-zero on errors."
+        }
+      ]
+    }
+  ]
+}
