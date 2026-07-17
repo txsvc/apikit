@@ -22,9 +22,20 @@ const (
 // CacheMiddleware returns Echo middleware that sets the Cache-Control header
 // based on the provided CacheCategory.
 func CacheMiddleware(cat CacheCategory) echo.MiddlewareFunc {
+	var value string
+	switch cat {
+	case CacheNoStore:
+		value = "no-store"
+	case CacheNoCache:
+		value = "no-cache"
+	case CachePublic:
+		value = "public, max-age=300"
+	}
+
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			return next(c) // stub: no Cache-Control header set
+			c.Response().Header().Set("Cache-Control", value)
+			return next(c)
 		}
 	}
 }
