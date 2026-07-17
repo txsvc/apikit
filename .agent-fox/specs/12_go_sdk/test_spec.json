@@ -1,0 +1,1619 @@
+{
+  "$schema": null,
+  "spec_id": "12",
+  "spec_name": "go_sdk",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-12-1",
+      "requirement_id": "12-REQ-1.1",
+      "kind": "unit",
+      "description": "NewClient returns a non-nil *Client with all default field values correctly set when called with a baseURL and no options.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\")",
+      "expected": "Non-nil *Client; httpClient == http.DefaultClient; mountPoint == \"/api/v1\"; apiKey == \"\"; requestID == \"\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\")\nassert client != nil\nassert client.httpClient == http.DefaultClient\nassert client.mountPoint == \"/api/v1\"\nassert client.apiKey == \"\"\nassert client.requestID == \"\""
+    },
+    {
+      "id": "TS-12-2",
+      "requirement_id": "12-REQ-1.2",
+      "kind": "unit",
+      "description": "NewClient strips a trailing slash from the baseURL before storing it on the Client struct.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com/\")",
+      "expected": "client.baseURL == \"https://api.example.com\" (no trailing slash)",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com/\")\nassert client.baseURL == \"https://api.example.com\""
+    },
+    {
+      "id": "TS-12-3",
+      "requirement_id": "12-REQ-1.3",
+      "kind": "unit",
+      "description": "Client is safe for concurrent use — multiple goroutines calling methods simultaneously produce no data races.",
+      "preconditions": [
+        "A running httptest.Server returning valid JSON responses",
+        "The apikit package compiled with -race flag"
+      ],
+      "input": "NewClient(server.URL, WithAPIKey(\"key\")); 50 goroutines each calling client.Healthz(ctx) concurrently",
+      "expected": "All calls complete without data races detected by the Go race detector; all return valid responses or errors",
+      "assertion_pseudocode": "server = httptest.NewServer(handler returning 200 HealthResponse)\ndefer server.Close()\nclient = NewClient(server.URL)\nvar wg sync.WaitGroup\nfor i in 0..49:\n  wg.Add(1)\n  go func():\n    defer wg.Done()\n    resp, err = client.Healthz(context.Background())\n    assert err == nil OR err != nil  // any result is acceptable; no race\nwg.Wait()\n// Run with: go test -race ./..."
+    },
+    {
+      "id": "TS-12-4",
+      "requirement_id": "12-REQ-1.4",
+      "kind": "unit",
+      "description": "WithAPIKey sets the Client's apiKey field to the provided key string.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\", WithAPIKey(\"my-secret-key\"))",
+      "expected": "client.apiKey == \"my-secret-key\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\", WithAPIKey(\"my-secret-key\"))\nassert client.apiKey == \"my-secret-key\""
+    },
+    {
+      "id": "TS-12-5",
+      "requirement_id": "12-REQ-1.5",
+      "kind": "unit",
+      "description": "WithHTTPClient sets the Client's httpClient field to the provided *http.Client, overriding http.DefaultClient.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "customHTTP = &http.Client{Timeout: 5 * time.Second}; NewClient(\"https://api.example.com\", WithHTTPClient(customHTTP))",
+      "expected": "client.httpClient == customHTTP (pointer equality)",
+      "assertion_pseudocode": "customHTTP = &http.Client{Timeout: 5 * time.Second}\nclient = NewClient(\"https://api.example.com\", WithHTTPClient(customHTTP))\nassert client.httpClient == customHTTP"
+    },
+    {
+      "id": "TS-12-6",
+      "requirement_id": "12-REQ-1.6",
+      "kind": "unit",
+      "description": "WithRequestID sets the Client's requestID field to the provided id string.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\", WithRequestID(\"req-abc-123\"))",
+      "expected": "client.requestID == \"req-abc-123\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\", WithRequestID(\"req-abc-123\"))\nassert client.requestID == \"req-abc-123\""
+    },
+    {
+      "id": "TS-12-7",
+      "requirement_id": "12-REQ-1.7",
+      "kind": "unit",
+      "description": "WithMountPoint prepends a leading slash to a path that does not start with '/'.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\", WithMountPoint(\"api/v1\"))",
+      "expected": "client.mountPoint == \"/api/v1\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\", WithMountPoint(\"api/v1\"))\nassert client.mountPoint == \"/api/v1\""
+    },
+    {
+      "id": "TS-12-8",
+      "requirement_id": "12-REQ-1.8",
+      "kind": "unit",
+      "description": "WithMountPoint strips the trailing slash from a path that ends with '/'.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\", WithMountPoint(\"/api/v1/\"))",
+      "expected": "client.mountPoint == \"/api/v1\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\", WithMountPoint(\"/api/v1/\"))\nassert client.mountPoint == \"/api/v1\""
+    },
+    {
+      "id": "TS-12-9",
+      "requirement_id": "12-REQ-1.9",
+      "kind": "unit",
+      "description": "WithMountPoint normalizes an empty string to '/' and stores it as the Client's mountPoint.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"https://api.example.com\", WithMountPoint(\"\"))",
+      "expected": "client.mountPoint == \"/\"",
+      "assertion_pseudocode": "client = NewClient(\"https://api.example.com\", WithMountPoint(\"\"))\nassert client.mountPoint == \"/\""
+    },
+    {
+      "id": "TS-12-10",
+      "requirement_id": "12-REQ-2.1",
+      "kind": "unit",
+      "description": "All domain object types are defined exactly once in the apikit package with no duplicate definitions.",
+      "preconditions": [
+        "The apikit package compiles successfully with 'go build ./...'"
+      ],
+      "input": "Compile the apikit package",
+      "expected": "Package compiles without 'type X redeclared in this block' errors; each type (User, APIKeyMeta, APIKeyFull, PAT, PATFull, Organization, OAuthProvider, AuthCallbackRequest, AuthCallbackResponse, CreateUserRequest, UpdateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, HealthResponse, VersionResponse, RevokeKeyResponse, ListUsersOptions, ListOrgsOptions) is declared exactly once",
+      "assertion_pseudocode": "// Static analysis / compilation check\n// Run: go build ./...\n// Also: grep -rn 'type User struct' . | wc -l == 1\n// Repeat for each canonical type name\nassert compilationSucceeds()\nassert typeDeclarationCount(\"User\") == 1\nassert typeDeclarationCount(\"APIKeyMeta\") == 1\nassert typeDeclarationCount(\"Organization\") == 1\n// etc. for all listed types"
+    },
+    {
+      "id": "TS-12-11",
+      "requirement_id": "12-REQ-2.2",
+      "kind": "unit",
+      "description": "All struct fields in sdk_types.go use snake_case JSON tags matching the OpenAPI schema field names.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "json.Marshal(&User{ID: \"u1\", Username: \"alice\", Email: \"a@b.com\", Status: \"active\", Role: \"user\", Provider: \"github\", ProviderID: \"gh1\", CreatedAt: t, UpdatedAt: t})",
+      "expected": "JSON output contains keys: \"id\", \"username\", \"email\", \"full_name\", \"status\", \"role\", \"provider\", \"provider_id\", \"created_at\", \"updated_at\"",
+      "assertion_pseudocode": "u = User{ID: \"u1\", Username: \"alice\", Email: \"a@b.com\", Status: \"active\", Role: \"user\", Provider: \"github\", ProviderID: \"gh1\", CreatedAt: now, UpdatedAt: now}\nbytes = json.Marshal(u)\nassert bytes contains key \"id\"\nassert bytes contains key \"username\"\nassert bytes contains key \"email\"\nassert bytes contains key \"status\"\nassert bytes contains key \"role\"\nassert bytes contains key \"provider\"\nassert bytes contains key \"provider_id\"\nassert bytes contains key \"created_at\"\nassert bytes contains key \"updated_at\""
+    },
+    {
+      "id": "TS-12-12",
+      "requirement_id": "12-REQ-2.3",
+      "kind": "unit",
+      "description": "Nullable *time.Time fields deserialize null JSON values as nil and non-null as valid *time.Time in RFC 3339.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "json.Unmarshal({\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}, &APIKeyMeta{})",
+      "expected": "ExpiresAt == nil; RevokedAt == nil; CreatedAt is valid non-nil time.Time",
+      "assertion_pseudocode": "jsonStr = `{\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}`\nvar m APIKeyMeta\nerr = json.Unmarshal([]byte(jsonStr), &m)\nassert err == nil\nassert m.ExpiresAt == nil\nassert m.RevokedAt == nil\nassert m.CreatedAt.Year() == 2024"
+    },
+    {
+      "id": "TS-12-13",
+      "requirement_id": "12-REQ-2.4",
+      "kind": "unit",
+      "description": "UpdateUserRequest.FullName is a plain string with no omitempty tag, so the JSON body always includes 'full_name' even when empty.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "json.Marshal(&UpdateUserRequest{FullName: \"\"})",
+      "expected": "JSON output contains key \"full_name\" with value \"\"",
+      "assertion_pseudocode": "req = UpdateUserRequest{FullName: \"\"}\nbytes = json.Marshal(req)\nresult = string(bytes)\nassert result contains '\"full_name\"'\nassert result contains '\"full_name\":\"\"'"
+    },
+    {
+      "id": "TS-12-14",
+      "requirement_id": "12-REQ-2.5",
+      "kind": "unit",
+      "description": "Optional request fields with omitempty are absent from the JSON body when nil.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "json.Marshal(&AuthCallbackRequest{Provider: \"github\", Code: \"abc\", RedirectURI: \"http://localhost/cb\"}); json.Marshal(&CreateOrgRequest{Name: \"Acme\", Slug: \"acme\"}); json.Marshal(&UpdateOrgRequest{})",
+      "expected": "Serialized AuthCallbackRequest omits 'expires'; CreateOrgRequest omits 'url'; UpdateOrgRequest omits both 'name' and 'url'",
+      "assertion_pseudocode": "authReq = AuthCallbackRequest{Provider: \"github\", Code: \"abc\", RedirectURI: \"http://localhost/cb\"}\nbytes = json.Marshal(authReq)\nassert bytes does NOT contain '\"expires\"'\n\ncreateOrgReq = CreateOrgRequest{Name: \"Acme\", Slug: \"acme\"}\nbytes2 = json.Marshal(createOrgReq)\nassert bytes2 does NOT contain '\"url\"'\n\nupdateOrgReq = UpdateOrgRequest{}\nbytes3 = json.Marshal(updateOrgReq)\nassert bytes3 does NOT contain '\"name\"'\nassert bytes3 does NOT contain '\"url\"'"
+    },
+    {
+      "id": "TS-12-15",
+      "requirement_id": "12-REQ-2.6",
+      "kind": "unit",
+      "description": "ListOrgMembers returns []*User directly; there is no OrgMember type in the apikit package.",
+      "preconditions": [
+        "A running httptest.Server returning a bare JSON array of User objects",
+        "The apikit package is compiled and importable"
+      ],
+      "input": "client.ListOrgMembers(ctx, \"org-id-1\")",
+      "expected": "Return type is []*User (not []*OrgMember or any other type); the package does not export or define an OrgMember type",
+      "assertion_pseudocode": "server = httptest.NewServer(handler returning [{\"id\":\"u1\",\"username\":\"alice\",...}])\nclient = NewClient(server.URL)\nmembers, err = client.ListOrgMembers(context.Background(), \"org-id-1\")\nassert err == nil\nassert type_of(members) == []*User\nassert len(members) == 1\nassert members[0].ID == \"u1\"\n// Compile check: OrgMember type does not exist in package\n// go build will fail if OrgMember is referenced"
+    },
+    {
+      "id": "TS-12-16",
+      "requirement_id": "12-REQ-3.1",
+      "kind": "unit",
+      "description": "The do method sets 'Accept: application/json' on every outgoing request.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "client.Healthz(ctx) against a mock server",
+      "expected": "Captured request has header Accept == \"application/json\"",
+      "assertion_pseudocode": "var capturedHeader http.Header\nserver = httptest.NewServer(func(w, r):\n  capturedHeader = r.Header\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL)\nclient.Healthz(context.Background())\nassert capturedHeader.Get(\"Accept\") == \"application/json\""
+    },
+    {
+      "id": "TS-12-17",
+      "requirement_id": "12-REQ-3.2",
+      "kind": "unit",
+      "description": "The do method sets 'Content-Type: application/json' on requests that have a non-nil body.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "client.UpdateUser(ctx, &UpdateUserRequest{FullName: \"Alice\"}) against a mock server",
+      "expected": "Captured request has header Content-Type == \"application/json\"",
+      "assertion_pseudocode": "var capturedCT string\nserver = httptest.NewServer(func(w, r):\n  capturedCT = r.Header.Get(\"Content-Type\")\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.UpdateUser(context.Background(), &UpdateUserRequest{FullName: \"Alice\"})\nassert capturedCT == \"application/json\""
+    },
+    {
+      "id": "TS-12-18",
+      "requirement_id": "12-REQ-3.3",
+      "kind": "unit",
+      "description": "The do method sets 'Authorization: Bearer <apiKey>' on requests when apiKey is non-empty.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "NewClient(server.URL, WithAPIKey(\"my-token\")); client.Healthz(ctx)",
+      "expected": "Captured request has header Authorization == \"Bearer my-token\"",
+      "assertion_pseudocode": "var capturedAuth string\nserver = httptest.NewServer(func(w, r):\n  capturedAuth = r.Header.Get(\"Authorization\")\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"my-token\"))\nclient.Healthz(context.Background())\nassert capturedAuth == \"Bearer my-token\""
+    },
+    {
+      "id": "TS-12-19",
+      "requirement_id": "12-REQ-3.4",
+      "kind": "unit",
+      "description": "The do method sets 'X-Request-ID: <requestID>' on requests when requestID is non-empty.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "NewClient(server.URL, WithRequestID(\"req-xyz\")); client.Healthz(ctx)",
+      "expected": "Captured request has header X-Request-ID == \"req-xyz\"",
+      "assertion_pseudocode": "var capturedRID string\nserver = httptest.NewServer(func(w, r):\n  capturedRID = r.Header.Get(\"X-Request-ID\")\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL, WithRequestID(\"req-xyz\"))\nclient.Healthz(context.Background())\nassert capturedRID == \"req-xyz\""
+    },
+    {
+      "id": "TS-12-20",
+      "requirement_id": "12-REQ-3.5",
+      "kind": "unit",
+      "description": "The do method does not set any Authorization header when apiKey is empty.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "NewClient(server.URL) (no WithAPIKey); client.Healthz(ctx)",
+      "expected": "Captured request has no Authorization header (empty string)",
+      "assertion_pseudocode": "var capturedAuth string\nserver = httptest.NewServer(func(w, r):\n  capturedAuth = r.Header.Get(\"Authorization\")\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL)\nclient.Healthz(context.Background())\nassert capturedAuth == \"\""
+    },
+    {
+      "id": "TS-12-21",
+      "requirement_id": "12-REQ-3.6",
+      "kind": "unit",
+      "description": "The do method does not set any X-Request-ID header when requestID is empty.",
+      "preconditions": [
+        "A running httptest.Server that captures and inspects request headers"
+      ],
+      "input": "NewClient(server.URL) (no WithRequestID); client.Healthz(ctx)",
+      "expected": "Captured request has no X-Request-ID header (empty string)",
+      "assertion_pseudocode": "var capturedRID string\nserver = httptest.NewServer(func(w, r):\n  capturedRID = r.Header.Get(\"X-Request-ID\")\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL)\nclient.Healthz(context.Background())\nassert capturedRID == \"\""
+    },
+    {
+      "id": "TS-12-22",
+      "requirement_id": "12-REQ-3.7",
+      "kind": "unit",
+      "description": "The do method passes the caller-supplied context.Context to the request, enabling cancellation.",
+      "preconditions": [
+        "A running httptest.Server that delays responses by 100ms"
+      ],
+      "input": "ctx cancelled immediately; client.Healthz(ctx)",
+      "expected": "Method returns an error wrapping context.Canceled",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  time.Sleep(100 * time.Millisecond)\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL)\nctx, cancel = context.WithCancel(context.Background())\ncancel()  // cancel immediately\nresp, err = client.Healthz(ctx)\nassert err != nil\nassert errors.Is(err, context.Canceled)"
+    },
+    {
+      "id": "TS-12-23",
+      "requirement_id": "12-REQ-3.8",
+      "kind": "unit",
+      "description": "The do method decodes the JSON response body into the typed response struct on HTTP 200 or 201.",
+      "preconditions": [
+        "A running httptest.Server returning a valid JSON User object with status 200"
+      ],
+      "input": "client.GetUser(ctx) against mock server returning {\"id\":\"u1\",\"username\":\"alice\",...}",
+      "expected": "Returns non-nil *Response[User] with Data.ID == \"u1\" and nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json({\"id\":\"u1\",\"username\":\"alice\",\"email\":\"a@b.com\",\"status\":\"active\",\"role\":\"user\",\"provider\":\"github\",\"provider_id\":\"gh1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"updated_at\":\"2024-01-01T00:00:00Z\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert err == nil\nassert resp != nil\nassert resp.Data != nil\nassert resp.Data.ID == \"u1\"\nassert resp.Data.Username == \"alice\""
+    },
+    {
+      "id": "TS-12-24",
+      "requirement_id": "12-REQ-3.9",
+      "kind": "unit",
+      "description": "The do method returns nil body with nil error when the server responds with HTTP 204.",
+      "preconditions": [
+        "A running httptest.Server returning HTTP 204 No Content"
+      ],
+      "input": "client.RevokeToken(ctx, \"tok-1\") against mock server returning 204",
+      "expected": "Returns nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RevokeToken(context.Background(), \"tok-1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-25",
+      "requirement_id": "12-REQ-3.10",
+      "kind": "unit",
+      "description": "The do method returns nil *Response[T] and ErrNotModified when the server responds with HTTP 304.",
+      "preconditions": [
+        "A running httptest.Server returning HTTP 304"
+      ],
+      "input": "client.GetUser(ctx, WithIfNoneMatch(\"\\\"etag-abc\\\"\")) against mock server returning 304",
+      "expected": "Returns nil *Response[User] and ErrNotModified; errors.Is(err, ErrNotModified) == true",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(304)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background(), WithIfNoneMatch(\"\\\"etag-abc\\\"\"))\nassert resp == nil\nassert errors.Is(err, ErrNotModified)"
+    },
+    {
+      "id": "TS-12-26",
+      "requirement_id": "12-REQ-3.11",
+      "kind": "unit",
+      "description": "The do method decodes the nested JSON error envelope and returns *APIError with Code and Message on 4xx/5xx.",
+      "preconditions": [
+        "A running httptest.Server returning 404 with JSON error envelope"
+      ],
+      "input": "client.GetUser(ctx) against mock server returning {\"error\":{\"code\":404,\"message\":\"User not found\"}}",
+      "expected": "Returns *APIError with Code==404 and Message==\"User not found\"; err.Error()==\"API error 404: User not found\"",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(404)\n  w.Write(json({\"error\":{\"code\":404,\"message\":\"User not found\"}}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert resp == nil\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr)\nassert apiErr.Code == 404\nassert apiErr.Message == \"User not found\"\nassert err.Error() == \"API error 404: User not found\""
+    },
+    {
+      "id": "TS-12-27",
+      "requirement_id": "12-REQ-3.12",
+      "kind": "unit",
+      "description": "The do method returns *APIError with Code from HTTP status and Message from HTTP status text when the error body is non-JSON.",
+      "preconditions": [
+        "A running httptest.Server returning 502 with an HTML body"
+      ],
+      "input": "client.GetUser(ctx) against mock server returning 502 with '<html>Bad Gateway</html>'",
+      "expected": "Returns *APIError with Code==502 and Message==\"Bad Gateway\" (or the HTTP status text)",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(502)\n  w.Write([]byte(\"<html>Bad Gateway</html>\"))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert resp == nil\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr)\nassert apiErr.Code == 502\nassert apiErr.Message == \"Bad Gateway\""
+    },
+    {
+      "id": "TS-12-28",
+      "requirement_id": "12-REQ-3.13",
+      "kind": "unit",
+      "description": "The do method applies per-request RequestOption functions to the *http.Request before execution.",
+      "preconditions": [
+        "A running httptest.Server that captures request headers"
+      ],
+      "input": "client.GetUser(ctx, WithIfNoneMatch(\"\\\"v1\\\"\")) against mock server",
+      "expected": "Captured request has header If-None-Match == \"\\\"v1\\\"\"",
+      "assertion_pseudocode": "var capturedINM string\nserver = httptest.NewServer(func(w, r):\n  capturedINM = r.Header.Get(\"If-None-Match\")\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.GetUser(context.Background(), WithIfNoneMatch(\"\\\"v1\\\"\"))\nassert capturedINM == \"\\\"v1\\\"\""
+    },
+    {
+      "id": "TS-12-29",
+      "requirement_id": "12-REQ-4.1",
+      "kind": "unit",
+      "description": "Client constructs API endpoint URLs as baseURL + mountPoint + path.",
+      "preconditions": [
+        "A running httptest.Server that captures the request URL path"
+      ],
+      "input": "NewClient(server.URL); client.GetUser(ctx)",
+      "expected": "Request URL path == \"/api/v1/user\"",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.GetUser(context.Background())\nassert capturedPath == \"/api/v1/user\""
+    },
+    {
+      "id": "TS-12-30",
+      "requirement_id": "12-REQ-4.2",
+      "kind": "unit",
+      "description": "Client constructs health probe endpoint URLs as baseURL + path without the mountPoint.",
+      "preconditions": [
+        "A running httptest.Server that captures the request URL path"
+      ],
+      "input": "NewClient(server.URL, WithMountPoint(\"/api/v1\")); client.Healthz(ctx), Readyz(ctx), Version(ctx)",
+      "expected": "Request paths are \"/healthz\", \"/readyz\", \"/version\" respectively (no mount point prefix)",
+      "assertion_pseudocode": "var capturedPaths []string\nserver = httptest.NewServer(func(w, r):\n  capturedPaths.append(r.URL.Path)\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL, WithMountPoint(\"/api/v1\"))\nclient.Healthz(context.Background())\nclient.Readyz(context.Background())\n// for Version, write json({\"version\":\"1.0\",\"build_time\":\"\",\"commit\":\"\",\"mount_point\":\"\"})\nclient.Version(context.Background())\nassert capturedPaths[0] == \"/healthz\"\nassert capturedPaths[1] == \"/readyz\"\nassert capturedPaths[2] == \"/version\""
+    },
+    {
+      "id": "TS-12-31",
+      "requirement_id": "12-REQ-4.3",
+      "kind": "unit",
+      "description": "Client constructs auth endpoint URLs as baseURL + mountPoint + path.",
+      "preconditions": [
+        "A running httptest.Server that captures the request URL path"
+      ],
+      "input": "NewClient(server.URL); client.GetProviders(ctx)",
+      "expected": "Request path == \"/api/v1/auth/providers\"",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL)\nclient.GetProviders(context.Background())\nassert capturedPath == \"/api/v1/auth/providers\""
+    },
+    {
+      "id": "TS-12-32",
+      "requirement_id": "12-REQ-4.4",
+      "kind": "unit",
+      "description": "Client uses the custom mount point in all API and auth endpoint URL construction when WithMountPoint is set.",
+      "preconditions": [
+        "A running httptest.Server that captures the request URL path"
+      ],
+      "input": "NewClient(server.URL, WithMountPoint(\"/v2\")); client.GetUser(ctx)",
+      "expected": "Request path == \"/v2/user\"",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"), WithMountPoint(\"/v2\"))\nclient.GetUser(context.Background())\nassert capturedPath == \"/v2/user\""
+    },
+    {
+      "id": "TS-12-33",
+      "requirement_id": "12-REQ-4.5",
+      "kind": "unit",
+      "description": "Path parameters are interpolated into URL paths verbatim without URL-encoding.",
+      "preconditions": [
+        "A running httptest.Server that captures the request URL path"
+      ],
+      "input": "client.RefreshKey(ctx, \"key-uuid-123\")",
+      "expected": "Request path == \"/api/v1/user/keys/key-uuid-123/refresh\"",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json(APIKeyFull{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.RefreshKey(context.Background(), \"key-uuid-123\")\nassert capturedPath == \"/api/v1/user/keys/key-uuid-123/refresh\""
+    },
+    {
+      "id": "TS-12-34",
+      "requirement_id": "12-REQ-5.1",
+      "kind": "unit",
+      "description": "WithIfNoneMatch adds an If-None-Match header with the provided etag value to the request.",
+      "preconditions": [
+        "A running httptest.Server that captures request headers"
+      ],
+      "input": "client.GetUser(ctx, WithIfNoneMatch(\"\\\"abc123\\\"\"))",
+      "expected": "Captured request has header If-None-Match == \"\\\"abc123\\\"\"",
+      "assertion_pseudocode": "var capturedINM string\nserver = httptest.NewServer(func(w, r):\n  capturedINM = r.Header.Get(\"If-None-Match\")\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.GetUser(context.Background(), WithIfNoneMatch(\"\\\"abc123\\\"\"))\nassert capturedINM == \"\\\"abc123\\\"\""
+    },
+    {
+      "id": "TS-12-35",
+      "requirement_id": "12-REQ-5.2",
+      "kind": "unit",
+      "description": "GetUser returns nil *Response[User] and ErrNotModified when the server returns HTTP 304.",
+      "preconditions": [
+        "A running httptest.Server returning HTTP 304"
+      ],
+      "input": "client.GetUser(ctx, WithIfNoneMatch(\"\\\"abc\\\"\")) against server returning 304",
+      "expected": "resp == nil; errors.Is(err, ErrNotModified) == true",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(304)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background(), WithIfNoneMatch(\"\\\"abc\\\"\"))\nassert resp == nil\nassert errors.Is(err, ErrNotModified)"
+    },
+    {
+      "id": "TS-12-36",
+      "requirement_id": "12-REQ-5.3",
+      "kind": "unit",
+      "description": "GetUser returns non-nil *Response[User] with Data, StatusCode 200, and ETag header on successful 200 response.",
+      "preconditions": [
+        "A running httptest.Server returning 200 with User JSON and ETag header"
+      ],
+      "input": "client.GetUser(ctx) against server returning 200 with ETag: \"\\\"v42\\\"\"",
+      "expected": "resp != nil; resp.Data != nil; resp.StatusCode == 200; resp.ETag() == \"\\\"v42\\\"\"",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.Header().Set(\"ETag\", \"\\\"v42\\\"\")\n  w.WriteHeader(200)\n  w.Write(json(User{ID:\"u1\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert err == nil\nassert resp != nil\nassert resp.Data != nil\nassert resp.StatusCode == 200\nassert resp.ETag() == \"\\\"v42\\\"\""
+    },
+    {
+      "id": "TS-12-37",
+      "requirement_id": "12-REQ-5.4",
+      "kind": "unit",
+      "description": "Response[T].ETag() returns the ETag header value or empty string when absent.",
+      "preconditions": [
+        "A running httptest.Server returning 200 with and without ETag headers"
+      ],
+      "input": "Two requests: one with ETag header, one without",
+      "expected": "First call: ETag() == \"\\\"v1\\\"\"; Second call: ETag() == \"\"",
+      "assertion_pseudocode": "// With ETag\nserver1 = httptest.NewServer(func(w, r):\n  w.Header().Set(\"ETag\", \"\\\"v1\\\"\")\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server1.URL, WithAPIKey(\"key\"))\nresp1, _ = client.GetUser(context.Background())\nassert resp1.ETag() == \"\\\"v1\\\"\"\n\n// Without ETag\nserver2 = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient2 = NewClient(server2.URL, WithAPIKey(\"key\"))\nresp2, _ = client2.GetUser(context.Background())\nassert resp2.ETag() == \"\""
+    },
+    {
+      "id": "TS-12-38",
+      "requirement_id": "12-REQ-5.5",
+      "kind": "unit",
+      "description": "Only GetUser, GetUserByID, GetToken, and GetOrg accept variadic ...RequestOption parameters.",
+      "preconditions": [
+        "The apikit package compiles successfully"
+      ],
+      "input": "Compile-time check of method signatures",
+      "expected": "GetUser, GetUserByID, GetToken, GetOrg accept ...RequestOption; all other methods do not have this parameter",
+      "assertion_pseudocode": "// Verified by compilation; signature checks\n// The following MUST compile:\nclient.GetUser(ctx, WithIfNoneMatch(\"e\"))\nclient.GetUserByID(ctx, \"id\", WithIfNoneMatch(\"e\"))\nclient.GetToken(ctx, \"tid\", WithIfNoneMatch(\"e\"))\nclient.GetOrg(ctx, \"oid\", WithIfNoneMatch(\"e\"))\n\n// The following MUST NOT compile (no RequestOption param):\n// client.UpdateUser(ctx, req, WithIfNoneMatch(\"e\")) -- compile error\n// client.ListKeys(ctx, WithIfNoneMatch(\"e\")) -- compile error\n// Verify via go build ./..."
+    },
+    {
+      "id": "TS-12-39",
+      "requirement_id": "12-REQ-5.6",
+      "kind": "unit",
+      "description": "Response[T].StatusCode reflects the actual HTTP status code (e.g., 201 for creation endpoints) returned by the server.",
+      "preconditions": [
+        "A running httptest.Server returning HTTP 201 with a User JSON body"
+      ],
+      "input": "client.GetUserByID(ctx, \"id1\") against server returning 201 with User JSON",
+      "expected": "resp.StatusCode == 201",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(201)\n  w.Write(json(User{ID:\"id1\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUserByID(context.Background(), \"id1\")\nassert err == nil\nassert resp != nil\nassert resp.StatusCode == 201"
+    },
+    {
+      "id": "TS-12-40",
+      "requirement_id": "12-REQ-6.1",
+      "kind": "unit",
+      "description": "APIError.Error() returns the string in the format 'API error {Code}: {Message}'.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "APIError{Code: 404, Message: \"User not found\"}",
+      "expected": "err.Error() == \"API error 404: User not found\"",
+      "assertion_pseudocode": "apiErr = &APIError{Code: 404, Message: \"User not found\"}\nassert apiErr.Error() == \"API error 404: User not found\"\n\napiErr2 = &APIError{Code: 500, Message: \"Internal Server Error\"}\nassert apiErr2.Error() == \"API error 500: Internal Server Error\""
+    },
+    {
+      "id": "TS-12-41",
+      "requirement_id": "12-REQ-6.2",
+      "kind": "unit",
+      "description": "APIError struct contains accessible Code int and Message string fields.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "APIError{Code: 422, Message: \"Validation failed\"}",
+      "expected": "apiErr.Code == 422; apiErr.Message == \"Validation failed\"",
+      "assertion_pseudocode": "apiErr = &APIError{Code: 422, Message: \"Validation failed\"}\nassert apiErr.Code == 422\nassert apiErr.Message == \"Validation failed\""
+    },
+    {
+      "id": "TS-12-42",
+      "requirement_id": "12-REQ-6.3",
+      "kind": "unit",
+      "description": "do decodes the nested JSON error envelope and returns *APIError retrievable via errors.As.",
+      "preconditions": [
+        "A running httptest.Server returning 404 with nested JSON error envelope"
+      ],
+      "input": "client.GetUser(ctx) against server returning {\"error\":{\"code\":404,\"message\":\"User not found\"}}",
+      "expected": "errors.As(err, &apiErr) == true; apiErr.Code == 404; apiErr.Message == \"User not found\"",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(404)\n  w.Write(json({\"error\":{\"code\":404,\"message\":\"User not found\"}}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\n_, err = client.GetUser(context.Background())\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true\nassert apiErr.Code == 404\nassert apiErr.Message == \"User not found\""
+    },
+    {
+      "id": "TS-12-43",
+      "requirement_id": "12-REQ-6.4",
+      "kind": "unit",
+      "description": "ErrNotModified is a package-level sentinel error and errors.Is(ErrNotModified, ErrNotModified) returns true.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "errors.Is(ErrNotModified, ErrNotModified)",
+      "expected": "true",
+      "assertion_pseudocode": "assert errors.Is(ErrNotModified, ErrNotModified) == true\nassert ErrNotModified != nil\nassert ErrNotModified.Error() == \"not modified\""
+    },
+    {
+      "id": "TS-12-44",
+      "requirement_id": "12-REQ-6.5",
+      "kind": "unit",
+      "description": "All plain errors from the do method wrap the underlying cause so that errors.Unwrap returns non-nil.",
+      "preconditions": [
+        "A running httptest.Server that is immediately closed to cause a network error"
+      ],
+      "input": "client.GetUser(ctx) against a closed server (connection refused)",
+      "expected": "err != nil; errors.Unwrap(err) != nil; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "server = httptest.NewServer(handler)\nurl = server.URL\nserver.Close()  // close immediately\nclient = NewClient(url, WithAPIKey(\"key\"))\n_, err = client.GetUser(context.Background())\nassert err != nil\nassert errors.Unwrap(err) != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-45",
+      "requirement_id": "12-REQ-7.1",
+      "kind": "integration",
+      "description": "GetUser sends a GET request to mountPoint+'/user' and returns *Response[User] with decoded user data.",
+      "preconditions": [
+        "A running httptest.Server at /api/v1/user returning a valid User JSON on GET"
+      ],
+      "input": "client.GetUser(ctx)",
+      "expected": "GET request to /api/v1/user; resp != nil; resp.Data.ID populated; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(mux where GET /api/v1/user returns User JSON)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert err == nil\nassert resp != nil\nassert resp.Data != nil\nassert resp.Data.ID != \"\""
+    },
+    {
+      "id": "TS-12-46",
+      "requirement_id": "12-REQ-7.2",
+      "kind": "integration",
+      "description": "UpdateUser sends a PATCH request to mountPoint+'/user' with JSON body always including full_name.",
+      "preconditions": [
+        "A running httptest.Server at PATCH /api/v1/user that captures the request body and returns a User JSON"
+      ],
+      "input": "client.UpdateUser(ctx, &UpdateUserRequest{FullName: \"Alice Smith\"})",
+      "expected": "PATCH to /api/v1/user; request body contains {\"full_name\":\"Alice Smith\"}; returns *User",
+      "assertion_pseudocode": "var capturedBody []byte\nserver = httptest.NewServer(func(w, r):\n  if r.Method == \"PATCH\" && r.URL.Path == \"/api/v1/user\":\n    capturedBody = readAll(r.Body)\n    w.WriteHeader(200)\n    w.Write(json(User{FullName: ptr(\"Alice Smith\"),...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.UpdateUser(context.Background(), &UpdateUserRequest{FullName: \"Alice Smith\"})\nassert err == nil\nassert user != nil\nassert capturedBody contains '\"full_name\":\"Alice Smith\"'"
+    },
+    {
+      "id": "TS-12-47",
+      "requirement_id": "12-REQ-7.3",
+      "kind": "integration",
+      "description": "ListKeys sends GET to /user/keys and decodes the bare JSON array into []*APIKeyMeta.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/keys returning a JSON array of APIKeyMeta"
+      ],
+      "input": "client.ListKeys(ctx)",
+      "expected": "GET to /api/v1/user/keys; returns []*APIKeyMeta with all elements populated; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/user/keys\":\n    w.WriteHeader(200)\n    w.Write(json([{\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListKeys(context.Background())\nassert err == nil\nassert len(keys) == 1\nassert keys[0].KeyID == \"k1\""
+    },
+    {
+      "id": "TS-12-48",
+      "requirement_id": "12-REQ-7.4",
+      "kind": "integration",
+      "description": "RefreshKey sends a POST to /user/keys/{keyID}/refresh and returns *APIKeyFull.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/user/keys/key-1/refresh returning APIKeyFull JSON"
+      ],
+      "input": "client.RefreshKey(ctx, \"key-1\")",
+      "expected": "POST to /api/v1/user/keys/key-1/refresh; returns *APIKeyFull with Key and KeyID; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/user/keys/key-1/refresh\":\n    w.WriteHeader(200)\n    w.Write(json({\"key\":\"new-secret\",\"key_id\":\"key-1\",\"expires_at\":null}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeyFull, err = client.RefreshKey(context.Background(), \"key-1\")\nassert err == nil\nassert keyFull.Key == \"new-secret\"\nassert keyFull.KeyID == \"key-1\""
+    },
+    {
+      "id": "TS-12-49",
+      "requirement_id": "12-REQ-7.5",
+      "kind": "integration",
+      "description": "RevokeKey sends DELETE to /user/keys/{keyID} and returns *RevokeKeyResponse with KeyID and RevokedAt on HTTP 200.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/user/keys/key-1 returning RevokeKeyResponse JSON with 200"
+      ],
+      "input": "client.RevokeKey(ctx, \"key-1\")",
+      "expected": "DELETE to /api/v1/user/keys/key-1; returns *RevokeKeyResponse with KeyID==\"key-1\"; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/user/keys/key-1\":\n    w.WriteHeader(200)\n    w.Write(json({\"key_id\":\"key-1\",\"revoked_at\":\"2024-06-01T00:00:00Z\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nrevokeResp, err = client.RevokeKey(context.Background(), \"key-1\")\nassert err == nil\nassert revokeResp.KeyID == \"key-1\"\nassert revokeResp.RevokedAt is non-zero time"
+    },
+    {
+      "id": "TS-12-50",
+      "requirement_id": "12-REQ-7.6",
+      "kind": "integration",
+      "description": "ListTokens sends GET to /user/tokens and decodes the bare JSON array into []*PAT.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/tokens returning a JSON array of PAT"
+      ],
+      "input": "client.ListTokens(ctx)",
+      "expected": "GET to /api/v1/user/tokens; returns []*PAT with elements populated; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/user/tokens\":\n    w.WriteHeader(200)\n    w.Write(json([{\"token_id\":\"t1\",\"name\":\"mytoken\",\"permissions\":[\"read\"],\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\ntokens, err = client.ListTokens(context.Background())\nassert err == nil\nassert len(tokens) == 1\nassert tokens[0].TokenID == \"t1\""
+    },
+    {
+      "id": "TS-12-51",
+      "requirement_id": "12-REQ-7.7",
+      "kind": "integration",
+      "description": "CreateToken sends POST to /user/tokens with JSON body and returns *PATFull on 201.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/user/tokens returning 201 with PATFull JSON"
+      ],
+      "input": "client.CreateToken(ctx, &CreateTokenRequest{Name: \"ci\", Permissions: [\"read\", \"write\"]})",
+      "expected": "POST to /api/v1/user/tokens; returns *PATFull with Token and TokenID; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/user/tokens\":\n    w.WriteHeader(201)\n    w.Write(json({\"token\":\"tok-secret\",\"token_id\":\"t1\",\"name\":\"ci\",\"permissions\":[\"read\",\"write\"],\"expires_at\":null}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\npatFull, err = client.CreateToken(context.Background(), &CreateTokenRequest{Name:\"ci\",Permissions:[\"read\",\"write\"]})\nassert err == nil\nassert patFull.Token == \"tok-secret\"\nassert patFull.TokenID == \"t1\""
+    },
+    {
+      "id": "TS-12-52",
+      "requirement_id": "12-REQ-7.8",
+      "kind": "integration",
+      "description": "GetToken sends GET to /user/tokens/{tokenID} and returns *Response[PAT] on success.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/tokens/t1 returning 200 with PAT JSON"
+      ],
+      "input": "client.GetToken(ctx, \"t1\")",
+      "expected": "GET to /api/v1/user/tokens/t1; returns *Response[PAT] with Data.TokenID==\"t1\"; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/user/tokens/t1\":\n    w.WriteHeader(200)\n    w.Write(json({\"token_id\":\"t1\",\"name\":\"mytoken\",\"permissions\":[\"read\"],\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetToken(context.Background(), \"t1\")\nassert err == nil\nassert resp != nil\nassert resp.Data.TokenID == \"t1\""
+    },
+    {
+      "id": "TS-12-53",
+      "requirement_id": "12-REQ-7.9",
+      "kind": "integration",
+      "description": "RevokeToken sends DELETE to /user/tokens/{tokenID} and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/user/tokens/t1 returning 204"
+      ],
+      "input": "client.RevokeToken(ctx, \"t1\")",
+      "expected": "DELETE to /api/v1/user/tokens/t1; returns nil error on 204",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/user/tokens/t1\":\n    w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RevokeToken(context.Background(), \"t1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-54",
+      "requirement_id": "12-REQ-7.10",
+      "kind": "integration",
+      "description": "ListUserOrgs sends GET to /user/orgs and decodes the bare JSON array into []*Organization.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/orgs returning a JSON array of Organization"
+      ],
+      "input": "client.ListUserOrgs(ctx)",
+      "expected": "GET to /api/v1/user/orgs; returns []*Organization with elements populated; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/user/orgs\":\n    w.WriteHeader(200)\n    w.Write(json([{\"id\":\"org1\",\"name\":\"Acme\",\"slug\":\"acme\",\"url\":null,\"status\":\"active\",\"created_at\":\"2024-01-01T00:00:00Z\",\"updated_at\":\"2024-01-01T00:00:00Z\"}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\norgs, err = client.ListUserOrgs(context.Background())\nassert err == nil\nassert len(orgs) == 1\nassert orgs[0].ID == \"org1\""
+    },
+    {
+      "id": "TS-12-55",
+      "requirement_id": "12-REQ-8.1",
+      "kind": "integration",
+      "description": "ListUsers appends include_blocked=true query parameter when IncludeBlocked is true.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users that captures query parameters"
+      ],
+      "input": "client.ListUsers(ctx, &ListUsersOptions{IncludeBlocked: true})",
+      "expected": "Request URL contains query string include_blocked=true; returns []*User; nil error",
+      "assertion_pseudocode": "var capturedQuery string\nserver = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/users\":\n    capturedQuery = r.URL.RawQuery\n    w.WriteHeader(200)\n    w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListUsers(context.Background(), &ListUsersOptions{IncludeBlocked: true})\nassert capturedQuery contains \"include_blocked=true\""
+    },
+    {
+      "id": "TS-12-56",
+      "requirement_id": "12-REQ-8.2",
+      "kind": "integration",
+      "description": "ListUsers sends GET without include_blocked query parameter when options is nil or IncludeBlocked is false.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users that captures query parameters"
+      ],
+      "input": "client.ListUsers(ctx, nil) and client.ListUsers(ctx, &ListUsersOptions{IncludeBlocked: false})",
+      "expected": "Neither request URL contains include_blocked; returns []*User",
+      "assertion_pseudocode": "var capturedQueries []string\nserver = httptest.NewServer(func(w, r):\n  capturedQueries.append(r.URL.RawQuery)\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListUsers(context.Background(), nil)\nclient.ListUsers(context.Background(), &ListUsersOptions{IncludeBlocked: false})\nassert capturedQueries[0] does NOT contain \"include_blocked\"\nassert capturedQueries[1] does NOT contain \"include_blocked\""
+    },
+    {
+      "id": "TS-12-57",
+      "requirement_id": "12-REQ-8.3",
+      "kind": "integration",
+      "description": "GetUserByID sends GET to /users/{id} and returns *Response[User] with Data populated.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users/user-1 returning 200 with User JSON"
+      ],
+      "input": "client.GetUserByID(ctx, \"user-1\")",
+      "expected": "GET to /api/v1/users/user-1; resp.Data.ID == \"user-1\"; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/users/user-1\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"user-1\",\"username\":\"alice\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUserByID(context.Background(), \"user-1\")\nassert err == nil\nassert resp.Data.ID == \"user-1\""
+    },
+    {
+      "id": "TS-12-58",
+      "requirement_id": "12-REQ-8.4",
+      "kind": "integration",
+      "description": "CreateUser sends POST to /users with JSON body and returns *User on 201.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/users returning 201 with User JSON"
+      ],
+      "input": "client.CreateUser(ctx, &CreateUserRequest{Username: \"bob\", Email: \"bob@example.com\", Provider: \"github\", ProviderID: \"gh2\"})",
+      "expected": "POST to /api/v1/users; request body contains username/email; returns *User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/users\":\n    w.WriteHeader(201)\n    w.Write(json({\"id\":\"u2\",\"username\":\"bob\",\"email\":\"bob@example.com\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.CreateUser(context.Background(), &CreateUserRequest{Username:\"bob\",Email:\"bob@example.com\",Provider:\"github\",ProviderID:\"gh2\"})\nassert err == nil\nassert user.Username == \"bob\""
+    },
+    {
+      "id": "TS-12-59",
+      "requirement_id": "12-REQ-8.5",
+      "kind": "integration",
+      "description": "UpdateUserByID sends PATCH to /users/{id} with JSON body and returns *User.",
+      "preconditions": [
+        "A running httptest.Server at PATCH /api/v1/users/user-1 returning 200 with User JSON"
+      ],
+      "input": "client.UpdateUserByID(ctx, \"user-1\", &UpdateUserRequest{FullName: \"Bob Smith\"})",
+      "expected": "PATCH to /api/v1/users/user-1; body contains full_name; returns *User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"PATCH\" && r.URL.Path == \"/api/v1/users/user-1\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"user-1\",\"full_name\":\"Bob Smith\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.UpdateUserByID(context.Background(), \"user-1\", &UpdateUserRequest{FullName:\"Bob Smith\"})\nassert err == nil\nassert user != nil"
+    },
+    {
+      "id": "TS-12-60",
+      "requirement_id": "12-REQ-8.6",
+      "kind": "integration",
+      "description": "PromoteUser sends POST to /users/{id}/promote with no body and returns *User.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/users/user-1/promote returning 200 with User JSON"
+      ],
+      "input": "client.PromoteUser(ctx, \"user-1\")",
+      "expected": "POST to /api/v1/users/user-1/promote; no request body; returns *User; nil error",
+      "assertion_pseudocode": "var capturedMethod, capturedPath string\nvar capturedBodyLen int\nserver = httptest.NewServer(func(w, r):\n  capturedMethod = r.Method\n  capturedPath = r.URL.Path\n  capturedBodyLen = int(r.ContentLength)\n  w.WriteHeader(200)\n  w.Write(json(User{ID:\"user-1\",Role:\"admin\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.PromoteUser(context.Background(), \"user-1\")\nassert err == nil\nassert capturedMethod == \"POST\"\nassert capturedPath == \"/api/v1/users/user-1/promote\"\nassert user != nil"
+    },
+    {
+      "id": "TS-12-61",
+      "requirement_id": "12-REQ-8.7",
+      "kind": "integration",
+      "description": "DemoteUser sends POST to /users/{id}/demote with no body and returns *User.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/users/user-1/demote returning 200 with User JSON"
+      ],
+      "input": "client.DemoteUser(ctx, \"user-1\")",
+      "expected": "POST to /api/v1/users/user-1/demote; returns *User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/users/user-1/demote\":\n    w.WriteHeader(200)\n    w.Write(json(User{ID:\"user-1\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.DemoteUser(context.Background(), \"user-1\")\nassert err == nil\nassert user != nil"
+    },
+    {
+      "id": "TS-12-62",
+      "requirement_id": "12-REQ-8.8",
+      "kind": "integration",
+      "description": "BlockUser sends POST to /users/{id}/block with no body and returns *User.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/users/user-1/block returning 200 with User JSON"
+      ],
+      "input": "client.BlockUser(ctx, \"user-1\")",
+      "expected": "POST to /api/v1/users/user-1/block; returns *User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/users/user-1/block\":\n    w.WriteHeader(200)\n    w.Write(json(User{ID:\"user-1\",Status:\"blocked\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.BlockUser(context.Background(), \"user-1\")\nassert err == nil\nassert user != nil"
+    },
+    {
+      "id": "TS-12-63",
+      "requirement_id": "12-REQ-8.9",
+      "kind": "integration",
+      "description": "UnblockUser sends POST to /users/{id}/unblock with no body and returns *User.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/users/user-1/unblock returning 200 with User JSON"
+      ],
+      "input": "client.UnblockUser(ctx, \"user-1\")",
+      "expected": "POST to /api/v1/users/user-1/unblock; returns *User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/users/user-1/unblock\":\n    w.WriteHeader(200)\n    w.Write(json(User{ID:\"user-1\",Status:\"active\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nuser, err = client.UnblockUser(context.Background(), \"user-1\")\nassert err == nil\nassert user != nil"
+    },
+    {
+      "id": "TS-12-64",
+      "requirement_id": "12-REQ-8.10",
+      "kind": "integration",
+      "description": "ListUserKeys sends GET to /users/{userID}/keys and decodes the bare JSON array into []*APIKeyMeta.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users/user-1/keys returning a JSON array"
+      ],
+      "input": "client.ListUserKeys(ctx, \"user-1\")",
+      "expected": "GET to /api/v1/users/user-1/keys; returns []*APIKeyMeta; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/users/user-1/keys\":\n    w.WriteHeader(200)\n    w.Write(json([{\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListUserKeys(context.Background(), \"user-1\")\nassert err == nil\nassert len(keys) == 1\nassert keys[0].KeyID == \"k1\""
+    },
+    {
+      "id": "TS-12-65",
+      "requirement_id": "12-REQ-8.11",
+      "kind": "integration",
+      "description": "RevokeUserKey sends DELETE to /users/{userID}/keys/{keyID} and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/users/user-1/keys/key-1 returning 204"
+      ],
+      "input": "client.RevokeUserKey(ctx, \"user-1\", \"key-1\")",
+      "expected": "DELETE to /api/v1/users/user-1/keys/key-1; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/users/user-1/keys/key-1\":\n    w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RevokeUserKey(context.Background(), \"user-1\", \"key-1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-66",
+      "requirement_id": "12-REQ-8.12",
+      "kind": "integration",
+      "description": "ListUserTokens sends GET to /users/{userID}/tokens and decodes the bare JSON array into []*PAT.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users/user-1/tokens returning a JSON array"
+      ],
+      "input": "client.ListUserTokens(ctx, \"user-1\")",
+      "expected": "GET to /api/v1/users/user-1/tokens; returns []*PAT; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/users/user-1/tokens\":\n    w.WriteHeader(200)\n    w.Write(json([{\"token_id\":\"t1\",\"name\":\"ci\",\"permissions\":[\"read\"],\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\ntokens, err = client.ListUserTokens(context.Background(), \"user-1\")\nassert err == nil\nassert len(tokens) == 1"
+    },
+    {
+      "id": "TS-12-67",
+      "requirement_id": "12-REQ-8.13",
+      "kind": "integration",
+      "description": "RevokeUserToken sends DELETE to /users/{userID}/tokens/{tokenID} and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/users/user-1/tokens/t1 returning 204"
+      ],
+      "input": "client.RevokeUserToken(ctx, \"user-1\", \"t1\")",
+      "expected": "DELETE to /api/v1/users/user-1/tokens/t1; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/users/user-1/tokens/t1\":\n    w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RevokeUserToken(context.Background(), \"user-1\", \"t1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-68",
+      "requirement_id": "12-REQ-9.1",
+      "kind": "integration",
+      "description": "CreateOrg sends POST to /orgs with JSON body and returns *Organization on 201.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/orgs returning 201 with Organization JSON"
+      ],
+      "input": "client.CreateOrg(ctx, &CreateOrgRequest{Name: \"Acme\", Slug: \"acme\"})",
+      "expected": "POST to /api/v1/orgs; body contains name and slug; returns *Organization; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/orgs\":\n    w.WriteHeader(201)\n    w.Write(json({\"id\":\"org1\",\"name\":\"Acme\",\"slug\":\"acme\",\"url\":null,\"status\":\"active\",\"created_at\":\"2024-01-01T00:00:00Z\",\"updated_at\":\"2024-01-01T00:00:00Z\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\norg, err = client.CreateOrg(context.Background(), &CreateOrgRequest{Name:\"Acme\",Slug:\"acme\"})\nassert err == nil\nassert org.ID == \"org1\"\nassert org.Slug == \"acme\""
+    },
+    {
+      "id": "TS-12-69",
+      "requirement_id": "12-REQ-9.2",
+      "kind": "integration",
+      "description": "ListOrgs appends include_blocked=true query parameter when IncludeBlocked is true.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/orgs that captures query parameters"
+      ],
+      "input": "client.ListOrgs(ctx, &ListOrgsOptions{IncludeBlocked: true})",
+      "expected": "Request URL contains include_blocked=true; returns []*Organization; nil error",
+      "assertion_pseudocode": "var capturedQuery string\nserver = httptest.NewServer(func(w, r):\n  capturedQuery = r.URL.RawQuery\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: true})\nassert capturedQuery contains \"include_blocked=true\""
+    },
+    {
+      "id": "TS-12-70",
+      "requirement_id": "12-REQ-9.3",
+      "kind": "integration",
+      "description": "ListOrgs sends GET without include_blocked query parameter when options is nil or IncludeBlocked is false.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/orgs that captures query parameters"
+      ],
+      "input": "client.ListOrgs(ctx, nil) and client.ListOrgs(ctx, &ListOrgsOptions{IncludeBlocked: false})",
+      "expected": "Neither request URL contains include_blocked; returns []*Organization",
+      "assertion_pseudocode": "var capturedQueries []string\nserver = httptest.NewServer(func(w, r):\n  capturedQueries.append(r.URL.RawQuery)\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListOrgs(context.Background(), nil)\nclient.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: false})\nassert capturedQueries[0] does NOT contain \"include_blocked\"\nassert capturedQueries[1] does NOT contain \"include_blocked\""
+    },
+    {
+      "id": "TS-12-71",
+      "requirement_id": "12-REQ-9.4",
+      "kind": "integration",
+      "description": "GetOrg sends GET to /orgs/{id} and returns *Response[Organization] on success.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/orgs/org-1 returning 200 with Organization JSON"
+      ],
+      "input": "client.GetOrg(ctx, \"org-1\")",
+      "expected": "GET to /api/v1/orgs/org-1; resp.Data.ID == \"org-1\"; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/orgs/org-1\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"org-1\",\"name\":\"Acme\",\"slug\":\"acme\",\"url\":null,\"status\":\"active\",\"created_at\":\"2024-01-01T00:00:00Z\",\"updated_at\":\"2024-01-01T00:00:00Z\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetOrg(context.Background(), \"org-1\")\nassert err == nil\nassert resp.Data.ID == \"org-1\""
+    },
+    {
+      "id": "TS-12-72",
+      "requirement_id": "12-REQ-9.5",
+      "kind": "integration",
+      "description": "UpdateOrg sends PATCH to /orgs/{id} with JSON body and returns *Organization.",
+      "preconditions": [
+        "A running httptest.Server at PATCH /api/v1/orgs/org-1 returning 200 with Organization JSON"
+      ],
+      "input": "client.UpdateOrg(ctx, \"org-1\", &UpdateOrgRequest{Name: ptr(\"NewName\")})",
+      "expected": "PATCH to /api/v1/orgs/org-1; body contains name; returns *Organization; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"PATCH\" && r.URL.Path == \"/api/v1/orgs/org-1\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"org-1\",\"name\":\"NewName\",\"slug\":\"acme\",\"url\":null,\"status\":\"active\",\"created_at\":\"2024-01-01T00:00:00Z\",\"updated_at\":\"2024-01-01T00:00:00Z\"}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nname = \"NewName\"\norg, err = client.UpdateOrg(context.Background(), \"org-1\", &UpdateOrgRequest{Name: &name})\nassert err == nil\nassert org.Name == \"NewName\""
+    },
+    {
+      "id": "TS-12-73",
+      "requirement_id": "12-REQ-9.6",
+      "kind": "integration",
+      "description": "DeleteOrg sends DELETE to /orgs/{id} and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/orgs/org-1 returning 204"
+      ],
+      "input": "client.DeleteOrg(ctx, \"org-1\")",
+      "expected": "DELETE to /api/v1/orgs/org-1; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/orgs/org-1\":\n    w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.DeleteOrg(context.Background(), \"org-1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-74",
+      "requirement_id": "12-REQ-9.7",
+      "kind": "integration",
+      "description": "BlockOrg sends POST to /orgs/{id}/block with no body and returns *Organization.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/orgs/org-1/block returning 200 with Organization JSON"
+      ],
+      "input": "client.BlockOrg(ctx, \"org-1\")",
+      "expected": "POST to /api/v1/orgs/org-1/block; returns *Organization; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/orgs/org-1/block\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"org-1\",\"status\":\"blocked\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\norg, err = client.BlockOrg(context.Background(), \"org-1\")\nassert err == nil\nassert org.Status == \"blocked\""
+    },
+    {
+      "id": "TS-12-75",
+      "requirement_id": "12-REQ-9.8",
+      "kind": "integration",
+      "description": "UnblockOrg sends POST to /orgs/{id}/unblock with no body and returns *Organization.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/orgs/org-1/unblock returning 200 with Organization JSON"
+      ],
+      "input": "client.UnblockOrg(ctx, \"org-1\")",
+      "expected": "POST to /api/v1/orgs/org-1/unblock; returns *Organization; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/orgs/org-1/unblock\":\n    w.WriteHeader(200)\n    w.Write(json({\"id\":\"org-1\",\"status\":\"active\",...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\norg, err = client.UnblockOrg(context.Background(), \"org-1\")\nassert err == nil\nassert org.Status == \"active\""
+    },
+    {
+      "id": "TS-12-76",
+      "requirement_id": "12-REQ-9.9",
+      "kind": "integration",
+      "description": "ListOrgMembers sends GET to /orgs/{orgID}/members and decodes the bare JSON array into []*User.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/orgs/org-1/members returning a JSON array of User"
+      ],
+      "input": "client.ListOrgMembers(ctx, \"org-1\")",
+      "expected": "GET to /api/v1/orgs/org-1/members; returns []*User; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/orgs/org-1/members\":\n    w.WriteHeader(200)\n    w.Write(json([{\"id\":\"u1\",\"username\":\"alice\",...}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nmembers, err = client.ListOrgMembers(context.Background(), \"org-1\")\nassert err == nil\nassert len(members) == 1\nassert members[0].ID == \"u1\""
+    },
+    {
+      "id": "TS-12-77",
+      "requirement_id": "12-REQ-9.10",
+      "kind": "integration",
+      "description": "AddOrgMember sends PUT to /orgs/{orgID}/members/{userID} with no body and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at PUT /api/v1/orgs/org-1/members/user-1 returning 204"
+      ],
+      "input": "client.AddOrgMember(ctx, \"org-1\", \"user-1\")",
+      "expected": "PUT to /api/v1/orgs/org-1/members/user-1; no request body; nil error",
+      "assertion_pseudocode": "var capturedMethod, capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedMethod = r.Method\n  capturedPath = r.URL.Path\n  w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.AddOrgMember(context.Background(), \"org-1\", \"user-1\")\nassert err == nil\nassert capturedMethod == \"PUT\"\nassert capturedPath == \"/api/v1/orgs/org-1/members/user-1\""
+    },
+    {
+      "id": "TS-12-78",
+      "requirement_id": "12-REQ-9.11",
+      "kind": "integration",
+      "description": "RemoveOrgMember sends DELETE to /orgs/{orgID}/members/{userID} and returns nil error on 204.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/orgs/org-1/members/user-1 returning 204"
+      ],
+      "input": "client.RemoveOrgMember(ctx, \"org-1\", \"user-1\")",
+      "expected": "DELETE to /api/v1/orgs/org-1/members/user-1; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"DELETE\" && r.URL.Path == \"/api/v1/orgs/org-1/members/user-1\":\n    w.WriteHeader(204)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RemoveOrgMember(context.Background(), \"org-1\", \"user-1\")\nassert err == nil"
+    },
+    {
+      "id": "TS-12-79",
+      "requirement_id": "12-REQ-10.1",
+      "kind": "integration",
+      "description": "GetProviders sends GET to mountPoint+'/auth/providers' and decodes the bare JSON array into []*OAuthProvider.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/auth/providers returning a JSON array of OAuthProvider"
+      ],
+      "input": "client.GetProviders(ctx)",
+      "expected": "GET to /api/v1/auth/providers; returns []*OAuthProvider; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"GET\" && r.URL.Path == \"/api/v1/auth/providers\":\n    w.WriteHeader(200)\n    w.Write(json([{\"name\":\"github\",\"authorize_url\":\"https://github.com/login/oauth/authorize\"}]))\n)\nclient = NewClient(server.URL)\nproviders, err = client.GetProviders(context.Background())\nassert err == nil\nassert len(providers) == 1\nassert providers[0].Name == \"github\""
+    },
+    {
+      "id": "TS-12-80",
+      "requirement_id": "12-REQ-10.2",
+      "kind": "integration",
+      "description": "ExchangeOAuthCode sends POST to mountPoint+'/auth/callback' with JSON body and returns *AuthCallbackResponse.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/auth/callback returning 200 with AuthCallbackResponse JSON"
+      ],
+      "input": "client.ExchangeOAuthCode(ctx, &AuthCallbackRequest{Provider: \"github\", Code: \"code123\", RedirectURI: \"http://localhost/cb\"})",
+      "expected": "POST to /api/v1/auth/callback; body contains provider, code, redirect_uri; returns *AuthCallbackResponse with User and APIKey; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.Method == \"POST\" && r.URL.Path == \"/api/v1/auth/callback\":\n    w.WriteHeader(200)\n    w.Write(json({\"user\":{\"id\":\"u1\",\"username\":\"alice\",...},\"api_key\":{\"key\":\"secret\",\"key_id\":\"k1\",\"expires_at\":null}}))\n)\nclient = NewClient(server.URL)\nresp, err = client.ExchangeOAuthCode(context.Background(), &AuthCallbackRequest{Provider:\"github\",Code:\"code123\",RedirectURI:\"http://localhost/cb\"})\nassert err == nil\nassert resp.User.ID == \"u1\"\nassert resp.APIKey.Key == \"secret\""
+    },
+    {
+      "id": "TS-12-81",
+      "requirement_id": "12-REQ-11.1",
+      "kind": "integration",
+      "description": "Healthz sends GET to baseURL+'/healthz' without the mount point and returns *HealthResponse.",
+      "preconditions": [
+        "A running httptest.Server at GET /healthz returning 200 with HealthResponse JSON"
+      ],
+      "input": "client.Healthz(ctx) with a custom mount point configured",
+      "expected": "GET to /healthz (not /api/v1/healthz); returns *HealthResponse with Status; nil error",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL, WithMountPoint(\"/api/v1\"))\nresp, err = client.Healthz(context.Background())\nassert err == nil\nassert resp.Status == \"ok\"\nassert capturedPath == \"/healthz\""
+    },
+    {
+      "id": "TS-12-82",
+      "requirement_id": "12-REQ-11.2",
+      "kind": "integration",
+      "description": "Readyz sends GET to baseURL+'/readyz' without the mount point and returns *HealthResponse.",
+      "preconditions": [
+        "A running httptest.Server at GET /readyz returning 200 with HealthResponse JSON"
+      ],
+      "input": "client.Readyz(ctx)",
+      "expected": "GET to /readyz (not /api/v1/readyz); returns *HealthResponse with Status; nil error",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json({\"status\":\"ok\"}))\n)\nclient = NewClient(server.URL)\nresp, err = client.Readyz(context.Background())\nassert err == nil\nassert resp.Status == \"ok\"\nassert capturedPath == \"/readyz\""
+    },
+    {
+      "id": "TS-12-83",
+      "requirement_id": "12-REQ-11.3",
+      "kind": "integration",
+      "description": "Version sends GET to baseURL+'/version' without the mount point and returns *VersionResponse.",
+      "preconditions": [
+        "A running httptest.Server at GET /version returning 200 with VersionResponse JSON"
+      ],
+      "input": "client.Version(ctx)",
+      "expected": "GET to /version; returns *VersionResponse with Version, BuildTime, Commit, MountPoint; nil error",
+      "assertion_pseudocode": "var capturedPath string\nserver = httptest.NewServer(func(w, r):\n  capturedPath = r.URL.Path\n  w.WriteHeader(200)\n  w.Write(json({\"version\":\"1.0.0\",\"build_time\":\"2024-01-01\",\"commit\":\"abc123\",\"mount_point\":\"/api/v1\"}))\n)\nclient = NewClient(server.URL)\nresp, err = client.Version(context.Background())\nassert err == nil\nassert resp.Version == \"1.0.0\"\nassert capturedPath == \"/version\""
+    },
+    {
+      "id": "TS-12-84",
+      "requirement_id": "12-REQ-12.1",
+      "kind": "unit",
+      "description": "ListUsers constructs query parameters using url.Values; include_blocked=true appears when IncludeBlocked is true.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users capturing raw query"
+      ],
+      "input": "client.ListUsers(ctx, &ListUsersOptions{IncludeBlocked: true})",
+      "expected": "RawQuery == \"include_blocked=true\"",
+      "assertion_pseudocode": "var capturedQuery string\nserver = httptest.NewServer(func(w, r):\n  capturedQuery = r.URL.RawQuery\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListUsers(context.Background(), &ListUsersOptions{IncludeBlocked: true})\nassert capturedQuery == \"include_blocked=true\""
+    },
+    {
+      "id": "TS-12-85",
+      "requirement_id": "12-REQ-12.2",
+      "kind": "unit",
+      "description": "ListOrgs constructs query parameters using url.Values; include_blocked=true appears when IncludeBlocked is true.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/orgs capturing raw query"
+      ],
+      "input": "client.ListOrgs(ctx, &ListOrgsOptions{IncludeBlocked: true})",
+      "expected": "RawQuery == \"include_blocked=true\"",
+      "assertion_pseudocode": "var capturedQuery string\nserver = httptest.NewServer(func(w, r):\n  capturedQuery = r.URL.RawQuery\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nclient.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: true})\nassert capturedQuery == \"include_blocked=true\""
+    },
+    {
+      "id": "TS-12-86",
+      "requirement_id": "12-REQ-12.3",
+      "kind": "unit",
+      "description": "ListUsersOptions is defined as a struct with at minimum IncludeBlocked bool and is accepted by ListUsers as a pointer.",
+      "preconditions": [
+        "The apikit package compiles"
+      ],
+      "input": "Compile: opts := &ListUsersOptions{IncludeBlocked: true}; client.ListUsers(ctx, opts)",
+      "expected": "Package compiles without errors; ListUsersOptions struct is accessible in apikit package",
+      "assertion_pseudocode": "// Compilation check via go build ./...\nopts = &ListUsersOptions{IncludeBlocked: true}\nassert opts.IncludeBlocked == true\n// type assertion: ListUsers accepts *ListUsersOptions"
+    },
+    {
+      "id": "TS-12-87",
+      "requirement_id": "12-REQ-12.4",
+      "kind": "unit",
+      "description": "ListOrgsOptions is defined as a struct with at minimum IncludeBlocked bool and is accepted by ListOrgs as a pointer.",
+      "preconditions": [
+        "The apikit package compiles"
+      ],
+      "input": "Compile: opts := &ListOrgsOptions{IncludeBlocked: true}; client.ListOrgs(ctx, opts)",
+      "expected": "Package compiles without errors; ListOrgsOptions struct is accessible in apikit package",
+      "assertion_pseudocode": "// Compilation check via go build ./...\nopts = &ListOrgsOptions{IncludeBlocked: true}\nassert opts.IncludeBlocked == true\n// type assertion: ListOrgs accepts *ListOrgsOptions"
+    },
+    {
+      "id": "TS-12-88",
+      "requirement_id": "12-REQ-13.1",
+      "kind": "unit",
+      "description": "List endpoint responses are decoded directly from bare JSON arrays into Go slices without a wrapper struct.",
+      "preconditions": [
+        "A running httptest.Server returning a bare JSON array [{...},{...}] at GET /api/v1/user/keys"
+      ],
+      "input": "client.ListKeys(ctx) against server returning [{\"key_id\":\"k1\",...},{\"key_id\":\"k2\",...}]",
+      "expected": "Returns []*APIKeyMeta with 2 elements; no error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json([{\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null},{\"key_id\":\"k2\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListKeys(context.Background())\nassert err == nil\nassert len(keys) == 2\nassert keys[0].KeyID == \"k1\"\nassert keys[1].KeyID == \"k2\""
+    },
+    {
+      "id": "TS-12-89",
+      "requirement_id": "12-REQ-13.2",
+      "kind": "unit",
+      "description": "List endpoint returns a non-nil empty slice when the server returns an empty JSON array [].",
+      "preconditions": [
+        "A running httptest.Server returning [] at GET /api/v1/user/keys"
+      ],
+      "input": "client.ListKeys(ctx) against server returning []",
+      "expected": "Returns non-nil []*APIKeyMeta with length 0; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListKeys(context.Background())\nassert err == nil\nassert keys != nil\nassert len(keys) == 0"
+    },
+    {
+      "id": "TS-12-90",
+      "requirement_id": "12-REQ-14.1",
+      "kind": "unit",
+      "description": "Client uses Go's default HTTP redirect policy, which follows up to 10 redirects automatically.",
+      "preconditions": [
+        "A running httptest.Server that issues a single redirect from /redirect to /healthz"
+      ],
+      "input": "client making a request that results in one redirect",
+      "expected": "Request follows the redirect and returns the final response; no redirect error for <=10 redirects",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  if r.URL.Path == \"/healthz\":\n    w.WriteHeader(200)\n    w.Write(json({\"status\":\"ok\"}))\n  else:\n    http.Redirect(w, r, \"/healthz\", 302)\n)\nclient = NewClient(server.URL)\n// Trigger a redirecting endpoint indirectly by calling a health endpoint\n// that the mock redirects\nresp, err = client.Healthz(context.Background())\nassert err == nil OR err contains redirect limit info"
+    },
+    {
+      "id": "TS-12-91",
+      "requirement_id": "12-REQ-14.2",
+      "kind": "unit",
+      "description": "Client supports custom redirect policy by injecting a configured *http.Client via WithHTTPClient.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(url, WithHTTPClient(&http.Client{CheckRedirect: func(...) error { return http.ErrUseLastResponse }}))",
+      "expected": "Client uses the provided *http.Client with its custom CheckRedirect; SDK does not override it",
+      "assertion_pseudocode": "customHTTP = &http.Client{\n  CheckRedirect: func(req *http.Request, via []*http.Request) error {\n    return http.ErrUseLastResponse\n  },\n}\nclient = NewClient(\"https://example.com\", WithHTTPClient(customHTTP))\nassert client.httpClient == customHTTP\nassert client.httpClient.CheckRedirect != nil"
+    },
+    {
+      "id": "TS-12-92",
+      "requirement_id": "12-REQ-15.1",
+      "kind": "unit",
+      "description": "All SDK source files are in the root apikit package and all exported types are importable by external consumers.",
+      "preconditions": [
+        "The apikit Go module is available"
+      ],
+      "input": "go build ./... from the module root",
+      "expected": "Package builds without errors; all SDK types (Client, NewClient, APIError, etc.) are in package apikit",
+      "assertion_pseudocode": "// Run: go build ./...\n// Run: grep '^package' sdk.go sdk_types.go sdk_user.go sdk_admin.go sdk_auth.go sdk_health.go sdk_errors.go\n// All lines must be 'package apikit'\nassert all SDK files declare 'package apikit'\nassert no SDK file is under internal/ directory"
+    },
+    {
+      "id": "TS-12-93",
+      "requirement_id": "12-REQ-15.2",
+      "kind": "unit",
+      "description": "The package requires at minimum Go 1.18 for generics support required by Response[T] and compiles on Go 1.18+.",
+      "preconditions": [
+        "Go 1.18+ toolchain is available"
+      ],
+      "input": "go build ./... with Go >= 1.18",
+      "expected": "Package compiles without errors; go.mod go directive is >= 1.18",
+      "assertion_pseudocode": "// Run: go build ./...\n// Run: grep '^go ' go.mod\n// go directive version must be >= 1.18\nassert goVersion >= \"1.18\"\nassert compilationSucceeds()\n// Response[T] must be syntactically valid generic type"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-12-P1",
+      "property_id": "12-PROP-1",
+      "validates": [
+        "12-REQ-1.3"
+      ],
+      "description": "Client immutability guarantees concurrent safety: no field is modified after NewClient returns, making all concurrent method calls safe.",
+      "for_any_strategy": "Any Client c = NewClient(baseURL, opts...); any combination of 10-100 goroutines calling any subset of client methods simultaneously",
+      "invariant_check": "Run go test -race ./...; for any set of concurrent method calls on c, the race detector reports no data races. All goroutines observe the same apiKey, mountPoint, requestID, baseURL, and httpClient values set during construction."
+    },
+    {
+      "id": "TS-12-P2",
+      "property_id": "12-PROP-2",
+      "validates": [
+        "12-REQ-6.3",
+        "12-REQ-6.E1",
+        "12-REQ-6.E2"
+      ],
+      "description": "APIError classification is exhaustive: for any HTTP response with status code >= 400, do always returns a non-nil *APIError with Code set to the HTTP status code.",
+      "for_any_strategy": "Any HTTP status code S in range [400, 599]; response body may be valid JSON envelope, HTML, plain text, or empty",
+      "invariant_check": "For each generated (S, body) pair: call any SDK method against a mock server returning (S, body); assert errors.As(err, &apiErr) == true; assert apiErr.Code == S; assert apiErr != nil. The loop terminates after at most len(tested_status_codes) * len(body_types) iterations."
+    },
+    {
+      "id": "TS-12-P3",
+      "property_id": "12-PROP-3",
+      "validates": [
+        "12-REQ-3.E1",
+        "12-REQ-3.E2",
+        "12-REQ-3.E3",
+        "12-REQ-3.E4",
+        "12-REQ-6.5"
+      ],
+      "description": "Plain errors always wrap their underlying cause: errors.Unwrap returns non-nil for every plain error category returned by do.",
+      "for_any_strategy": "Any plain error scenario: network failure (connection refused), context cancellation, context deadline exceeded, JSON decode error on 2xx, marshal error",
+      "invariant_check": "For each error scenario: trigger the error condition; call errors.Unwrap(err); assert result != nil; assert errors.As(err, &apiErr) == false. Each scenario executes in bounded time (single request, no retry)."
+    },
+    {
+      "id": "TS-12-P4",
+      "property_id": "12-PROP-4",
+      "validates": [
+        "12-REQ-1.7",
+        "12-REQ-1.8",
+        "12-REQ-1.9"
+      ],
+      "description": "Mount point normalization is idempotent: for any path string p, applying WithMountPoint(p) always produces a mountPoint starting with exactly one '/' and with no trailing '/'.",
+      "for_any_strategy": "Any string p from the set: \"\", \"api\", \"/api\", \"api/\", \"/api/\", \"api/v1\", \"/api/v1\", \"/api/v1/\", \"//api\", \"/api//v1\"",
+      "invariant_check": "For each p: c = NewClient(\"http://example.com\", WithMountPoint(p)); assert c.mountPoint starts with exactly one '/'; assert c.mountPoint does not end with '/' (unless mountPoint == '/'). Applying WithMountPoint(c.mountPoint) again produces the same result (idempotent)."
+    },
+    {
+      "id": "TS-12-P5",
+      "property_id": "12-PROP-5",
+      "validates": [
+        "12-REQ-4.2",
+        "12-REQ-11.1",
+        "12-REQ-11.2",
+        "12-REQ-11.3"
+      ],
+      "description": "Health probes always bypass mount point: regardless of mountPoint configuration, Healthz/Readyz/Version always use baseURL + path.",
+      "for_any_strategy": "Any Client c with any mountPoint value (default, custom, empty, deeply nested); any baseURL value",
+      "invariant_check": "For each (baseURL, mountPoint) pair: set up mock server; call Healthz(ctx), Readyz(ctx), Version(ctx); capture request paths; assert captured path == '/healthz', '/readyz', '/version' respectively; assert captured path does NOT contain mountPoint prefix (unless mountPoint == '/')."
+    },
+    {
+      "id": "TS-12-P6",
+      "property_id": "12-PROP-6",
+      "validates": [
+        "12-REQ-13.2",
+        "12-REQ-7.E1",
+        "12-REQ-8.E1"
+      ],
+      "description": "List endpoints return non-nil empty slice for empty server response: for any list method, a server returning [] produces a non-nil Go slice of length 0.",
+      "for_any_strategy": "Any list endpoint method (ListKeys, ListTokens, ListUsers, ListOrgs, ListOrgMembers, ListUserKeys, ListUserTokens, ListUserOrgs, GetProviders); mock server returns []",
+      "invariant_check": "For each list method m: configure mock server to return 200 with body []; call m(ctx, ...); assert result != nil; assert len(result) == 0; assert err == nil. Bounded by number of list methods (constant)."
+    },
+    {
+      "id": "TS-12-P7",
+      "property_id": "12-PROP-7",
+      "validates": [
+        "12-REQ-3.3",
+        "12-REQ-3.5"
+      ],
+      "description": "Authorization header is set iff apiKey is non-empty: for any request, the Authorization header is present with 'Bearer <key>' if and only if apiKey is non-empty.",
+      "for_any_strategy": "Any Client c with apiKey = any string value (empty or non-empty); any SDK method call",
+      "invariant_check": "For apiKey == \"\": captured request has no Authorization header. For apiKey == k (non-empty): captured request has Authorization == \"Bearer \" + k. Test at least 5 different non-empty key values and the empty string. No iteration is unbounded."
+    },
+    {
+      "id": "TS-12-P8",
+      "property_id": "12-PROP-8",
+      "validates": [
+        "12-REQ-5.2",
+        "12-REQ-3.10",
+        "12-REQ-5.E1"
+      ],
+      "description": "ErrNotModified is returned iff the server responds with 304: for any conditional GET method, ErrNotModified appears if and only if the server status is 304, and the *Response[T] is always nil in that case.",
+      "for_any_strategy": "Any conditional GET method (GetUser, GetUserByID, GetToken, GetOrg); server response status is any value from {200, 304}",
+      "invariant_check": "For status 200: assert errors.Is(err, ErrNotModified) == false; assert resp != nil. For status 304: assert errors.Is(err, ErrNotModified) == true; assert resp == nil. Bounded by 4 methods * 2 status values = 8 test executions."
+    },
+    {
+      "id": "TS-12-P9",
+      "property_id": "12-PROP-9",
+      "validates": [
+        "12-REQ-2.4",
+        "12-REQ-7.2"
+      ],
+      "description": "UpdateUserRequest always includes full_name in JSON body: for any call to UpdateUser or UpdateUserByID with any FullName value, the JSON body always contains the 'full_name' key.",
+      "for_any_strategy": "Any string value for UpdateUserRequest.FullName, including empty string, whitespace-only, very long strings, and strings with special characters",
+      "invariant_check": "For each FullName value v: marshal &UpdateUserRequest{FullName: v}; assert JSON output contains key '\"full_name\"'; assert JSON output does not omit the key. Also capture server-side request body in integration test and assert 'full_name' key is always present."
+    },
+    {
+      "id": "TS-12-P10",
+      "property_id": "12-PROP-10",
+      "validates": [
+        "12-REQ-2.1"
+      ],
+      "description": "Canonical types are defined exactly once in the apikit package: each domain type name appears in exactly one Go file.",
+      "for_any_strategy": "All Go source files in the apikit package",
+      "invariant_check": "For each type name in [User, APIKeyMeta, APIKeyFull, PAT, PATFull, Organization, OAuthProvider, AuthCallbackRequest, AuthCallbackResponse, CreateUserRequest, UpdateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, HealthResponse, VersionResponse, RevokeKeyResponse, ListUsersOptions, ListOrgsOptions]: grep for 'type <Name> struct' across all *.go files in package; count == 1. go build ./... succeeds with no redeclaration errors."
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-12-E1",
+      "requirement_id": "12-REQ-1.E1",
+      "kind": "unit",
+      "description": "NewClient accepts an empty baseURL without panicking and returns a non-nil *Client; subsequent requests fail at the transport layer with a plain error.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"\"); then client.Healthz(ctx)",
+      "expected": "NewClient returns non-nil *Client; Healthz returns non-nil plain error (not *APIError); no panic",
+      "assertion_pseudocode": "client = NewClient(\"\")\nassert client != nil\n\nresp, err = client.Healthz(context.Background())\nassert err != nil\nassert resp == nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false\n// no panic during either call"
+    },
+    {
+      "id": "TS-12-E2",
+      "requirement_id": "12-REQ-1.E2",
+      "kind": "unit",
+      "description": "NewClient strips the trailing slash from baseURL to prevent double slashes in constructed URLs.",
+      "preconditions": [
+        "A running httptest.Server that captures request URL paths"
+      ],
+      "input": "NewClient(\"http://localhost:PORT/\", WithAPIKey(\"key\")); client.GetUser(ctx)",
+      "expected": "client.baseURL has no trailing slash; request URL path is \"/api/v1/user\" not \"//api/v1/user\"",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nbaseURLWithSlash = server.URL + \"/\"\nclient = NewClient(baseURLWithSlash, WithAPIKey(\"key\"))\nassert client.baseURL == server.URL  // no trailing slash\nresp, err = client.GetUser(context.Background())\nassert err == nil  // URL construction is valid"
+    },
+    {
+      "id": "TS-12-E3",
+      "requirement_id": "12-REQ-3.E1",
+      "kind": "integration",
+      "description": "do returns a plain error wrapping the JSON decode error when the server returns 200 with an empty body; errors.Unwrap returns non-nil and errors.As for *APIError returns false.",
+      "preconditions": [
+        "A running httptest.Server returning 200 with an empty body"
+      ],
+      "input": "client.GetUser(ctx) against server returning HTTP 200 with empty body",
+      "expected": "err != nil; errors.Unwrap(err) != nil; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  // write nothing\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetUser(context.Background())\nassert resp == nil\nassert err != nil\nassert errors.Unwrap(err) != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-E4",
+      "requirement_id": "12-REQ-3.E2",
+      "kind": "unit",
+      "description": "do returns a plain error wrapping the JSON marshal error before any HTTP request is made when request body encoding fails.",
+      "preconditions": [
+        "The apikit package is compiled and importable; a mock type that fails json.Marshal is available"
+      ],
+      "input": "A CreateTokenRequest-equivalent that causes json.Marshal to fail (e.g., a struct with a chan field via internal mechanism)",
+      "expected": "err != nil; errors.Unwrap(err) != nil; no HTTP request is sent; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "// This is best tested via an internal/whitebox approach or by replacing\n// the body encoder. Since all SDK types are valid JSON, this edge case\n// is validated by ensuring the do method wraps marshal errors.\n// Test with a mock that injects a marshal-failing body:\nvar requestMade bool\nserver = httptest.NewServer(func(w, r):\n  requestMade = true\n  w.WriteHeader(200)\n)\n// Simulate marshal failure via internal test hook or\n// verify that fmt.Errorf(\"%w\", marshalErr) is used in do\nassert when marshal fails: err != nil\nassert errors.Unwrap(err) != nil\nassert requestMade == false\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-E5",
+      "requirement_id": "12-REQ-3.E3",
+      "kind": "integration",
+      "description": "do returns a plain error wrapping the network error on connection refused; errors.As for *APIError returns false.",
+      "preconditions": [
+        "A port on localhost that refuses connections (server is closed before request)"
+      ],
+      "input": "client.GetUser(ctx) against a server that has been shut down",
+      "expected": "err != nil; errors.Unwrap(err) != nil; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "server = httptest.NewServer(handler)\nurl = server.URL\nserver.Close()\nclient = NewClient(url, WithAPIKey(\"key\"))\n_, err = client.GetUser(context.Background())\nassert err != nil\nassert errors.Unwrap(err) != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-E6",
+      "requirement_id": "12-REQ-3.E4",
+      "kind": "integration",
+      "description": "do returns a plain error wrapping context.Canceled when the context is cancelled before or during the request.",
+      "preconditions": [
+        "A running httptest.Server that sleeps 200ms before responding"
+      ],
+      "input": "ctx cancelled immediately before request; client.GetUser(ctx)",
+      "expected": "err != nil; errors.Is(err, context.Canceled) or errors.Unwrap(err) returns context.Canceled; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  time.Sleep(200 * time.Millisecond)\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nctx, cancel = context.WithCancel(context.Background())\ncancel()\n_, err = client.GetUser(ctx)\nassert err != nil\nassert errors.Is(err, context.Canceled)\nassert errors.Unwrap(err) != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-E7",
+      "requirement_id": "12-REQ-3.E5",
+      "kind": "unit",
+      "description": "Client constructed with empty baseURL does not panic; requests fail at HTTP transport with a plain error.",
+      "preconditions": [
+        "The apikit package is compiled and importable"
+      ],
+      "input": "NewClient(\"\"); client.ListOrgs(ctx, nil)",
+      "expected": "No panic; err != nil; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "client = NewClient(\"\")\nassert client != nil\n_, err = client.ListOrgs(context.Background(), nil)\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false\n// no panic occurred"
+    },
+    {
+      "id": "TS-12-E8",
+      "requirement_id": "12-REQ-4.E1",
+      "kind": "unit",
+      "description": "Trailing slash stripping in NewClient ensures no double slashes appear in constructed URLs.",
+      "preconditions": [
+        "A running httptest.Server that validates request URLs have no double slashes"
+      ],
+      "input": "NewClient(server.URL + \"/\", WithAPIKey(\"key\")); client.GetUser(ctx)",
+      "expected": "Request URL path is \"/api/v1/user\" without double slashes; no \"//api/v1/user\"",
+      "assertion_pseudocode": "var capturedURL string\nserver = httptest.NewServer(func(w, r):\n  capturedURL = r.URL.String()\n  w.WriteHeader(200)\n  w.Write(json(User{...}))\n)\nclient = NewClient(server.URL + \"/\", WithAPIKey(\"key\"))\nclient.GetUser(context.Background())\nassert capturedURL does NOT contain \"//api\"\nassert capturedURL == \"/api/v1/user\""
+    },
+    {
+      "id": "TS-12-E9",
+      "requirement_id": "12-REQ-5.E1",
+      "kind": "unit",
+      "description": "On HTTP 304, *Response[T] is nil and ErrNotModified is returned; caller must check errors.Is before dereferencing.",
+      "preconditions": [
+        "A running httptest.Server returning 304"
+      ],
+      "input": "client.GetOrg(ctx, \"org-1\", WithIfNoneMatch(\"\\\"v1\\\"\")) against server returning 304",
+      "expected": "resp == nil; errors.Is(err, ErrNotModified) == true; dereferencing resp would panic (nil)",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(304)\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nresp, err = client.GetOrg(context.Background(), \"org-1\", WithIfNoneMatch(\"\\\"v1\\\"\"))\nassert resp == nil\nassert errors.Is(err, ErrNotModified)\n// Demonstrate nil-safety: accessing resp.Data would panic\n// Callers must guard with: if errors.Is(err, ErrNotModified) { ... }"
+    },
+    {
+      "id": "TS-12-E10",
+      "requirement_id": "12-REQ-6.E1",
+      "kind": "integration",
+      "description": "do returns *APIError with Code=502 and Message from HTTP status text when server returns a 502 with an HTML body.",
+      "preconditions": [
+        "A running httptest.Server returning 502 with HTML body"
+      ],
+      "input": "client.GetUser(ctx) against server returning 502 '<html>Bad Gateway</html>'",
+      "expected": "*APIError with Code==502; Message contains 'Bad Gateway'; errors.As returns true",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(502)\n  w.Write([]byte(\"<html>Bad Gateway</html>\"))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\n_, err = client.GetUser(context.Background())\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true\nassert apiErr.Code == 502\nassert apiErr.Message contains \"Bad Gateway\" OR apiErr.Message == \"Bad Gateway\""
+    },
+    {
+      "id": "TS-12-E11",
+      "requirement_id": "12-REQ-6.E2",
+      "kind": "integration",
+      "description": "do returns *APIError with Code from HTTP status and Message from status text when the server returns a 4xx with a plain-text body.",
+      "preconditions": [
+        "A running httptest.Server returning 413 with a plain-text body"
+      ],
+      "input": "client.CreateToken(ctx, req) against server returning 413 'Request Entity Too Large'",
+      "expected": "*APIError with Code==413; Message from HTTP status text; errors.As returns true",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(413)\n  w.Write([]byte(\"Request Entity Too Large\"))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\n_, err = client.CreateToken(context.Background(), &CreateTokenRequest{Name:\"t\",Permissions:[\"read\"]})\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true\nassert apiErr.Code == 413"
+    },
+    {
+      "id": "TS-12-E12",
+      "requirement_id": "12-REQ-6.E3",
+      "kind": "unit",
+      "description": "errors.As returns false when using a non-*APIError target type against an error from the SDK.",
+      "preconditions": [
+        "A running httptest.Server returning a 404 error"
+      ],
+      "input": "errors.As(err, &someOtherErrorType) where err is an *APIError",
+      "expected": "errors.As returns false for incompatible target types",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(404)\n  w.Write(json({\"error\":{\"code\":404,\"message\":\"not found\"}}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\n_, err = client.GetUser(context.Background())\nassert err != nil\n\n// errors.As with unrelated type returns false\nvar ioErr *os.PathError\nassert errors.As(err, &ioErr) == false\n\n// But errors.As with *APIError returns true\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true"
+    },
+    {
+      "id": "TS-12-E13",
+      "requirement_id": "12-REQ-7.E1",
+      "kind": "integration",
+      "description": "ListKeys returns a non-nil empty []*APIKeyMeta slice when the server returns an empty JSON array.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/keys returning []"
+      ],
+      "input": "client.ListKeys(ctx) against server returning []",
+      "expected": "keys != nil; len(keys) == 0; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListKeys(context.Background())\nassert err == nil\nassert keys != nil\nassert len(keys) == 0"
+    },
+    {
+      "id": "TS-12-E14",
+      "requirement_id": "12-REQ-7.E2",
+      "kind": "integration",
+      "description": "RevokeToken returns an *APIError when the server returns a non-204 error status.",
+      "preconditions": [
+        "A running httptest.Server at DELETE /api/v1/user/tokens/t1 returning 403 with JSON error envelope"
+      ],
+      "input": "client.RevokeToken(ctx, \"t1\") against server returning 403",
+      "expected": "err != nil; errors.As(err, &apiErr) == true; apiErr.Code == 403",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(403)\n  w.Write(json({\"error\":{\"code\":403,\"message\":\"Forbidden\"}}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nerr = client.RevokeToken(context.Background(), \"t1\")\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true\nassert apiErr.Code == 403"
+    },
+    {
+      "id": "TS-12-E15",
+      "requirement_id": "12-REQ-8.E1",
+      "kind": "integration",
+      "description": "ListUsers returns a non-nil empty []*User slice when the server returns an empty JSON array.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/users returning []"
+      ],
+      "input": "client.ListUsers(ctx, nil) against server returning []",
+      "expected": "users != nil; len(users) == 0; nil error",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json([]))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nusers, err = client.ListUsers(context.Background(), nil)\nassert err == nil\nassert users != nil\nassert len(users) == 0"
+    },
+    {
+      "id": "TS-12-E16",
+      "requirement_id": "12-REQ-9.E1",
+      "kind": "unit",
+      "description": "AddOrgMember with a non-URL-safe userID does not escape the value; the resulting malformed URL causes a transport-layer error.",
+      "preconditions": [
+        "The apikit package is compiled; no running server needed for this error path"
+      ],
+      "input": "client.AddOrgMember(ctx, \"org-1\", \"user/with/slashes\")",
+      "expected": "Either a plain error from HTTP transport or the request reaches the server with slashes verbatim (path traversal); errors.As(err, &apiErr) == false on transport error",
+      "assertion_pseudocode": "// The SDK does not escape path parameters\n// Callers are responsible for URL-safe IDs\nclient = NewClient(\"http://localhost:19999\", WithAPIKey(\"key\"))  // no server\nerr = client.AddOrgMember(context.Background(), \"org-1\", \"user/with/slashes\")\n// Either transport error or malformed path — no *APIError\nif err != nil:\n  var apiErr *APIError\n  assert errors.As(err, &apiErr) == false"
+    },
+    {
+      "id": "TS-12-E17",
+      "requirement_id": "12-REQ-10.E1",
+      "kind": "integration",
+      "description": "ExchangeOAuthCode returns *APIError with Code and Message when the server returns a 4xx error.",
+      "preconditions": [
+        "A running httptest.Server at POST /api/v1/auth/callback returning 400 with JSON error envelope"
+      ],
+      "input": "client.ExchangeOAuthCode(ctx, &AuthCallbackRequest{Provider: \"github\", Code: \"bad\", RedirectURI: \"http://localhost/cb\"})",
+      "expected": "*APIError with Code==400; nil *AuthCallbackResponse; errors.As returns true",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(400)\n  w.Write(json({\"error\":{\"code\":400,\"message\":\"Invalid code\"}}))\n)\nclient = NewClient(server.URL)\nresp, err = client.ExchangeOAuthCode(context.Background(), &AuthCallbackRequest{Provider:\"github\",Code:\"bad\",RedirectURI:\"http://localhost/cb\"})\nassert resp == nil\nassert err != nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == true\nassert apiErr.Code == 400\nassert apiErr.Message == \"Invalid code\""
+    },
+    {
+      "id": "TS-12-E18",
+      "requirement_id": "12-REQ-11.E1",
+      "kind": "integration",
+      "description": "Healthz returns a plain error wrapping the network error when the server is unreachable; errors.As for *APIError returns false.",
+      "preconditions": [
+        "No server running at the target address"
+      ],
+      "input": "client.Healthz(ctx) against a non-existent server address",
+      "expected": "err != nil; errors.As(err, &apiErr) == false; errors.Unwrap(err) != nil",
+      "assertion_pseudocode": "client = NewClient(\"http://localhost:19998\", WithAPIKey(\"key\"))\nresp, err = client.Healthz(context.Background())\nassert err != nil\nassert resp == nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false\nassert errors.Unwrap(err) != nil"
+    },
+    {
+      "id": "TS-12-E19",
+      "requirement_id": "12-REQ-13.E1",
+      "kind": "integration",
+      "description": "do returns a plain error when a list endpoint server returns a wrapped JSON object instead of a bare array.",
+      "preconditions": [
+        "A running httptest.Server at GET /api/v1/user/keys returning {\"keys\":[...]} instead of [...]"
+      ],
+      "input": "client.ListKeys(ctx) against server returning {\"keys\":[{\"key_id\":\"k1\",...}]}",
+      "expected": "err != nil (JSON decode failure); nil []*APIKeyMeta; errors.As(err, &apiErr) == false",
+      "assertion_pseudocode": "server = httptest.NewServer(func(w, r):\n  w.WriteHeader(200)\n  w.Write(json({\"keys\":[{\"key_id\":\"k1\",\"created_at\":\"2024-01-01T00:00:00Z\",\"expires_at\":null,\"revoked_at\":null}]}))\n)\nclient = NewClient(server.URL, WithAPIKey(\"key\"))\nkeys, err = client.ListKeys(context.Background())\nassert err != nil\nassert keys == nil\nvar apiErr *APIError\nassert errors.As(err, &apiErr) == false"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-12-SMOKE-1",
+      "execution_path_id": "12-PATH-1",
+      "description": "Authenticated GET with ETag capture and conditional re-fetch: first call captures ETag, second call with If-None-Match returns ErrNotModified.",
+      "trigger": "Call NewClient with API key, then GetUser twice — once to capture ETag, once with WithIfNoneMatch",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.Client.GetUser",
+        "apikit.WithAPIKey",
+        "apikit.WithIfNoneMatch",
+        "apikit.Response[User].ETag"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (mock API server returning User JSON on 200 and 304)"
+      ],
+      "expected_effects": [
+        "First GetUser(ctx) returns non-nil *Response[User] with Data and ETag header; nil error",
+        "resp.ETag() returns the ETag value from the response header",
+        "Second GetUser(ctx, WithIfNoneMatch(etag)) returns nil *Response[User] and ErrNotModified",
+        "errors.Is(err, ErrNotModified) == true",
+        "Requests use Authorization: Bearer <key> header",
+        "Both requests target path /api/v1/user"
+      ]
+    },
+    {
+      "id": "TS-12-SMOKE-2",
+      "execution_path_id": "12-PATH-2",
+      "description": "API error handling on 4xx: GetUserByID with a non-existent ID returns typed *APIError inspectable via errors.As.",
+      "trigger": "Call NewClient with API key, then GetUserByID with a non-existent ID against a mock server returning 404",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.Client.GetUserByID",
+        "apikit.APIError"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (returns 404 with {\"error\":{\"code\":404,\"message\":\"User not found\"}})"
+      ],
+      "expected_effects": [
+        "GetUserByID returns nil *Response[User] and non-nil error",
+        "errors.As(err, &apiErr) == true",
+        "apiErr.Code == 404",
+        "apiErr.Message == \"User not found\"",
+        "err.Error() == \"API error 404: User not found\"",
+        "Request targets path /api/v1/users/nonexistent-id"
+      ]
+    },
+    {
+      "id": "TS-12-SMOKE-3",
+      "execution_path_id": "12-PATH-3",
+      "description": "List organizations with include_blocked filter returning an empty result: verify query parameter construction and empty slice handling.",
+      "trigger": "Call NewClient with admin API key, then ListOrgs with IncludeBlocked: true against a mock server returning []",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.Client.ListOrgs",
+        "apikit.ListOrgsOptions",
+        "apikit.WithAPIKey"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (captures query parameters; returns 200 with [])"
+      ],
+      "expected_effects": [
+        "Request URL contains query parameter include_blocked=true",
+        "Request method is GET to /api/v1/orgs",
+        "Returns non-nil empty []*Organization slice (len == 0)",
+        "nil error",
+        "Request includes Authorization: Bearer <adminKey>"
+      ]
+    },
+    {
+      "id": "TS-12-SMOKE-4",
+      "execution_path_id": "12-PATH-4",
+      "description": "Organization member management end-to-end: CreateOrg, AddOrgMember, ListOrgMembers sequence.",
+      "trigger": "Call NewClient with admin API key; call CreateOrg, AddOrgMember, ListOrgMembers in sequence",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.Client.CreateOrg",
+        "apikit.Client.AddOrgMember",
+        "apikit.Client.ListOrgMembers",
+        "apikit.CreateOrgRequest"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (POST /orgs returns 201 Organization; PUT /orgs/{id}/members/{uid} returns 204; GET /orgs/{id}/members returns 200 with [User])"
+      ],
+      "expected_effects": [
+        "CreateOrg sends POST to /api/v1/orgs with JSON body; returns *Organization on 201",
+        "AddOrgMember sends PUT to /api/v1/orgs/{org.ID}/members/{userID} with no body; returns nil error on 204",
+        "ListOrgMembers sends GET to /api/v1/orgs/{org.ID}/members; returns []*User with the added member",
+        "All requests include Authorization: Bearer <adminKey>",
+        "No data corruption across sequential calls"
+      ]
+    },
+    {
+      "id": "TS-12-SMOKE-5",
+      "execution_path_id": "12-PATH-5",
+      "description": "Custom mount point configuration end-to-end: API requests use custom mount point while health probes bypass it.",
+      "trigger": "Call NewClient with WithMountPoint(\"api/v2\"); call GetUser (API endpoint) and Healthz (health probe)",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.WithMountPoint",
+        "apikit.Client.GetUser",
+        "apikit.Client.Healthz"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (captures request paths; handles both /api/v2/user and /healthz)"
+      ],
+      "expected_effects": [
+        "WithMountPoint(\"api/v2\") normalizes to \"/api/v2\" (leading slash added)",
+        "GetUser request path is /api/v2/user",
+        "Healthz request path is /healthz (no /api/v2 prefix)",
+        "Both calls succeed with valid responses",
+        "No double slashes in any constructed URL"
+      ]
+    },
+    {
+      "id": "TS-12-SMOKE-6",
+      "execution_path_id": "12-PATH-6",
+      "description": "OAuth code exchange flow: GetProviders discovers providers, ExchangeOAuthCode exchanges the code for a User and APIKeyFull.",
+      "trigger": "Call NewClient without API key; call GetProviders then ExchangeOAuthCode",
+      "real_components": [
+        "apikit.NewClient",
+        "apikit.Client.GetProviders",
+        "apikit.Client.ExchangeOAuthCode",
+        "apikit.AuthCallbackRequest",
+        "apikit.AuthCallbackResponse"
+      ],
+      "mockable": [
+        "net/http/httptest.Server (GET /auth/providers returns [OAuthProvider]; POST /auth/callback returns AuthCallbackResponse with User and APIKeyFull)"
+      ],
+      "expected_effects": [
+        "GetProviders sends GET to /api/v1/auth/providers; decodes bare JSON array into []*OAuthProvider",
+        "ExchangeOAuthCode sends POST to /api/v1/auth/callback with JSON body containing provider, code, redirect_uri",
+        "ExchangeOAuthCode returns *AuthCallbackResponse with User.ID and APIKey.Key populated",
+        "No Authorization header is sent (unauthenticated client)",
+        "nil errors from both calls"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

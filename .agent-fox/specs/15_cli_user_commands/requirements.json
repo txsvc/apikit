@@ -1,0 +1,1378 @@
+{
+  "$schema": null,
+  "spec_id": "15",
+  "spec_name": "cli_user_commands",
+  "schema_version": 1,
+  "introduction": "This spec defines all non-admin CLI commands for the `akc` tool — login (OAuth flow orchestration), user profile management, API key lifecycle, PAT management, and organization browsing — each implemented as a thin Cobra command delegating to the Go SDK (spec 12) and built on the CLI Core infrastructure (spec 13). Note: requirements referencing Go SDK client methods (e.g., `client.GetProviders`, `client.ExchangeOAuthCode`) are based on PRD descriptions and should be cross-checked against the installed spec-12 SDK before implementation.",
+  "glossary": {
+    "1:1 command": "A CLI command that maps directly to a single SDK method and API endpoint. All commands in this spec except `login` are 1:1 commands.",
+    "APIKeyFull": "Go SDK type representing a full API key including its plaintext key string, returned by `RefreshKey`.",
+    "APIKeyMeta": "Go SDK type representing API key metadata (no plaintext key), returned by `ListKeys`.",
+    "AuthCallbackRequest": "Go SDK type used to exchange an OAuth authorization code for credentials, containing provider, code, redirect_uri, and expires fields.",
+    "CreateTokenRequest": "Go SDK type carrying name, permissions, and expires fields for creating a Personal Access Token.",
+    "ENDPOINT_URL": "Environment variable that supplies the server endpoint URL, recognized by CLI Core alongside the `--endpoint-url` flag and config file.",
+    "NewAuthenticatedClient": "CLI Core function that constructs an authenticated SDK client. Reads `endpoint_url` and `api_key` from config/env/flags and pre-validates that `api_key` is present before returning. Returns exit code 2 if `api_key` is absent.",
+    "NewKeysCmd": "Constructor function returning the Cobra parent command for `akc keys`.",
+    "NewLoginCmd": "Constructor function returning the Cobra command for `akc login`.",
+    "NewOrgsCmd": "Constructor function returning the Cobra parent command for `akc orgs`.",
+    "NewTokensCmd": "Constructor function returning the Cobra parent command for `akc tokens`.",
+    "NewUserCmd": "Constructor function returning the Cobra parent command for `akc user`.",
+    "Organization": "Go SDK type representing an organization object.",
+    "PAT": "Go SDK type representing a Personal Access Token's metadata (no plaintext token value).",
+    "PATFull": "Go SDK type representing a Personal Access Token including its plaintext token value — available only at creation time.",
+    "Response": "Go SDK generic wrapper type `Response[T]` whose `.Data` field holds the typed payload returned by certain SDK read methods.",
+    "RevokeKeyResponse": "Go SDK type representing the response from revoking an API key.",
+    "UpdateUserRequest": "Go SDK type carrying the `full_name` field for updating a user's profile.",
+    "api_key": "The full API key string stored in the config file, formatted as `<prefix>_<key_id>_<secret>`. Used for authenticating SDK calls.",
+    "atomic write": "Write to a temporary file then `os.Rename` into place, preventing partial writes from corrupting the config file. Implemented by CLI Core (spec 13).",
+    "authorize_url": "The OAuth authorization URL returned by the server's provider discovery endpoint. May already contain query parameters such as `client_id` that must be preserved.",
+    "callback server": "A temporary local HTTP server started by the `login` command to receive the OAuth redirect from the browser. Binds to `127.0.0.1` on a random port and returns HTTP 404 for all paths except `/callback`.",
+    "codeCh": "A `chan string` used by the OAuth callback server handler to send the authorization code to the main login goroutine on successful callback.",
+    "composite command": "A CLI command that involves multiple API calls; distinguished from 1:1 commands in `help --json` by the `composite: true` flag. In this spec, only `login` is composite.",
+    "config-mutating command": "A CLI command that writes to the config file (path defined by CLI Core, spec 13). In this spec: `login`, `keys refresh`, `keys revoke`. All use atomic writes via CLI Core's save function.",
+    "endpoint_url": "The base URL of the apikit server, stored in the config file and used to construct the SDK client.",
+    "errCh": "A `chan error` used by the OAuth callback server handler to send an error to the main login goroutine on state mismatch or callback failure.",
+    "helpers.go": "File in `internal/cli/` containing shared helper functions: `validateExpires`, `parsePermissions`, `parseKeyID`, `openBrowser`.",
+    "key_id": "The identifier segment of an API key. Extracted from the full key string by parsing `<prefix>_<key_id>_<secret>` — the penultimate segment when split on `_`. Parsing implemented in `helpers.go`.",
+    "loginOpts": "Struct or parameter set passed to `runLogin` encapsulating the login command's configuration (provider, expires, endpoint URL, etc.).",
+    "loginTimeoutSeconds": "Package-level constant in `login.go` set to 120, representing the maximum seconds the login command waits for the browser OAuth callback before timing out.",
+    "openBrowser": "Shared helper function in `helpers.go` that opens a URL in the default browser using platform-appropriate commands.",
+    "parseKeyID": "Shared helper function in `helpers.go` that extracts `key_id` from a full API key string.",
+    "parsePermissions": "Shared helper function in `helpers.go` that splits a comma-separated permissions string, trims whitespace, and returns a non-empty slice or an error.",
+    "redirect_uri": "The local callback URL (`http://127.0.0.1:<port>/callback`) passed to the OAuth authorization URL and to `ExchangeOAuthCode` so the server can verify it matches the original request.",
+    "runLogin": "Internal helper function implementing the login OAuth flow. Accepts a `timeout time.Duration` parameter so tests can reduce the timeout without modifying the `loginTimeoutSeconds` constant.",
+    "state parameter": "A cryptographically random string (64 hex chars) included in the OAuth authorization request and validated on callback to prevent CSRF attacks.",
+    "user_id": "The authenticated user's identifier stored in the config file after a successful login.",
+    "validateExpires": "Shared helper function in `helpers.go` that validates an `--expires` integer is one of 0, 30, 60, or 90.",
+    "xdg-open": "Linux command used to open a URL in the system's default browser.",
+    "*cobra.Command": "The Cobra library type representing a CLI command. Each command constructor returns a `*cobra.Command` configured with Use, Short, Long, Args, RunE, and flags.",
+    "Use": "Cobra `*cobra.Command` field specifying the command's usage string (e.g., `\"show\"`).",
+    "Short": "Cobra `*cobra.Command` field providing a short one-line description of the command.",
+    "Long": "Cobra `*cobra.Command` field providing a detailed description of the command.",
+    "Args": "Cobra `*cobra.Command` field specifying positional argument validation (e.g., `cobra.ExactArgs(1)`).",
+    "RunE": "Cobra `*cobra.Command` field holding the function that executes when the command is invoked. Returns `error`.",
+    "ExactArgs(1)": "Cobra argument validator requiring exactly one positional argument.",
+    "MarkFlagRequired": "Cobra method that marks a flag as required, causing Cobra to return an error if the flag is not provided.",
+    "init()": "Go `init()` function — not used for command registration in this spec; commands are registered explicitly via `AddCommand` in `main.go`.",
+    "rootCmd.AddCommand": "Cobra method that registers child commands on the root command.",
+    "cli.NewLoginCmd()": "Call to `NewLoginCmd()` from the `internal/cli` package, returning the login Cobra command.",
+    "cli.NewUserCmd()": "Call to `NewUserCmd()` from the `internal/cli` package, returning the user parent Cobra command.",
+    "cli.NewKeysCmd()": "Call to `NewKeysCmd()` from the `internal/cli` package, returning the keys parent Cobra command.",
+    "cli.NewTokensCmd()": "Call to `NewTokensCmd()` from the `internal/cli` package, returning the tokens parent Cobra command.",
+    "cli.NewOrgsCmd()": "Call to `NewOrgsCmd()` from the `internal/cli` package, returning the orgs parent Cobra command.",
+    "composite: true": "Help-json annotation value indicating a composite command (multiple API calls).",
+    "method: null": "Help-json annotation value indicating no single HTTP method (composite command).",
+    "path: null": "Help-json annotation value indicating no single API path (composite command).",
+    "auth: \"none\"": "Help-json annotation value indicating no authentication required.",
+    "auth: \"api_key\"": "Help-json annotation value indicating API key authentication is required.",
+    "--provider": "Login command flag specifying the OAuth provider name (default: `\"github\"`).",
+    "--expires": "Flag specifying credential expiry in days; valid values are `0`, `30`, `60`, `90` (default: `90`).",
+    "--full-name": "User update command flag specifying the user's display name (required).",
+    "--name": "Tokens create command flag specifying the PAT's human-readable label (required).",
+    "--permissions": "Tokens create command flag specifying comma-separated `resource_type:action` pairs (required).",
+    "\"github\"": "Default value for the `--provider` flag on the login command.",
+    "0": "Valid `--expires` value meaning no expiry (indefinite).",
+    "30": "Valid `--expires` value meaning 30-day expiry.",
+    "60": "Valid `--expires` value meaning 60-day expiry.",
+    "90": "Valid `--expires` value meaning 90-day expiry (default).",
+    "{}": "Empty JSON object printed to stdout by commands that have no response body (e.g., `tokens revoke`).",
+    "apikit.NewClient(endpointURL)": "SDK constructor call creating an unauthenticated client for the login flow.",
+    "client.GetProviders(ctx)": "SDK method fetching available OAuth providers from the server.",
+    "client.ExchangeOAuthCode(ctx, &apikit.AuthCallbackRequest{Provider: provider, Code: code, RedirectURI: redirectURI, Expires: &expires})": "SDK method exchanging an OAuth authorization code for user credentials.",
+    "client.GetUser(ctx)": "SDK method fetching the authenticated user's profile.",
+    "client.UpdateUser(ctx, &apikit.UpdateUserRequest{FullName: fullName})": "SDK method updating the authenticated user's full name.",
+    "client.ListKeys(ctx)": "SDK method listing the authenticated user's API keys.",
+    "client.RefreshKey(ctx, keyID)": "SDK method refreshing the authenticated user's API key (new secret, same key_id).",
+    "client.RevokeKey(ctx, keyID)": "SDK method revoking the authenticated user's API key.",
+    "client.ListTokens(ctx)": "SDK method listing the authenticated user's PATs.",
+    "client.CreateToken(ctx, &apikit.CreateTokenRequest{Name: name, Permissions: perms, Expires: &expires})": "SDK method creating a new PAT with the specified name, permissions, and expiry.",
+    "client.GetToken(ctx, tokenID)": "SDK method fetching metadata for a specific PAT.",
+    "client.RevokeToken(ctx, tokenID)": "SDK method revoking a specific PAT (returns only error, HTTP 204).",
+    "client.ListUserOrgs(ctx)": "SDK method listing organizations the authenticated user belongs to.",
+    "client.GetOrg(ctx, id)": "SDK method fetching a specific organization's details.",
+    "client.ListOrgMembers(ctx, id)": "SDK method listing members of a specific organization.",
+    "RefreshKey": "SDK method on `*Client` that refreshes an API key, returning `*APIKeyFull`.",
+    "response.Data": "The typed payload field on `Response[T]`, accessed after SDK methods that return `*Response[T]`.",
+    "response.User": "The `User` field on `AuthCallbackResponse`, containing the authenticated user's profile after login.",
+    "response.User.ID": "The UUID of the authenticated user, extracted from the login response for config storage.",
+    "response.APIKey.Key": "The full API key string from the login response, stored in the config file.",
+    "response.Key": "The full API key string from the `APIKeyFull` response, used to update the config file after key refresh.",
+    "[]*APIKeyMeta": "Go slice type returned by `ListKeys` — array of API key metadata objects.",
+    "[]*Organization": "Go slice type returned by `ListUserOrgs` — array of organization objects.",
+    "[]*PAT": "Go slice type returned by `ListTokens` — array of PAT metadata objects.",
+    "[]*User": "Go slice type returned by `ListOrgMembers` — array of user objects.",
+    "[]string": "Go slice type for parsed permissions list.",
+    "User": "Go SDK type representing a user profile (canonical shared type from `sdk_types.go`).",
+    "error": "Go's built-in error interface, returned by SDK methods and helper functions.",
+    "crypto/rand": "Go standard library package for cryptographically secure random number generation.",
+    "crypto/rand.Read(32 bytes)": "Call to read 32 cryptographically random bytes for OAuth state parameter generation.",
+    "hex.EncodeToString": "Go standard library function encoding bytes as a lowercase hexadecimal string.",
+    "state": "The OAuth CSRF protection parameter — a 64-char hex string generated by the CLI and validated on callback.",
+    "client_id": "OAuth client identifier — already present in the `authorize_url` from the server; the CLI does not append it separately.",
+    "response_type=code": "OAuth query parameter requesting an authorization code grant.",
+    "/callback": "The HTTP path on the local callback server that handles the OAuth redirect.",
+    "/favicon.ico": "Example of a stray browser request path that the callback server returns HTTP 404 for.",
+    "GET /callback": "The HTTP request method and path handled by the local callback server for OAuth redirects.",
+    "127.0.0.1:0": "TCP address binding the callback server to localhost on a random available port.",
+    "http://127.0.0.1:<port>/callback": "The OAuth redirect URI constructed from the callback server's dynamically assigned port.",
+    "codeCh chan string": "Go channel used by the callback handler to send the authorization code to the main goroutine.",
+    "errCh chan error": "Go channel used by the callback handler to send errors (e.g., state mismatch) to the main goroutine.",
+    "ctx.Done()": "Go context cancellation signal — fires when the login timeout expires or the context is cancelled.",
+    "context.WithTimeout(context.Background(), 5*time.Second)": "Fresh Go context with 5-second deadline used for graceful callback server shutdown.",
+    "time.Duration": "Go standard library type representing a duration of time.",
+    "http.Server.Shutdown": "Go standard library method for gracefully shutting down an HTTP server.",
+    "parseKeyID(apiKey)": "Call to the `parseKeyID` helper function to extract `key_id` from a full API key string.",
+    "parsePermissions(permissionsFlag)": "Call to the `parsePermissions` helper function to split and validate the permissions flag value.",
+    "parts[len(parts)-2]": "Go expression extracting the penultimate element from a slice — used to get `key_id` from a key split on `_`.",
+    "_": "Underscore character used as the delimiter in API key format `<prefix>_<key_id>_<secret>`.",
+    "exec.Command(\"open\", url)": "Go `os/exec` call to open a URL in the default browser on macOS.",
+    "exec.Command(\"xdg-open\", url)": "Go `os/exec` call to open a URL in the default browser on Linux.",
+    "runtime.GOOS == \"darwin\"": "Go runtime check for macOS platform.",
+    "runtime.GOOS == \"linux\"": "Go runtime check for Linux platform.",
+    "json.MarshalIndent": "Go standard library function for producing indented JSON output.",
+    "os.Rename": "Go standard library function used in atomic writes — renames a temp file into place.",
+    "runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error": "Signature of the internal login helper function accepting a configurable timeout for testability.",
+    "runLogin(ctx, time.Duration(loginTimeoutSeconds)*time.Second, opts)": "Call to `runLogin` from the Cobra `RunE` function, passing the constant-derived timeout.",
+    "loginTimeoutSeconds = 120": "Package-level constant defining the default login timeout as 120 seconds.",
+    "time.Duration(loginTimeoutSeconds) * time.Second": "Expression converting the integer timeout constant to a `time.Duration` for `runLogin`.",
+    "id": "Positional argument representing a UUID (org ID) in `orgs show` and `orgs members` commands.",
+    "token_id": "Positional argument representing a PAT identifier in `tokens show` and `tokens revoke` commands.",
+    "resource_type:action": "Permission format used by PATs — a colon-separated pair (e.g., `users:read`, `orgs:read`).",
+    ",": "Comma delimiter used to separate permissions in the `--permissions` flag value.",
+    "akc login": "CLI command that runs the OAuth login flow (composite command).",
+    "akc tokens revoke": "CLI command that revokes a specific PAT by `token_id`.",
+    "<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>": "Verbatim HTML response returned by the callback server on successful OAuth callback.",
+    "<html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>": "Verbatim HTML response returned by the callback server on OAuth state mismatch (HTTP 400).",
+    "\"Opening browser for authentication...\"": "Stderr message printed before attempting to open the browser for OAuth login.",
+    "\"Open this URL in your browser: <url>\"": "Stderr fallback message printed when the browser cannot be opened automatically.",
+    "\"Logged in as <username>\"": "Stderr success message printed after a successful OAuth login.",
+    "\"API key refreshed\"": "Stderr message printed after a successful API key refresh.",
+    "\"API key revoked. Run 'akc login' to obtain a new key.\"": "Stderr message printed after revoking the API key.",
+    "\"Token created. Save the token value — it cannot be retrieved later.\"": "Stderr warning printed after creating a PAT, reminding the user to save the plaintext token.",
+    "\"Token <token_id> revoked\"": "Stderr message printed after revoking a PAT.",
+    "{\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}": "Error envelope JSON for invalid `--expires` flag value (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"endpoint URL is required for login \\u2014 use --endpoint-url or set ENDPOINT_URL\"}}": "Error envelope JSON for missing endpoint URL during login (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"--permissions must not be empty\"}}": "Error envelope JSON for empty `--permissions` flag value (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}": "Error envelope JSON for an API key string that cannot be parsed (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"login timed out waiting for browser callback\"}}": "Error envelope JSON for login timeout (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"OAuth state mismatch \\u2014 possible CSRF attack\"}}": "Error envelope JSON for OAuth state validation failure (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"failed to save config: <detail>\"}}": "Error envelope JSON template for config write failure (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"no API key configured \\u2014 run 'akc login' first\"}}": "Error envelope JSON for missing API key on authenticated commands (exit code 2).",
+    "{\"error\":{\"code\":404,\"message\":\"provider '<name>' not found\"}}": "Error envelope JSON for an unrecognized OAuth provider (exit code 1).",
+    "{\"error\":{\"code\":2,\"message\":\"OAuth state mismatch — possible CSRF attack\"}}": "Error envelope JSON for OAuth state validation failure (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL\"}}": "Error envelope JSON for missing endpoint URL during login (exit code 2).",
+    "{\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}": "Error envelope JSON for missing API key on authenticated commands (exit code 2)."
+  },
+  "requirements": [
+    {
+      "id": "15-REQ-1",
+      "title": "Command Group Registration",
+      "user_story": {
+        "role": "developer embedding akc commands",
+        "goal": "register all command groups with the root command via explicit AddCommand calls in main.go",
+        "benefit": "avoid init() side effects and import cycles while keeping the command tree visible"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "cmd/akc/main.go",
+          "action": "calls `rootCmd.AddCommand` with the results of `cli.NewLoginCmd()`, `cli.NewUserCmd()`, `cli.NewKeysCmd()`, `cli.NewTokensCmd()`, and `cli.NewOrgsCmd()` — no `init()` functions are used for registration",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "each Cobra command constructor",
+          "action": "populates `Use`, `Short`, `Long`, `Args`, `RunE`, flag definitions, and help-json annotations (name, description, method, path, args, flags, auth, composite) on the returned `*cobra.Command`",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "login command metadata",
+          "action": "sets `composite: true`, `method: null`, and `path: null` in its help-json annotation, and `auth: \"none\"`",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-1.4",
+          "ears_pattern": "ubiquitous",
+          "system": "all non-login commands",
+          "action": "set `auth: \"api_key\"` in their help-json annotation and include a non-null HTTP method and API path",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-2",
+      "title": "Login Command — OAuth Flow Orchestration",
+      "user_story": {
+        "role": "user",
+        "goal": "run `akc login` to authenticate via browser-based OAuth and persist credentials",
+        "benefit": "obtain an API key stored in the config file so all subsequent commands work without re-authenticating"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "accepts `--provider` flag (string, default `\"github\"`) and `--expires` flag (int, default `90`, valid values `0`, `30`, `60`, `90`)",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "login command",
+          "action": "constructs an unauthenticated SDK client via `apikit.NewClient(endpointURL)` and calls `client.GetProviders(ctx)` to fetch available OAuth providers",
+          "return_contract": "proceeds to provider lookup; exits with code 1 and error JSON if the SDK call fails",
+          "trigger": "invoked with a valid `endpoint_url` and valid flags"
+        },
+        {
+          "id": "15-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "login command",
+          "action": "searches the list for the requested provider by name; if not found exits with code 1 and error JSON `{\"error\":{\"code\":404,\"message\":\"provider '<name>' not found\"}}`",
+          "return_contract": "exit code 1 with error envelope to stdout if provider absent",
+          "trigger": "provider list returned by the server"
+        },
+        {
+          "id": "15-REQ-2.4",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "generates a 64-character hex `state parameter` using `crypto/rand.Read(32 bytes)` encoded with `hex.EncodeToString`",
+          "return_contract": "64-character lowercase hex string"
+        },
+        {
+          "id": "15-REQ-2.5",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "starts a `callback server` bound to `127.0.0.1:0`, derives `redirect_uri` as `http://127.0.0.1:<port>/callback`, and handles only `GET /callback`; all other paths receive HTTP 404 without triggering shutdown",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-2.6",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "constructs the authorization URL by parsing the provider's `authorize_url`, retrieving its existing query parameters, and adding `redirect_uri`, `state`, and `response_type=code` without overwriting existing parameters and without adding `client_id`",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-2.7",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "prints `\"Opening browser for authentication...\"` to stderr, then opens the authorization URL via `openBrowser`; on `openBrowser` failure prints `\"Open this URL in your browser: <url>\"` to stderr and continues",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-2.8",
+          "ears_pattern": "ubiquitous",
+          "system": "login command",
+          "action": "creates `codeCh chan string` and `errCh chan error`, wraps the flow in `runLogin(ctx, time.Duration(loginTimeoutSeconds)*time.Second, opts)`, and the main goroutine selects on `codeCh`, `errCh`, and `ctx.Done()`",
+          "return_contract": null
+        },
+        {
+          "id": "15-REQ-2.9",
+          "ears_pattern": "event_driven",
+          "system": "callback server handler",
+          "action": "responds with HTTP 200 and the verbatim success HTML `<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>`, then sends the code on `codeCh`",
+          "return_contract": "HTTP 200 with verbatim success HTML; code delivered on `codeCh`",
+          "trigger": "GET /callback request arrives with matching state and a code"
+        },
+        {
+          "id": "15-REQ-2.10",
+          "ears_pattern": "event_driven",
+          "system": "callback server handler",
+          "action": "sends an error on `errCh`, responds with HTTP 400 and the verbatim error HTML `<html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>`; main goroutine cancels context and exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"OAuth state mismatch — possible CSRF attack\"}}`",
+          "return_contract": "HTTP 400 with verbatim state-mismatch HTML to browser; exit code 2 with error envelope to stdout",
+          "trigger": "GET /callback request arrives with a mismatched state"
+        },
+        {
+          "id": "15-REQ-2.11",
+          "ears_pattern": "event_driven",
+          "system": "login command",
+          "action": "calls `client.ExchangeOAuthCode(ctx, &apikit.AuthCallbackRequest{Provider: provider, Code: code, RedirectURI: redirectURI, Expires: &expires})`",
+          "return_contract": "proceeds to config save on success; exits code 1 with error envelope on SDK error",
+          "trigger": "code received on `codeCh`"
+        },
+        {
+          "id": "15-REQ-2.12",
+          "ears_pattern": "event_driven",
+          "system": "login command",
+          "action": "saves `endpoint_url`, `user_id` (from `response.User.ID`), and `api_key` (from `response.APIKey.Key`) to config via CLI Core's atomic write function; prints `response.User` as JSON to stdout; prints `\"Logged in as <username>\"` to stderr",
+          "return_contract": "user JSON to stdout; success message to stderr; exit code 0",
+          "trigger": "successful code exchange response"
+        },
+        {
+          "id": "15-REQ-2.13",
+          "ears_pattern": "event_driven",
+          "system": "login command",
+          "action": "shuts down the `callback server` via `http.Server.Shutdown` using a fresh `context.WithTimeout(context.Background(), 5*time.Second)`",
+          "return_contract": null,
+          "trigger": "graceful completion or error after callback"
+        },
+        {
+          "id": "15-REQ-2.14",
+          "ears_pattern": "state_driven",
+          "system": "login command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"login timed out waiting for browser callback\"}}`",
+          "return_contract": "exit code 2 with timeout error envelope to stdout",
+          "state": "`ctx.Done()` fires before a callback is received"
+        },
+        {
+          "id": "15-REQ-2.15",
+          "ears_pattern": "unwanted",
+          "system": "login command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL\"}}`",
+          "return_contract": "exit code 2 with error envelope to stdout; no API calls made",
+          "error_condition": "`endpoint_url` is absent from flags, env, and config"
+        },
+        {
+          "id": "15-REQ-2.16",
+          "ears_pattern": "unwanted",
+          "system": "login command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}`",
+          "return_contract": "exit code 2 with error envelope to stdout; no API calls made",
+          "error_condition": "`--expires` value is not one of 0, 30, 60, 90"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "15-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "login command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"failed to save config: <detail>\"}}` to stdout; credentials are NOT printed; user must re-run `akc login`",
+          "return_contract": "exit code 2 with config-failure error envelope; no credential output",
+          "error_condition": "config write fails after successful code exchange"
+        },
+        {
+          "id": "15-REQ-2.E2",
+          "ears_pattern": "event_driven",
+          "system": "callback server",
+          "action": "responds with HTTP 404; does not signal `codeCh` or `errCh`; server continues listening",
+          "return_contract": "HTTP 404 to browser; neither channel receives a value",
+          "trigger": "a request arrives at any path other than `/callback` (e.g., `/favicon.ico`)"
+        },
+        {
+          "id": "15-REQ-2.E3",
+          "ears_pattern": "state_driven",
+          "system": "login command",
+          "action": "`runLogin` returns a timeout error; command exits with code 2 and the timeout error envelope; the `callback server` is shut down",
+          "return_contract": "exit code 2 with timeout error envelope; server shut down",
+          "state": "`loginTimeoutSeconds` has elapsed without any valid `/callback` request"
+        },
+        {
+          "id": "15-REQ-2.E4",
+          "ears_pattern": "unwanted",
+          "system": "login command",
+          "action": "prints `\"Open this URL in your browser: <url>\"` to stderr and continues the login flow; browser failure is not fatal",
+          "return_contract": "fallback URL printed to stderr; login flow continues",
+          "error_condition": "`openBrowser` subprocess fails (e.g., no display server)"
+        },
+        {
+          "id": "15-REQ-2.E5",
+          "ears_pattern": "unwanted",
+          "system": "login command",
+          "action": "shutdown uses a fresh `context.WithTimeout(context.Background(), 5*time.Second)` to ensure graceful teardown regardless of the login context state",
+          "return_contract": "server shut down within 5 seconds",
+          "error_condition": "context is cancelled (e.g., after state mismatch) before `http.Server.Shutdown` is called"
+        }
+      ]
+    },
+    {
+      "id": "15-REQ-3",
+      "title": "User Show Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc user show` to retrieve my profile",
+        "benefit": "inspect my current user data without opening a browser or dashboard"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "user show command",
+          "action": "accepts no flags or positional arguments; constructs an authenticated SDK client via `NewAuthenticatedClient`; calls `client.GetUser(ctx)`; prints `response.Data` as indented JSON to stdout",
+          "return_contract": "exit code 0 with `User` JSON to stdout"
+        },
+        {
+          "id": "15-REQ-3.2",
+          "ears_pattern": "unwanted",
+          "system": "user show command",
+          "action": "`NewAuthenticatedClient` returns an error; command exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}` to stdout without making any SDK call",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request",
+          "error_condition": "`api_key` is absent from config/env/flags"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-4",
+      "title": "User Update Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc user update --full-name \"...\"` to change my display name",
+        "benefit": "update profile information from the command line without client-side format constraints"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "user update command",
+          "action": "accepts `--full-name` flag (string, Cobra `MarkFlagRequired`); performs no client-side validation of the value; calls `client.UpdateUser(ctx, &apikit.UpdateUserRequest{FullName: fullName})`; prints the returned `User` as indented JSON to stdout",
+          "return_contract": "exit code 0 with updated `User` JSON to stdout"
+        },
+        {
+          "id": "15-REQ-4.2",
+          "ears_pattern": "unwanted",
+          "system": "user update command",
+          "action": "surfaces the server's error envelope as JSON to stdout and exits with code 1",
+          "return_contract": "exit code 1 with server error envelope JSON to stdout",
+          "error_condition": "server returns a 4xx response (e.g., 422 for empty or invalid name)"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-5",
+      "title": "Keys List Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc keys list` to view all my API keys",
+        "benefit": "audit active keys without accessing the web UI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "keys list command",
+          "action": "accepts no flags or arguments; calls `client.ListKeys(ctx)`; prints the returned `[]*APIKeyMeta` array as indented JSON to stdout",
+          "return_contract": "exit code 0 with `[]*APIKeyMeta` JSON array to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-6",
+      "title": "Keys Refresh Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc keys refresh` to rotate my current API key",
+        "benefit": "get a new API key and have it automatically saved to the config without manual editing"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "keys refresh command",
+          "action": "accepts no flags or arguments; uses `NewAuthenticatedClient` to verify `api_key` presence; calls `parseKeyID(apiKey)` to extract `key_id`; calls `client.RefreshKey(ctx, keyID)`; on success updates `api_key` in config with `response.Key` via CLI Core atomic write; prints `APIKeyFull` as indented JSON to stdout; prints `\"API key refreshed\"` to stderr",
+          "return_contract": "exit code 0 with `APIKeyFull` JSON to stdout; config updated atomically"
+        },
+        {
+          "id": "15-REQ-6.2",
+          "ears_pattern": "unwanted",
+          "system": "keys refresh command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}` before calling the SDK",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request",
+          "error_condition": "`api_key` string has fewer than 3 underscore-delimited segments"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "15-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "keys refresh command",
+          "action": "exits with code 2 and a descriptive error envelope; the new key value is NOT printed",
+          "return_contract": "exit code 2 with config-failure error envelope to stdout",
+          "error_condition": "config write fails after successful `RefreshKey` response"
+        }
+      ]
+    },
+    {
+      "id": "15-REQ-7",
+      "title": "Keys Revoke Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc keys revoke` to invalidate my current API key",
+        "benefit": "immediately revoke access and have the config cleared so the key cannot be accidentally reused"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "keys revoke command",
+          "action": "accepts no flags or arguments; uses `NewAuthenticatedClient` to verify `api_key` presence; calls `parseKeyID(apiKey)` to extract `key_id`; calls `client.RevokeKey(ctx, keyID)`; on success clears `api_key` and `user_id` to empty strings in config via CLI Core atomic write; prints `RevokeKeyResponse` as indented JSON to stdout; prints `\"API key revoked. Run 'akc login' to obtain a new key.\"` to stderr",
+          "return_contract": "exit code 0 with `RevokeKeyResponse` JSON to stdout; `api_key` and `user_id` cleared in config"
+        },
+        {
+          "id": "15-REQ-7.2",
+          "ears_pattern": "unwanted",
+          "system": "keys revoke command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}` before calling the SDK",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request",
+          "error_condition": "`api_key` string has fewer than 3 underscore-delimited segments"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-8",
+      "title": "Tokens List Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc tokens list` to view all my Personal Access Tokens",
+        "benefit": "inspect active PATs from the CLI without accessing the web dashboard"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "tokens list command",
+          "action": "accepts no flags or arguments; calls `client.ListTokens(ctx)`; prints the returned `[]*PAT` array as indented JSON to stdout",
+          "return_contract": "exit code 0 with `[]*PAT` JSON array to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-9",
+      "title": "Tokens Create Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc tokens create --name \"...\" --permissions \"...\" [--expires N]` to create a new PAT",
+        "benefit": "obtain a scoped token for automation, with the plaintext token displayed exactly once"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "tokens create command",
+          "action": "accepts `--name` (string, Cobra `MarkFlagRequired`), `--permissions` (string, Cobra `MarkFlagRequired`, comma-separated), and `--expires` (int, default `90`, valid values `0`, `30`, `60`, `90`); calls `parsePermissions(permissionsFlag)` to produce `[]string`; validates `--expires` via `validateExpires`; calls `client.CreateToken(ctx, &apikit.CreateTokenRequest{Name: name, Permissions: perms, Expires: &expires})`; prints `PATFull` as indented JSON to stdout; prints `\"Token created. Save the token value — it cannot be retrieved later.\"` to stderr",
+          "return_contract": "exit code 0 with `PATFull` JSON to stdout"
+        },
+        {
+          "id": "15-REQ-9.2",
+          "ears_pattern": "unwanted",
+          "system": "tokens create command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"--permissions must not be empty\"}}` without calling the SDK",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request",
+          "error_condition": "`--permissions` resolves to an empty slice after splitting and trimming"
+        },
+        {
+          "id": "15-REQ-9.3",
+          "ears_pattern": "unwanted",
+          "system": "tokens create command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}` without calling the SDK",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request",
+          "error_condition": "`--expires` value is not one of 0, 30, 60, 90"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-10",
+      "title": "Tokens Show Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc tokens show <token_id>` to retrieve metadata for a specific PAT",
+        "benefit": "inspect a token's name, permissions, and expiry without logging into the web dashboard"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "tokens show command",
+          "action": "accepts exactly one positional argument `token_id` (Cobra `ExactArgs(1)`); calls `client.GetToken(ctx, tokenID)`; prints `response.Data` as indented JSON to stdout",
+          "return_contract": "exit code 0 with `PAT` JSON to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-11",
+      "title": "Tokens Revoke Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc tokens revoke <token_id>` to invalidate a specific PAT",
+        "benefit": "immediately revoke a compromised or unnecessary token from the CLI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "tokens revoke command",
+          "action": "accepts exactly one positional argument `token_id` (Cobra `ExactArgs(1)`); calls `client.RevokeToken(ctx, tokenID)` which returns only `error`; on success prints `{}` as JSON to stdout; prints `\"Token <token_id> revoked\"` to stderr",
+          "return_contract": "exit code 0 with `{}` to stdout; revocation message to stderr"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-12",
+      "title": "Orgs List Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc orgs list` to view all organizations I belong to",
+        "benefit": "discover available organizations without accessing the web UI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "orgs list command",
+          "action": "accepts no flags or arguments; calls `client.ListUserOrgs(ctx)`; prints the returned `[]*Organization` array as indented JSON to stdout",
+          "return_contract": "exit code 0 with `[]*Organization` JSON array to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-13",
+      "title": "Orgs Show Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc orgs show <id>` to retrieve details for a specific organization",
+        "benefit": "inspect organization metadata by UUID from the CLI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "orgs show command",
+          "action": "accepts exactly one positional argument `id` (org UUID, Cobra `ExactArgs(1)`); calls `client.GetOrg(ctx, id)`; prints `response.Data` as indented JSON to stdout",
+          "return_contract": "exit code 0 with `Organization` JSON to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-14",
+      "title": "Orgs Members Command",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "run `akc orgs members <id>` to list all members of an organization",
+        "benefit": "audit organization membership from the CLI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "orgs members command",
+          "action": "accepts exactly one positional argument `id` (org UUID, Cobra `ExactArgs(1)`); calls `client.ListOrgMembers(ctx, id)`; prints the returned `[]*User` array as indented JSON to stdout",
+          "return_contract": "exit code 0 with `[]*User` JSON array to stdout"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-15",
+      "title": "Key ID Parsing Helper",
+      "user_story": {
+        "role": "developer",
+        "goal": "use `parseKeyID` from `helpers.go` to extract `key_id` from any valid `api_key` string",
+        "benefit": "avoid duplicating parsing logic across `keys refresh` and `keys revoke` and enable independent unit testing"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-15.1",
+          "ears_pattern": "ubiquitous",
+          "system": "parseKeyID helper",
+          "action": "splits the `api_key` string on `_`, returns `parts[len(parts)-2]` as `key_id` (penultimate segment), handling prefixes with or without embedded underscores",
+          "return_contract": "`(string, error)` — non-empty `key_id` string or error if fewer than 3 segments"
+        },
+        {
+          "id": "15-REQ-15.2",
+          "ears_pattern": "unwanted",
+          "system": "parseKeyID helper",
+          "action": "returns an error indicating invalid key format",
+          "return_contract": "`(\"\", error)` with descriptive error message",
+          "error_condition": "the `api_key` string has fewer than 3 underscore-delimited segments"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-16",
+      "title": "Expires Validation Helper",
+      "user_story": {
+        "role": "developer",
+        "goal": "use `validateExpires` from `helpers.go` for consistent `--expires` validation across login and tokens create",
+        "benefit": "guarantee the same valid values (0, 30, 60, 90) are enforced in all commands without duplication"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-16.1",
+          "ears_pattern": "ubiquitous",
+          "system": "validateExpires helper",
+          "action": "accepts an int and returns nil if the value is one of 0, 30, 60, 90; returns a descriptive error otherwise",
+          "return_contract": "`error` — nil for valid values; non-nil for all others"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-17",
+      "title": "Permissions Parsing Helper",
+      "user_story": {
+        "role": "developer",
+        "goal": "use `parsePermissions` from `helpers.go` to split and validate the `--permissions` flag value",
+        "benefit": "ensure consistent parsing and empty-check logic across commands and enable independent unit tests"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-17.1",
+          "ears_pattern": "ubiquitous",
+          "system": "parsePermissions helper",
+          "action": "splits the input string on `,`, trims whitespace from each entry, discards empty entries, and returns the resulting `[]string`",
+          "return_contract": "`([]string, error)` — non-empty slice on success; error if resulting slice is empty"
+        },
+        {
+          "id": "15-REQ-17.2",
+          "ears_pattern": "unwanted",
+          "system": "parsePermissions helper",
+          "action": "returns an error; individual entry format (e.g., `resource_type:action`) is not validated",
+          "return_contract": "`(nil, error)` with message `\"--permissions must not be empty\"`",
+          "error_condition": "input is an empty string or contains only whitespace and commas"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-18",
+      "title": "Browser Open Helper",
+      "user_story": {
+        "role": "developer",
+        "goal": "use `openBrowser` from `helpers.go` to open a URL in the user's default browser",
+        "benefit": "isolate platform-specific browser launch logic for testability and avoid duplication"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-18.1",
+          "ears_pattern": "ubiquitous",
+          "system": "openBrowser helper",
+          "action": "on `runtime.GOOS == \"darwin\"` runs `exec.Command(\"open\", url)`; on `runtime.GOOS == \"linux\"` runs `exec.Command(\"xdg-open\", url)`; returns an error if the command fails",
+          "return_contract": "`error` — nil on success; non-nil if the platform command fails or GOOS is unsupported"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-19",
+      "title": "Authentication Pre-validation for All Authenticated Commands",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "receive an immediate exit code 2 when `api_key` is missing, before any network request is made",
+        "benefit": "get fast, clear feedback that login is required rather than a confusing server 401 error"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-19.1",
+          "ears_pattern": "ubiquitous",
+          "system": "all authenticated commands (user, keys, tokens, orgs)",
+          "action": "delegate client construction to `NewAuthenticatedClient`; if `api_key` is absent, the command exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}` without making any SDK call",
+          "return_contract": "exit code 2 with error envelope to stdout; no network request"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-20",
+      "title": "JSON Output Formatting",
+      "user_story": {
+        "role": "consumer of akc output",
+        "goal": "receive all successful command output as indented JSON to stdout",
+        "benefit": "parse and process results programmatically without additional formatting steps"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-20.1",
+          "ears_pattern": "ubiquitous",
+          "system": "all commands",
+          "action": "format successful output using `json.MarshalIndent` with two-space indentation and no HTML escaping, writing to stdout; write all human-readable messages to stderr",
+          "return_contract": "valid indented JSON on stdout; plain-text messages on stderr"
+        },
+        {
+          "id": "15-REQ-20.2",
+          "ears_pattern": "ubiquitous",
+          "system": "all commands",
+          "action": "on API error (4xx/5xx), write the server's error envelope JSON to stdout and exit with code 1; on client error, write the CLI-generated error envelope JSON to stdout and exit with code 2",
+          "return_contract": "error envelope JSON to stdout; appropriate exit code"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "15-REQ-21",
+      "title": "Config Mutation — Atomic Writes",
+      "user_story": {
+        "role": "CLI infrastructure",
+        "goal": "ensure config-mutating commands (`login`, `keys refresh`, `keys revoke`) use the CLI Core atomic write function",
+        "benefit": "prevent partial writes that would corrupt the config file and leave the user in an unrecoverable state"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-21.1",
+          "ears_pattern": "ubiquitous",
+          "system": "config-mutating commands",
+          "action": "call CLI Core's atomic write function (write to temp file, `os.Rename` into place); only the fields listed for each command are changed; all other config fields are preserved",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "15-REQ-21.E1",
+          "ears_pattern": "unwanted",
+          "system": "config-mutating commands",
+          "action": "command exits with code 2 and a descriptive error envelope; any data that was to be printed to stdout (e.g., new key) is NOT printed",
+          "return_contract": "exit code 2 with config-failure error envelope to stdout",
+          "error_condition": "CLI Core atomic write function returns an error"
+        }
+      ]
+    },
+    {
+      "id": "15-REQ-22",
+      "title": "Login Timeout Testability via runLogin",
+      "user_story": {
+        "role": "test author",
+        "goal": "call `runLogin` directly with a short timeout to exercise timeout behavior in tests",
+        "benefit": "avoid waiting 120 seconds in tests while keeping the production `loginTimeoutSeconds` constant unmodified"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "15-REQ-22.1",
+          "ears_pattern": "ubiquitous",
+          "system": "login.go",
+          "action": "defines `loginTimeoutSeconds = 120` as a package-level constant and implements the OAuth flow in `runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error`; the Cobra `RunE` function calls `runLogin` passing `time.Duration(loginTimeoutSeconds) * time.Second`; the constant is never modified",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "15-PROP-1",
+      "title": "State Parameter Is Cryptographically Random and Correctly Sized",
+      "for_any": "login invocation",
+      "invariant": "the `state parameter` is exactly 64 lowercase hex characters derived from 32 bytes of `crypto/rand` output",
+      "validates": [
+        "15-REQ-2.4"
+      ]
+    },
+    {
+      "id": "15-PROP-2",
+      "title": "Existing authorize_url Query Parameters Are Preserved",
+      "for_any": "OAuth authorization URL constructed by the login command",
+      "invariant": "every query parameter present in the provider's `authorize_url` (including `client_id`) appears unchanged in the final authorization URL; `redirect_uri`, `state`, and `response_type=code` are added without overwriting any existing parameter",
+      "validates": [
+        "15-REQ-2.6"
+      ]
+    },
+    {
+      "id": "15-PROP-3",
+      "title": "Callback Server Does Not Shut Down on Non-/callback Paths",
+      "for_any": "HTTP request to the `callback server` at any path other than `/callback`",
+      "invariant": "the server responds with HTTP 404; neither `codeCh` nor `errCh` receives a value; the server continues listening",
+      "validates": [
+        "15-REQ-2.5",
+        "15-REQ-2.E2"
+      ]
+    },
+    {
+      "id": "15-PROP-4",
+      "title": "Credentials Not Emitted on Config Write Failure",
+      "for_any": "login flow where code exchange succeeds but config write fails",
+      "invariant": "stdout contains only the error envelope; no user JSON or credential data is written to stdout",
+      "validates": [
+        "15-REQ-2.E1"
+      ]
+    },
+    {
+      "id": "15-PROP-5",
+      "title": "parseKeyID Always Returns Penultimate Segment",
+      "for_any": "`api_key` string with 3 or more underscore-delimited segments",
+      "invariant": "`parseKeyID` returns `parts[len(parts)-2]` regardless of the number of underscores in the prefix",
+      "validates": [
+        "15-REQ-15.1"
+      ]
+    },
+    {
+      "id": "15-PROP-6",
+      "title": "No API Call Made When api_key Is Absent",
+      "for_any": "invocation of any authenticated command without a configured `api_key`",
+      "invariant": "no network request is issued; the command exits with code 2 before any SDK method is called",
+      "validates": [
+        "15-REQ-19.1"
+      ]
+    },
+    {
+      "id": "15-PROP-7",
+      "title": "validateExpires Accepts Exactly {0, 30, 60, 90}",
+      "for_any": "any integer value passed to `validateExpires`",
+      "invariant": "the function returns nil if and only if the value is one of 0, 30, 60, 90; all other values return a non-nil error",
+      "validates": [
+        "15-REQ-16.1",
+        "15-REQ-2.16",
+        "15-REQ-9.3"
+      ]
+    },
+    {
+      "id": "15-PROP-8",
+      "title": "Shutdown Context Is Always Fresh",
+      "for_any": "any login flow termination (success, timeout, or state mismatch)",
+      "invariant": "the `callback server` shutdown call always uses a fresh `context.WithTimeout(context.Background(), 5*time.Second)` and never reuses the login context",
+      "validates": [
+        "15-REQ-2.13",
+        "15-REQ-2.E5"
+      ]
+    },
+    {
+      "id": "15-PROP-9",
+      "title": "tokens revoke Always Emits Valid JSON to stdout",
+      "for_any": "successful `akc tokens revoke` invocation",
+      "invariant": "stdout contains exactly `{}` (a valid JSON object) even though the SDK returns no response body",
+      "validates": [
+        "15-REQ-11.1"
+      ]
+    },
+    {
+      "id": "15-PROP-10",
+      "title": "loginTimeoutSeconds Constant Is Never Modified",
+      "for_any": "any invocation of the login command or `runLogin`",
+      "invariant": "`loginTimeoutSeconds` remains 120 at all times; tests reduce the timeout by passing a short `time.Duration` argument directly to `runLogin`, not by modifying the constant",
+      "validates": [
+        "15-REQ-22.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "15-PATH-1",
+      "title": "Full End-to-End Login OAuth Flow",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc login --provider github --expires 90 --endpoint-url https://api.example.com`"
+        },
+        {
+          "actor": "Login Command (internal/cli/login.go)",
+          "action": "validates `endpoint_url` is present and `--expires` is valid via `validateExpires`"
+        },
+        {
+          "actor": "Login Command",
+          "action": "constructs unauthenticated SDK client via `apikit.NewClient(endpointURL)` and calls `client.GetProviders(ctx)` to retrieve available OAuth providers"
+        },
+        {
+          "actor": "Go SDK (spec 12)",
+          "action": "sends GET /providers to the apikit server and returns the provider list"
+        },
+        {
+          "actor": "Login Command",
+          "action": "finds the `github` provider in the list; generates 64-char hex `state parameter` via `crypto/rand`"
+        },
+        {
+          "actor": "Login Command",
+          "action": "starts `callback server` on `127.0.0.1:0`; derives `redirect_uri`; constructs authorization URL by appending `redirect_uri`, `state`, `response_type=code` to provider's `authorize_url`"
+        },
+        {
+          "actor": "Login Command",
+          "action": "prints `\"Opening browser for authentication...\"` to stderr; calls `openBrowser(authURL)`"
+        },
+        {
+          "actor": "openBrowser helper (helpers.go)",
+          "action": "executes `open <authURL>` (macOS) or `xdg-open <authURL>` (Linux) via `os/exec`"
+        },
+        {
+          "actor": "User's Browser",
+          "action": "navigates to the authorization URL, authenticates with the OAuth provider, and is redirected to `redirect_uri` with `code` and `state` query parameters"
+        },
+        {
+          "actor": "Callback Server (login.go)",
+          "action": "receives GET /callback; validates `state` matches; responds with HTTP 200 success HTML; sends `code` on `codeCh`"
+        },
+        {
+          "actor": "Login Command",
+          "action": "receives from `codeCh`; calls `client.ExchangeOAuthCode(ctx, &apikit.AuthCallbackRequest{Provider: \"github\", Code: code, RedirectURI: redirectURI, Expires: &expires})`"
+        },
+        {
+          "actor": "Go SDK (spec 12)",
+          "action": "sends POST to the OAuth callback endpoint and returns user and `api_key` credentials"
+        },
+        {
+          "actor": "Login Command",
+          "action": "calls CLI Core atomic write function (spec 13) to save `endpoint_url`, `user_id`, and `api_key` to the config file"
+        },
+        {
+          "actor": "CLI Core (spec 13)",
+          "action": "writes config to a temp file and renames it atomically into place"
+        },
+        {
+          "actor": "Login Command",
+          "action": "prints `response.User` as indented JSON to stdout; prints `\"Logged in as <username>\"` to stderr; shuts down `callback server` with a 5-second background context"
+        },
+        {
+          "actor": "User",
+          "action": "observes user JSON on stdout and success message on stderr; subsequent `akc` commands use the saved `api_key`"
+        }
+      ]
+    },
+    {
+      "id": "15-PATH-2",
+      "title": "Authenticated Command — User Show Happy Path",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc user show`"
+        },
+        {
+          "actor": "User Show Command (internal/cli/user.go)",
+          "action": "calls CLI Core `NewAuthenticatedClient` to construct an authenticated SDK client, pre-validating `api_key` is present"
+        },
+        {
+          "actor": "CLI Core (spec 13)",
+          "action": "reads `endpoint_url` and `api_key` from config/env/flags and returns an authenticated client"
+        },
+        {
+          "actor": "User Show Command",
+          "action": "calls `client.GetUser(ctx)`"
+        },
+        {
+          "actor": "Go SDK (spec 12)",
+          "action": "sends authenticated GET /user to the apikit server and returns `*Response[User]`"
+        },
+        {
+          "actor": "User Show Command",
+          "action": "prints `response.Data` as indented JSON to stdout; exits with code 0"
+        },
+        {
+          "actor": "User",
+          "action": "observes user profile JSON on stdout"
+        }
+      ]
+    },
+    {
+      "id": "15-PATH-3",
+      "title": "Keys Refresh — Rotate API Key and Save to Config",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc keys refresh`"
+        },
+        {
+          "actor": "Keys Refresh Command (internal/cli/keys.go)",
+          "action": "calls `NewAuthenticatedClient` to verify `api_key` presence; calls `parseKeyID(apiKey)` to extract `key_id`"
+        },
+        {
+          "actor": "parseKeyID helper (helpers.go)",
+          "action": "splits `api_key` on `_`, returns penultimate segment as `key_id`"
+        },
+        {
+          "actor": "Keys Refresh Command",
+          "action": "calls `client.RefreshKey(ctx, keyID)`"
+        },
+        {
+          "actor": "Go SDK (spec 12)",
+          "action": "sends authenticated POST/PUT to the key refresh endpoint and returns `*APIKeyFull`"
+        },
+        {
+          "actor": "Keys Refresh Command",
+          "action": "calls CLI Core atomic write to update `api_key` in config with `response.Key`"
+        },
+        {
+          "actor": "CLI Core (spec 13)",
+          "action": "atomically writes updated config file"
+        },
+        {
+          "actor": "Keys Refresh Command",
+          "action": "prints `APIKeyFull` as indented JSON to stdout; prints `\"API key refreshed\"` to stderr; exits with code 0"
+        },
+        {
+          "actor": "User",
+          "action": "observes new key JSON on stdout; config now contains the refreshed `api_key`"
+        }
+      ]
+    },
+    {
+      "id": "15-PATH-4",
+      "title": "Login Timeout — Callback Never Arrives",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc login` but never completes the browser OAuth flow"
+        },
+        {
+          "actor": "Login Command",
+          "action": "starts `callback server` and opens browser; enters select on `codeCh`, `errCh`, `ctx.Done()`"
+        },
+        {
+          "actor": "runLogin helper",
+          "action": "`loginTimeoutSeconds` (120s in production, short in tests) elapses; `ctx.Done()` fires"
+        },
+        {
+          "actor": "Login Command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"login timed out waiting for browser callback\"}}` to stdout; shuts down `callback server`"
+        },
+        {
+          "actor": "User",
+          "action": "observes timeout error envelope on stdout; no credentials are saved"
+        }
+      ]
+    },
+    {
+      "id": "15-PATH-5",
+      "title": "Tokens Create — PAT Created with Permissions",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc tokens create --name ci-bot --permissions \"users:read,orgs:read\" --expires 30`"
+        },
+        {
+          "actor": "Tokens Create Command (internal/cli/tokens.go)",
+          "action": "calls `NewAuthenticatedClient`; calls `parsePermissions(\"users:read,orgs:read\")` returning `[\"users:read\",\"orgs:read\"]`; calls `validateExpires(30)` returning nil"
+        },
+        {
+          "actor": "parsePermissions helper (helpers.go)",
+          "action": "splits on `,`, trims whitespace, returns non-empty `[]string`"
+        },
+        {
+          "actor": "Tokens Create Command",
+          "action": "calls `client.CreateToken(ctx, &apikit.CreateTokenRequest{Name: \"ci-bot\", Permissions: perms, Expires: &expires})`"
+        },
+        {
+          "actor": "Go SDK (spec 12)",
+          "action": "sends authenticated POST to the tokens endpoint and returns `*PATFull`"
+        },
+        {
+          "actor": "Tokens Create Command",
+          "action": "prints `PATFull` as indented JSON to stdout; prints `\"Token created. Save the token value — it cannot be retrieved later.\"` to stderr; exits with code 0"
+        },
+        {
+          "actor": "User",
+          "action": "observes full token JSON (including plaintext token) on stdout; saves the token value"
+        }
+      ]
+    },
+    {
+      "id": "15-PATH-6",
+      "title": "Missing API Key — Pre-validation Fires Before Network",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "runs `akc orgs list` without a configured `api_key`"
+        },
+        {
+          "actor": "Orgs List Command (internal/cli/orgs.go)",
+          "action": "calls `NewAuthenticatedClient`"
+        },
+        {
+          "actor": "CLI Core NewAuthenticatedClient (spec 13)",
+          "action": "finds `api_key` absent in config, env, and flags; returns an error immediately without making any network request"
+        },
+        {
+          "actor": "Orgs List Command",
+          "action": "exits with code 2 and error JSON `{\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}` to stdout"
+        },
+        {
+          "actor": "User",
+          "action": "observes error envelope on stdout; no HTTP request was made to the server"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "15-ERR-1",
+      "condition": "`endpoint_url` is absent from flags, env, and config when `akc login` is invoked",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL\"}}` to stdout; no API calls are made",
+      "requirement_id": "15-REQ-2.15"
+    },
+    {
+      "id": "15-ERR-2",
+      "condition": "`--expires` flag value is not one of 0, 30, 60, 90",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}` to stdout; no API calls are made",
+      "requirement_id": "15-REQ-2.16"
+    },
+    {
+      "id": "15-ERR-3",
+      "condition": "requested OAuth provider name is not in the list returned by `client.GetProviders`",
+      "behavior": "command exits with code 1 and writes `{\"error\":{\"code\":404,\"message\":\"provider '<name>' not found\"}}` to stdout",
+      "requirement_id": "15-REQ-2.3"
+    },
+    {
+      "id": "15-ERR-4",
+      "condition": "OAuth callback received with a `state parameter` that does not match the generated value",
+      "behavior": "`errCh` receives the mismatch error; browser receives HTTP 400 with verbatim state-mismatch HTML; main goroutine cancels context and exits with code 2 and `{\"error\":{\"code\":2,\"message\":\"OAuth state mismatch — possible CSRF attack\"}}` to stdout",
+      "requirement_id": "15-REQ-2.10"
+    },
+    {
+      "id": "15-ERR-5",
+      "condition": "login context times out (`loginTimeoutSeconds` elapsed) before any valid `/callback` request",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"login timed out waiting for browser callback\"}}` to stdout; `callback server` is shut down",
+      "requirement_id": "15-REQ-2.14"
+    },
+    {
+      "id": "15-ERR-6",
+      "condition": "CLI Core atomic write fails after successful OAuth code exchange",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"failed to save config: <detail>\"}}` to stdout; no credential data is written to stdout",
+      "requirement_id": "15-REQ-2.E1"
+    },
+    {
+      "id": "15-ERR-7",
+      "condition": "`api_key` is absent from config, env, and flags when any authenticated command is invoked",
+      "behavior": "`NewAuthenticatedClient` returns an error; command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}` to stdout without making any SDK call",
+      "requirement_id": "15-REQ-19.1"
+    },
+    {
+      "id": "15-ERR-8",
+      "condition": "`api_key` string has fewer than 3 underscore-delimited segments when `keys refresh` or `keys revoke` is invoked",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}` to stdout without making any SDK call",
+      "requirement_id": "15-REQ-6.2"
+    },
+    {
+      "id": "15-ERR-9",
+      "condition": "`--permissions` flag resolves to an empty slice after splitting and trimming",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"--permissions must not be empty\"}}` to stdout without making any SDK call",
+      "requirement_id": "15-REQ-9.2"
+    },
+    {
+      "id": "15-ERR-10",
+      "condition": "server returns a 4xx or 5xx response for any command",
+      "behavior": "command exits with code 1 and writes the server's error envelope JSON to stdout",
+      "requirement_id": "15-REQ-20.2"
+    },
+    {
+      "id": "15-ERR-11",
+      "condition": "network error occurs during any SDK call",
+      "behavior": "command exits with code 2 and writes `{\"error\":{\"code\":2,\"message\":\"<network error description>\"}}` to stdout",
+      "requirement_id": "15-REQ-20.2"
+    },
+    {
+      "id": "15-ERR-12",
+      "condition": "`openBrowser` subprocess fails (e.g., `xdg-open` not installed or no display server)",
+      "behavior": "login command prints `\"Open this URL in your browser: <url>\"` to stderr and continues the login flow; browser open failure is not fatal",
+      "requirement_id": "15-REQ-2.E4"
+    },
+    {
+      "id": "15-ERR-13",
+      "condition": "server returns 4xx for `akc user update` (e.g., 422 for empty or invalid name)",
+      "behavior": "command exits with code 1 and writes server's error envelope JSON to stdout; no client-side validation was performed",
+      "requirement_id": "15-REQ-4.2"
+    },
+    {
+      "id": "15-ERR-14",
+      "condition": "CLI Core atomic write fails after successful `keys refresh` response",
+      "behavior": "command exits with code 2 and writes a descriptive error envelope to stdout; the new key value is NOT printed",
+      "requirement_id": "15-REQ-6.E1"
+    },
+    {
+      "id": "15-ERR-15",
+      "condition": "CLI Core atomic write fails during any `config-mutating command`",
+      "behavior": "command exits with code 2 and writes a config-failure error envelope to stdout; data that would have been printed on success is NOT printed",
+      "requirement_id": "15-REQ-21.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/spf13/cobra",
+      "version": "latest (per project go.mod)",
+      "symbols": [
+        {
+          "name": "Command",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "type Command struct { Use string; Short string; Long string; Args PositionalArgs; RunE func(cmd *Command, args []string) error; ... }",
+          "notes": "Central Cobra type; each command constructor returns *cobra.Command"
+        },
+        {
+          "name": "ExactArgs",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func ExactArgs(n int) PositionalArgs",
+          "notes": "Used for commands with required positional arguments (tokens show, tokens revoke, orgs show, orgs members)"
+        },
+        {
+          "name": "MarkFlagRequired",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func (c *Command) MarkFlagRequired(name string) error",
+          "notes": "Used to mark --full-name, --name, --permissions as required flags"
+        }
+      ]
+    },
+    {
+      "package": "crypto/rand",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "Read",
+          "import_path": "crypto/rand",
+          "signature": "func Read(b []byte) (n int, err error)",
+          "notes": "Used to generate 32 random bytes for the OAuth state parameter"
+        }
+      ]
+    },
+    {
+      "package": "encoding/hex",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "EncodeToString",
+          "import_path": "encoding/hex",
+          "signature": "func EncodeToString(src []byte) string",
+          "notes": "Encodes 32 random bytes to a 64-character lowercase hex state parameter"
+        }
+      ]
+    },
+    {
+      "package": "net/http",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "Server",
+          "import_path": "net/http",
+          "signature": "type Server struct { Addr string; Handler Handler; ... }",
+          "notes": "Used for the local OAuth callback server"
+        },
+        {
+          "name": "Server.Shutdown",
+          "import_path": "net/http",
+          "signature": "func (srv *Server) Shutdown(ctx context.Context) error",
+          "notes": "Gracefully shuts down the callback server; called with a fresh 5-second background context"
+        },
+        {
+          "name": "ListenAndServe",
+          "import_path": "net/http",
+          "signature": "func (srv *Server) ListenAndServe() error",
+          "notes": "Starts the callback server; or net.Listen + srv.Serve for :0 port binding"
+        }
+      ]
+    },
+    {
+      "package": "os/exec",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "Command",
+          "import_path": "os/exec",
+          "signature": "func Command(name string, arg ...string) *Cmd",
+          "notes": "Used in openBrowser to invoke `open` (macOS) or `xdg-open` (Linux)"
+        }
+      ]
+    },
+    {
+      "package": "encoding/json",
+      "version": "Go stdlib",
+      "symbols": [
+        {
+          "name": "MarshalIndent",
+          "import_path": "encoding/json",
+          "signature": "func MarshalIndent(v any, prefix, indent string) ([]byte, error)",
+          "notes": "Used for all JSON output; called with prefix=\"\" and indent=\"  \" (two spaces)"
+        },
+        {
+          "name": "NewEncoder",
+          "import_path": "encoding/json",
+          "signature": "func NewEncoder(w io.Writer) *Encoder",
+          "notes": "Alternative encoder; SetEscapeHTML(false) must be called to disable HTML escaping"
+        }
+      ]
+    }
+  ]
+}

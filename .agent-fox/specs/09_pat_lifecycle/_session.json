@@ -1,0 +1,181 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `pat_lifecycle` PRD is exceptionally well-written and comprehensive. All four required sections (Intent, Goals, Non-Goals, Background/Design) are present and of high quality. The spec includes detailed functional requirements for all four CRUD endpoints, precise validation rules, complete Go type definitions, a thorough testing strategy with named test cases, a clear error-handling matrix, and well-reasoned design decisions. Dependencies on active specs (`server_core`, `database_layer`, `auth_middleware`) are explicitly declared and correctly scoped. Non-Goals cleanly delegate admin PAT management to `user_management` and token validation to `auth_middleware`, preventing overlap. The PRD is ready to proceed to artifact generation with only one minor ambiguity worth flagging for the owner's awareness.",
+      "gaps": [
+        "Minor ambiguity in privilege escalation rule for regular users: The spec states 'Regular users can grant any registered permission' but also says 'a PAT can only grant permissions that its owning user already has.' These two statements could conflict if certain registered permissions are admin-only. The design decision section clarifies this is scoped to PAT-created-by-PAT, but the interplay between a regular user's API key creating a PAT with admin-level registered permissions is not explicitly resolved.",
+        "The `user_management` spec (active) covers admin PAT endpoints (`GET /users/:id/tokens`, `DELETE /users/:id/tokens/:token_id`). While the Non-Goals section correctly delegates these to `user_management`, the `user_management` spec's intent description does not explicitly mention PAT admin endpoints. This cross-spec dependency should be verified to ensure `user_management` has actually captured those endpoints.",
+        "The spec references `spec 10 of 15` in the Source section but is assigned `spec_id: 09`. This numbering inconsistency (0-indexed vs 1-indexed) is cosmetic but could cause confusion when cross-referencing the master PRD.",
+        "No explicit mention of rate limiting or abuse prevention for PAT creation (e.g., maximum number of PATs per user). If unbounded PAT creation is intentional, a brief Non-Goal statement would add clarity."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For regular users authenticating via their API key: can they create a PAT with any registered permission (including permissions like `admin:*` if such exist in the registry), or are they restricted to permissions applicable to non-admin users?",
+          "context": "The Goals section states 'a PAT can only grant permissions that its owning user already has' and 'regular users have full access to their own resources, so any registered permission is valid for their own-resource scope.' This could allow a regular user to mint a PAT with admin-scoped permissions if those are registered. Clarifying this closes a potential privilege-escalation loophole.",
+          "options": [
+            "Regular users can only grant permissions that are not marked as admin-only in the PermissionRegistry",
+            "Regular users can grant any registered permission (the PermissionRegistry only contains permissions appropriate to the caller's role)",
+            "The PermissionRegistry is flat with no admin/user distinction; admin enforcement is done elsewhere"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Is there an intended maximum number of PATs a single user can hold at one time, or is creation unbounded?",
+          "context": "Without a cap, a compromised account or buggy client could create an unbounded number of PATs. If unbounded creation is a deliberate design choice, adding it as an explicit Non-Goal would prevent future implementers from adding an undocumented limit.",
+          "options": [
+            "No limit \u2014 unbounded PAT creation is intentional",
+            "There is a soft limit (e.g., 50 PATs per user) that should be enforced with HTTP 429 or 409",
+            "There is a hard limit that should be documented in this spec"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "The `user_management` spec is listed as an active dependency for admin PAT endpoints. Has `user_management` been updated to explicitly include `GET /users/:id/tokens` and `DELETE /users/:id/tokens/:token_id`? If not, should this spec declare a dependency on `user_management` for those endpoints?",
+          "context": "This spec correctly delegates admin PAT management to `user_management` in its Non-Goals, but if `user_management` has not yet captured those endpoints, there is a risk of the feature falling through the cracks between specs.",
+          "options": [
+            "Yes, user_management already covers admin PAT endpoints explicitly",
+            "No, user_management needs to be updated to include admin PAT endpoints",
+            "Admin PAT endpoints are out of scope for the current iteration entirely"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a well-structured and thorough PRD covering the PAT Lifecycle component. It excels in defining clear functional requirements, interfaces, error handling, and design decisions. The document is nearly implementation-ready, but a few gaps remain: the database schema for the `pats` table is referenced but not described (even minimally), the transaction/rollback behavior on partial failures during creation is underspecified, the character alphabet for token generation is not defined precisely, the `RegisterRoutes` signature has a minor Go type error, and several edge cases (concurrent revocation, name uniqueness, max name length) are not addressed. Resolving these will make the spec fully actionable by a developer without needing to consult other specs.",
+      "gaps": [
+        "The `pats` table columns are referenced throughout (token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, created_at, revoked_at) but no schema summary or column types are provided in this spec. A developer implementing pat.go must infer types from context or dig into spec 02.",
+        "The exact character alphabet for token_id and secret generation is described as 'lowercase letters and digits' but not spelled out (e.g., `abcdefghijklmnopqrstuvwxyz0123456789`). This matters for the alphanumeric generation implementation and test assertions.",
+        "Concurrent revocation behavior is unspecified: if two requests simultaneously attempt to revoke the same PAT, which wins and what does the loser receive? A `SELECT ... then UPDATE` pattern without locking could result in both succeeding.",
+        "The `RegisterRoutes` method signature uses `echo.Group` (value type) instead of `*echo.Group` (pointer), which will not compile correctly in Echo v4. This is a concrete interface bug.",
+        "Name uniqueness (or lack thereof) per user is not stated. Can a user create two PATs with the same name? The error table has no entry for duplicate name, implying names are non-unique, but this should be explicit.",
+        "Maximum length for the `name` field is not specified. Without a bound, malicious or erroneous clients could send arbitrarily long strings.",
+        "The behavior when `db.WithTx` or the INSERT fails mid-flight (e.g., after token generation but before commit) is not described. The spec should state that no partial state is persisted and the error response is HTTP 500.",
+        "The `expires_days` column's purpose in list/get responses is unclear \u2014 it is defined in the glossary and stored in the DB, but it does not appear in any response type or JSON example. It should be either included in responses or explicitly excluded with a rationale.",
+        "The ordering guarantee for the `permissions` array in responses is not specified (e.g., insertion order, alphabetical). This affects test assertions and client stability."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the exact character alphabet used for generating token_id and secret? For example, is it strictly `[a-z0-9]` (36 chars), or does it include uppercase letters?",
+          "context": "The spec says 'lowercase letters and digits' but does not enumerate the alphabet. Implementers and test authors need a precise definition to write correct generation logic and assertion regexes.",
+          "options": [
+            "Strictly lowercase a-z and 0-9 (36-character alphabet)",
+            "Lowercase a-z, uppercase A-Z, and 0-9 (62-character alphabet)",
+            "Other \u2014 please specify"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should PAT names be unique per user, or can a user have multiple PATs with the same name?",
+          "context": "No uniqueness constraint or duplicate-name error is mentioned. If names must be unique per user, an HTTP 409 error case and a DB constraint are needed. If names are non-unique, the spec should state this explicitly so developers don't add an unintended constraint.",
+          "options": [
+            "Names must be unique per user (enforce at DB and return HTTP 409 on conflict)",
+            "Names are non-unique \u2014 a user may create multiple PATs with the same name",
+            "Names should be unique per user but enforced only at the application layer (no DB constraint)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Is there a maximum length for the PAT `name` field? If so, what is it, and what HTTP response should be returned when exceeded?",
+          "context": "Without a length bound, clients can send arbitrarily long strings. Most token-management APIs cap names at 64\u2013255 characters. This also affects the DB column definition in spec 02.",
+          "options": [
+            "64 characters",
+            "128 characters",
+            "255 characters",
+            "No enforced maximum length"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "What is the intended behavior when two concurrent requests attempt to revoke the same PAT simultaneously?",
+          "context": "The current spec uses a read-then-write pattern (check revoked_at, then set it). Without row-level locking or a conditional update, both requests could pass the 'already revoked' check and both succeed. Should the implementation use a conditional UPDATE (e.g., `WHERE revoked_at IS NULL`) so only one succeeds and the other receives HTTP 400?",
+          "options": [
+            "Use a conditional UPDATE (WHERE revoked_at IS NULL) \u2014 the first writer wins, the second gets HTTP 400 'token already revoked'",
+            "Use a SELECT FOR UPDATE / transaction lock to serialize concurrent revocations",
+            "Concurrent revocation is not a concern for this iteration; document it as a known limitation"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should `expires_days` be included in list/get/revoke responses, or is it intentionally omitted (stored in DB only for internal use)?",
+          "context": "`expires_days` appears in the glossary and DB insert step but is absent from all response structs and JSON examples. Clients might find it useful to know the original expiry window without computing it from expires_at and created_at. Clarifying this prevents accidental inclusion or omission.",
+          "options": [
+            "Include expires_days in all metadata responses (PATResponse)",
+            "Omit expires_days from all responses \u2014 it is stored only for internal/audit use",
+            "Include it only in the CreatePATResponse, not in subsequent reads"
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "What is the required ordering of the `permissions` array in responses \u2014 insertion order, alphabetical, or undefined?",
+          "context": "Permissions are stored as a JSON array. If the order is undefined, clients cannot rely on stable ordering for equality checks, and integration tests must sort before asserting. Defining an order (e.g., preserve insertion order) prevents subtle test flakiness.",
+          "options": [
+            "Preserve insertion order (the order the client sent them at creation time)",
+            "Return in alphabetical (lexicographic) order regardless of insertion order",
+            "Order is explicitly undefined \u2014 clients must not rely on it"
+          ],
+          "required": false
+        },
+        {
+          "id": "q7",
+          "text": "Should the `RegisterRoutes` method receiver take `*echo.Group` (pointer) rather than `echo.Group` (value)? Echo v4's group type is used by pointer throughout the framework.",
+          "context": "The current spec defines `func (h *PATHandler) RegisterRoutes(g echo.Group)`. In Echo v4, route registration methods like `g.POST()` are defined on `*echo.Group`. Passing a value copy would either not compile or silently drop route registrations. This appears to be a typo in the spec.",
+          "options": [
+            "Yes \u2014 change the signature to `func (h *PATHandler) RegisterRoutes(g *echo.Group)`",
+            "No \u2014 keep `echo.Group` value type (please explain why)"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now implementation-ready. All seven gaps from the previous assessment have been resolved: the token alphabet is precisely defined as [a-z0-9] (36 chars) throughout the spec and glossary; PAT name non-uniqueness is explicitly stated with rationale; the 255-character name cap is specified with its HTTP 400 error message; concurrent revocation uses a conditional UPDATE with first-writer-wins semantics; expires_days is explicitly excluded from all responses with documented rationale; permissions ordering is defined as insertion order; and the RegisterRoutes signature is corrected to *echo.Group. Transaction rollback behavior on INSERT failure is also now clearly specified. New test cases cover all resolved gaps. No significant gaps remain.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "The PermissionRegistry is flat with no admin/user distinction; admin enforcement is done elsewhere. The built-in permissions (users:read, orgs:read, keys:read, keys:manage, tokens:read, tokens:manage) are all appropriate for any user to grant. Admin-only operations are enforced by the auth middleware RequireAdmin check on admin endpoints, not by the permission model. A regular user creating a PAT with tokens:manage can only manage their own tokens, not other users tokens.",
+        "q2": "No limit. Unbounded PAT creation is intentional. Rate limiting is explicitly deferred in the master PRD. No per-user PAT cap is needed for this iteration.",
+        "q3": "The user_management spec will cover admin PAT endpoints. This spec correctly delegates those to user_management via Non-Goals. Cross-spec coordination is handled at the campaign level."
+      },
+      "timestamp": "2026-07-17T11:30:09.334485+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "Strictly lowercase a-z and 0-9 (36-character alphabet). This matches the API key key_id format described in the master PRD.",
+        "q2": "Names are non-unique. A user may create multiple PATs with the same name. This matches GitHub PAT behavior where names are labels for the user, not identifiers.",
+        "q3": "255 characters. Return HTTP 400 with message 'name must be 255 characters or fewer' when exceeded.",
+        "q4": "Use a conditional UPDATE (WHERE revoked_at IS NULL). The first writer wins, the second gets HTTP 400 'token already revoked'. This is simple and correct with SQLite single-connection pool.",
+        "q5": "Omit expires_days from all responses. It is stored only for internal/audit use. Clients can derive the original window from created_at and expires_at if needed.",
+        "q6": "Preserve insertion order (the order the client sent them at creation time). The JSON array is stored and returned as-is.",
+        "q7": "Yes. Change the signature to func (h *PATHandler) RegisterRoutes(g *echo.Group). This is a typo in the spec; Echo v4 uses pointer receivers."
+      },
+      "timestamp": "2026-07-17T11:34:08.275130+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

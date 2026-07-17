@@ -1,0 +1,1500 @@
+{
+  "$schema": null,
+  "spec_id": "14",
+  "spec_name": "cli_admin_commands",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-14-1",
+      "requirement_id": "14-REQ-1.1",
+      "kind": "unit",
+      "description": "NewAdminCmd returns a *cobra.Command with Use='admin', no RunE, and HasSubCommands() true.",
+      "preconditions": [
+        "internal/cli package is compilable",
+        "NewAdminCmd is exported"
+      ],
+      "input": "call NewAdminCmd()",
+      "expected": "returned command has Use == 'admin', RunE == nil, HasSubCommands() == true",
+      "assertion_pseudocode": "cmd = NewAdminCmd(); assert cmd.Use == 'admin'; assert cmd.RunE == nil; assert cmd.HasSubCommands() == true"
+    },
+    {
+      "id": "TS-14-2",
+      "requirement_id": "14-REQ-1.2",
+      "kind": "unit",
+      "description": "The admin users command group registers exactly the eight required subcommands: list, show, create, update, promote, demote, block, unblock.",
+      "preconditions": [
+        "internal/cli package is compilable"
+      ],
+      "input": "call newAdminUsersCmd()",
+      "expected": "the returned command has eight subcommands with Use values matching list, show, create, update, promote, demote, block, unblock",
+      "assertion_pseudocode": "cmd = newAdminUsersCmd(); names = [c.Name() for c in cmd.Commands()]; assert set(names) == {'list','show','create','update','promote','demote','block','unblock'}"
+    },
+    {
+      "id": "TS-14-3",
+      "requirement_id": "14-REQ-1.3",
+      "kind": "unit",
+      "description": "The admin orgs command group registers list, create, update, delete, block, unblock, and a members sub-group containing list, add, remove.",
+      "preconditions": [
+        "internal/cli package is compilable"
+      ],
+      "input": "call newAdminOrgsCmd()",
+      "expected": "direct children include list/create/update/delete/block/unblock/members; members children include list/add/remove",
+      "assertion_pseudocode": "orgsCmd = newAdminOrgsCmd(); topNames = [c.Name() for c in orgsCmd.Commands()]; assert set(topNames) >= {'list','create','update','delete','block','unblock','members'}; membersCmd = find(orgsCmd.Commands(), name='members'); memberNames = [c.Name() for c in membersCmd.Commands()]; assert set(memberNames) == {'list','add','remove'}"
+    },
+    {
+      "id": "TS-14-4",
+      "requirement_id": "14-REQ-1.4",
+      "kind": "unit",
+      "description": "The admin keys command group registers exactly two subcommands: list and revoke.",
+      "preconditions": [
+        "internal/cli package is compilable"
+      ],
+      "input": "call newAdminKeysCmd()",
+      "expected": "returned command has exactly subcommands list and revoke",
+      "assertion_pseudocode": "cmd = newAdminKeysCmd(); names = [c.Name() for c in cmd.Commands()]; assert set(names) == {'list','revoke'}"
+    },
+    {
+      "id": "TS-14-5",
+      "requirement_id": "14-REQ-1.5",
+      "kind": "unit",
+      "description": "The admin tokens command group registers exactly two subcommands: list and revoke.",
+      "preconditions": [
+        "internal/cli package is compilable"
+      ],
+      "input": "call newAdminTokensCmd()",
+      "expected": "returned command has exactly subcommands list and revoke",
+      "assertion_pseudocode": "cmd = newAdminTokensCmd(); names = [c.Name() for c in cmd.Commands()]; assert set(names) == {'list','revoke'}"
+    },
+    {
+      "id": "TS-14-6",
+      "requirement_id": "14-REQ-1.6",
+      "kind": "unit",
+      "description": "NewAdminCmd is the only exported constructor in the admin CLI package; all others are unexported.",
+      "preconditions": [
+        "internal/cli package source is available"
+      ],
+      "input": "inspect exported symbols in internal/cli/admin*.go files",
+      "expected": "only NewAdminCmd is exported; newAdminUsersCmd, newAdminOrgsCmd, newAdminOrgsMembersCmd, newAdminKeysCmd, newAdminTokensCmd are all unexported",
+      "assertion_pseudocode": "symbols = exported_functions('internal/cli', 'admin*.go'); assert symbols == ['NewAdminCmd']"
+    },
+    {
+      "id": "TS-14-7",
+      "requirement_id": "14-REQ-2.1",
+      "kind": "unit",
+      "description": "Every admin subcommand with a RunE executes loadConfig, newClient, validates args/flags, calls the SDK method, and prints JSON to stdout on success.",
+      "preconditions": [
+        "mock SDK client constructed",
+        "loadConfig and newClient stubbed to return valid config and client"
+      ],
+      "input": "invoke akc admin users list with valid config",
+      "expected": "loadConfig called once, newClient called once, ListUsers called once, printJSON writes valid JSON to stdout, exit code 0",
+      "assertion_pseudocode": "mock = MockClient(); capture stdout; invoke 'admin users list' with mock; assert mock.ListUsersCalled == true; assert isValidJSON(stdout); assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-8",
+      "requirement_id": "14-REQ-2.2",
+      "kind": "unit",
+      "description": "When the SDK method returns *apikit.APIError, handleError is called, the JSON error envelope is printed to stdout, and exit code is 1.",
+      "preconditions": [
+        "mock SDK client returns &apikit.APIError{Code: 403, Message: 'forbidden'}"
+      ],
+      "input": "invoke akc admin users show <id> where SDK returns APIError 403",
+      "expected": "stdout contains {\"error\":{\"code\":403,\"message\":\"forbidden\"}}, exit code is 1",
+      "assertion_pseudocode": "mock.GetUserByIDReturns = APIError{Code:403, Message:'forbidden'}; capture stdout; invoke 'admin users show user-1'; parsed = JSON.parse(stdout); assert parsed.error.code == 403; assert parsed.error.message == 'forbidden'; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-9",
+      "requirement_id": "14-REQ-2.3",
+      "kind": "unit",
+      "description": "When the SDK method returns a non-APIError (e.g. network failure), handleError prints a code-0 error envelope to stdout and exit code is 2.",
+      "preconditions": [
+        "mock SDK client returns errors.New('connection refused')"
+      ],
+      "input": "invoke akc admin users list where SDK returns plain network error",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"connection refused\"}}, exit code is 2",
+      "assertion_pseudocode": "mock.ListUsersReturns = error('connection refused'); capture stdout; invoke 'admin users list'; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert 'connection refused' in parsed.error.message; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-10",
+      "requirement_id": "14-REQ-2.4",
+      "kind": "unit",
+      "description": "When loadConfig returns an error (missing API key), the command prints a code-0 JSON error envelope and exits with code 2 without calling the SDK.",
+      "preconditions": [
+        "loadConfig is stubbed to return an error"
+      ],
+      "input": "invoke akc admin users list with missing API key in config",
+      "expected": "stdout contains error envelope with code 0, exit code 2, SDK method not called",
+      "assertion_pseudocode": "loadConfigStub = func() { return nil, error('missing api key') }; mock.ListUsersCalled = false; capture stdout; invoke 'admin users list'; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert exitCode == 2; assert mock.ListUsersCalled == false"
+    },
+    {
+      "id": "TS-14-11",
+      "requirement_id": "14-REQ-2.5",
+      "kind": "unit",
+      "description": "All SDK method calls use context.Background() as the context argument.",
+      "preconditions": [
+        "mock SDK client captures the context argument passed to it"
+      ],
+      "input": "invoke akc admin users list with valid config and mock SDK",
+      "expected": "the context passed to ListUsers is context.Background() (non-nil, no deadline)",
+      "assertion_pseudocode": "mock = CapturingMockClient(); invoke 'admin users list'; ctx = mock.CapturedContext; assert ctx != nil; hasDeadline, _ = ctx.Deadline(); assert hasDeadline == false"
+    },
+    {
+      "id": "TS-14-12",
+      "requirement_id": "14-REQ-2.6",
+      "kind": "unit",
+      "description": "No net/http client is constructed or used directly in admin*.go production files.",
+      "preconditions": [
+        "source files internal/cli/admin.go, admin_users.go, admin_orgs.go, admin_keys.go, admin_tokens.go are accessible"
+      ],
+      "input": "static analysis / grep of production admin source files",
+      "expected": "no import of 'net/http' appears in any internal/cli/admin*.go file",
+      "assertion_pseudocode": "for each file in ['admin.go','admin_users.go','admin_orgs.go','admin_keys.go','admin_tokens.go']: assert 'net/http' not in imports(file)"
+    },
+    {
+      "id": "TS-14-13",
+      "requirement_id": "14-REQ-3.1",
+      "kind": "unit",
+      "description": "When a required positional argument is absent, the command prints a missing-argument JSON error envelope to stdout and exits with code 2 without calling the SDK.",
+      "preconditions": [
+        "mock SDK client available"
+      ],
+      "input": "invoke akc admin users show (no positional argument provided)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required argument: id\"}}, exit code 2, SDK not called",
+      "assertion_pseudocode": "mock.GetUserByIDCalled = false; capture stdout; invoke 'admin users show' with args=[]; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2; assert mock.GetUserByIDCalled == false"
+    },
+    {
+      "id": "TS-14-14",
+      "requirement_id": "14-REQ-3.2",
+      "kind": "unit",
+      "description": "When a required flag is absent, the command prints a missing-flag JSON error envelope to stdout and exits with code 2 without calling the SDK.",
+      "preconditions": [
+        "mock SDK client available"
+      ],
+      "input": "invoke akc admin users create --email a@b.com --provider local --provider-id p1 (no --username)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --username\"}}, exit code 2, SDK not called",
+      "assertion_pseudocode": "mock.CreateUserCalled = false; capture stdout; invoke 'admin users create --email a@b.com --provider local --provider-id p1'; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert parsed.error.message == 'missing required flag: --username'; assert exitCode == 2; assert mock.CreateUserCalled == false"
+    },
+    {
+      "id": "TS-14-15",
+      "requirement_id": "14-REQ-3.3",
+      "kind": "unit",
+      "description": "Extra positional arguments cause Cobra's ExactArgs validator to reject the command before RunE is called.",
+      "preconditions": [
+        "command registered with cobra.ExactArgs(1)"
+      ],
+      "input": "invoke akc admin users show id1 id2 (extra arg)",
+      "expected": "Cobra prints a usage error before RunE executes; SDK is not called; exit code is non-zero",
+      "assertion_pseudocode": "mock.GetUserByIDCalled = false; invoke 'admin users show id1 id2'; assert exitCode != 0; assert mock.GetUserByIDCalled == false"
+    },
+    {
+      "id": "TS-14-16",
+      "requirement_id": "14-REQ-3.4",
+      "kind": "unit",
+      "description": "Non-UUID string IDs are passed through to the SDK without client-side validation.",
+      "preconditions": [
+        "mock SDK client returns APIError{Code:404}"
+      ],
+      "input": "invoke akc admin users show 'not-a-uuid'",
+      "expected": "GetUserByID is called with id='not-a-uuid', SDK error is forwarded as exit code 1",
+      "assertion_pseudocode": "mock.GetUserByIDReturns = APIError{Code:404, Message:'user not found'}; capture stdout; invoke 'admin users show not-a-uuid'; assert mock.CapturedID == 'not-a-uuid'; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-17",
+      "requirement_id": "14-REQ-3.5",
+      "kind": "unit",
+      "description": "An empty string value for a required string flag is passed through to the SDK without client-side rejection.",
+      "preconditions": [
+        "mock SDK client returns APIError{Code:400} for empty username"
+      ],
+      "input": "invoke akc admin users create --username '' --email a@b.com --provider local --provider-id p1",
+      "expected": "CreateUser is called with Username='', SDK error forwarded as exit code 1",
+      "assertion_pseudocode": "mock.CreateUserReturns = APIError{Code:400, Message:'username required'}; capture stdout; invoke 'admin users create --username \"\" --email a@b.com --provider local --provider-id p1'; assert mock.CapturedReq.Username == ''; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-18",
+      "requirement_id": "14-REQ-4.1",
+      "kind": "unit",
+      "description": "akc admin users list without --include-blocked calls ListUsers with IncludeBlocked:false and prints the user array as JSON.",
+      "preconditions": [
+        "mock SDK ListUsers returns []*apikit.User{{ID:'u1'}}"
+      ],
+      "input": "invoke akc admin users list (no flags)",
+      "expected": "ListUsers called with opts.IncludeBlocked==false; stdout is JSON array containing user u1; exit code 0",
+      "assertion_pseudocode": "mock.ListUsersReturns = [User{ID:'u1'}]; capture stdout; invoke 'admin users list'; assert mock.CapturedOpts.IncludeBlocked == false; parsed = JSON.parse(stdout); assert len(parsed) == 1; assert parsed[0].id == 'u1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-19",
+      "requirement_id": "14-REQ-4.2",
+      "kind": "unit",
+      "description": "akc admin users list --include-blocked calls ListUsers with IncludeBlocked:true.",
+      "preconditions": [
+        "mock SDK ListUsers returns []*apikit.User with a blocked user"
+      ],
+      "input": "invoke akc admin users list --include-blocked",
+      "expected": "ListUsers called with opts.IncludeBlocked==true; stdout is JSON array; exit code 0",
+      "assertion_pseudocode": "mock.ListUsersReturns = [User{ID:'u1',Blocked:true}]; capture stdout; invoke 'admin users list --include-blocked'; assert mock.CapturedOpts.IncludeBlocked == true; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-20",
+      "requirement_id": "14-REQ-4.3",
+      "kind": "unit",
+      "description": "akc admin users list is registered in the agent interface with method GET, path /users, auth admin, and flag --include-blocked.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command",
+        "akc help --json output is captured"
+      ],
+      "input": "run akc help --json",
+      "expected": "output contains entry with name='admin users list', method='GET', path='/users', auth='admin', flags includes {name:'include-blocked', type:'bool', default:false}",
+      "assertion_pseudocode": "helpJSON = run('akc help --json'); cmds = JSON.parse(helpJSON).commands; entry = find(cmds, name='admin users list'); assert entry.method == 'GET'; assert entry.path == '/users'; assert entry.auth == 'admin'; flag = find(entry.flags, name='include-blocked'); assert flag.type == 'bool'; assert flag.default == false"
+    },
+    {
+      "id": "TS-14-21",
+      "requirement_id": "14-REQ-5.1",
+      "kind": "unit",
+      "description": "akc admin users show <id> calls GetUserByID with the given id and prints the unwrapped user as JSON.",
+      "preconditions": [
+        "mock SDK GetUserByID returns &apikit.User{ID:'u1', Username:'alice'}"
+      ],
+      "input": "invoke akc admin users show u1",
+      "expected": "GetUserByID called with id='u1'; stdout is JSON user object with id='u1'; exit code 0",
+      "assertion_pseudocode": "mock.GetUserByIDReturns = User{ID:'u1', Username:'alice'}; capture stdout; invoke 'admin users show u1'; assert mock.CapturedID == 'u1'; parsed = JSON.parse(stdout); assert parsed.id == 'u1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-22",
+      "requirement_id": "14-REQ-5.2",
+      "kind": "unit",
+      "description": "akc admin users show is registered in the agent interface with method GET, path /users/:id, auth admin, and positional arg id.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "output entry for 'admin users show' has method='GET', path='/users/:id', auth='admin', args=[{name:'id'}]",
+      "assertion_pseudocode": "helpJSON = run('akc help --json'); entry = find(JSON.parse(helpJSON).commands, name='admin users show'); assert entry.method == 'GET'; assert entry.path == '/users/:id'; assert entry.auth == 'admin'; assert entry.args[0].name == 'id'"
+    },
+    {
+      "id": "TS-14-23",
+      "requirement_id": "14-REQ-6.1",
+      "kind": "unit",
+      "description": "akc admin users create with all four required flags calls CreateUser with the correct struct and prints the new user as JSON.",
+      "preconditions": [
+        "mock SDK CreateUser returns &apikit.User{ID:'u2', Username:'bob'}"
+      ],
+      "input": "invoke akc admin users create --username bob --email bob@x.com --provider local --provider-id p2",
+      "expected": "CreateUser called with {Username:'bob', Email:'bob@x.com', Provider:'local', ProviderID:'p2'}; stdout is JSON user object; exit code 0",
+      "assertion_pseudocode": "mock.CreateUserReturns = User{ID:'u2', Username:'bob'}; capture stdout; invoke 'admin users create --username bob --email bob@x.com --provider local --provider-id p2'; assert mock.CapturedReq == {Username:'bob', Email:'bob@x.com', Provider:'local', ProviderID:'p2'}; parsed = JSON.parse(stdout); assert parsed.id == 'u2'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-24",
+      "requirement_id": "14-REQ-6.2",
+      "kind": "unit",
+      "description": "akc admin users create is registered in the agent interface with method POST, path /users, auth admin, and four required string flags.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users create' has method='POST', path='/users', auth='admin', four flags: username, email, provider, provider-id all required",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users create'); assert entry.method == 'POST'; assert entry.path == '/users'; assert entry.auth == 'admin'; flagNames = [f.name for f in entry.flags]; assert set(flagNames) == {'username','email','provider','provider-id'}; for f in entry.flags: assert f.required == true"
+    },
+    {
+      "id": "TS-14-25",
+      "requirement_id": "14-REQ-7.1",
+      "kind": "unit",
+      "description": "akc admin users update <id> --full-name 'Alice B' calls UpdateUserByID with the correct id and FullName, prints user JSON.",
+      "preconditions": [
+        "mock SDK UpdateUserByID returns &apikit.User{ID:'u1', FullName:'Alice B'}"
+      ],
+      "input": "invoke akc admin users update u1 --full-name 'Alice B'",
+      "expected": "UpdateUserByID called with id='u1', req.FullName='Alice B'; stdout is user JSON; exit code 0",
+      "assertion_pseudocode": "mock.UpdateUserByIDReturns = User{ID:'u1', FullName:'Alice B'}; capture stdout; invoke 'admin users update u1 --full-name \"Alice B\"'; assert mock.CapturedID == 'u1'; assert mock.CapturedReq.FullName == 'Alice B'; parsed = JSON.parse(stdout); assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-26",
+      "requirement_id": "14-REQ-7.2",
+      "kind": "unit",
+      "description": "akc admin users update with --full-name '' treats empty string as valid, calls SDK with FullName='' and exits 0.",
+      "preconditions": [
+        "mock SDK UpdateUserByID returns a user object"
+      ],
+      "input": "invoke akc admin users update u1 --full-name ''",
+      "expected": "UpdateUserByID called with req.FullName=''; exit code 0",
+      "assertion_pseudocode": "mock.UpdateUserByIDReturns = User{ID:'u1', FullName:''}; capture stdout; invoke 'admin users update u1 --full-name \"\"'; assert mock.CapturedReq.FullName == ''; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-27",
+      "requirement_id": "14-REQ-7.3",
+      "kind": "unit",
+      "description": "akc admin users update is registered in the agent interface with method PATCH, path /users/:id, auth admin, positional arg id, required flag --full-name.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users update' has method='PATCH', path='/users/:id', auth='admin', args=[{name:'id'}], flags=[{name:'full-name', required:true}]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users update'); assert entry.method == 'PATCH'; assert entry.path == '/users/:id'; assert entry.auth == 'admin'; assert entry.args[0].name == 'id'; flag = find(entry.flags, name='full-name'); assert flag.required == true"
+    },
+    {
+      "id": "TS-14-28",
+      "requirement_id": "14-REQ-8.1",
+      "kind": "unit",
+      "description": "akc admin users promote <id> calls PromoteUser with the given id and prints the returned user as JSON.",
+      "preconditions": [
+        "mock SDK PromoteUser returns &apikit.User{ID:'u1', Role:'admin'}"
+      ],
+      "input": "invoke akc admin users promote u1",
+      "expected": "PromoteUser called with id='u1'; stdout is user JSON with role='admin'; exit code 0",
+      "assertion_pseudocode": "mock.PromoteUserReturns = User{ID:'u1', Role:'admin'}; capture stdout; invoke 'admin users promote u1'; assert mock.CapturedID == 'u1'; assert exitCode == 0; assert isValidJSON(stdout)"
+    },
+    {
+      "id": "TS-14-29",
+      "requirement_id": "14-REQ-8.2",
+      "kind": "unit",
+      "description": "akc admin users promote is registered in the agent interface with method POST, path /users/:id/promote, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users promote' has method='POST', path='/users/:id/promote', auth='admin', args=[{name:'id'}]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users promote'); assert entry.method == 'POST'; assert entry.path == '/users/:id/promote'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-30",
+      "requirement_id": "14-REQ-9.1",
+      "kind": "unit",
+      "description": "akc admin users demote <id> calls DemoteUser with the given id and prints the returned user as JSON without performing the last-admin check.",
+      "preconditions": [
+        "mock SDK DemoteUser returns &apikit.User{ID:'u1', Role:'user'}"
+      ],
+      "input": "invoke akc admin users demote u1",
+      "expected": "DemoteUser called with id='u1'; stdout is user JSON; exit code 0; no client-side last-admin validation",
+      "assertion_pseudocode": "mock.DemoteUserReturns = User{ID:'u1', Role:'user'}; capture stdout; invoke 'admin users demote u1'; assert mock.CapturedID == 'u1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-31",
+      "requirement_id": "14-REQ-9.2",
+      "kind": "unit",
+      "description": "akc admin users demote is registered in the agent interface with method POST, path /users/:id/demote, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users demote' has method='POST', path='/users/:id/demote', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users demote'); assert entry.method == 'POST'; assert entry.path == '/users/:id/demote'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-32",
+      "requirement_id": "14-REQ-10.1",
+      "kind": "unit",
+      "description": "akc admin users block <id> calls BlockUser with the given id and prints the returned user as JSON.",
+      "preconditions": [
+        "mock SDK BlockUser returns &apikit.User{ID:'u1', Blocked:true}"
+      ],
+      "input": "invoke akc admin users block u1",
+      "expected": "BlockUser called with id='u1'; stdout is user JSON; exit code 0",
+      "assertion_pseudocode": "mock.BlockUserReturns = User{ID:'u1', Blocked:true}; capture stdout; invoke 'admin users block u1'; assert mock.CapturedID == 'u1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-33",
+      "requirement_id": "14-REQ-10.2",
+      "kind": "unit",
+      "description": "akc admin users block is registered in the agent interface with method POST, path /users/:id/block, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users block' has method='POST', path='/users/:id/block', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users block'); assert entry.method == 'POST'; assert entry.path == '/users/:id/block'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-34",
+      "requirement_id": "14-REQ-11.1",
+      "kind": "unit",
+      "description": "akc admin users unblock <id> calls UnblockUser with the given id and prints the returned user as JSON.",
+      "preconditions": [
+        "mock SDK UnblockUser returns &apikit.User{ID:'u1', Blocked:false}"
+      ],
+      "input": "invoke akc admin users unblock u1",
+      "expected": "UnblockUser called with id='u1'; stdout is user JSON; exit code 0",
+      "assertion_pseudocode": "mock.UnblockUserReturns = User{ID:'u1', Blocked:false}; capture stdout; invoke 'admin users unblock u1'; assert mock.CapturedID == 'u1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-35",
+      "requirement_id": "14-REQ-11.2",
+      "kind": "unit",
+      "description": "akc admin users unblock is registered in the agent interface with method POST, path /users/:id/unblock, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin users unblock' has method='POST', path='/users/:id/unblock', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin users unblock'); assert entry.method == 'POST'; assert entry.path == '/users/:id/unblock'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-36",
+      "requirement_id": "14-REQ-12.1",
+      "kind": "unit",
+      "description": "akc admin orgs list without --include-blocked calls ListOrgs with IncludeBlocked:false and prints the org array as JSON.",
+      "preconditions": [
+        "mock SDK ListOrgs returns []*apikit.Organization{{ID:'o1'}}"
+      ],
+      "input": "invoke akc admin orgs list (no flags)",
+      "expected": "ListOrgs called with opts.IncludeBlocked==false; stdout is JSON array with org o1; exit code 0",
+      "assertion_pseudocode": "mock.ListOrgsReturns = [Org{ID:'o1'}]; capture stdout; invoke 'admin orgs list'; assert mock.CapturedOpts.IncludeBlocked == false; parsed = JSON.parse(stdout); assert len(parsed) == 1; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-37",
+      "requirement_id": "14-REQ-12.2",
+      "kind": "unit",
+      "description": "akc admin orgs list --include-blocked calls ListOrgs with IncludeBlocked:true.",
+      "preconditions": [
+        "mock SDK ListOrgs returns []*apikit.Organization with blocked org"
+      ],
+      "input": "invoke akc admin orgs list --include-blocked",
+      "expected": "ListOrgs called with opts.IncludeBlocked==true; exit code 0",
+      "assertion_pseudocode": "mock.ListOrgsReturns = [Org{ID:'o1', Blocked:true}]; capture stdout; invoke 'admin orgs list --include-blocked'; assert mock.CapturedOpts.IncludeBlocked == true; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-38",
+      "requirement_id": "14-REQ-12.3",
+      "kind": "unit",
+      "description": "akc admin orgs list is registered in the agent interface with method GET, path /orgs, auth admin, and flag --include-blocked.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs list' has method='GET', path='/orgs', auth='admin', flag include-blocked with type bool and default false",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs list'); assert entry.method == 'GET'; assert entry.path == '/orgs'; assert entry.auth == 'admin'; flag = find(entry.flags, name='include-blocked'); assert flag.type == 'bool'; assert flag.default == false"
+    },
+    {
+      "id": "TS-14-39",
+      "requirement_id": "14-REQ-13.1",
+      "kind": "unit",
+      "description": "akc admin orgs create with --name, --slug, --url calls CreateOrg with a non-nil URL pointer and prints the org as JSON.",
+      "preconditions": [
+        "mock SDK CreateOrg returns &apikit.Organization{ID:'o1', Name:'Acme', Slug:'acme'}"
+      ],
+      "input": "invoke akc admin orgs create --name Acme --slug acme --url https://acme.com",
+      "expected": "CreateOrg called with {Name:'Acme', Slug:'acme', URL:ptr('https://acme.com')}; stdout is org JSON; exit code 0",
+      "assertion_pseudocode": "mock.CreateOrgReturns = Org{ID:'o1'}; capture stdout; invoke 'admin orgs create --name Acme --slug acme --url https://acme.com'; assert mock.CapturedReq.Name == 'Acme'; assert mock.CapturedReq.Slug == 'acme'; assert *mock.CapturedReq.URL == 'https://acme.com'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-40",
+      "requirement_id": "14-REQ-13.2",
+      "kind": "unit",
+      "description": "akc admin orgs create without --url sets the URL field to nil in the CreateOrgRequest.",
+      "preconditions": [
+        "mock SDK CreateOrg returns &apikit.Organization{ID:'o1'}"
+      ],
+      "input": "invoke akc admin orgs create --name Acme --slug acme (no --url)",
+      "expected": "CreateOrg called with URL==nil in request",
+      "assertion_pseudocode": "mock.CreateOrgReturns = Org{ID:'o1'}; invoke 'admin orgs create --name Acme --slug acme'; assert mock.CapturedReq.URL == nil"
+    },
+    {
+      "id": "TS-14-41",
+      "requirement_id": "14-REQ-13.3",
+      "kind": "unit",
+      "description": "akc admin orgs create is registered in the agent interface with method POST, path /orgs, auth admin, required flags name/slug and optional flag url.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs create' has method='POST', path='/orgs', auth='admin'; flags include name (required), slug (required), url (not required)",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs create'); assert entry.method == 'POST'; assert entry.path == '/orgs'; assert entry.auth == 'admin'; nameFlag = find(entry.flags,'name'); assert nameFlag.required == true; slugFlag = find(entry.flags,'slug'); assert slugFlag.required == true; urlFlag = find(entry.flags,'url'); assert urlFlag.required == false"
+    },
+    {
+      "id": "TS-14-42",
+      "requirement_id": "14-REQ-14.1",
+      "kind": "unit",
+      "description": "akc admin orgs update <id> with --name and --url calls UpdateOrg with non-nil pointer fields and prints the org as JSON.",
+      "preconditions": [
+        "mock SDK UpdateOrg returns &apikit.Organization{ID:'o1', Name:'NewName'}"
+      ],
+      "input": "invoke akc admin orgs update o1 --name NewName --url https://new.com",
+      "expected": "UpdateOrg called with id='o1', req.Name==ptr('NewName'), req.URL==ptr('https://new.com'); stdout is org JSON; exit code 0",
+      "assertion_pseudocode": "mock.UpdateOrgReturns = Org{ID:'o1', Name:'NewName'}; capture stdout; invoke 'admin orgs update o1 --name NewName --url https://new.com'; assert mock.CapturedID == 'o1'; assert *mock.CapturedReq.Name == 'NewName'; assert *mock.CapturedReq.URL == 'https://new.com'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-43",
+      "requirement_id": "14-REQ-14.2",
+      "kind": "unit",
+      "description": "akc admin orgs update with no flags emits a warnf warning to stderr, still calls UpdateOrg with nil fields, prints org JSON, and exits 0.",
+      "preconditions": [
+        "mock SDK UpdateOrg returns &apikit.Organization{ID:'o1'}"
+      ],
+      "input": "invoke akc admin orgs update o1 (no --name, no --url)",
+      "expected": "stderr contains warning from warnf('no fields specified for update'); UpdateOrg called with both fields nil; stdout is org JSON; exit code 0",
+      "assertion_pseudocode": "mock.UpdateOrgReturns = Org{ID:'o1'}; capture stdout and stderr; invoke 'admin orgs update o1'; assert 'no fields specified for update' in stderr; assert mock.CapturedReq.Name == nil; assert mock.CapturedReq.URL == nil; assert mock.UpdateOrgCalled == true; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-44",
+      "requirement_id": "14-REQ-14.3",
+      "kind": "unit",
+      "description": "akc admin orgs update is registered in the agent interface with method PATCH, path /orgs/:id, auth admin, positional arg id, optional flags name and url.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs update' has method='PATCH', path='/orgs/:id', auth='admin', args=[{name:'id'}], flags name and url both optional",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs update'); assert entry.method == 'PATCH'; assert entry.path == '/orgs/:id'; assert entry.auth == 'admin'; nameFlag = find(entry.flags,'name'); assert nameFlag.required == false; urlFlag = find(entry.flags,'url'); assert urlFlag.required == false"
+    },
+    {
+      "id": "TS-14-45",
+      "requirement_id": "14-REQ-15.1",
+      "kind": "unit",
+      "description": "akc admin orgs delete <id> calls DeleteOrg and on success prints '{}' to stdout with exit code 0, no confirmation prompt.",
+      "preconditions": [
+        "mock SDK DeleteOrg returns nil error"
+      ],
+      "input": "invoke akc admin orgs delete o1",
+      "expected": "DeleteOrg called with id='o1'; stdout contains '{}'; exit code 0",
+      "assertion_pseudocode": "mock.DeleteOrgReturns = nil; capture stdout; invoke 'admin orgs delete o1'; assert mock.CapturedID == 'o1'; parsed = JSON.parse(stdout); assert parsed == {}; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-46",
+      "requirement_id": "14-REQ-15.2",
+      "kind": "unit",
+      "description": "akc admin orgs delete is registered in the agent interface with method DELETE, path /orgs/:id, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs delete' has method='DELETE', path='/orgs/:id', auth='admin', args=[{name:'id'}]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs delete'); assert entry.method == 'DELETE'; assert entry.path == '/orgs/:id'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-47",
+      "requirement_id": "14-REQ-16.1",
+      "kind": "unit",
+      "description": "akc admin orgs block <id> calls BlockOrg and prints the returned org as JSON.",
+      "preconditions": [
+        "mock SDK BlockOrg returns &apikit.Organization{ID:'o1', Blocked:true}"
+      ],
+      "input": "invoke akc admin orgs block o1",
+      "expected": "BlockOrg called with id='o1'; stdout is org JSON; exit code 0",
+      "assertion_pseudocode": "mock.BlockOrgReturns = Org{ID:'o1', Blocked:true}; capture stdout; invoke 'admin orgs block o1'; assert mock.CapturedID == 'o1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-48",
+      "requirement_id": "14-REQ-16.2",
+      "kind": "unit",
+      "description": "akc admin orgs block is registered in the agent interface with method POST, path /orgs/:id/block, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs block' has method='POST', path='/orgs/:id/block', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs block'); assert entry.method == 'POST'; assert entry.path == '/orgs/:id/block'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-49",
+      "requirement_id": "14-REQ-17.1",
+      "kind": "unit",
+      "description": "akc admin orgs unblock <id> calls UnblockOrg and prints the returned org as JSON.",
+      "preconditions": [
+        "mock SDK UnblockOrg returns &apikit.Organization{ID:'o1', Blocked:false}"
+      ],
+      "input": "invoke akc admin orgs unblock o1",
+      "expected": "UnblockOrg called with id='o1'; stdout is org JSON; exit code 0",
+      "assertion_pseudocode": "mock.UnblockOrgReturns = Org{ID:'o1', Blocked:false}; capture stdout; invoke 'admin orgs unblock o1'; assert mock.CapturedID == 'o1'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-50",
+      "requirement_id": "14-REQ-17.2",
+      "kind": "unit",
+      "description": "akc admin orgs unblock is registered in the agent interface with method POST, path /orgs/:id/unblock, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs unblock' has method='POST', path='/orgs/:id/unblock', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs unblock'); assert entry.method == 'POST'; assert entry.path == '/orgs/:id/unblock'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-51",
+      "requirement_id": "14-REQ-18.1",
+      "kind": "unit",
+      "description": "akc admin orgs members list <id> calls ListOrgMembers with the org id and prints the member array as JSON.",
+      "preconditions": [
+        "mock SDK ListOrgMembers returns []*apikit.User{{ID:'u1'}}"
+      ],
+      "input": "invoke akc admin orgs members list o1",
+      "expected": "ListOrgMembers called with orgID='o1'; stdout is JSON array of users; exit code 0",
+      "assertion_pseudocode": "mock.ListOrgMembersReturns = [User{ID:'u1'}]; capture stdout; invoke 'admin orgs members list o1'; assert mock.CapturedOrgID == 'o1'; parsed = JSON.parse(stdout); assert len(parsed) == 1; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-52",
+      "requirement_id": "14-REQ-18.2",
+      "kind": "unit",
+      "description": "akc admin orgs members list is registered in the agent interface with method GET, path /orgs/:id/members, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs members list' has method='GET', path='/orgs/:id/members', auth='admin', args=[{name:'id'}]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs members list'); assert entry.method == 'GET'; assert entry.path == '/orgs/:id/members'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-53",
+      "requirement_id": "14-REQ-19.1",
+      "kind": "unit",
+      "description": "akc admin orgs members add <org_id> <user_id> calls AddOrgMember and prints '{}' on success.",
+      "preconditions": [
+        "mock SDK AddOrgMember returns nil error"
+      ],
+      "input": "invoke akc admin orgs members add o1 u1",
+      "expected": "AddOrgMember called with orgID='o1', userID='u1'; stdout contains '{}'; exit code 0",
+      "assertion_pseudocode": "mock.AddOrgMemberReturns = nil; capture stdout; invoke 'admin orgs members add o1 u1'; assert mock.CapturedOrgID == 'o1'; assert mock.CapturedUserID == 'u1'; parsed = JSON.parse(stdout); assert parsed == {}; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-54",
+      "requirement_id": "14-REQ-19.2",
+      "kind": "unit",
+      "description": "akc admin orgs members add is registered in the agent interface with method PUT, path /orgs/:id/members/:user_id, auth admin, two positional args.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs members add' has method='PUT', path='/orgs/:id/members/:user_id', auth='admin', args=[org_id, user_id]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs members add'); assert entry.method == 'PUT'; assert entry.path == '/orgs/:id/members/:user_id'; assert entry.auth == 'admin'; argNames = [a.name for a in entry.args]; assert 'org_id' in argNames; assert 'user_id' in argNames"
+    },
+    {
+      "id": "TS-14-55",
+      "requirement_id": "14-REQ-20.1",
+      "kind": "unit",
+      "description": "akc admin orgs members remove <org_id> <user_id> calls RemoveOrgMember and prints '{}' on success.",
+      "preconditions": [
+        "mock SDK RemoveOrgMember returns nil error"
+      ],
+      "input": "invoke akc admin orgs members remove o1 u1",
+      "expected": "RemoveOrgMember called with orgID='o1', userID='u1'; stdout contains '{}'; exit code 0",
+      "assertion_pseudocode": "mock.RemoveOrgMemberReturns = nil; capture stdout; invoke 'admin orgs members remove o1 u1'; assert mock.CapturedOrgID == 'o1'; assert mock.CapturedUserID == 'u1'; parsed = JSON.parse(stdout); assert parsed == {}; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-56",
+      "requirement_id": "14-REQ-20.2",
+      "kind": "unit",
+      "description": "akc admin orgs members remove is registered in the agent interface with method DELETE, path /orgs/:id/members/:user_id, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin orgs members remove' has method='DELETE', path='/orgs/:id/members/:user_id', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin orgs members remove'); assert entry.method == 'DELETE'; assert entry.path == '/orgs/:id/members/:user_id'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-57",
+      "requirement_id": "14-REQ-21.1",
+      "kind": "unit",
+      "description": "akc admin keys list <user_id> calls ListUserKeys and prints the key metadata array as JSON without secret key material.",
+      "preconditions": [
+        "mock SDK ListUserKeys returns []*apikit.APIKeyMeta{{ID:'k1', Name:'mykey'}}"
+      ],
+      "input": "invoke akc admin keys list u1",
+      "expected": "ListUserKeys called with userID='u1'; stdout is JSON array of APIKey metadata; exit code 0",
+      "assertion_pseudocode": "mock.ListUserKeysReturns = [APIKey{ID:'k1', Name:'mykey'}]; capture stdout; invoke 'admin keys list u1'; assert mock.CapturedUserID == 'u1'; parsed = JSON.parse(stdout); assert len(parsed) == 1; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-58",
+      "requirement_id": "14-REQ-21.2",
+      "kind": "unit",
+      "description": "akc admin keys list is registered in the agent interface with method GET, path /users/:id/keys, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin keys list' has method='GET', path='/users/:id/keys', auth='admin', args=[{name:'user_id'}]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin keys list'); assert entry.method == 'GET'; assert entry.path == '/users/:id/keys'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-59",
+      "requirement_id": "14-REQ-22.1",
+      "kind": "unit",
+      "description": "akc admin keys revoke <user_id> <key_id> calls RevokeUserKey and prints '{}' on success without a confirmation prompt.",
+      "preconditions": [
+        "mock SDK RevokeUserKey returns nil error"
+      ],
+      "input": "invoke akc admin keys revoke u1 k1",
+      "expected": "RevokeUserKey called with userID='u1', keyID='k1'; stdout contains '{}'; exit code 0",
+      "assertion_pseudocode": "mock.RevokeUserKeyReturns = nil; capture stdout; invoke 'admin keys revoke u1 k1'; assert mock.CapturedUserID == 'u1'; assert mock.CapturedKeyID == 'k1'; parsed = JSON.parse(stdout); assert parsed == {}; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-60",
+      "requirement_id": "14-REQ-22.2",
+      "kind": "unit",
+      "description": "akc admin keys revoke is registered in the agent interface with method DELETE, path /users/:id/keys/:key_id, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin keys revoke' has method='DELETE', path='/users/:id/keys/:key_id', auth='admin', args=[user_id, key_id]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin keys revoke'); assert entry.method == 'DELETE'; assert entry.path == '/users/:id/keys/:key_id'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-61",
+      "requirement_id": "14-REQ-23.1",
+      "kind": "unit",
+      "description": "akc admin tokens list <user_id> calls ListUserTokens and prints the token metadata array as JSON without secret material.",
+      "preconditions": [
+        "mock SDK ListUserTokens returns []*apikit.PAT{{ID:'t1', Name:'mytoken'}}"
+      ],
+      "input": "invoke akc admin tokens list u1",
+      "expected": "ListUserTokens called with userID='u1'; stdout is JSON array of Token metadata; exit code 0",
+      "assertion_pseudocode": "mock.ListUserTokensReturns = [Token{ID:'t1', Name:'mytoken'}]; capture stdout; invoke 'admin tokens list u1'; assert mock.CapturedUserID == 'u1'; parsed = JSON.parse(stdout); assert len(parsed) == 1; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-62",
+      "requirement_id": "14-REQ-23.2",
+      "kind": "unit",
+      "description": "akc admin tokens list is registered in the agent interface with method GET, path /users/:id/tokens, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin tokens list' has method='GET', path='/users/:id/tokens', auth='admin'",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin tokens list'); assert entry.method == 'GET'; assert entry.path == '/users/:id/tokens'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-63",
+      "requirement_id": "14-REQ-24.1",
+      "kind": "unit",
+      "description": "akc admin tokens revoke <user_id> <token_id> calls RevokeUserToken and prints '{}' on success without confirmation.",
+      "preconditions": [
+        "mock SDK RevokeUserToken returns nil error"
+      ],
+      "input": "invoke akc admin tokens revoke u1 t1",
+      "expected": "RevokeUserToken called with userID='u1', tokenID='t1'; stdout contains '{}'; exit code 0",
+      "assertion_pseudocode": "mock.RevokeUserTokenReturns = nil; capture stdout; invoke 'admin tokens revoke u1 t1'; assert mock.CapturedUserID == 'u1'; assert mock.CapturedTokenID == 't1'; parsed = JSON.parse(stdout); assert parsed == {}; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-64",
+      "requirement_id": "14-REQ-24.2",
+      "kind": "unit",
+      "description": "akc admin tokens revoke is registered in the agent interface with method DELETE, path /users/:id/tokens/:token_id, auth admin.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "entry for 'admin tokens revoke' has method='DELETE', path='/users/:id/tokens/:token_id', auth='admin', args=[user_id, token_id]",
+      "assertion_pseudocode": "entry = find(JSON.parse(run('akc help --json')).commands, name='admin tokens revoke'); assert entry.method == 'DELETE'; assert entry.path == '/users/:id/tokens/:token_id'; assert entry.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-65",
+      "requirement_id": "14-REQ-25.1",
+      "kind": "unit",
+      "description": "Every successful admin command writes valid JSON to stdout using json.MarshalIndent with two-space indentation.",
+      "preconditions": [
+        "mock SDK returns a user object for admin users show"
+      ],
+      "input": "invoke akc admin users show u1",
+      "expected": "stdout is a valid JSON string; json.MarshalIndent with two-space indent is used (output is indented)",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users show u1'; assert isValidJSON(stdout); assert '  ' in stdout // two-space indent present"
+    },
+    {
+      "id": "TS-14-66",
+      "requirement_id": "14-REQ-25.2",
+      "kind": "unit",
+      "description": "Every void-response command prints exactly the empty JSON object '{}' to stdout on success.",
+      "preconditions": [
+        "mock SDK DeleteOrg returns nil; mock SDK RevokeUserKey returns nil"
+      ],
+      "input": "invoke akc admin orgs delete o1; separately invoke akc admin keys revoke u1 k1",
+      "expected": "stdout for each command parses as empty JSON object {}",
+      "assertion_pseudocode": "for cmd in ['admin orgs delete o1', 'admin keys revoke u1 k1']: capture stdout; invoke cmd; parsed = JSON.parse(stdout); assert parsed == {} OR JSON.stringify(parsed) == '{}'"
+    },
+    {
+      "id": "TS-14-67",
+      "requirement_id": "14-REQ-25.3",
+      "kind": "unit",
+      "description": "Warning and informational messages go exclusively to stderr via warnf; stdout contains only JSON.",
+      "preconditions": [
+        "mock SDK UpdateOrg returns org; no --name or --url provided"
+      ],
+      "input": "invoke akc admin orgs update o1 with no flags",
+      "expected": "stdout is valid JSON; stderr contains the warnf warning; no warning text appears on stdout",
+      "assertion_pseudocode": "capture stdout and stderr; invoke 'admin orgs update o1'; assert isValidJSON(stdout); assert 'no fields specified for update' in stderr; assert 'no fields specified for update' not in stdout"
+    },
+    {
+      "id": "TS-14-68",
+      "requirement_id": "14-REQ-26.1",
+      "kind": "unit",
+      "description": "Exit codes are exactly 0 on success, 1 on APIError, and 2 on client error, with no other codes produced.",
+      "preconditions": [
+        "three separate invocations: success, APIError, network error"
+      ],
+      "input": "invoke commands in success, APIError, and network-error scenarios",
+      "expected": "exit code is 0 for success, 1 for APIError, 2 for network error",
+      "assertion_pseudocode": "assert exitCode('admin users list', mockSuccess) == 0; assert exitCode('admin users show u1', mockAPIError(404)) == 1; assert exitCode('admin users list', mockNetworkError) == 2"
+    },
+    {
+      "id": "TS-14-69",
+      "requirement_id": "14-REQ-26.2",
+      "kind": "unit",
+      "description": "All error output paths produce a valid JSON error envelope on stdout with code N for API errors and 0 for client errors.",
+      "preconditions": [
+        "mock returns APIError{Code:404}; separate invocation with network error"
+      ],
+      "input": "invoke admin users show with APIError 404; separately invoke with network error",
+      "expected": "both stdouts are valid JSON matching {\"error\":{\"code\":N,\"message\":\"...\"}}",
+      "assertion_pseudocode": "capture stdout1 for APIError case; parsed1 = JSON.parse(stdout1); assert 'error' in parsed1; assert parsed1.error.code == 404; capture stdout2 for network error; parsed2 = JSON.parse(stdout2); assert parsed2.error.code == 0"
+    },
+    {
+      "id": "TS-14-70",
+      "requirement_id": "14-REQ-26.3",
+      "kind": "unit",
+      "description": "When the server returns HTTP 403, the CLI prints the 403 error envelope to stdout and exits with code 1.",
+      "preconditions": [
+        "mock SDK returns APIError{Code:403, Message:'forbidden'}"
+      ],
+      "input": "invoke akc admin users list where SDK returns 403 APIError",
+      "expected": "stdout is {\"error\":{\"code\":403,\"message\":\"forbidden\"}}; exit code 1",
+      "assertion_pseudocode": "mock.ListUsersReturns = APIError{Code:403, Message:'forbidden'}; capture stdout; invoke 'admin users list'; parsed = JSON.parse(stdout); assert parsed.error.code == 403; assert parsed.error.message == 'forbidden'; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-71",
+      "requirement_id": "14-REQ-26.4",
+      "kind": "unit",
+      "description": "When the server returns HTTP 404, the CLI prints the 404 error envelope to stdout and exits with code 1.",
+      "preconditions": [
+        "mock SDK returns APIError{Code:404, Message:'user not found'}"
+      ],
+      "input": "invoke akc admin users show u999 where SDK returns 404 APIError",
+      "expected": "stdout is {\"error\":{\"code\":404,\"message\":\"user not found\"}}; exit code 1",
+      "assertion_pseudocode": "mock.GetUserByIDReturns = APIError{Code:404, Message:'user not found'}; capture stdout; invoke 'admin users show u999'; parsed = JSON.parse(stdout); assert parsed.error.code == 404; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-72",
+      "requirement_id": "14-REQ-27.1",
+      "kind": "unit",
+      "description": "Every admin command appears in akc help --json output with auth set to 'admin'.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "all admin commands (admin users list, admin users show, admin users create, admin users update, admin users promote, admin users demote, admin users block, admin users unblock, admin orgs list, admin orgs create, admin orgs update, admin orgs delete, admin orgs block, admin orgs unblock, admin orgs members list, admin orgs members add, admin orgs members remove, admin keys list, admin keys revoke, admin tokens list, admin tokens revoke) each have auth=='admin'",
+      "assertion_pseudocode": "cmds = JSON.parse(run('akc help --json')).commands; adminCmds = [c for c in cmds if c.name.startsWith('admin')]; for cmd in adminCmds: assert cmd.auth == 'admin'"
+    },
+    {
+      "id": "TS-14-73",
+      "requirement_id": "14-REQ-27.2",
+      "kind": "unit",
+      "description": "Each admin command's agent interface entry includes name, description, method, path, args array, and flags array with required fields populated.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command"
+      ],
+      "input": "run akc help --json",
+      "expected": "each admin command entry has non-empty name, description, method, path; args is an array; flags is an array with name/type/required/default/description per flag",
+      "assertion_pseudocode": "for entry in adminCmdsFromHelpJSON(): assert entry.name != ''; assert entry.description != ''; assert entry.method != ''; assert entry.path != ''; assert isArray(entry.args); assert isArray(entry.flags); for flag in entry.flags: assert flag.name != ''; assert flag.type != ''"
+    },
+    {
+      "id": "TS-14-74",
+      "requirement_id": "14-REQ-28.1",
+      "kind": "unit",
+      "description": "Each admin test file defines an unexported test-scoped interface and injects a mock into the command, with no production code export of the interface.",
+      "preconditions": [
+        "Go test files admin_users_test.go, admin_orgs_test.go, admin_keys_test.go, admin_tokens_test.go exist"
+      ],
+      "input": "run go test ./internal/cli/...",
+      "expected": "tests compile and pass; mock interfaces are unexported and defined only in _test.go files",
+      "assertion_pseudocode": "result = run('go test ./internal/cli/...'); assert result.exitCode == 0; for file in test_files: interfaces = unexported_interfaces(file); assert len(interfaces) >= 1"
+    },
+    {
+      "id": "TS-14-75",
+      "requirement_id": "14-REQ-28.2",
+      "kind": "unit",
+      "description": "Each admin command test verifies correct SDK method, parameters, JSON stdout, exit code, and error envelope on validation failure.",
+      "preconditions": [
+        "all mock SDK interfaces implemented in test files"
+      ],
+      "input": "run go test ./internal/cli/... -v",
+      "expected": "all named test cases from the PRD Testing Strategy pass; go test exits 0",
+      "assertion_pseudocode": "result = run('go test -v ./internal/cli/...'); assert result.exitCode == 0; assert 'PASS' in result.output"
+    },
+    {
+      "id": "TS-14-76",
+      "requirement_id": "14-REQ-28.3",
+      "kind": "unit",
+      "description": "No integration test files requiring a live or stubbed HTTP server are present in the repository layout for this spec.",
+      "preconditions": [
+        "repository source tree accessible"
+      ],
+      "input": "inspect internal/cli/ directory for integration test files",
+      "expected": "no file matches *integration_test.go or similar patterns within internal/cli/admin*.go scope",
+      "assertion_pseudocode": "files = list_files('internal/cli/'); assert not any('integration' in f for f in files)"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-14-P1",
+      "property_id": "14-PROP-1",
+      "validates": [
+        "14-REQ-25.1",
+        "14-REQ-25.2",
+        "14-REQ-26.2"
+      ],
+      "description": "For any admin command invocation (success or error), stdout always contains exactly one valid JSON value and nothing else.",
+      "for_any_strategy": "Generate random combinations of: (a) command name from the full admin command set, (b) valid or invalid positional args, (c) valid or invalid flags, (d) SDK mock returning success/APIError/networkError",
+      "invariant_check": "parse stdout as JSON; assert no parse error; assert stdout contains no non-JSON prefix or suffix text"
+    },
+    {
+      "id": "TS-14-P2",
+      "property_id": "14-PROP-2",
+      "validates": [
+        "14-REQ-26.1",
+        "14-REQ-2.2",
+        "14-REQ-2.3"
+      ],
+      "description": "For any admin command invocation, the exit code is exactly 0, 1, or 2 — never any other value.",
+      "for_any_strategy": "Generate random combinations of command + args + flags + SDK response type (nil, APIError, networkError, missingArg scenario)",
+      "invariant_check": "exitCode = run(command, args, flags, mockSDK); assert exitCode in {0, 1, 2}"
+    },
+    {
+      "id": "TS-14-P3",
+      "property_id": "14-PROP-3",
+      "validates": [
+        "14-REQ-2.6"
+      ],
+      "description": "For any file in internal/cli/admin*.go, no net/http client is constructed or used directly.",
+      "for_any_strategy": "Static analysis over all files matching internal/cli/admin*.go",
+      "invariant_check": "for each file in glob('internal/cli/admin*.go'): ast = parseGo(file); assert 'net/http' not in imports(ast); assert no http.Client or http.Do calls in ast"
+    },
+    {
+      "id": "TS-14-P4",
+      "property_id": "14-PROP-4",
+      "validates": [
+        "14-REQ-3.1",
+        "14-REQ-3.2"
+      ],
+      "description": "For any admin command invocation where a required positional argument or required flag is absent, no SDK method is ever called and exit code is 2.",
+      "for_any_strategy": "For each command requiring positional args or required flags, generate invocations with each required item omitted one at a time",
+      "invariant_check": "mock.AnySdkMethodCalled = false; exitCode = run(command, missingArgOrFlag); assert mock.AnySdkMethodCalled == false; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-P5",
+      "property_id": "14-PROP-5",
+      "validates": [
+        "14-REQ-25.2",
+        "14-REQ-15.1",
+        "14-REQ-19.1",
+        "14-REQ-20.1",
+        "14-REQ-22.1",
+        "14-REQ-24.1"
+      ],
+      "description": "For any successful invocation of a void-response command (orgs delete, orgs members add, orgs members remove, keys revoke, tokens revoke), stdout is exactly '{}' and exit code is 0.",
+      "for_any_strategy": "For each of the five void-response commands, generate valid inputs with mock SDK returning nil error",
+      "invariant_check": "capture stdout; exitCode = run(voidCmd, validArgs); parsed = JSON.parse(stdout); assert JSON.stringify(parsed) == '{}'; assert exitCode == 0"
+    },
+    {
+      "id": "TS-14-P6",
+      "property_id": "14-PROP-6",
+      "validates": [
+        "14-REQ-27.1",
+        "14-REQ-27.2"
+      ],
+      "description": "For every command registered under akc admin, the agent interface entry includes auth='admin' and non-empty method, path, args, flags fields.",
+      "for_any_strategy": "Enumerate all commands registered under the admin tree via NewAdminCmd().Commands() recursively",
+      "invariant_check": "helpJSON = run('akc help --json'); for each adminCmd in enumerateAdminCommands(): entry = find(helpJSON.commands, name=adminCmd.fullName); assert entry.auth == 'admin'; assert entry.method != ''; assert entry.path != ''"
+    },
+    {
+      "id": "TS-14-P7",
+      "property_id": "14-PROP-7",
+      "validates": [
+        "14-REQ-2.5"
+      ],
+      "description": "For any SDK method invocation in any admin command, the context argument is context.Background() with no deadline and no cancellation.",
+      "for_any_strategy": "For each admin command, generate a valid invocation with a capturing mock SDK that records the context",
+      "invariant_check": "for each adminCmd: mock = CapturingMock(); run(adminCmd, validArgs, mock); ctx = mock.CapturedContext; assert ctx != nil; deadline, hasDeadline = ctx.Deadline(); assert hasDeadline == false; assert ctx.Done() == nil"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-14-E1",
+      "requirement_id": "14-REQ-1.E1",
+      "kind": "unit",
+      "description": "Invoking a parent-only command (e.g. 'admin', 'admin users') directly prints help text and exits 0 without calling loadConfig or the SDK.",
+      "preconditions": [
+        "NewAdminCmd() registered on root command",
+        "loadConfig is a trackable stub"
+      ],
+      "input": "invoke akc admin (no subcommand)",
+      "expected": "help text is printed; exit code 0; loadConfig not called; no SDK call made",
+      "assertion_pseudocode": "loadConfigCalled = false; capture stdout; invoke 'admin'; assert exitCode == 0; assert loadConfigCalled == false; assert len(stdout) > 0"
+    },
+    {
+      "id": "TS-14-E2",
+      "requirement_id": "14-REQ-2.E1",
+      "kind": "unit",
+      "description": "If printJSON fails (e.g. stdout is closed), the command exits with code 2.",
+      "preconditions": [
+        "printJSON is stubbed to return an error"
+      ],
+      "input": "invoke akc admin users list where printJSON returns error",
+      "expected": "exit code 2",
+      "assertion_pseudocode": "printJSONStub = func(v) { return error('write failed') }; invoke 'admin users list'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E3",
+      "requirement_id": "14-REQ-2.E2",
+      "kind": "unit",
+      "description": "When an OS signal (SIGINT) is received while an SDK call is in progress, Cobra terminates the process without special cleanup.",
+      "preconditions": [
+        "SDK mock blocks indefinitely",
+        "test sends SIGINT to process"
+      ],
+      "input": "invoke akc admin users list with a blocking SDK mock then send SIGINT",
+      "expected": "process terminates; exit code is signal-determined; no panic or deadlock",
+      "assertion_pseudocode": "proc = start('admin users list', blockingMock); send(SIGINT, proc); exitCode = wait(proc); assert exitCode != 0 // signal-determined"
+    },
+    {
+      "id": "TS-14-E4",
+      "requirement_id": "14-REQ-5.E1",
+      "kind": "unit",
+      "description": "akc admin users show invoked without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users show (no args)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required argument: id\"}}; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users show' args=[]; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E5",
+      "requirement_id": "14-REQ-6.E1",
+      "kind": "unit",
+      "description": "akc admin users create without --username exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users create --email a@b.com --provider local --provider-id p1",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --username\"}}; exit code 2; SDK not called",
+      "assertion_pseudocode": "mock.CreateUserCalled = false; capture stdout; invoke 'admin users create --email a@b.com --provider local --provider-id p1'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --username'; assert exitCode == 2; assert mock.CreateUserCalled == false"
+    },
+    {
+      "id": "TS-14-E6",
+      "requirement_id": "14-REQ-6.E2",
+      "kind": "unit",
+      "description": "akc admin users create without --email exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users create --username bob --provider local --provider-id p1",
+      "expected": "stdout contains missing-flag error for --email; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users create --username bob --provider local --provider-id p1'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --email'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E7",
+      "requirement_id": "14-REQ-6.E3",
+      "kind": "unit",
+      "description": "akc admin users create without --provider exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users create --username bob --email b@x.com --provider-id p1",
+      "expected": "stdout contains missing-flag error for --provider; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users create --username bob --email b@x.com --provider-id p1'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --provider'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E8",
+      "requirement_id": "14-REQ-6.E4",
+      "kind": "unit",
+      "description": "akc admin users create without --provider-id exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users create --username bob --email b@x.com --provider local",
+      "expected": "stdout contains missing-flag error for --provider-id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users create --username bob --email b@x.com --provider local'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --provider-id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E9",
+      "requirement_id": "14-REQ-7.E1",
+      "kind": "unit",
+      "description": "akc admin users update without the <id> positional argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users update --full-name Alice (no id arg)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required argument: id\"}}; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users update --full-name Alice' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E10",
+      "requirement_id": "14-REQ-7.E2",
+      "kind": "unit",
+      "description": "akc admin users update without --full-name exits with code 2 and prints the missing-flag error envelope; SDK is not called.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users update u1 (no --full-name flag)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --full-name\"}}; exit code 2; SDK not called",
+      "assertion_pseudocode": "mock.UpdateUserByIDCalled = false; capture stdout; invoke 'admin users update u1'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --full-name'; assert exitCode == 2; assert mock.UpdateUserByIDCalled == false"
+    },
+    {
+      "id": "TS-14-E11",
+      "requirement_id": "14-REQ-8.E1",
+      "kind": "unit",
+      "description": "akc admin users promote without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users promote (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users promote' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E12",
+      "requirement_id": "14-REQ-9.E1",
+      "kind": "unit",
+      "description": "akc admin users demote without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users demote (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users demote' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E13",
+      "requirement_id": "14-REQ-9.E2",
+      "kind": "unit",
+      "description": "akc admin users demote when the server returns 409 last-admin conflict prints the 409 error envelope and exits with code 1.",
+      "preconditions": [
+        "mock SDK DemoteUser returns APIError{Code:409, Message:'cannot demote the last admin'}"
+      ],
+      "input": "invoke akc admin users demote u1",
+      "expected": "stdout is {\"error\":{\"code\":409,\"message\":\"cannot demote the last admin\"}}; exit code 1",
+      "assertion_pseudocode": "mock.DemoteUserReturns = APIError{Code:409, Message:'cannot demote the last admin'}; capture stdout; invoke 'admin users demote u1'; parsed = JSON.parse(stdout); assert parsed.error.code == 409; assert parsed.error.message == 'cannot demote the last admin'; assert exitCode == 1"
+    },
+    {
+      "id": "TS-14-E14",
+      "requirement_id": "14-REQ-10.E1",
+      "kind": "unit",
+      "description": "akc admin users block without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users block (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users block' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E15",
+      "requirement_id": "14-REQ-11.E1",
+      "kind": "unit",
+      "description": "akc admin users unblock without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin users unblock (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin users unblock' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E16",
+      "requirement_id": "14-REQ-13.E1",
+      "kind": "unit",
+      "description": "akc admin orgs create without --name exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs create --slug acme",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --name\"}}; exit code 2; SDK not called",
+      "assertion_pseudocode": "mock.CreateOrgCalled = false; capture stdout; invoke 'admin orgs create --slug acme'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --name'; assert exitCode == 2; assert mock.CreateOrgCalled == false"
+    },
+    {
+      "id": "TS-14-E17",
+      "requirement_id": "14-REQ-13.E2",
+      "kind": "unit",
+      "description": "akc admin orgs create without --slug exits with code 2 and prints the missing-flag error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs create --name Acme",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --slug\"}}; exit code 2; SDK not called",
+      "assertion_pseudocode": "mock.CreateOrgCalled = false; capture stdout; invoke 'admin orgs create --name Acme'; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required flag: --slug'; assert exitCode == 2; assert mock.CreateOrgCalled == false"
+    },
+    {
+      "id": "TS-14-E18",
+      "requirement_id": "14-REQ-14.E1",
+      "kind": "unit",
+      "description": "akc admin orgs update without the <id> positional argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs update --name NewName (no id arg)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs update --name NewName' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E19",
+      "requirement_id": "14-REQ-15.E1",
+      "kind": "unit",
+      "description": "akc admin orgs delete without the <id> positional argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs delete (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs delete' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E20",
+      "requirement_id": "14-REQ-16.E1",
+      "kind": "unit",
+      "description": "akc admin orgs block without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs block (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs block' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E21",
+      "requirement_id": "14-REQ-17.E1",
+      "kind": "unit",
+      "description": "akc admin orgs unblock without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs unblock (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs unblock' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E22",
+      "requirement_id": "14-REQ-18.E1",
+      "kind": "unit",
+      "description": "akc admin orgs members list without the <id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs members list (no args)",
+      "expected": "stdout contains missing-argument error for id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs members list' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E23",
+      "requirement_id": "14-REQ-19.E1",
+      "kind": "unit",
+      "description": "akc admin orgs members add with missing positional arguments exits with code 2 and prints the appropriate missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs members add o1 (missing user_id)",
+      "expected": "stdout contains missing-argument error for user_id or org_id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs members add o1' args=['o1']; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert 'missing required argument' in parsed.error.message; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E24",
+      "requirement_id": "14-REQ-20.E1",
+      "kind": "unit",
+      "description": "akc admin orgs members remove with missing positional arguments exits with code 2 and prints the appropriate missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin orgs members remove (no args)",
+      "expected": "stdout contains missing-argument error; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin orgs members remove' args=[]; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert 'missing required argument' in parsed.error.message; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E25",
+      "requirement_id": "14-REQ-21.E1",
+      "kind": "unit",
+      "description": "akc admin keys list without the <user_id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin keys list (no args)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required argument: user_id\"}}; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin keys list' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: user_id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E26",
+      "requirement_id": "14-REQ-22.E1",
+      "kind": "unit",
+      "description": "akc admin keys revoke with missing positional arguments exits with code 2 and prints the appropriate missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin keys revoke u1 (missing key_id)",
+      "expected": "stdout contains missing-argument error for key_id or user_id; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin keys revoke u1' args=['u1']; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert 'missing required argument' in parsed.error.message; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E27",
+      "requirement_id": "14-REQ-23.E1",
+      "kind": "unit",
+      "description": "akc admin tokens list without the <user_id> argument exits with code 2 and prints the missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin tokens list (no args)",
+      "expected": "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required argument: user_id\"}}; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin tokens list' args=[]; parsed = JSON.parse(stdout); assert parsed.error.message == 'missing required argument: user_id'; assert exitCode == 2"
+    },
+    {
+      "id": "TS-14-E28",
+      "requirement_id": "14-REQ-24.E1",
+      "kind": "unit",
+      "description": "akc admin tokens revoke with missing positional arguments exits with code 2 and prints the appropriate missing-argument error envelope.",
+      "preconditions": [
+        "mock SDK available"
+      ],
+      "input": "invoke akc admin tokens revoke u1 (missing token_id)",
+      "expected": "stdout contains missing-argument error; exit code 2",
+      "assertion_pseudocode": "capture stdout; invoke 'admin tokens revoke u1' args=['u1']; parsed = JSON.parse(stdout); assert parsed.error.code == 0; assert 'missing required argument' in parsed.error.message; assert exitCode == 2"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-14-SMOKE-1",
+      "execution_path_id": "14-PATH-1",
+      "description": "Successful akc admin users list: loadConfig reads config, newClient constructs client, ListUsers called with IncludeBlocked:false, JSON array printed to stdout, exits 0.",
+      "trigger": "Run 'akc admin users list' with a valid config file containing endpoint URL and API key; mock SDK returns a non-empty user list",
+      "real_components": [
+        "internal/cli/admin_users.go",
+        "NewAdminCmd",
+        "newAdminUsersCmd",
+        "printJSON"
+      ],
+      "mockable": [
+        "loadConfig (returns valid Config)",
+        "newClient (returns mock apikit.Client)",
+        "apikit.Client.ListUsers (returns []*apikit.User)"
+      ],
+      "expected_effects": [
+        "stdout is a valid JSON array of user objects",
+        "exit code is 0",
+        "ListUsers called with opts.IncludeBlocked==false",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-2",
+      "execution_path_id": "14-PATH-2",
+      "description": "API error path: akc admin users show with non-existent id returns 404 APIError, handleError prints error envelope to stdout, exits 1.",
+      "trigger": "Run 'akc admin users show abc-nonexistent-id' with valid config; mock SDK returns *apikit.APIError{Code:404, Message:'user not found'}",
+      "real_components": [
+        "internal/cli/admin_users.go",
+        "handleError"
+      ],
+      "mockable": [
+        "loadConfig",
+        "newClient",
+        "apikit.Client.GetUserByID (returns APIError 404)"
+      ],
+      "expected_effects": [
+        "stdout contains {\"error\":{\"code\":404,\"message\":\"user not found\"}}",
+        "exit code is 1",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-3",
+      "execution_path_id": "14-PATH-3",
+      "description": "Client validation error: akc admin users create with missing --provider-id flag prints missing-flag error envelope to stdout, exits 2, SDK not called.",
+      "trigger": "Run 'akc admin users create --username alice --email alice@example.com --provider local' (omitting --provider-id)",
+      "real_components": [
+        "internal/cli/admin_users.go"
+      ],
+      "mockable": [
+        "loadConfig",
+        "newClient",
+        "apikit.Client.CreateUser (must not be called)"
+      ],
+      "expected_effects": [
+        "stdout contains {\"error\":{\"code\":0,\"message\":\"missing required flag: --provider-id\"}}",
+        "exit code is 2",
+        "CreateUser SDK method never called"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-4",
+      "execution_path_id": "14-PATH-4",
+      "description": "Void-response path: akc admin orgs delete calls DeleteOrg, receives nil error, prints '{}' to stdout, exits 0.",
+      "trigger": "Run 'akc admin orgs delete org-uuid-123' with valid config; mock SDK DeleteOrg returns nil",
+      "real_components": [
+        "internal/cli/admin_orgs.go",
+        "printJSON"
+      ],
+      "mockable": [
+        "loadConfig",
+        "newClient",
+        "apikit.Client.DeleteOrg (returns nil error)"
+      ],
+      "expected_effects": [
+        "stdout is '{}'",
+        "exit code is 0",
+        "DeleteOrg called with id='org-uuid-123'"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-5",
+      "execution_path_id": "14-PATH-5",
+      "description": "Empty-patch warning path: akc admin orgs update with no flags emits warnf warning to stderr, calls UpdateOrg with nil fields, prints org JSON, exits 0.",
+      "trigger": "Run 'akc admin orgs update org-uuid-456' with no --name or --url flags; mock UpdateOrg returns Org{ID:'org-uuid-456'}",
+      "real_components": [
+        "internal/cli/admin_orgs.go",
+        "warnf",
+        "printJSON"
+      ],
+      "mockable": [
+        "loadConfig",
+        "newClient",
+        "apikit.Client.UpdateOrg (returns Org)"
+      ],
+      "expected_effects": [
+        "stderr contains 'no fields specified for update'",
+        "UpdateOrg called with UpdateOrgRequest{Name:nil, URL:nil}",
+        "stdout is valid org JSON",
+        "exit code is 0"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-6",
+      "execution_path_id": "14-PATH-6",
+      "description": "Network failure path: akc admin keys list encounters TCP connection failure, handleError prints code-0 error envelope to stdout, exits 2.",
+      "trigger": "Run 'akc admin keys list user-uuid-789' with valid config; mock SDK returns a plain error (not APIError)",
+      "real_components": [
+        "internal/cli/admin_keys.go",
+        "handleError"
+      ],
+      "mockable": [
+        "loadConfig",
+        "newClient",
+        "apikit.Client.ListUserKeys (returns errors.New('connection refused'))"
+      ],
+      "expected_effects": [
+        "stdout contains {\"error\":{\"code\":0,\"message\":\"connection refused\"}}",
+        "exit code is 2",
+        "stderr may be empty or contain only plain-text warnings"
+      ]
+    },
+    {
+      "id": "TS-14-SMOKE-7",
+      "execution_path_id": "14-PATH-7",
+      "description": "Full agent-discovery-then-create flow: agent parses akc help --json, constructs admin users create command, executes it, receives user JSON on stdout.",
+      "trigger": "First run 'akc help --json' and verify admin users create entry; then run 'akc admin users create --username bot --email bot@ci.example.com --provider local --provider-id bot-001'",
+      "real_components": [
+        "internal/cli/admin_users.go",
+        "NewAdminCmd",
+        "printJSON"
+      ],
+      "mockable": [
+        "loadConfig (env-var based Config)",
+        "newClient",
+        "apikit.Client.CreateUser (returns User{ID:'new-id', Username:'bot'})"
+      ],
+      "expected_effects": [
+        "akc help --json includes admin users create entry with method=POST, auth=admin, four required flags",
+        "CreateUser called with correct request struct",
+        "stdout is valid user JSON with username='bot'",
+        "exit code is 0"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

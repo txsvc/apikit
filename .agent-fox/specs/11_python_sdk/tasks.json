@@ -1,0 +1,1706 @@
+{
+  "$schema": null,
+  "spec_id": "11",
+  "spec_name": "python_sdk",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "cd packages/sdk-python && uv run pytest -q tests/",
+    "all_tests": "cd packages/sdk-python && uv run pytest -q",
+    "linter": "cd packages/sdk-python && uv run ruff check ."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "03",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Python SDK typed models and method signatures must match the OpenAPI schemas defined in spec 03",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: project structure, Client construction, context manager, auth headers",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for pyproject.toml configuration and package layout (TS-11-1, TS-11-2, TS-11-3, TS-11-4)",
+          "details": [
+            "In tests/test_client.py (or a separate tests/test_project_structure.py), write TS-11-1: parse pyproject.toml and assert name='apikit', requires-python='>=3.12', httpx>=0.27 in deps, respx/mypy/ruff/pytest in dev deps.",
+            "Write TS-11-2: assert all required file paths exist under packages/sdk-python/.",
+            "Write TS-11-3: assert `from apikit import Client, APIError, User, Organization` succeeds and all are types.",
+            "Write TS-11-4: assert pyproject.toml has no PyPI publishing configuration (no flit/twine/publish url).",
+            "All tests must fail initially (red) since source files do not yet exist."
+          ],
+          "test_spec_refs": [
+            "TS-11-1",
+            "TS-11-2",
+            "TS-11-3",
+            "TS-11-4"
+          ],
+          "requirement_refs": [
+            "11-REQ-1.1",
+            "11-REQ-1.2",
+            "11-REQ-1.3",
+            "11-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for Client constructor, URL normalization, timeout forwarding (TS-11-5, TS-11-6, TS-11-7, TS-11-8)",
+          "details": [
+            "Write TS-11-5: instantiate Client with all parameter combinations and assert defaults (mount_point='/api/v1', timeout=30.0).",
+            "Write TS-11-6: assert trailing slashes stripped from base_url and mount_point at construction.",
+            "Write TS-11-7: use respx.mock to verify healthz/readyz/version hit base_url directly; get_user hits base_url+mount_point.",
+            "Write TS-11-8: verify httpx.Client receives timeout=5.0 and timeout=None respectively.",
+            "Write TS-11-E2: assert multiple trailing slashes are all stripped (base_url='https://api.example.com///').",
+            "Write TS-11-E3: assert empty string mount_point is stored as '' and URL construction remains correct."
+          ],
+          "test_spec_refs": [
+            "TS-11-5",
+            "TS-11-6",
+            "TS-11-7",
+            "TS-11-8"
+          ],
+          "requirement_refs": [
+            "11-REQ-2.1",
+            "11-REQ-2.2",
+            "11-REQ-2.3",
+            "11-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for context manager protocol (TS-11-9, TS-11-10, TS-11-E4)",
+          "details": [
+            "Write TS-11-9: verify `with Client(...) as c:` returns self and httpx.Client is closed after the block.",
+            "Write TS-11-10: verify exceptions inside the with block propagate; httpx.Client is still closed.",
+            "Write TS-11-E4: patch httpx.Client.close to raise RuntimeError; verify it propagates without suppression.",
+            "Use `unittest.mock.patch` for TS-11-E4 since no real HTTP call is needed."
+          ],
+          "test_spec_refs": [
+            "TS-11-9",
+            "TS-11-10",
+            "TS-11-E4"
+          ],
+          "requirement_refs": [
+            "11-REQ-3.1",
+            "11-REQ-3.2",
+            "11-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write tests for authentication, standard headers, and response header capture (TS-11-11 through TS-11-17)",
+          "details": [
+            "Write TS-11-11: with api_key set, verify Authorization: Bearer header on every request.",
+            "Write TS-11-12: with api_key=None, verify no Authorization header is sent.",
+            "Write TS-11-13: verify Accept: application/json is present on all requests.",
+            "Write TS-11-14: verify Content-Type: application/json is present on POST/PATCH requests.",
+            "Write TS-11-15: verify last_etag and last_request_id reset and populate from response headers.",
+            "Write TS-11-16: verify last_etag is None when response has no ETag header.",
+            "Write TS-11-17: verify last_request_id is None when response has no X-Request-ID header.",
+            "Use respx.mock for all tests; define SAMPLE_USER_DICT as a module-level fixture dict."
+          ],
+          "test_spec_refs": [
+            "TS-11-11",
+            "TS-11-12",
+            "TS-11-13",
+            "TS-11-14",
+            "TS-11-15",
+            "TS-11-16",
+            "TS-11-17"
+          ],
+          "requirement_refs": [
+            "11-REQ-4.1",
+            "11-REQ-4.2",
+            "11-REQ-5.1",
+            "11-REQ-5.2",
+            "11-REQ-6.1",
+            "11-REQ-6.2",
+            "11-REQ-6.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write tests for ETag/If-None-Match conditional GET support (TS-11-18, TS-11-19, TS-11-20)",
+          "details": [
+            "Write TS-11-18: verify If-None-Match header is sent when if_none_match is provided.",
+            "Write TS-11-19: verify NotModifiedError raised on 304; assert not isinstance(raised, APIError).",
+            "Write TS-11-20: verify If-None-Match header absent when if_none_match=None.",
+            "Write TS-11-P7 property parametrization: test all conditional GET methods (get_user, get_user_by_id, get_org, get_token) with mocked 304."
+          ],
+          "test_spec_refs": [
+            "TS-11-18",
+            "TS-11-19",
+            "TS-11-20"
+          ],
+          "requirement_refs": [
+            "11-REQ-7.1",
+            "11-REQ-7.2",
+            "11-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test files under packages/sdk-python/tests/ exist and are syntactically valid Python (importable).",
+          "Tests are collected by pytest without import errors: `cd packages/sdk-python && uv run pytest --collect-only -q` exits with 0 errors.",
+          "All tests in this group fail with ImportError or AttributeError (red phase — implementations not yet written).",
+          "No linter errors introduced in test files: `cd packages/sdk-python && uv run ruff check tests/`."
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: exceptions, typed models, from_dict/to_dict",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for exception hierarchy (TS-11-21 through TS-11-26)",
+          "details": [
+            "Write TS-11-21: assert APIError(code=404, message='not found') has correct attributes and is an Exception.",
+            "Write TS-11-22: assert 4xx with valid JSON envelope raises APIError with envelope code/message.",
+            "Write TS-11-23: assert 5xx with non-JSON body raises APIError with HTTP status code and raw text.",
+            "Write TS-11-24: assert 5xx with empty body raises APIError with code and message='Unexpected error'.",
+            "Write TS-11-25: parametrize 401→UnauthorizedError, 403→ForbiddenError, 404→NotFoundError, 409→ConflictError; each is isinstance(e, APIError).",
+            "Write TS-11-26: assert issubclass(NotModifiedError, Exception) and not issubclass(NotModifiedError, APIError).",
+            "Write TS-11-E5: assert 5xx with JSON body missing code/message sub-fields falls back to APIError with raw text."
+          ],
+          "test_spec_refs": [
+            "TS-11-21",
+            "TS-11-22",
+            "TS-11-23",
+            "TS-11-24",
+            "TS-11-25",
+            "TS-11-26"
+          ],
+          "requirement_refs": [
+            "11-REQ-8.1",
+            "11-REQ-8.2",
+            "11-REQ-8.3",
+            "11-REQ-8.4",
+            "11-REQ-8.5",
+            "11-REQ-8.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for response dataclass definitions and field shapes (TS-11-27 through TS-11-32)",
+          "details": [
+            "Write TS-11-27: import all 10 response dataclasses and assert dataclasses.is_dataclass for each.",
+            "Write TS-11-28: assert snake_case field names (created_at, key_id, provider_id, token_id) on relevant classes.",
+            "Write TS-11-29: assert status on User/Organization and role on User are plain str; arbitrary values accepted.",
+            "Write TS-11-30: assert APIKeyWithSecret has exactly {key, key_id, expires_at} fields; created_at/revoked_at absent.",
+            "Write TS-11-31: assert AuthCallbackResponse has user: User and api_key: APIKeyWithSecret fields.",
+            "Write TS-11-32: assert list_org_members returns list[User]; assert `from apikit import OrgMember` raises ImportError."
+          ],
+          "test_spec_refs": [
+            "TS-11-27",
+            "TS-11-28",
+            "TS-11-29",
+            "TS-11-30",
+            "TS-11-31",
+            "TS-11-32"
+          ],
+          "requirement_refs": [
+            "11-REQ-9.1",
+            "11-REQ-9.2",
+            "11-REQ-9.3",
+            "11-REQ-9.4",
+            "11-REQ-9.5",
+            "11-REQ-9.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for from_dict deserialization and edge cases (TS-11-33, TS-11-34, TS-11-E6, TS-11-E7)",
+          "details": [
+            "Write TS-11-33: assert User.from_dict with RFC 3339 strings produces datetime objects for created_at and updated_at.",
+            "Write TS-11-34: assert HealthStatus.from_dict with extra unknown keys raises no exception; returns HealthStatus(status='ok').",
+            "Write TS-11-E6: assert User.from_dict with malformed datetime string raises ValueError.",
+            "Write TS-11-E7: assert User.from_dict with missing required fields raises KeyError or TypeError.",
+            "Write TS-11-P4 parametrized test: for each response dataclass, from_dict with extra keys never raises."
+          ],
+          "test_spec_refs": [
+            "TS-11-33",
+            "TS-11-34",
+            "TS-11-E6",
+            "TS-11-E7"
+          ],
+          "requirement_refs": [
+            "11-REQ-10.1",
+            "11-REQ-10.2",
+            "11-REQ-10.E1",
+            "11-REQ-10.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write tests for to_dict serialization and internal request dataclasses (TS-11-35, TS-11-36, TS-11-37)",
+          "details": [
+            "Write TS-11-35: assert UpdateOrgRequest(name=None, url='https://example.com').to_dict() returns {'url': 'https://example.com'} with no None values.",
+            "Write TS-11-36: import all 6 internal request dataclasses from apikit.models; assert each is a dataclass.",
+            "Write TS-11-37: assert CreateTokenRequest and AuthCallbackRequest have expires field typed int with default 90.",
+            "Write TS-11-P5 parametrized test: to_dict() for all request dataclasses with optional fields=None never yields None values."
+          ],
+          "test_spec_refs": [
+            "TS-11-35",
+            "TS-11-36",
+            "TS-11-37"
+          ],
+          "requirement_refs": [
+            "11-REQ-11.1",
+            "11-REQ-12.1",
+            "11-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All new test functions collected without import errors: `cd packages/sdk-python && uv run pytest --collect-only -q`.",
+          "Tests in this group fail with ImportError or AttributeError (red phase).",
+          "No ruff linter errors in test files: `cd packages/sdk-python && uv run ruff check tests/`.",
+          "Requirements 11-REQ-8.x, 11-REQ-9.x, 11-REQ-10.x, 11-REQ-11.1, 11-REQ-12.x acceptance criteria are traceable to written tests."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests: endpoint methods (health/auth/self), status code rules, keyword-only args, tooling gates",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for health/meta and auth endpoint methods (TS-11-38 through TS-11-40)",
+          "details": [
+            "Write TS-11-38: verify healthz(), readyz(), version() return HealthStatus/VersionInfo and hit base_url (no mount_point).",
+            "Write TS-11-39: verify get_providers() sends GET to mount_point+/auth/providers and returns list[OAuthProvider].",
+            "Write TS-11-40: verify exchange_oauth_code() sends POST with correct body; returns AuthCallbackResponse.",
+            "Write TS-11-P2 parametrized: for multiple mount_point values, health/version URLs never contain the mount_point string."
+          ],
+          "test_spec_refs": [
+            "TS-11-38",
+            "TS-11-39",
+            "TS-11-40"
+          ],
+          "requirement_refs": [
+            "11-REQ-13.1",
+            "11-REQ-14.1",
+            "11-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for authenticated-user (self) endpoint methods (TS-11-41 through TS-11-50)",
+          "details": [
+            "Write TS-11-41: get_user() returns User on 200; raises NotModifiedError on 304.",
+            "Write TS-11-42: update_user(full_name=) sends PATCH with body; returns User.",
+            "Write TS-11-43: list_keys() returns list[APIKey].",
+            "Write TS-11-44: refresh_key('key-abc') sends POST to /user/keys/key-abc/refresh; parses HTTP 200 as APIKeyWithSecret.",
+            "Write TS-11-45: revoke_key() sends DELETE; returns None on 204.",
+            "Write TS-11-46: list_tokens() returns list[PAT].",
+            "Write TS-11-47: create_token() sends POST with body; returns PATWithSecret on 201.",
+            "Write TS-11-48: get_token() returns PAT on 200; raises NotModifiedError on 304.",
+            "Write TS-11-49: revoke_token() returns None on 204.",
+            "Write TS-11-50: list_user_orgs() returns list[Organization]."
+          ],
+          "test_spec_refs": [
+            "TS-11-41",
+            "TS-11-42",
+            "TS-11-43",
+            "TS-11-44",
+            "TS-11-45",
+            "TS-11-46",
+            "TS-11-47",
+            "TS-11-48",
+            "TS-11-49",
+            "TS-11-50"
+          ],
+          "requirement_refs": [
+            "11-REQ-15.1",
+            "11-REQ-15.2",
+            "11-REQ-15.3",
+            "11-REQ-15.4",
+            "11-REQ-15.5",
+            "11-REQ-15.6",
+            "11-REQ-15.7",
+            "11-REQ-15.8",
+            "11-REQ-15.9",
+            "11-REQ-15.10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests for HTTP status code rules, keyword-only args, and tooling gates (TS-11-64 through TS-11-71)",
+          "details": [
+            "Write TS-11-64: assert 200 and 201 responses parsed into typed dataclasses.",
+            "Write TS-11-65: assert 204 DELETE/PUT returns None.",
+            "Write TS-11-66: assert refresh_key parses 200 as APIKeyWithSecret; result lacks created_at/revoked_at.",
+            "Write TS-11-67: assert calling update_user with positional arg raises TypeError.",
+            "Write TS-11-68: shell integration test asserting `uv run pytest -q` exits 0.",
+            "Write TS-11-69: shell integration test asserting `uv run ruff check .` exits 0.",
+            "Write TS-11-70: shell integration test asserting `uv run mypy .` exits 0.",
+            "Write TS-11-71: meta-test verifying all documented test scenario categories have at least one test function."
+          ],
+          "test_spec_refs": [
+            "TS-11-64",
+            "TS-11-65",
+            "TS-11-66",
+            "TS-11-67",
+            "TS-11-68",
+            "TS-11-69",
+            "TS-11-70",
+            "TS-11-71"
+          ],
+          "requirement_refs": [
+            "11-REQ-18.1",
+            "11-REQ-18.2",
+            "11-REQ-18.3",
+            "11-REQ-19.1",
+            "11-REQ-20.1",
+            "11-REQ-20.2",
+            "11-REQ-20.3",
+            "11-REQ-20.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write tests for property-based invariants and smoke tests (TS-11-P1, TS-11-P3, TS-11-P6, TS-11-SMOKE-1 through TS-11-SMOKE-6)",
+          "details": [
+            "Write TS-11-P1: parametrize base_url/mount_point combos with/without trailing slashes; assert no double slashes in path after scheme.",
+            "Write TS-11-P3: mock request sequence with alternating ETag presence; assert last_etag/last_request_id are None at request start.",
+            "Write TS-11-P6: parametrize 401/403/404/409; assert each raises specific subclass that is also isinstance(APIError).",
+            "Write TS-11-SMOKE-1 through TS-11-SMOKE-6 as end-to-end scenario tests using respx.mock covering all six execution paths."
+          ],
+          "test_spec_refs": [
+            "TS-11-P1",
+            "TS-11-P3",
+            "TS-11-P6",
+            "TS-11-SMOKE-1",
+            "TS-11-SMOKE-2",
+            "TS-11-SMOKE-3",
+            "TS-11-SMOKE-4",
+            "TS-11-SMOKE-5",
+            "TS-11-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "11-PROP-1",
+            "11-PROP-3",
+            "11-PROP-6",
+            "11-PATH-1",
+            "11-PATH-2",
+            "11-PATH-3",
+            "11-PATH-4",
+            "11-PATH-5",
+            "11-PATH-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All tests collected without errors: `cd packages/sdk-python && uv run pytest --collect-only -q` exits 0.",
+          "Test group 3 tests fail with ImportError/AttributeError (red phase — implementations pending).",
+          "No ruff linter errors in test files: `cd packages/sdk-python && uv run ruff check tests/`.",
+          "Total test count matches expected number from test_spec (≥71 test functions + property/smoke variants)."
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Scaffold project: pyproject.toml, package layout, and stub source files",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Create packages/sdk-python/ directory structure and pyproject.toml",
+          "details": [
+            "Create directory tree: packages/sdk-python/src/apikit/ and packages/sdk-python/tests/.",
+            "Write pyproject.toml with [project] name='apikit', version='0.1.0', requires-python='>=3.12', dependencies=['httpx>=0.27'].",
+            "Add [project.optional-dependencies] dev=['respx>=0.21','mypy>=1.10','ruff>=0.4','pytest'].",
+            "Add [tool.mypy] strict=true and [tool.ruff] sections.",
+            "Do NOT include any PyPI publishing configuration (no [project.urls] publish, no flit/twine).",
+            "Create empty __init__.py files: src/apikit/__init__.py and tests/__init__.py."
+          ],
+          "test_spec_refs": [
+            "TS-11-1",
+            "TS-11-2",
+            "TS-11-4"
+          ],
+          "requirement_refs": [
+            "11-REQ-1.1",
+            "11-REQ-1.2",
+            "11-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Create stub exceptions.py with all exception classes",
+          "details": [
+            "Create src/apikit/exceptions.py.",
+            "Define APIError(Exception) with __init__(self, code: int, message: str): self.code=code; self.message=message; super().__init__(message).",
+            "Define UnauthorizedError(APIError), ForbiddenError(APIError), NotFoundError(APIError), ConflictError(APIError) — all stub subclasses.",
+            "Define NotModifiedError(Exception) — direct subclass of Exception, not APIError.",
+            "All classes pass mypy strict (full type annotations on __init__)."
+          ],
+          "test_spec_refs": [
+            "TS-11-21",
+            "TS-11-25",
+            "TS-11-26"
+          ],
+          "requirement_refs": [
+            "11-REQ-8.1",
+            "11-REQ-8.5",
+            "11-REQ-8.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Create stub models.py with all dataclass definitions (response and request)",
+          "details": [
+            "Create src/apikit/models.py.",
+            "Define all 10 response dataclasses: User, APIKey, APIKeyWithSecret, PAT, PATWithSecret, Organization, OAuthProvider, AuthCallbackResponse, VersionInfo, HealthStatus — each with correct snake_case fields and type annotations per PRD.",
+            "APIKeyWithSecret: exactly 3 fields: key: str, key_id: str, expires_at: datetime | None.",
+            "status/role fields on User and Organization typed as plain str.",
+            "Define all 6 internal request dataclasses: UpdateUserRequest, CreateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, AuthCallbackRequest.",
+            "CreateTokenRequest.expires and AuthCallbackRequest.expires: int with default=90.",
+            "Stub from_dict and to_dict as `raise NotImplementedError` for now — they will be implemented in group 5."
+          ],
+          "test_spec_refs": [
+            "TS-11-27",
+            "TS-11-28",
+            "TS-11-29",
+            "TS-11-30",
+            "TS-11-31",
+            "TS-11-36",
+            "TS-11-37"
+          ],
+          "requirement_refs": [
+            "11-REQ-9.1",
+            "11-REQ-9.2",
+            "11-REQ-9.3",
+            "11-REQ-9.4",
+            "11-REQ-9.5",
+            "11-REQ-9.6",
+            "11-REQ-12.1",
+            "11-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Create stub client.py with Client class skeleton and __init__.py exports",
+          "details": [
+            "Create src/apikit/client.py.",
+            "Define Client class with __init__(self, base_url: str, mount_point: str = '/api/v1', api_key: str | None = None, timeout: float | None = 30.0) -> None.",
+            "Store _base_url, _mount_point, _api_key, _timeout, _http_client (httpx.Client), last_etag: str | None = None, last_request_id: str | None = None.",
+            "Stub all endpoint methods with `raise NotImplementedError` — signatures must be correct (keyword-only where required).",
+            "Implement __enter__/__exit__ stubs.",
+            "Update src/apikit/__init__.py to export Client, all response model dataclasses, and all exception types."
+          ],
+          "test_spec_refs": [
+            "TS-11-3",
+            "TS-11-5",
+            "TS-11-9"
+          ],
+          "requirement_refs": [
+            "11-REQ-1.3",
+            "11-REQ-2.1",
+            "11-REQ-3.1",
+            "11-REQ-4.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Package is importable: `cd packages/sdk-python && uv run python -c 'from apikit import Client, APIError, User, Organization'` exits 0.",
+          "TS-11-1, TS-11-2, TS-11-3, TS-11-4 now pass: `cd packages/sdk-python && uv run pytest tests/ -k 'test_pyproject or test_package_layout or test_imports or test_no_pypi' -q`.",
+          "TS-11-27, TS-11-28, TS-11-30, TS-11-31, TS-11-36, TS-11-37 pass (dataclass field shapes).",
+          "TS-11-21, TS-11-25, TS-11-26 pass (exception hierarchy).",
+          "No ruff errors: `cd packages/sdk-python && uv run ruff check .`.",
+          "mypy strict passes on stubs: `cd packages/sdk-python && uv run mypy src/`."
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement from_dict, to_dict, and exception handling logic",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement from_dict on all response dataclasses",
+          "details": [
+            "Replace `raise NotImplementedError` stubs in each response dataclass with actual from_dict(data: dict) -> Self classmethod.",
+            "Parse RFC 3339 datetime strings using datetime.fromisoformat() or dateutil.parser.isoparse(); raise ValueError on malformed strings.",
+            "For nested dataclasses (AuthCallbackResponse.user, AuthCallbackResponse.api_key): call nested .from_dict() on the sub-dict.",
+            "Silently ignore all extra/unknown keys: filter data dict to only known field names before constructing instance.",
+            "For list fields (PAT.permissions, PATWithSecret.permissions): pass through list directly.",
+            "For nullable datetime fields (expires_at, revoked_at): return None when value is None, parse when non-None.",
+            "Use typing.Self (Python 3.11+) or cls(...) pattern compatible with Python 3.12."
+          ],
+          "test_spec_refs": [
+            "TS-11-33",
+            "TS-11-34",
+            "TS-11-E6",
+            "TS-11-E7"
+          ],
+          "requirement_refs": [
+            "11-REQ-10.1",
+            "11-REQ-10.2",
+            "11-REQ-10.E1",
+            "11-REQ-10.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement to_dict on all internal request dataclasses",
+          "details": [
+            "Replace `raise NotImplementedError` stubs in each request dataclass with actual to_dict() -> dict method.",
+            "Omit any field whose value is None (do not include key at all in output dict).",
+            "Include required (non-None) fields always.",
+            "No datetime serialization needed in request dataclasses (all fields are str, int, list[str], or str|None).",
+            "Verify UpdateOrgRequest(name=None, url='x').to_dict() == {'url': 'x'}.",
+            "All 6 internal request dataclasses: UpdateUserRequest, CreateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, AuthCallbackRequest."
+          ],
+          "test_spec_refs": [
+            "TS-11-35",
+            "TS-11-P5"
+          ],
+          "requirement_refs": [
+            "11-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Implement _raise_for_status error parsing in Client",
+          "details": [
+            "Add a private _raise_for_status(self, response: httpx.Response) -> None method to Client.",
+            "Try to parse JSON body; look for {'error': {'code': N, 'message': '...'}} envelope.",
+            "If envelope parsed successfully: use envelope code and message; else use HTTP status code and raw response.text.",
+            "If body is empty (response.text.strip() == ''): use 'Unexpected error' as message.",
+            "If JSON parses but lacks expected nested structure (11-REQ-8.E1): fall back to raw response text — wrap in try/except KeyError.",
+            "Map status codes to subclasses: 401→UnauthorizedError, 403→ForbiddenError, 404→NotFoundError, 409→ConflictError, all others→APIError.",
+            "Also handle 304: raise NotModifiedError() (not an error, separate branch)."
+          ],
+          "test_spec_refs": [
+            "TS-11-22",
+            "TS-11-23",
+            "TS-11-24",
+            "TS-11-E5"
+          ],
+          "requirement_refs": [
+            "11-REQ-8.2",
+            "11-REQ-8.3",
+            "11-REQ-8.4",
+            "11-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "TS-11-33, TS-11-34, TS-11-E6, TS-11-E7 pass: `cd packages/sdk-python && uv run pytest tests/test_models.py -q`.",
+          "TS-11-35, TS-11-P5 pass: to_dict tests green.",
+          "TS-11-21 through TS-11-26, TS-11-E5 pass: `cd packages/sdk-python && uv run pytest tests/test_exceptions.py -q`.",
+          "No ruff errors: `cd packages/sdk-python && uv run ruff check .`.",
+          "No mypy errors: `cd packages/sdk-python && uv run mypy src/`.",
+          "11-REQ-10.1, 11-REQ-10.2 acceptance criteria met (from_dict parses datetimes and ignores unknown keys).",
+          "11-REQ-11.1 acceptance criteria met (to_dict omits None optional fields)."
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement Client core: construction, URL building, headers, context manager, ETag",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement Client __init__ with URL normalization and httpx.Client setup",
+          "details": [
+            "In __init__: store self._base_url = base_url.rstrip('/'), self._mount_point = mount_point.rstrip('/').",
+            "Initialize self._http_client = httpx.Client(timeout=timeout).",
+            "Initialize self.last_etag: str | None = None and self.last_request_id: str | None = None.",
+            "Store self._api_key = api_key.",
+            "The rstrip('/') approach handles 0-N trailing slashes uniformly (handles 11-REQ-2.E1).",
+            "Empty string mount_point: rstrip('/') on '' returns '' — store as '' (handles 11-REQ-2.E2)."
+          ],
+          "test_spec_refs": [
+            "TS-11-5",
+            "TS-11-6",
+            "TS-11-8",
+            "TS-11-E2",
+            "TS-11-E3"
+          ],
+          "requirement_refs": [
+            "11-REQ-2.1",
+            "11-REQ-2.2",
+            "11-REQ-2.4",
+            "11-REQ-2.E1",
+            "11-REQ-2.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement Client context manager (__enter__ and __exit__)",
+          "details": [
+            "Implement __enter__(self) -> 'Client': return self.",
+            "Implement __exit__(self, exc_type, exc_val, exc_tb) -> None: call self._http_client.close(); return None (never suppress).",
+            "Closing httpx.Client via .close() is unconditional — even if exc_type is not None.",
+            "Return type is None (falsy) so any exception propagates.",
+            "If close() itself raises, that exception propagates naturally (11-REQ-3.E1 — no suppression)."
+          ],
+          "test_spec_refs": [
+            "TS-11-9",
+            "TS-11-10",
+            "TS-11-E4"
+          ],
+          "requirement_refs": [
+            "11-REQ-3.1",
+            "11-REQ-3.2",
+            "11-REQ-3.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement _build_url, _get_headers, and _request helper methods",
+          "details": [
+            "Implement _build_url(self, path: str, use_mount: bool = True) -> str: if use_mount: return self._base_url + self._mount_point + path; else return self._base_url + path.",
+            "Implement _get_headers(self, with_body: bool = False, if_none_match: str | None = None) -> dict[str, str]: always include Accept: application/json; add Authorization: Bearer when api_key not None; add Content-Type: application/json when with_body=True; add If-None-Match when if_none_match not None.",
+            "Implement _request(self, method, url, *, json=None, params=None, if_none_match=None) -> httpx.Response: reset last_etag=None and last_request_id=None; build headers; send request via self._http_client.request(); capture ETag and X-Request-ID from response headers; call _raise_for_status for non-2xx non-204 non-304; return response.",
+            "Health/meta URLs use use_mount=False; all others use use_mount=True (default)."
+          ],
+          "test_spec_refs": [
+            "TS-11-7",
+            "TS-11-11",
+            "TS-11-12",
+            "TS-11-13",
+            "TS-11-14",
+            "TS-11-15",
+            "TS-11-18",
+            "TS-11-20"
+          ],
+          "requirement_refs": [
+            "11-REQ-2.3",
+            "11-REQ-4.1",
+            "11-REQ-4.2",
+            "11-REQ-5.1",
+            "11-REQ-5.2",
+            "11-REQ-6.1",
+            "11-REQ-7.1",
+            "11-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Write property-based URL double-slash tests and verify Client core tests pass",
+          "details": [
+            "Run TS-11-5, TS-11-6, TS-11-7, TS-11-8, TS-11-9, TS-11-10 to confirm Client core is wired.",
+            "Run TS-11-11 through TS-11-20 to confirm auth headers and ETag behavior.",
+            "Run TS-11-P1: parametrize base_url and mount_point with trailing slashes; assert no double slashes in constructed URLs.",
+            "Run TS-11-P2: for multiple mount_point values, health/version URLs don't contain mount_point.",
+            "Run TS-11-P3: verify last_etag/last_request_id are always None at start of each request."
+          ],
+          "test_spec_refs": [
+            "TS-11-P1",
+            "TS-11-P2",
+            "TS-11-P3"
+          ],
+          "requirement_refs": [
+            "11-PROP-1",
+            "11-PROP-2",
+            "11-PROP-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "TS-11-5, TS-11-6, TS-11-7, TS-11-8, TS-11-E2, TS-11-E3 pass: `cd packages/sdk-python && uv run pytest tests/test_client.py -k 'constructor or url or timeout' -q`.",
+          "TS-11-9, TS-11-10, TS-11-E4 pass: context manager tests green.",
+          "TS-11-11 through TS-11-20 pass: header and ETag tests green.",
+          "TS-11-P1, TS-11-P2, TS-11-P3 pass: property invariant tests green.",
+          "No ruff errors: `cd packages/sdk-python && uv run ruff check .`.",
+          "No mypy errors: `cd packages/sdk-python && uv run mypy src/`.",
+          "11-REQ-2.x, 11-REQ-3.x, 11-REQ-4.x, 11-REQ-5.x, 11-REQ-6.x, 11-REQ-7.x acceptance criteria met."
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement health/meta, auth, and authenticated-user (self) endpoint methods",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement health/meta endpoint methods: healthz, readyz, version",
+          "details": [
+            "Implement healthz(self) -> HealthStatus: call _request('GET', _build_url('/healthz', use_mount=False)); return HealthStatus.from_dict(response.json()).",
+            "Implement readyz(self) -> HealthStatus: identical pattern with '/readyz'.",
+            "Implement version(self) -> VersionInfo: identical pattern with '/version'; return VersionInfo.from_dict(response.json()).",
+            "All three must use use_mount=False to resolve against base_url only."
+          ],
+          "test_spec_refs": [
+            "TS-11-38"
+          ],
+          "requirement_refs": [
+            "11-REQ-13.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement auth endpoint methods: get_providers, exchange_oauth_code",
+          "details": [
+            "Implement get_providers(self) -> list[OAuthProvider]: GET /auth/providers; return [OAuthProvider.from_dict(p) for p in response.json()].",
+            "Implement exchange_oauth_code(self, *, provider: str, code: str, redirect_uri: str, expires: int = 90) -> AuthCallbackResponse: build AuthCallbackRequest; send POST /auth/callback with json=body.to_dict(); return AuthCallbackResponse.from_dict(response.json()).",
+            "exchange_oauth_code must use keyword-only arguments (the * enforces this)."
+          ],
+          "test_spec_refs": [
+            "TS-11-39",
+            "TS-11-40"
+          ],
+          "requirement_refs": [
+            "11-REQ-14.1",
+            "11-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement authenticated-user key and token methods",
+          "details": [
+            "Implement get_user(*, if_none_match=None) -> User: GET /user with if_none_match; return User.from_dict(response.json()).",
+            "Implement update_user(*, full_name: str) -> User: PATCH /user with json={'full_name': full_name}; return User.from_dict(response.json()).",
+            "Implement list_keys() -> list[APIKey]: GET /user/keys; return [APIKey.from_dict(k) for k in response.json()].",
+            "Implement refresh_key(key_id: str) -> APIKeyWithSecret: POST /user/keys/{key_id}/refresh (no body); parse HTTP 200 as APIKeyWithSecret.from_dict(response.json()).",
+            "Implement revoke_key(key_id: str) -> None: DELETE /user/keys/{key_id}; return None (204).",
+            "Implement list_tokens(), create_token(*, name, permissions, expires=90) -> PATWithSecret, get_token(token_id, *, if_none_match=None) -> PAT, revoke_token(token_id) -> None, list_user_orgs() -> list[Organization].",
+            "All keyword-only parameters use * in signature."
+          ],
+          "test_spec_refs": [
+            "TS-11-41",
+            "TS-11-42",
+            "TS-11-43",
+            "TS-11-44",
+            "TS-11-45",
+            "TS-11-46",
+            "TS-11-47",
+            "TS-11-48",
+            "TS-11-49",
+            "TS-11-50"
+          ],
+          "requirement_refs": [
+            "11-REQ-15.1",
+            "11-REQ-15.2",
+            "11-REQ-15.3",
+            "11-REQ-15.4",
+            "11-REQ-15.5",
+            "11-REQ-15.6",
+            "11-REQ-15.7",
+            "11-REQ-15.8",
+            "11-REQ-15.9",
+            "11-REQ-15.10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "TS-11-38 passes: health/meta methods return correct typed objects and use base_url directly.",
+          "TS-11-39, TS-11-40 pass: auth methods send correct requests and deserialize responses.",
+          "TS-11-41 through TS-11-50 pass: all authenticated-user methods green.",
+          "TS-11-44 specifically passes: refresh_key parses HTTP 200 as APIKeyWithSecret.",
+          "No ruff errors: `cd packages/sdk-python && uv run ruff check .`.",
+          "No mypy errors: `cd packages/sdk-python && uv run mypy src/`."
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement admin user management and organization endpoint methods",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement admin user CRUD and status-change methods",
+          "details": [
+            "Implement list_users(*, include_blocked: bool = False) -> list[User]: GET /users; append params={'include_blocked': 'true'} when include_blocked=True (only when True).",
+            "Implement get_user_by_id(user_id: str, *, if_none_match=None) -> User: GET /users/{user_id}.",
+            "Implement create_user(*, username, email, provider, provider_id) -> User: POST /users with CreateUserRequest.to_dict(); return User on 201.",
+            "Implement update_user_by_id(user_id: str, *, full_name: str) -> User: PATCH /users/{user_id} with UpdateUserRequest.to_dict().",
+            "Implement promote_user, demote_user, block_user, unblock_user — each POST to /users/{user_id}/{action}; return User.from_dict(response.json())."
+          ],
+          "test_spec_refs": [
+            "TS-11-51",
+            "TS-11-52",
+            "TS-11-53",
+            "TS-11-54",
+            "TS-11-55"
+          ],
+          "requirement_refs": [
+            "11-REQ-16.1",
+            "11-REQ-16.2",
+            "11-REQ-16.3",
+            "11-REQ-16.4",
+            "11-REQ-16.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement admin user key and token management methods",
+          "details": [
+            "Implement list_user_keys(user_id: str) -> list[APIKey]: GET /users/{user_id}/keys.",
+            "Implement revoke_user_key(user_id: str, key_id: str) -> None: DELETE /users/{user_id}/keys/{key_id}; return None on 204.",
+            "Implement list_user_tokens(user_id: str) -> list[PAT]: GET /users/{user_id}/tokens.",
+            "Implement revoke_user_token(user_id: str, token_id: str) -> None: DELETE /users/{user_id}/tokens/{token_id}; return None on 204."
+          ],
+          "test_spec_refs": [
+            "TS-11-56",
+            "TS-11-57"
+          ],
+          "requirement_refs": [
+            "11-REQ-16.6",
+            "11-REQ-16.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement organization CRUD, block/unblock, and member management methods",
+          "details": [
+            "Implement create_org(*, name, slug, url=None) -> Organization: POST /orgs with CreateOrgRequest.to_dict(); return Organization on 201.",
+            "Implement list_orgs(*, include_blocked=False) -> list[Organization]: GET /orgs; append include_blocked=true param when True.",
+            "Implement get_org(org_id, *, if_none_match=None) -> Organization: GET /orgs/{org_id}.",
+            "Implement update_org(org_id, *, name=None, url=None) -> Organization: PATCH /orgs/{org_id} with UpdateOrgRequest(name, url).to_dict().",
+            "Implement delete_org(org_id) -> None: DELETE /orgs/{org_id}; return None on 204.",
+            "Implement block_org, unblock_org: POST to /orgs/{org_id}/block and /unblock; return Organization.from_dict(response.json()).",
+            "Implement list_org_members(org_id) -> list[User]: GET /orgs/{org_id}/members; return [User.from_dict(m) for m in response.json()].",
+            "Implement add_org_member(org_id, user_id) -> None: PUT /orgs/{org_id}/members/{user_id}; return None on 204.",
+            "Implement remove_org_member(org_id, user_id) -> None: DELETE /orgs/{org_id}/members/{user_id}; return None on 204."
+          ],
+          "test_spec_refs": [
+            "TS-11-58",
+            "TS-11-59",
+            "TS-11-60",
+            "TS-11-61",
+            "TS-11-62",
+            "TS-11-63"
+          ],
+          "requirement_refs": [
+            "11-REQ-17.1",
+            "11-REQ-17.2",
+            "11-REQ-17.3",
+            "11-REQ-17.4",
+            "11-REQ-17.5",
+            "11-REQ-17.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Verify HTTP status code rules and keyword-only arg enforcement",
+          "details": [
+            "Confirm _request helper handles 200/201 by returning response for body parsing; 204 by returning None; 304 by raising NotModifiedError.",
+            "Ensure methods that return None on 204 (DELETE/PUT) do not attempt JSON parsing.",
+            "Confirm refresh_key is wired to parse 200 (not 201) as APIKeyWithSecret.",
+            "Confirm all body-accepting methods use * in signature; run TS-11-67 to confirm TypeError on positional arg.",
+            "Run TS-11-P6 property test: 401/403/404/409 each raise correct subclass and isinstance(e, APIError) is True."
+          ],
+          "test_spec_refs": [
+            "TS-11-64",
+            "TS-11-65",
+            "TS-11-66",
+            "TS-11-67"
+          ],
+          "requirement_refs": [
+            "11-REQ-18.1",
+            "11-REQ-18.2",
+            "11-REQ-18.3",
+            "11-REQ-19.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "TS-11-51 through TS-11-57 pass: admin user management tests green.",
+          "TS-11-58 through TS-11-63 pass: organization management tests green.",
+          "TS-11-64 through TS-11-67 pass: status code rules and keyword-only enforcement verified.",
+          "TS-11-P6 passes: all status-code-specific exception subclasses are also APIError instances.",
+          "No ruff errors: `cd packages/sdk-python && uv run ruff check .`.",
+          "No mypy errors: `cd packages/sdk-python && uv run mypy src/`.",
+          "All 11-REQ-16.x and 11-REQ-17.x acceptance criteria met."
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "checkpoint",
+      "title": "Full test suite green and tooling quality gates pass",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Run complete test suite and confirm all tests pass",
+          "details": [
+            "Run `cd packages/sdk-python && uv run pytest -q` and confirm exit code 0.",
+            "Triage and fix any remaining failures — common issues: datetime parsing edge cases, missing URL path segments, incorrect status code branching.",
+            "Ensure SAMPLE_USER_DICT, SAMPLE_API_KEY_DICT, SAMPLE_PAT_DICT, SAMPLE_ORG_DICT, SAMPLE_API_KEY_WITH_SECRET_DICT fixtures are defined in a conftest.py or shared module under tests/."
+          ],
+          "test_spec_refs": [
+            "TS-11-68"
+          ],
+          "requirement_refs": [
+            "11-REQ-20.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Run ruff linter and fix all warnings",
+          "details": [
+            "Run `cd packages/sdk-python && uv run ruff check .`; fix all reported issues.",
+            "Common issues: unused imports, missing blank lines, line length, f-string usage.",
+            "Re-run until exit code 0 with no diagnostics."
+          ],
+          "test_spec_refs": [
+            "TS-11-69"
+          ],
+          "requirement_refs": [
+            "11-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Run mypy strict and fix all type errors",
+          "details": [
+            "Run `cd packages/sdk-python && uv run mypy .`; fix all strict-mode errors.",
+            "Common issues: missing return type annotations, untyped parameters in from_dict/to_dict, incorrect use of Self type, missing overloads.",
+            "Ensure [tool.mypy] strict=true is set in pyproject.toml and that mypy is run from the packages/sdk-python directory.",
+            "Re-run until exit code 0 with 'Success: no issues found'."
+          ],
+          "test_spec_refs": [
+            "TS-11-70"
+          ],
+          "requirement_refs": [
+            "11-REQ-20.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Verify test coverage of all documented scenarios (TS-11-71)",
+          "details": [
+            "Audit tests/ against the 16 documented scenario categories from TS-11-71.",
+            "Confirm at least one pytest function exists for each category: URL construction, trailing slash normalization, auth header presence/absence, Content-Type/Accept headers, request body serialization, response deserialization with datetime parsing, from_dict unknown field ignoring, APIError on 4xx/5xx with valid envelope, APIError on non-JSON body, APIError on empty body, subclass exceptions (401/403/404/409), NotModifiedError on 304, last_etag and last_request_id, context manager protocol, timeout forwarding, refresh_key 200-response parsing.",
+            "Add any missing test cases identified in the audit."
+          ],
+          "test_spec_refs": [
+            "TS-11-71"
+          ],
+          "requirement_refs": [
+            "11-REQ-20.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "`cd packages/sdk-python && uv run pytest -q` exits 0 with all tests passing.",
+          "`cd packages/sdk-python && uv run ruff check .` exits 0 with no errors.",
+          "`cd packages/sdk-python && uv run mypy .` exits 0 with no errors in strict mode.",
+          "All 16 test scenario categories from TS-11-71 have at least one passing test.",
+          "All smoke tests (TS-11-SMOKE-1 through TS-11-SMOKE-6) pass.",
+          "11-REQ-20.1 through 11-REQ-20.4 acceptance criteria fully met."
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Trace all execution paths and verify no stubs remain",
+          "details": [
+            "Search for `raise NotImplementedError` and `pass` (as stub bodies in non-abstract methods) in all src/apikit/*.py files — none should remain.",
+            "Trace PATH-1 (authenticated GET with ETag): Client.__init__ → _build_url → _request → ETag capture → User.from_dict → return.",
+            "Trace PATH-2 (error response): _request → _raise_for_status → JSON parse → NotFoundError raised.",
+            "Trace PATH-3 (304 conditional GET): _request → _raise_for_status → NotModifiedError raised.",
+            "Trace PATH-4 (context manager): __enter__ → method call → exception → __exit__ → httpx.Client.close().",
+            "Trace PATH-5 (OAuth exchange): exchange_oauth_code → AuthCallbackRequest.to_dict → _request → AuthCallbackResponse.from_dict → nested User.from_dict + APIKeyWithSecret.from_dict.",
+            "Trace PATH-6 (health probe): healthz → _build_url(use_mount=False) → base_url+/healthz → HealthStatus.from_dict."
+          ],
+          "test_spec_refs": [
+            "TS-11-SMOKE-1",
+            "TS-11-SMOKE-2",
+            "TS-11-SMOKE-3",
+            "TS-11-SMOKE-4",
+            "TS-11-SMOKE-5",
+            "TS-11-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "11-REQ-2.3",
+            "11-REQ-13.1",
+            "11-REQ-14.1",
+            "11-REQ-14.2",
+            "11-REQ-15.1",
+            "11-REQ-16.1",
+            "11-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Verify return value propagation across all method chains",
+          "details": [
+            "Confirm all methods that return typed dataclasses call .from_dict(response.json()) and return the result (not None).",
+            "Confirm all DELETE/PUT methods returning None on 204 do not call .json() on the response.",
+            "Confirm refresh_key receives HTTP 200 and calls APIKeyWithSecret.from_dict(response.json()) — not create flow.",
+            "Confirm create_org, create_user, create_token return parsed objects from 201 response bodies.",
+            "Confirm list_* methods iterate the JSON array and call from_dict on each element.",
+            "Verify by inspecting client.py that no endpoint method returns a bare httpx.Response object to the caller."
+          ],
+          "test_spec_refs": [
+            "TS-11-64",
+            "TS-11-65",
+            "TS-11-66"
+          ],
+          "requirement_refs": [
+            "11-REQ-9.1",
+            "11-REQ-10.1",
+            "11-REQ-18.1",
+            "11-REQ-18.2",
+            "11-REQ-18.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Run all smoke tests with real component wiring",
+          "details": [
+            "Run all smoke tests explicitly: `cd packages/sdk-python && uv run pytest tests/ -k 'smoke' -v`.",
+            "TS-11-SMOKE-1: Client with trailing-slash URL, GET /user 200, ETag captured, User returned.",
+            "TS-11-SMOKE-2: get_user_by_id non-existent, 404 with envelope, NotFoundError raised with code=404.",
+            "TS-11-SMOKE-3: get_org with if_none_match, 304 response, NotModifiedError raised, not APIError.",
+            "TS-11-SMOKE-4: context manager with ValueError inside; httpx.Client closed; exception propagates.",
+            "TS-11-SMOKE-5: exchange_oauth_code with all params; POST body correct; AuthCallbackResponse.user and .api_key populated.",
+            "TS-11-SMOKE-6: Client with trailing slashes; healthz() hits exactly 'https://api.example.com/healthz'; no double slashes."
+          ],
+          "test_spec_refs": [
+            "TS-11-SMOKE-1",
+            "TS-11-SMOKE-2",
+            "TS-11-SMOKE-3",
+            "TS-11-SMOKE-4",
+            "TS-11-SMOKE-5",
+            "TS-11-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "11-PATH-1",
+            "11-PATH-2",
+            "11-PATH-3",
+            "11-PATH-4",
+            "11-PATH-5",
+            "11-PATH-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.4",
+          "title": "Dead-code and stub audit: search for Python stub markers",
+          "details": [
+            "Search src/ for `raise NotImplementedError` — zero occurrences expected.",
+            "Search src/ for methods containing only `pass` as body — zero occurrences expected (excluding abstract base classes, which are not used here).",
+            "Search src/ for `# TODO` comments — resolve or document any found.",
+            "Search src/ for `return None` in methods whose return type is not None — investigate each occurrence.",
+            "Confirm all 34 endpoint methods in client.py are implemented (not stubbed): count method definitions and cross-check against PRD endpoint table.",
+            "Run `grep -rn 'NotImplementedError\\|# TODO' packages/sdk-python/src/` and assert no output."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "11-REQ-1.2",
+            "11-REQ-2.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.5",
+          "title": "Cross-spec OpenAPI alignment verification",
+          "details": [
+            "Cross-check all dataclass field names against api/openapi.yaml schema definitions from spec 03.",
+            "Verify User fields (id, username, email, full_name, status, role, provider, provider_id, created_at, updated_at) match OpenAPI User schema.",
+            "Verify APIKey fields (key_id, created_at, expires_at, revoked_at) match OpenAPI APIKey schema.",
+            "Verify APIKeyWithSecret contains only (key, key_id, expires_at) — no created_at or revoked_at.",
+            "Verify PAT fields (token_id, name, permissions, created_at, expires_at, revoked_at) match OpenAPI PAT schema.",
+            "Verify Organization fields (id, name, slug, url, status, created_at, updated_at) match OpenAPI Organization schema.",
+            "Run final full suite: `cd packages/sdk-python && uv run pytest -q && uv run ruff check . && uv run mypy .` — all three must exit 0."
+          ],
+          "test_spec_refs": [
+            "TS-11-27",
+            "TS-11-28",
+            "TS-11-30"
+          ],
+          "requirement_refs": [
+            "11-REQ-9.1",
+            "11-REQ-9.2",
+            "11-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "`cd packages/sdk-python && uv run pytest -q` exits 0 — all tests pass with no failures or errors.",
+          "`cd packages/sdk-python && uv run ruff check .` exits 0 — no linter diagnostics.",
+          "`cd packages/sdk-python && uv run mypy .` exits 0 — no strict-mode type errors.",
+          "All 6 smoke tests (TS-11-SMOKE-1 through TS-11-SMOKE-6) pass explicitly.",
+          "`grep -rn 'raise NotImplementedError' packages/sdk-python/src/` returns no output.",
+          "All 34 endpoint methods are present and implemented in client.py (verified by grep/ast inspection).",
+          "All dataclass field names match OpenAPI schema shapes from spec 03.",
+          "11-REQ-1.x through 11-REQ-20.x acceptance criteria are all met as confirmed by passing tests."
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "11-REQ-1.1",
+      "test_spec_id": "TS-11-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-1.2",
+      "test_spec_id": "TS-11-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-1.3",
+      "test_spec_id": "TS-11-3",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-1.4",
+      "test_spec_id": "TS-11-4",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.1",
+      "test_spec_id": "TS-11-5",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.2",
+      "test_spec_id": "TS-11-6",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.3",
+      "test_spec_id": "TS-11-7",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.4",
+      "test_spec_id": "TS-11-8",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.E1",
+      "test_spec_id": "TS-11-E2",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-2.E2",
+      "test_spec_id": "TS-11-E3",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-3.1",
+      "test_spec_id": "TS-11-9",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-3.2",
+      "test_spec_id": "TS-11-10",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-3.E1",
+      "test_spec_id": "TS-11-E4",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-4.1",
+      "test_spec_id": "TS-11-11",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-4.2",
+      "test_spec_id": "TS-11-12",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-5.1",
+      "test_spec_id": "TS-11-13",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-5.2",
+      "test_spec_id": "TS-11-14",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-6.1",
+      "test_spec_id": "TS-11-15",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-6.2",
+      "test_spec_id": "TS-11-16",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-6.3",
+      "test_spec_id": "TS-11-17",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-7.1",
+      "test_spec_id": "TS-11-18",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-7.2",
+      "test_spec_id": "TS-11-19",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-7.3",
+      "test_spec_id": "TS-11-20",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.1",
+      "test_spec_id": "TS-11-21",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.2",
+      "test_spec_id": "TS-11-22",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.3",
+      "test_spec_id": "TS-11-23",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.4",
+      "test_spec_id": "TS-11-24",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.5",
+      "test_spec_id": "TS-11-25",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.6",
+      "test_spec_id": "TS-11-26",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-8.E1",
+      "test_spec_id": "TS-11-E5",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.1",
+      "test_spec_id": "TS-11-27",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.2",
+      "test_spec_id": "TS-11-28",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.3",
+      "test_spec_id": "TS-11-29",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.4",
+      "test_spec_id": "TS-11-30",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.5",
+      "test_spec_id": "TS-11-31",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-9.6",
+      "test_spec_id": "TS-11-32",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-10.1",
+      "test_spec_id": "TS-11-33",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-10.2",
+      "test_spec_id": "TS-11-34",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-10.E1",
+      "test_spec_id": "TS-11-E6",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-10.E2",
+      "test_spec_id": "TS-11-E7",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-11.1",
+      "test_spec_id": "TS-11-35",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-12.1",
+      "test_spec_id": "TS-11-36",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-12.2",
+      "test_spec_id": "TS-11-37",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-13.1",
+      "test_spec_id": "TS-11-38",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-14.1",
+      "test_spec_id": "TS-11-39",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-14.2",
+      "test_spec_id": "TS-11-40",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.1",
+      "test_spec_id": "TS-11-41",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.2",
+      "test_spec_id": "TS-11-42",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.3",
+      "test_spec_id": "TS-11-43",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.4",
+      "test_spec_id": "TS-11-44",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.5",
+      "test_spec_id": "TS-11-45",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.6",
+      "test_spec_id": "TS-11-46",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.7",
+      "test_spec_id": "TS-11-47",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.8",
+      "test_spec_id": "TS-11-48",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.9",
+      "test_spec_id": "TS-11-49",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-15.10",
+      "test_spec_id": "TS-11-50",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-18.1",
+      "test_spec_id": "TS-11-64",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-18.2",
+      "test_spec_id": "TS-11-65",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-18.3",
+      "test_spec_id": "TS-11-66",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-19.1",
+      "test_spec_id": "TS-11-67",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-20.1",
+      "test_spec_id": "TS-11-68",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-20.2",
+      "test_spec_id": "TS-11-69",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-20.3",
+      "test_spec_id": "TS-11-70",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-20.4",
+      "test_spec_id": "TS-11-71",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.1",
+      "test_spec_id": "TS-11-51",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.2",
+      "test_spec_id": "TS-11-52",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.3",
+      "test_spec_id": "TS-11-53",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.4",
+      "test_spec_id": "TS-11-54",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.5",
+      "test_spec_id": "TS-11-55",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.6",
+      "test_spec_id": "TS-11-56",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-16.7",
+      "test_spec_id": "TS-11-57",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.1",
+      "test_spec_id": "TS-11-58",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.2",
+      "test_spec_id": "TS-11-59",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.3",
+      "test_spec_id": "TS-11-60",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.4",
+      "test_spec_id": "TS-11-61",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.5",
+      "test_spec_id": "TS-11-62",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "11-REQ-17.6",
+      "test_spec_id": "TS-11-63",
+      "task_id": "8.3",
+      "test_path": null
+    }
+  ]
+}

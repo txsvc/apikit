@@ -1,0 +1,539 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `api_key_lifecycle` PRD is exceptionally well-written and comprehensive. All four required sections (Intent, Goals, Non-Goals, Background/Source) are present and of high quality. The spec covers key format, generation logic, all three REST endpoints, validation rules, error handling, SQL queries, testing strategy, design rationale, interfaces, and a glossary. Dependencies on active specs (`server_core`, `database_layer`, `auth_middleware`) are correctly declared and the downstream relationship with `oauth_provider_registry` is clearly documented. One minor cross-spec observation is noted: `pat_lifecycle` (an active spec) also defines user-scoped credential endpoints under a `/user/` path group, but `api_key_lifecycle` explicitly calls this out as a Non-Goal, and the two specs cover distinct credential types. No blocking gaps were found.",
+      "gaps": [
+        "Minor: The PRD notes that admin endpoints for viewing/revoking other users' keys (GET /users/:id/keys, DELETE /users/:id/keys/:key_id) are deferred to a 'separate admin user management spec', but no such spec exists in the current active spec landscape. The user_management spec (active) may be the intended home, but this is not explicitly confirmed. This is a soft gap \u2014 it does not block this spec but may cause scope confusion later.",
+        "Minor: The auth requirement for POST /user/keys/:key_id/refresh states 'API key (the key being refreshed must be the caller's active key)' \u2014 implying PAT authentication is NOT accepted for refresh. This asymmetry versus GET (accepts API key or PAT with keys:read) and DELETE (accepts API key or PAT with keys:manage) is intentional but the rationale is not documented in the Design Decisions section.",
+        "Minor: The PRD references a `db.WithTx` function in the integration test for transaction rollback scenarios, but this helper is not explicitly called out as part of spec 02's public API in the Dependencies table. This is a low-risk documentation gap.",
+        "Minor: The modular arithmetic bias note (byte % 62, ~0.8% bias) is acknowledged but there is no explicit decision to revisit or a ticket reference. Acceptable as-is given the stated rationale, but worth flagging for audit."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The Non-Goals section defers admin key management endpoints (GET /users/:id/keys, DELETE /users/:id/keys/:key_id) to a 'separate admin user management spec'. Is the existing `user_management` spec (active) the intended home for those admin endpoints, or will a new spec be created?",
+          "context": "Confirming this prevents scope ambiguity. If user_management is the target, a dependency note or cross-reference in that spec's backlog would be appropriate.",
+          "options": [
+            "Yes, user_management spec will cover admin key endpoints",
+            "A new dedicated spec will be created for admin key management",
+            "Not yet decided"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "The refresh endpoint (POST /user/keys/:key_id/refresh) only accepts API key authentication, not PAT authentication. Is this intentional, and if so, should the rationale be documented in the Design Decisions section?",
+          "context": "GET and DELETE accept both API keys and PATs with the appropriate permission scope, but refresh does not. The asymmetry may confuse implementers or API consumers if not explained.",
+          "options": [
+            "Yes, intentional \u2014 please add a design decision entry explaining why",
+            "Yes, intentional \u2014 rationale is self-evident (a PAT should not be able to mint new key material)",
+            "No, this was an oversight \u2014 refresh should also accept PAT with keys:manage"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, implementation-ready PRD. It is thorough, internally consistent, and well-structured. The functional requirements are precise and cover the full lifecycle (generation, listing, refresh, revocation). Dependencies are clearly scoped, error handling is exhaustive, and the testing strategy is comprehensive with both unit and integration test cases. The design decisions section explains the \"why\" behind non-obvious choices. Minor gaps exist around: the `api_keys` schema not being reproduced here (deferred to spec 02), the mount point path not being explicitly defined, time-manipulation strategy for expiry testing, and the behavior of `GenerateAPIKey` when called with a user who has only expired (not revoked) keys.",
+      "gaps": [
+        "The api_keys table schema (column types, constraints, indexes) is not reproduced in this spec \u2014 it is fully deferred to spec 02. If spec 02 changes the schema, this spec has no record of what it depends on. A schema excerpt or reference table of the columns this spec reads/writes would improve traceability.",
+        "The mount point base path (e.g., /api/v1, /v1, /) is not defined here. The spec uses {mount_point} as a placeholder but never resolves it, making it impossible to verify full URL paths without consulting spec 01.",
+        "The integration test for 'refresh expired key' mentions 'time manipulation in tests' but does not specify the mechanism \u2014 whether this is via a test helper that directly writes a past expires_at to the database, a clock injection interface, or another approach. This could block implementation.",
+        "The behavior of GenerateAPIKey when the user has only expired keys (no revoked, no active) is implied by the revocation query (which filters on revoked_at IS NULL), but expired keys also satisfy that filter if their revoked_at is NULL. The spec should clarify whether expired-but-not-revoked keys are also revoked by the UPDATE query during generation, or left untouched.",
+        "The ETag derivation strategy for GET /user/keys (based on most recent created_at) is stated, but the exact format/encoding of the ETag value is not specified. This matters for cache correctness and interoperability with the SetETag/CheckETag helpers from spec 01.",
+        "There is no explicit mention of what happens when GenerateAPIKey is called concurrently for the same user (race condition on the one-active-key invariant). Whether SQLite's serialized write mode or an explicit transaction isolation level is relied upon to prevent duplicate active keys is not stated.",
+        "The spec does not define the HTTP response body (if any) for the case where a 304 Not Modified is returned on GET /user/keys with a matching ETag \u2014 this is standard HTTP behavior but worth noting for completeness.",
+        "The `expires_days` column is referenced in the refresh logic (recalculating expires_at from the stored expires_days), but the INSERT query shown does include it. However, the GET /user/keys response schema and the SELECT for listing do not include expires_days in the returned fields. It is worth explicitly noting that expires_days is an internal/stored field not exposed to clients."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the resolved base mount point for the API key endpoints? For example, are they at /api/v1/user/keys, /v1/user/keys, or simply /user/keys?",
+          "context": "The spec uses {mount_point} as a placeholder throughout but never resolves it. Knowing the concrete path is important for integration tests, client documentation, and confirming there are no conflicts with other specs' route registrations.",
+          "options": [
+            "/api/v1",
+            "/v1",
+            "/api",
+            "/ (root \u2014 no prefix)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How should 'time manipulation' for expiry testing be implemented in integration tests? Specifically, how do tests create an already-expired key to exercise the 'cannot refresh an expired key' validation path?",
+          "context": "The testing strategy mentions 'use time manipulation in tests' for the expired-key refresh test but does not specify the mechanism. The implementation approach (direct DB write of a past expires_at vs. a clock injection interface vs. a test helper) affects the package's internal design.",
+          "options": [
+            "Directly write a past expires_at value to the database in the test setup (no clock injection needed)",
+            "Inject a clock interface into handlers/GenerateAPIKey so tests can supply a fake time source",
+            "Use a package-level variable for the current-time function, overridable in tests",
+            "Create a test helper that backdates the expires_at column after key creation"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "When GenerateAPIKey is called for a user who has only expired keys (revoked_at IS NULL but expires_at is in the past), should those expired keys also be revoked (revoked_at set) by the UPDATE query, or left untouched?",
+          "context": "The revocation query filters on `revoked_at IS NULL`, which also matches expired keys that were never explicitly revoked. Clarifying intent here ensures the one-active-key invariant is correctly maintained and that the audit trail for expired keys is accurate.",
+          "options": [
+            "Yes \u2014 revoke all keys where revoked_at IS NULL (expired or not), ensuring a clean slate",
+            "No \u2014 only revoke non-expired active keys; leave expired keys' revoked_at as NULL",
+            "It doesn't matter functionally, but prefer option A for simplicity"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "What is the exact format of the ETag value returned by GET /user/keys? For example, is it the raw created_at timestamp, a quoted string of it, or a hash of it?",
+          "context": "The spec says the ETag is 'derived from the most recent created_at timestamp' but does not specify encoding. HTTP ETags must be quoted strings per RFC 7232. The SetETag/CheckETag helpers from spec 01 may have their own conventions that should be documented here.",
+          "options": [
+            "Quoted RFC 3339 timestamp string (e.g., \"2026-07-17T14:30:00Z\")",
+            "Quoted SHA-256 hash of the most recent created_at timestamp",
+            "Whatever SetETag() from spec 01 produces \u2014 defer to that helper's convention",
+            "Quoted Unix epoch integer of the most recent created_at"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Is concurrent key generation for the same user a realistic scenario, and if so, what mechanism enforces the one-active-key invariant under concurrency?",
+          "context": "If two OAuth logins for the same user complete simultaneously, both could call GenerateAPIKey concurrently, potentially creating two active keys. SQLite's default WAL mode serializes writes, but it is worth stating whether this is the relied-upon guarantee or whether an explicit transaction + SELECT FOR UPDATE pattern is expected.",
+          "options": [
+            "SQLite's serialized write mode is sufficient \u2014 no additional locking needed",
+            "Wrap the revoke + insert in a single explicit transaction (already implied by db.Executor)",
+            "Add a unique partial index on api_keys(user_id) WHERE revoked_at IS NULL to enforce at the DB level",
+            "This is not a concern for the current scale; document as a known limitation"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD that demonstrates strong spec-format discipline. The document clearly defines scope, dependencies, functional requirements, interfaces, error handling, and testing strategy. The intent, goals, and non-goals are unambiguous. Key design decisions are explicitly justified, and the glossary is thorough. The spec is implementation-ready with only a small number of minor gaps or clarification opportunities that are unlikely to block development.",
+      "gaps": [
+        "The `GET /api/v1/user/keys` endpoint specifies Auth as 'API key or PAT with keys:read permission', but the PAT permission system and what constitutes a valid `keys:read` or `keys:manage` scope are not defined in this spec \u2014 they are presumably defined elsewhere (auth_middleware / PAT spec). This is acceptable as a cross-spec dependency but could benefit from a brief note pointing to the authoritative source.",
+        "The refresh endpoint response example shows `'newSecret32CharsLongHere1234'` (30 chars visible, but spec requires 32 chars) \u2014 the example string is illustrative but slightly inconsistent in length, which could confuse implementers counting characters.",
+        "The ETag derivation for `GET /api/v1/user/keys` uses 'the most recent created_at timestamp among the user's keys', but it is unspecified what happens to the ETag when a key is revoked (revoked_at changes, but created_at does not). A revocation would not invalidate the cached listing ETag, potentially serving a stale revoked_at: null response to a client with a cached copy.",
+        "The `DELETE /api/v1/user/keys/:key_id` validation does not explicitly address the case of an expired (but not revoked) key \u2014 it is unclear whether deleting an expired key is permitted or should return an error (the error table only covers 'already revoked', not 'already expired').",
+        "The spec does not address what HTTP status code or behavior to return if the `key_id` path parameter is malformed (e.g., wrong length, non-alphanumeric characters) \u2014 it is assumed to fall through to 404 but is not stated.",
+        "The `RegisterKeyHandlers` signature accepts `*sql.DB` directly rather than `db.Executor`, which is inconsistent with `GenerateAPIKey` accepting `db.Executor`. The rationale for this difference is not explained.",
+        "There is no explicit statement about whether the endpoints return an empty JSON array `[]` or `null` when the user has no keys for the GET endpoint at the HTTP layer \u2014 it is covered in integration tests ('verify HTTP 200 with an empty JSON array []') but not in the endpoint specification section itself.",
+        "The spec mentions `CacheMiddleware(CacheNoStore)` is inherited from the mount point group default in the dependencies table, but does not clarify whether `RegisterKeyHandlers` needs to apply any additional middleware or whether it is purely inherited \u2014 minor ambiguity for the implementer."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "When a key is revoked via DELETE, the ETag for GET /api/v1/user/keys is derived from the most recent `created_at`, which does not change on revocation. Should the ETag also incorporate `revoked_at` (e.g., using the most recent of `created_at` or `revoked_at`) so that a revocation invalidates cached listings?",
+          "context": "A client that cached the listing response with an ETag would not see the updated `revoked_at` after a DELETE if the ETag only tracks `created_at`. This could leave a client with a stale view of key status until it explicitly re-fetches.",
+          "options": [
+            "Keep ETag based on created_at only (revocation does not need to bust the cache \u2014 the listing is for audit; revoked_at is visible on next unconditional fetch)",
+            "Derive ETag from the most recent of created_at or revoked_at across all user keys",
+            "Derive ETag from a composite hash of all key metadata fields",
+            "Remove ETag support from the listing endpoint entirely"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Is deleting (revoking) an already-expired but not explicitly revoked key allowed, or should the DELETE endpoint return an error for expired keys?",
+          "context": "The DELETE validation section only defines an error for keys that are already revoked (HTTP 400 'key is already revoked'). It is silent on expired keys. Since expired keys can appear in listings, a user may attempt to explicitly revoke one. Clarifying this prevents inconsistent implementations.",
+          "options": [
+            "Allow DELETE on expired keys (sets revoked_at, makes audit trail explicit \u2014 consistent with GenerateAPIKey behavior)",
+            "Return HTTP 400 'key is already expired' for expired keys (treat expiry like revocation for DELETE purposes)",
+            "Allow DELETE on expired keys silently (no error, idempotent-ish behavior)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the GET /api/v1/user/keys endpoint explicitly state that it returns an empty JSON array `[]` (not `null`) when the user has no keys, in the endpoint specification section (not just in the integration tests)?",
+          "context": "The integration test section specifies 'verify HTTP 200 with an empty JSON array []', but the endpoint specification body does not call this out explicitly. Clients and implementers reading only the endpoint spec might assume `null` or a 404.",
+          "options": [
+            "Yes \u2014 add an explicit note to the endpoint spec: 'Returns [] with HTTP 200 when the user has no keys'",
+            "No \u2014 the integration test coverage is sufficient; the spec body does not need to repeat it"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "The `RegisterKeyHandlers` function signature accepts `*sql.DB` directly, while `GenerateAPIKey` accepts `db.Executor`. Should `RegisterKeyHandlers` be updated to accept `db.Executor` for consistency, or is `*sql.DB` intentional at the handler registration level?",
+          "context": "Using `db.Executor` throughout would allow handlers to be tested more flexibly and is consistent with the rest of the spec's design. However, handler registration typically happens at startup with a concrete `*sql.DB`, so `*sql.DB` may be intentional to keep the registration API simple.",
+          "options": [
+            "Keep *sql.DB \u2014 handler registration always uses the concrete DB at startup; db.Executor is only needed for GenerateAPIKey's transaction flexibility",
+            "Change to db.Executor for consistency and testability",
+            "No preference \u2014 leave the decision to the implementer"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Should the spec explicitly state the behavior when a malformed `key_id` path parameter is provided (e.g., wrong length or non-alphanumeric characters) \u2014 does it return HTTP 400 (validation error) or HTTP 404 (treat as not found)?",
+          "context": "Currently the spec is silent on malformed key_id path params. Implementers might differ on whether to validate the format before querying the DB (returning 400) or simply let the DB query return no rows (returning 404). Consistency matters for API clients.",
+          "options": [
+            "Return HTTP 404 'key not found' \u2014 no format validation; let the DB query handle it",
+            "Return HTTP 400 with a validation error for obviously malformed key_ids (e.g., wrong length)",
+            "Leave this as an implementation detail not specified in the PRD"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD that demonstrates senior-level engineering thoroughness. It covers the API Key Lifecycle component with remarkable depth across functional requirements, interface contracts, database queries, error handling, testing strategy, and design rationale. The document is self-consistent, clearly scoped, and provides enough detail for an engineer to implement the feature without ambiguity. Only a handful of minor gaps were identified, none of which block implementation.",
+      "gaps": [
+        "The `db.Executor` interface used in `GenerateAPIKey` is referenced as coming from spec 02, but its exact definition (method signatures) is not reproduced here. An implementer working only from this spec would need to consult spec 02 to know what methods to satisfy.",
+        "The ETag computation references `MAX(created_at, COALESCE(revoked_at, created_at))` but does not clarify whether the raw timestamp string from the DB is passed to `SetETag()` or whether it is first parsed and re-formatted. This is a minor ambiguity delegated to spec 01.",
+        "The `GET /api/v1/user/keys` listing is specified to return 'all keys \u2014 both active and revoked/expired' but the SQL query has no LIMIT clause. For users with long histories (e.g., many years of monthly refreshes), this could return a large number of rows. While pagination is explicitly out of scope, the decision to impose no row cap is not discussed.",
+        "The exact behavior when `GenerateAPIKey` is called within a transaction that was started by the caller (spec 06 OAuth callback) and the revocation UPDATE affects zero rows (first-time user with no prior keys) is implied to be a no-op success, but this is not explicitly stated.",
+        "The `TokenPrefix` build-time configurability mechanism (how it is set, e.g., linker flag, config, constant) is referenced but not defined in this spec \u2014 it is assumed to come from spec 01. If spec 01 does not fully define this, implementers may make incompatible choices.",
+        "The response Content-Type header (`application/json`) is not explicitly stated for any endpoint, though it is implied by the JSON response bodies and Echo framework defaults.",
+        "There is no explicit statement about what happens if the database INSERT in `GenerateAPIKey` fails after the revocation UPDATE has already committed (or vice versa within a transaction). The transactional atomicity guarantee for the two-step operation (revoke + insert) when called with a bare `*sql.DB` (not a `*sql.Tx`) is not addressed."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "When `GenerateAPIKey` is called with a bare `*sql.DB` (not within a caller-provided transaction), are the revocation UPDATE and the INSERT executed as a single atomic transaction internally, or are they two separate sequential operations that could partially fail?",
+          "context": "If a crash or DB error occurs between the UPDATE (revoke old keys) and the INSERT (create new key), the user could be left with no active key and no new key. Clarifying whether `GenerateAPIKey` wraps these two operations in its own internal transaction when called with `*sql.DB` (vs. a `*sql.Tx`) is important for correctness and disaster-recovery reasoning.",
+          "options": [
+            "GenerateAPIKey internally begins a transaction when called with *sql.DB, making the revoke+insert atomic in all cases.",
+            "The revoke and insert are two separate operations when called with *sql.DB; the caller is responsible for wrapping in a transaction if atomicity is needed.",
+            "GenerateAPIKey always requires the caller to pass a *sql.Tx; passing *sql.DB is only for standalone/non-transactional contexts where partial failure is acceptable."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Is there a maximum number of key records retained per user in the `api_keys` table, or do revoked/expired keys accumulate indefinitely?",
+          "context": "The listing endpoint returns all keys with no LIMIT, and pagination is explicitly out of scope. For long-lived systems, a user who refreshes or re-logins monthly for several years could accumulate dozens or hundreds of rows. Clarifying whether there is a pruning/archival strategy (e.g., keep only the last N revoked keys) prevents an unaddressed scalability concern from becoming a production issue.",
+          "options": [
+            "No cap \u2014 all historical keys are retained indefinitely for audit purposes.",
+            "A configurable retention limit (e.g., keep the last 10 revoked keys per user) is applied at generation time.",
+            "An out-of-band archival/purge job handles old rows; the spec does not need to address it."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the `GET /api/v1/user/keys` listing endpoint explicitly document the `Content-Type: application/json` response header, or is it sufficient to rely on Echo framework defaults?",
+          "context": "All three endpoints return JSON bodies, but no endpoint definition explicitly states the Content-Type header. For completeness and to avoid implementer ambiguity (especially if middleware or custom serializers are involved), it may be worth an explicit note.",
+          "options": [
+            "Rely on Echo defaults; no need to document explicitly.",
+            "Add a note to each endpoint definition explicitly stating Content-Type: application/json.",
+            "Add a single note in the Technical Stack or Base Mount Point section covering all endpoints."
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "When `GenerateAPIKey` is called for a first-time user (no prior keys), does the revocation UPDATE executing with zero matching rows constitute a success, or should it be treated as a detectable condition?",
+          "context": "The spec implies this is a silent no-op success (the UPDATE affects 0 rows and processing continues). Making this explicit prevents implementers from adding an unnecessary error check on the UPDATE row count.",
+          "options": [
+            "Zero rows affected by the revocation UPDATE is a no-op success; execution continues to INSERT.",
+            "The revocation UPDATE result should be logged at DEBUG level but never returns an error.",
+            "This is already sufficiently implied by the spec; no change needed."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD that meets and exceeds spec-format quality standards. It is comprehensive, internally consistent, and demonstrates a high degree of engineering rigor. The document clearly defines the API key lifecycle component with precise functional requirements, explicit interface contracts, well-reasoned design decisions, a thorough testing strategy, and a complete glossary. Nearly all implementation decisions are justified, edge cases are called out explicitly, and cross-spec dependencies are mapped with directional clarity. Only a handful of minor gaps and clarifying questions remain.",
+      "gaps": [
+        "The `db.Executor` interface is referenced extensively but its definition (method signatures) is not reproduced here \u2014 implementers must consult spec 02 to understand what methods it requires (e.g., ExecContext, QueryContext, QueryRowContext). A one-line interface definition or a pointer to the exact location in spec 02 would help.",
+        "The ETag computation references `SetETag()` and `CheckETag()` from spec 01 but does not describe their expected signatures or the exact string format fed into them (e.g., RFC 3339, Unix epoch). If spec 01 changes that helper's contract, this spec gives no fallback.",
+        "The `api_keys` table schema is described only by column names referenced in SQL queries. The column types, constraints (e.g., PRIMARY KEY, UNIQUE, NOT NULL), and indexes are deferred entirely to spec 02, with no even-summary reproduction here. A reader implementing this spec in isolation cannot determine, for example, whether `key_id` is the primary key or whether there is a unique index on `(user_id, key_id)`.",
+        "The `PAT authentication rejected for refresh` error path specifies HTTP 401 with message `'API key authentication required'`, but it is not stated where this credential-type flag is surfaced in the request context (i.e., which context key / field the refresh handler reads to detect PAT vs. API key auth). The PAT permission system is said to be defined in spec 05 and `pat_lifecycle`, but the concrete context accessor is unspecified.",
+        "There is no mention of how the refresh endpoint atomically handles the UPDATE (secret_hash, created_at, expires_at). If the UPDATE affects 0 rows (race condition after ownership check), the spec does not clarify whether that maps to 404 or a 500.",
+        "The `GenerateAPIKey` function signature uses `db.Executor` but the Design Decisions section says 'When called with a bare *sql.DB \u2026 it internally begins a transaction.' It is not explained how the function detects whether the Executor is a *sql.DB vs. *sql.Tx (type assertion, wrapper type, etc.) \u2014 this is an implementation detail that could lead to ambiguity.",
+        "The listing endpoint's ETag query (MAX of effective timestamps) is described in prose but no corresponding SQL snippet is provided in the Database Queries section, unlike the other five queries.",
+        "The spec does not address what happens if `crypto/rand.Read()` returns an error (e.g., system entropy exhaustion). There is no error handling specification for random generation failures."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Can you provide the method signatures for the `db.Executor` interface from spec 02, or confirm the exact location in spec 02 where they are defined so implementers can find them without reading the entire spec?",
+          "context": "The interface is central to `GenerateAPIKey`'s signature and transaction flexibility, but its method set is never shown. Without it, an implementer cannot write the function without consulting spec 02.",
+          "options": [
+            "Reproduce the interface definition inline in this spec",
+            "Add a direct section/line reference to spec 02 (e.g., 'see spec 02, Interfaces section, `Executor` interface')",
+            "Leave as-is (implementers are expected to read spec 02)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How does `GenerateAPIKey` distinguish between a `*sql.DB` and a `*sql.Tx` at runtime when deciding whether to begin an internal transaction? Is there a type assertion, a wrapper type, or a separate `TxExecutor` type?",
+          "context": "The spec says 'when called with *sql.DB it begins a transaction; when called with *sql.Tx it does not.' Since both satisfy `db.Executor`, the function must detect which it received. The mechanism matters for correctness and should be specified.",
+          "options": [
+            "Type assertion (`if _, ok := tx.(*sql.DB); ok { ... }`)",
+            "A second boolean parameter `ownsTransaction bool`",
+            "Two separate exported functions: `GenerateAPIKey(*sql.DB, ...)` and `GenerateAPIKeyInTx(*sql.Tx, ...)`",
+            "A wrapper type in spec 02 that carries a flag",
+            "Other (please describe)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What is the concrete context accessor (key name or function) used by the refresh handler to determine that the caller authenticated via PAT rather than an API key?",
+          "context": "The spec says PAT authentication is rejected for the refresh endpoint with HTTP 401, and that the credential-type flag is defined in spec 05 / pat_lifecycle. Implementers need to know exactly which context value to read and how to distinguish PAT from API key.",
+          "options": [
+            "Add a reference to the exact context key/function in spec 05 (e.g., `auth.CredentialTypeFromContext(c)`)",
+            "Define a sentinel constant here and note that spec 05 sets it",
+            "Leave as-is (implementers must consult spec 05)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should the refresh handler treat a 0-rows-affected UPDATE (e.g., due to a race condition after the ownership check passes) as a 404 or a 500?",
+          "context": "The spec carefully handles the 0-rows-affected case for the revocation UPDATE in GenerateAPIKey, but does not address the analogous situation in the refresh UPDATE. A concurrent DELETE between the ownership check and the UPDATE could leave the handler with a successful SELECT but a no-op UPDATE.",
+          "options": [
+            "Return HTTP 404 'key not found' (treat as if the key disappeared)",
+            "Return HTTP 500 'internal server error' (unexpected state)",
+            "Re-query after the UPDATE to determine the appropriate response",
+            "Document this as a known race condition with no special handling (last-write-wins)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Would you like to add the ETag-derivation SQL query to the Database Queries section for completeness, alongside the other five queries?",
+          "context": "The ETag logic is described in prose (MAX of effective timestamps across all user keys) but no corresponding SQL snippet is provided, unlike the other queries. Adding it would make the Database Queries section a complete reference.",
+          "options": [
+            "Yes, add the SQL snippet",
+            "No, the prose description is sufficient"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "What should happen when `crypto/rand.Read()` fails during key or secret generation? Should this surface as HTTP 500 to the client, cause a server panic/fatal, or be handled some other way?",
+          "context": "Entropy exhaustion is rare but not impossible. The spec specifies DB errors map to HTTP 500 but is silent on random generation failures, which occur in the same code path.",
+          "options": [
+            "Return HTTP 500 'internal server error' (same as DB errors)",
+            "Log and panic/fatal (treat as unrecoverable)",
+            "Other (please describe)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD. It is comprehensive, internally consistent, and provides implementation-ready detail across all dimensions: functional requirements, interface contracts, database queries, error handling, design rationale, and testing strategy. The spec demonstrates strong cross-spec boundary awareness and clearly delineates what is in-scope versus delegated to other specs. Only a small number of minor gaps or ambiguities were identified, none of which block implementation.",
+      "gaps": [
+        "The `db.Executor` interface method set is referenced but not reproduced here \u2014 implementers must consult spec 02, which is acceptable but creates a cross-spec lookup dependency that could slow implementation.",
+        "The concrete context key/accessor for detecting PAT vs. API key credential type (used in the refresh endpoint) is deferred entirely to spec 05 (`auth_middleware`). The PRD notes this correctly but does not name the accessor, which means implementers must coordinate with spec 05 before coding the refresh handler.",
+        "The `GET /api/v1/user/keys` ETag input is described as a raw timestamp string passed to `SetETag()`, but the exact SQL type affinity and Go type used to scan the `MAX(...)` result (e.g., `string`, `time.Time`, `sql.NullString`) is not specified, leaving a small ambiguity in how the ETag input is derived from the database row.",
+        "The PAT permission scopes (`keys:read`, `keys:manage`) are mentioned in endpoint auth descriptions but their definition is delegated to spec 05 and the `pat_lifecycle` spec. There is no summary of what these scopes allow, which may require implementers to look up two additional specs.",
+        "No explicit HTTP response Content-Type or status code table is provided for the non-200 error responses \u2014 the error table covers messages and codes but does not show the full response envelope shape (beyond the reference to `APIError()` from spec 01).",
+        "The `self-revocation` behavior (revoking the key currently used to authenticate) is documented but there is no mention of whether the auth middleware caches key validity within a request or re-checks it mid-flight \u2014 this edge case is noted correctly as benign but could benefit from a one-line cross-reference to spec 05.",
+        "The `internal/keys` package is described as 'not directly importable by consuming projects,' yet `GenerateAPIKey` is re-exported via the root `apikit` package. The re-export mechanism (type alias vs. wrapper function) is shown for `APIKeyResult` (type alias) and `GenerateAPIKey` (wrapper), but it is not clarified whether additional types (e.g., error types) need re-exporting.",
+        "No mention of logging strategy (e.g., whether key generation, refresh, or revocation events should emit structured log entries for observability), which may be expected as part of a production-grade implementation."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the concrete Go type used to scan the ETag timestamp from the `MAX(MAX(created_at, COALESCE(revoked_at, created_at)))` query result \u2014 e.g., `string` (already formatted), `time.Time`, or `sql.NullString`? And is the raw scanned value passed directly to `SetETag()`, or is it formatted first (e.g., via `FormatUTC()`)?",
+          "context": "The ETag derivation query is clearly specified, but the Go-level scan type and the exact value passed to `SetETag()` are ambiguous. Implementers need to know whether to scan as a string or time.Time, and whether to reformat before passing to the ETag helper.",
+          "options": [
+            "Scan as `string` (already in RFC 3339 format from SQLite) and pass directly to `SetETag()`",
+            "Scan as `string` and reformat via `FormatUTC()` before passing to `SetETag()`",
+            "Scan as `time.Time` and pass through `FormatUTC()` before passing to `SetETag()`",
+            "Scan as `sql.NullString` and handle the null case (no ETag) explicitly"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the `internal/keys` package emit structured log entries (e.g., via a logger from spec 01) for key lifecycle events such as generation, refresh, and revocation? If so, at what level (info, debug, warn) and what fields should be included?",
+          "context": "The PRD is silent on logging strategy. Production key lifecycle events are often audit-relevant and may be expected to appear in structured logs alongside the database `revoked_at` audit trail.",
+          "options": [
+            "No logging required \u2014 the database audit trail (`revoked_at`, `created_at`) is sufficient",
+            "Log key generation, refresh, and revocation at INFO level with `user_id` and `key_id` fields",
+            "Log only errors (crypto/rand failures, DB errors) at ERROR level",
+            "Defer to the consuming spec or application-level middleware for observability"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Are there any additional types from `internal/keys` (beyond `APIKeyResult` and `GenerateAPIKey`) that need to be re-exported via the root `apikit` package \u2014 for example, custom error types or constants?",
+          "context": "The PRD specifies re-exports for `APIKeyResult` and `GenerateAPIKey` but does not address whether error values (e.g., `ErrKeyRevoked`, `ErrKeyExpired`) or the `expiresDays` valid-values set are part of the public API surface.",
+          "options": [
+            "No additional re-exports \u2014 only `APIKeyResult` and `GenerateAPIKey` are public",
+            "Re-export sentinel error values (e.g., `ErrKeyRevoked`, `ErrKeyExpired`) for programmatic error handling by consumers",
+            "Re-export a `ValidExpireDays` constant or slice for consumers that need to validate expiry inputs",
+            "Re-export both sentinel errors and valid expiry constants"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally thorough and well-structured PRD. It covers functional requirements, API contracts, data model interactions, error handling, concurrency behavior, transaction semantics, public API surface, testing strategy, design rationale, and a glossary \u2014 all at a level of detail that would allow an implementer to produce a correct, production-quality implementation with minimal ambiguity. The few remaining gaps are minor and largely concern cross-spec boundary clarifications or low-priority implementation details that are either already deferred or resolvable by consulting referenced upstream specs.",
+      "gaps": [
+        "The concrete context key/accessor for detecting PAT vs. API key credential type (used by the refresh handler) is deferred to spec 05 (auth_middleware), but no fallback or example is provided in this spec in case spec 05 is unavailable during implementation. A note about what to look for (e.g., a boolean flag, a string discriminator) would help.",
+        "The `keys:read` and `keys:manage` PAT permission scopes are referenced but not defined here \u2014 they are deferred to spec 05 and the pat_lifecycle spec. If those specs are not yet written, implementers have no authoritative source for the exact scope strings.",
+        "The error message for invalid `expiresDays` (`'expires must be 0, 30, 60, or 90'`) is listed in the error table but it is unclear which layer surfaces this (HTTP handler vs. GenerateAPIKey return value), since the function itself validates the parameter. Clarification on whether this ever surfaces as an HTTP error in this spec's handlers would be helpful.",
+        "There is no explicit mention of the HTTP response Content-Type header beyond a design decision note that Echo's `c.JSON()` handles it. While likely sufficient for implementers, a brief note in the endpoint response sections (or a shared note in Technical Stack) would make the spec fully self-contained.",
+        "The `db.WrapError()` function is listed as a dependency usage but its behavior (e.g., what it maps to, whether it converts SQLite constraint errors to specific sentinel values) is not described here and must be inferred from spec 02. A brief description of what callers can expect from wrapped errors would reduce spec 02 look-ups.",
+        "There is no explicit description of how the logger instance is obtained within `internal/keys` (e.g., passed in at `RegisterKeyHandlers` time, retrieved from Echo context, or obtained via a package-level singleton from spec 01). This is a minor implementation detail but could lead to inconsistency across the codebase.",
+        "The integration test for the refresh race condition (0-rows UPDATE) relies on directly manipulating the database between the ownership check and the UPDATE \u2014 this is described as a simulation, but the exact test mechanism is left to the implementer. A note on whether this is achievable without mocking (e.g., by wrapping with a test hook) would be useful.",
+        "The spec does not address what happens if `GenerateAPIKey` is called with an invalid `expiresDays` value from the OAuth callback (spec 06). Since spec 06 is a downstream consumer, specifying who is responsible for validating `expiresDays` before calling `GenerateAPIKey` (the caller, or `GenerateAPIKey` itself) is answered in the spec, but the error propagation path back to the OAuth handler is not described."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How is the structured logger instance obtained within `internal/keys`? Is it passed as a parameter to `RegisterKeyHandlers` (and stored in a handler closure), retrieved from the Echo context per-request, or obtained via a package-level accessor from spec 01?",
+          "context": "The spec states that INFO-level log entries are emitted using the logger from spec 01, but does not specify how the logger is injected into the `internal/keys` package. This is an implementation detail that affects the package's API surface and coupling to spec 01.",
+          "options": [
+            "Passed as a parameter to `RegisterKeyHandlers` and stored in handler closures",
+            "Retrieved from the Echo context (e.g., `c.Logger()`) per request",
+            "Obtained via a package-level singleton/accessor from spec 01 (e.g., `servercore.Logger()`)",
+            "Passed as a parameter to `GenerateAPIKey` alongside `db.Executor`"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the invalid `expiresDays` error (`'expires must be 0, 30, 60, or 90'`) ever surface as an HTTP 400 response from the endpoints defined in this spec? Or is it exclusively an internal function-level error that would only surface if a caller (e.g., spec 06) passes an invalid value?",
+          "context": "The error table lists this as HTTP 400, but neither the refresh handler nor any other endpoint in this spec accepts `expiresDays` as an HTTP input \u2014 it's always read from the stored key record. It's unclear which runtime path (if any) would expose this as an HTTP error in this spec's handlers.",
+          "options": [
+            "It is only an internal guard \u2014 no endpoint in this spec can trigger it since expiresDays is read from DB (not user input). Remove it from the HTTP error table.",
+            "Retain it in the error table as a safeguard for future extensions or direct callers of GenerateAPIKey.",
+            "Document it as an error returned by GenerateAPIKey (not an HTTP response) and move it out of the HTTP error table."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What is the expected behavior if `db.WrapError()` maps a database error to a known sentinel (e.g., a duplicate key constraint on `key_id` insert)? Should `GenerateAPIKey` treat all wrapped DB errors as HTTP 500, or should any specific wrapped error types be handled distinctly?",
+          "context": "The spec states database errors surface as HTTP 500 'internal server error', and `db.WrapError()` is used for error mapping. If `db.WrapError()` can surface a unique-constraint violation (e.g., on a `key_id` collision, however improbable), it is unclear whether the handler should retry, return a specific error, or treat it as a 500.",
+          "options": [
+            "All errors from DB operations (including constraint violations after wrapping) are treated as HTTP 500. No retry logic.",
+            "A unique constraint violation on key_id should trigger a retry of random generation (with a bounded retry count).",
+            "Defer to whatever spec 02 documents for db.WrapError() behavior \u2014 no special handling needed here."
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Is there a maximum number of retries or a timeout for `crypto/rand.Read()` failures, or is a single failure immediately fatal (returning HTTP 500)?",
+          "context": "The spec states that `crypto/rand.Read()` failures return an error immediately. It is worth confirming whether a single failure is immediately fatal or if a small number of retries is expected before surfacing as HTTP 500, particularly given that entropy exhaustion is typically transient.",
+          "options": [
+            "Single failure is immediately fatal \u2014 return error immediately, no retries.",
+            "Retry up to N times (specify N) before returning HTTP 500.",
+            "Defer to Go stdlib behavior \u2014 crypto/rand.Read() blocks until entropy is available, so failure is rare; treat as immediately fatal."
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "For the `GET /api/v1/user/keys` listing, should keys be returned in a specific order (e.g., `created_at DESC` as shown in the SQL query), and should this ordering be considered part of the API contract (i.e., stable and documented for clients)?",
+          "context": "The SQL query uses `ORDER BY created_at DESC`, which is good practice, but the spec does not explicitly state whether this ordering is part of the API contract. If clients may rely on ordering (e.g., first element is always the most recently created key), this should be formally stated.",
+          "options": [
+            "Yes \u2014 ORDER BY created_at DESC is part of the API contract. Document it explicitly in the endpoint spec.",
+            "No \u2014 ordering is an implementation detail. Clients must not rely on it.",
+            "Yes, but order by a combination of created_at and revoked_at to ensure the active key appears first."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now fully production-ready. All five user answers have been cleanly incorporated: (1) logger injection is explicitly documented as `c.Logger()` per-request in handlers and an explicit parameter in `GenerateAPIKey`; (2) the `expiresDays` invalid-value error is correctly repositioned as a function-level Go error with a dedicated explanatory note, removed from the HTTP error table; (3) `db.WrapError()` behavior for unique constraint violations is described with a bounded 3-retry strategy for `key_id` collisions; (4) `crypto/rand.Read()` failures are explicitly documented as immediately fatal with no retries; and (5) `ORDER BY created_at DESC` is formally declared part of the API contract in the endpoint spec, the SQL comment, and a dedicated design decision. The PRD now covers all key concerns with no significant gaps remaining.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Yes, user_management spec will cover admin key endpoints",
+        "q2": "Yes, intentional \u2014 rationale is self-evident (a PAT should not be able to mint new key material)"
+      },
+      "timestamp": "2026-07-17T11:30:45.218303+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "/api/v1",
+        "q2": "Directly write a past expires_at value to the database in the test setup (no clock injection needed)",
+        "q3": "Yes \u2014 revoke all keys where revoked_at IS NULL (expired or not), ensuring a clean slate",
+        "q4": "Whatever SetETag() from spec 01 produces \u2014 defer to that helper's convention",
+        "q5": "SQLite's serialized write mode is sufficient \u2014 no additional locking needed"
+      },
+      "timestamp": "2026-07-17T11:33:57.053673+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Derive ETag from the most recent of created_at or revoked_at across all user keys",
+        "q2": "Allow DELETE on expired keys (sets revoked_at, makes audit trail explicit \u2014 consistent with GenerateAPIKey behavior)",
+        "q3": "Yes \u2014 add an explicit note to the endpoint spec: 'Returns [] with HTTP 200 when the user has no keys'",
+        "q4": "Keep *sql.DB \u2014 handler registration always uses the concrete DB at startup; db.Executor is only needed for GenerateAPIKey's transaction flexibility",
+        "q5": "Return HTTP 404 'key not found' \u2014 no format validation; let the DB query handle it"
+      },
+      "timestamp": "2026-07-17T11:37:36.282828+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "GenerateAPIKey internally begins a transaction when called with *sql.DB, making the revoke+insert atomic in all cases.",
+        "q2": "No cap \u2014 all historical keys are retained indefinitely for audit purposes.",
+        "q3": "Rely on Echo defaults; no need to document explicitly.",
+        "q4": "Zero rows affected by the revocation UPDATE is a no-op success; execution continues to INSERT."
+      },
+      "timestamp": "2026-07-17T11:41:39.533878+00:00"
+    },
+    {
+      "assessment_index": 4,
+      "answers": {
+        "q1": "Leave as-is (implementers are expected to read spec 02)",
+        "q2": "Type assertion (`if _, ok := tx.(*sql.DB); ok { ... }`)",
+        "q3": "Leave as-is (implementers must consult spec 05)",
+        "q4": "Return HTTP 404 'key not found' (treat as if the key disappeared)",
+        "q5": "Yes, add the SQL snippet",
+        "q6": "Return HTTP 500 'internal server error' (same as DB errors)"
+      },
+      "timestamp": "2026-07-17T11:46:20.074125+00:00"
+    },
+    {
+      "assessment_index": 5,
+      "answers": {
+        "q1": "Scan as string and reformat via FormatUTC() before passing to SetETag()",
+        "q2": "Log key generation, refresh, and revocation at INFO level with user_id and key_id fields",
+        "q3": "No additional re-exports \u2014 only APIKeyResult and GenerateAPIKey are public"
+      },
+      "timestamp": "2026-07-17T11:51:10.958800+00:00"
+    },
+    {
+      "assessment_index": 6,
+      "answers": {
+        "q1": "Retrieved from the Echo context (e.g., c.Logger()) per request",
+        "q2": "Document it as an error returned by GenerateAPIKey (not an HTTP response) and move it out of the HTTP error table.",
+        "q3": "A unique constraint violation on key_id should trigger a retry of random generation (with a bounded retry count).",
+        "q4": "Single failure is immediately fatal \u2014 return error immediately, no retries.",
+        "q5": "Yes \u2014 ORDER BY created_at DESC is part of the API contract. Document it explicitly in the endpoint spec."
+      },
+      "timestamp": "2026-07-17T11:57:48.856533+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

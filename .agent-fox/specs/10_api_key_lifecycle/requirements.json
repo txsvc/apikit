@@ -1,0 +1,1062 @@
+{
+  "$schema": null,
+  "spec_id": "10",
+  "spec_name": "api_key_lifecycle",
+  "schema_version": 1,
+  "introduction": "This spec defines the API key lifecycle system for the `apikit` project, covering the `GenerateAPIKey` library function and the three authenticated REST endpoints (`GET /api/v1/user/keys`, `POST /api/v1/user/keys/:key_id/refresh`, `DELETE /api/v1/user/keys/:key_id`) that allow users to list, refresh, and revoke their API keys. Note: requirements referencing `db.Executor`, `db.WrapError`, `db.WithTx`, `SetETag`, `CheckETag`, `CacheMiddleware`, `NowUTC`, `FormatUTC`, `TokenPrefix`, and `APIError` APIs are based on upstream spec interfaces (specs 01 and 02) and should be cross-checked against those specs before implementation.",
+  "glossary": {
+    "API key": "A user-scoped credential in the format `<prefix>_<key_id>_<secret>`, issued via OAuth login. One active key per user.",
+    "APIError": "The standard error response envelope function from spec 01 (`server_core`) used for all error HTTP responses.",
+    "APIKeyResult": "The struct returned by `GenerateAPIKey` containing `FullKey`, `KeyID`, `SecretHash`, and `ExpiresAt`.",
+    "CacheMiddleware": "Middleware from spec 01 that sets cache-control response headers.",
+    "CacheNoStore": "A constant from spec 01 passed to `CacheMiddleware` to set `Cache-Control: no-store`.",
+    "CheckETag": "A helper function from spec 01 that evaluates an `If-None-Match` request header against a computed ETag.",
+    "FormatUTC": "A helper function from spec 01 that formats a timestamp as a canonical RFC 3339 UTC string.",
+    "GenerateAPIKey": "The function in `internal/keys` that creates a new API key, revokes all existing keys where `revoked_at IS NULL`, and inserts the new key record.",
+    "NowUTC": "A helper function from spec 01 that returns the current UTC time.",
+    "PAT": "Personal Access Token — a separate credential type with scoped permissions, distinct from an API key.",
+    "RegisterKeyHandlers": "The function that registers the three API key lifecycle endpoints on an Echo group.",
+    "SetETag": "A helper function from spec 01 that sets the ETag response header with canonical encoding.",
+    "TokenPrefix": "The build-time configurable prefix (default `ak`) used in all credential formats.",
+    "active key": "A key that has not been revoked (`revoked_at IS NULL`) and has not expired (`expires_at IS NULL OR expires_at > now`).",
+    "api_keys": "The database table storing API key records with columns: `key_id`, `user_id`, `secret_hash`, `expires_days`, `expires_at`, `created_at`, `revoked_at`.",
+    "apikit": "The root Go module that re-exports `APIKeyResult` and `GenerateAPIKey` from `internal/keys` as public API.",
+    "db.Executor": "An interface from spec 02's database layer satisfied by both `*sql.DB` and `*sql.Tx`, allowing functions to work with or without an explicit transaction.",
+    "db.WithTx": "A helper function from spec 02's database layer that manages transaction lifecycle (begin, commit, rollback) for a given function.",
+    "db.WrapError": "A function from spec 02's database layer that maps raw SQLite errors to known sentinel types (e.g., unique constraint violations).",
+    "etag_ts": "The derived ETag input timestamp: MAX(MAX(created_at, COALESCE(revoked_at, created_at))) across all of the user's keys.",
+    "expires_at": "The calculated expiry timestamp for a key. NULL when `expires_days` is 0 (indefinite). Calculated as `created_at + (expires_days * 24h)`.",
+    "expires_days": "The original expiry duration stored on the key record: `0` (indefinite), `30`, `60`, or `90` days. Used to recalculate `expires_at` on refresh. Not exposed in API responses.",
+    "internal/keys": "The Go package (`internal/keys`) containing the `GenerateAPIKey` function and HTTP handlers for key lifecycle endpoints.",
+    "key_id": "The random 8-character alphanumeric identifier portion of an API key, stored in plaintext in the `api_keys` table.",
+    "keys:manage": "A PAT permission scope that grants write access to key management endpoints including revocation.",
+    "keys:read": "A PAT permission scope that grants read-only access to key metadata endpoints.",
+    "mount point": "The base URL path `/api/v1` under which all API key lifecycle endpoints are registered.",
+    "refresh": "The operation of generating a new secret for an existing key while preserving the `key_id`. Resets `expires_at` based on the original `expires_days`. Only permitted on non-revoked, non-expired keys.",
+    "revoke": "Permanently invalidating a key by setting `revoked_at`. Irreversible. Permitted on active and expired (but not already-revoked) keys.",
+    "revoked_at": "The timestamp when a key was permanently invalidated. NULL while the key has not been explicitly revoked.",
+    "secret": "The random 32-character alphanumeric portion of an API key, stored only as a SHA-256 hash. The plaintext is returned once at creation and once on refresh.",
+    "secret_hash": "The SHA-256 hex digest of the API key secret, stored in the `api_keys.secret_hash` column.",
+    "\"expires_at\": null": "JSON response field value indicating an indefinite (non-expiring) key where `expires_days` is 0.",
+    "(*APIKeyResult, error)": "Return type of the `GenerateAPIKey` function.",
+    "(group *echo.Group, database *sql.DB)": "Parameter signature of the `RegisterKeyHandlers` function.",
+    "(tx db.Executor, userID string, expiresDays int, logger echo.Logger)": "Parameter signature of the `GenerateAPIKey` function.",
+    "*sql.DB": "Go standard library `database/sql.DB` pointer type representing a database handle; satisfies `db.Executor`.",
+    "*sql.Tx": "Go standard library `database/sql.Tx` pointer type representing a database transaction; satisfies `db.Executor`.",
+    "/api/v1/user/keys": "The full path to the API key listing endpoint under the default mount point.",
+    "<TokenPrefix>_<key_id>_<new_secret>": "The full key string constructed during refresh with the new secret.",
+    "<key_id>": "Placeholder for the 8-character alphanumeric key identifier portion of an API key.",
+    "<prefix>": "Placeholder for the build-time configurable `TokenPrefix` (default `ak`).",
+    "<prefix>_<key_id>_<secret>": "The canonical API key format combining prefix, key identifier, and secret.",
+    "<secret>": "Placeholder for the 32-character alphanumeric secret portion of an API key.",
+    "Cache-Control: no-store": "HTTP cache header value applied to all mutable resource endpoints.",
+    "CacheMiddleware(CacheNoStore)": "Middleware constructor call that produces the `Cache-Control: no-store` header.",
+    "CheckETag()": "Invocation of the `CheckETag` helper function from spec 01.",
+    "DELETE /user/keys/:key_id": "Echo route pattern for the key revocation endpoint.",
+    "ExpiresAt": "Field on `APIKeyResult` holding the calculated expiry timestamp (nil for indefinite).",
+    "FormatUTC()": "Invocation of the `FormatUTC` helper function from spec 01.",
+    "FullKey": "Field on `APIKeyResult` holding the complete key string `<prefix>_<key_id>_<secret>`.",
+    "GET /api/v1/user/keys": "Full path for the authenticated user's key listing endpoint.",
+    "GET /user/keys": "Echo route pattern for the key listing endpoint.",
+    "If-None-Match": "HTTP request header used for conditional GET requests with ETag validation.",
+    "KeyID": "Field on `APIKeyResult` holding the 8-character alphanumeric key identifier.",
+    "MAX(MAX(created_at, COALESCE(revoked_at, created_at)))": "SQL expression that computes the most recent timestamp across all key records for ETag derivation.",
+    "POST /user/keys/:key_id/refresh": "Echo route pattern for the key refresh endpoint.",
+    "SetETag()": "Invocation of the `SetETag` helper function from spec 01.",
+    "UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND user_id = ?": "SQL statement that revokes a specific key belonging to a user.",
+    "UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL": "SQL statement that revokes all active keys for a user during key generation.",
+    "UPDATE api_keys SET secret_hash = ?, expires_at = ?, created_at = ? WHERE key_id = ? AND user_id = ?": "SQL statement that updates a key record during refresh.",
+    "Valid": "Boolean field on `sql.NullString` indicating whether the scanned value is non-NULL.",
+    "[0-9A-Za-z]": "The 62-character alphanumeric character set used for generating `key_id` and `secret`.",
+    "^[a-zA-Z0-9]+_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$": "Regular expression pattern matching the canonical API key format.",
+    "ak": "The default value of `TokenPrefix`, used as the key format prefix.",
+    "api_keys.secret_hash": "The database column in `api_keys` that stores the SHA-256 hex hash of the secret.",
+    "byte % 62": "Modular arithmetic operation mapping a random byte to one of the 62 alphanumeric characters.",
+    "c.Logger()": "Echo context method that returns the per-request logger instance.",
+    "created_at": "Timestamp column in `api_keys` recording when the key was created or last refreshed.",
+    "created_at + (expiresDays * 24h)": "The formula for calculating `expires_at` from the creation timestamp and expiry duration.",
+    "created_at DESC": "SQL ordering clause that sorts keys by creation time in descending order.",
+    "crypto/rand": "Go standard library package providing cryptographically secure random number generation.",
+    "crypto/rand.Read()": "Function from `crypto/rand` that fills a byte slice with random data.",
+    "expiresDays": "The integer parameter to `GenerateAPIKey` specifying the key expiry duration in days.",
+    "expires_at > now": "SQL condition identifying keys that have not yet expired.",
+    "expires_at IS NULL": "SQL condition identifying keys with indefinite expiry (`expires_days = 0`).",
+    "expires_days = 0": "Value indicating an indefinite (non-expiring) key.",
+    "hex(sha256(secret))": "The computation producing the `secret_hash` value: SHA-256 digest of the secret encoded as lowercase hexadecimal.",
+    "if _, ok := tx.(*sql.DB); ok { ... }": "Go type assertion pattern used by `GenerateAPIKey` to detect whether the executor is a `*sql.DB` or `*sql.Tx`.",
+    "key": "JSON response field in the refresh endpoint containing the full API key with plaintext secret.",
+    "keys.GenerateAPIKey": "The internal package-qualified name of the `GenerateAPIKey` function in `internal/keys`.",
+    "logger": "Parameter name for the `echo.Logger` instance passed to `GenerateAPIKey`.",
+    "logger echo.Logger": "The typed parameter in `GenerateAPIKey`'s signature providing a structured logger.",
+    "revoked_at IS NULL": "SQL condition identifying keys that have not been explicitly revoked.",
+    "sql.NullString": "Go standard library type used to scan nullable string values from SQL queries.",
+    "time.Now().UTC()": "Go expression returning the current time in UTC.",
+    "time.Now().UTC().Add(time.Duration(expiresDays) * 24 * time.Hour)": "Go expression calculating the expiry timestamp from the current time and expiry duration.",
+    "tx": "Parameter name for the `db.Executor` interface value passed to `GenerateAPIKey`.",
+    "type APIKeyResult = keys.APIKeyResult": "Go type alias re-exporting `APIKeyResult` from `internal/keys` through the root `apikit` package.",
+    "user_id": "The UUID identifier of the user who owns an API key; foreign key to `users.id`.",
+    "{0, 30, 60, 90}": "The set of valid values for `expiresDays`.",
+    "{30, 60, 90}": "The subset of valid `expiresDays` values that produce a non-NULL `expires_at`."
+  },
+  "requirements": [
+    {
+      "id": "10-REQ-1",
+      "title": "API Key Format",
+      "user_story": {
+        "role": "developer consuming the apikit library",
+        "goal": "receive API keys in a consistent, predictable format",
+        "benefit": "I can reliably parse and validate key material in downstream systems"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "API key format",
+          "action": "All API keys follow the format `<prefix>_<key_id>_<secret>` where `<prefix>` is `TokenPrefix` (default `ak`), `<key_id>` is a random 8-character alphanumeric string, and `<secret>` is a random 32-character alphanumeric string",
+          "return_contract": "A well-formed key string matching the regex `^[a-zA-Z0-9]+_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$`"
+        },
+        {
+          "id": "10-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "random string generator",
+          "action": "generates `key_id` and `secret` using `crypto/rand` with the 62-character alphanumeric set `[0-9A-Za-z]` via modular arithmetic (`byte % 62`) or rejection sampling",
+          "return_contract": "Strings containing only characters from `[0-9A-Za-z]` of exactly the specified length (8 for `key_id`, 32 for `secret`)"
+        },
+        {
+          "id": "10-REQ-1.3",
+          "ears_pattern": "unwanted",
+          "system": "random string generator",
+          "action": "returns the error immediately with no retries and writes no partial state to the database",
+          "return_contract": "Non-nil error value; caller surfaces as HTTP 500 `\"internal server error\"` via `APIError`",
+          "error_condition": "`crypto/rand.Read()` returns an error"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "random string generator",
+          "action": "treats the `crypto/rand` failure as immediately fatal, abandons all retries, and returns the error",
+          "return_contract": "Non-nil error; no further retry is attempted regardless of remaining retry budget",
+          "error_condition": "`crypto/rand.Read()` fails during a retry attempt for `key_id` collision"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-2",
+      "title": "GenerateAPIKey Function",
+      "user_story": {
+        "role": "OAuth callback handler (spec 06) or refresh endpoint",
+        "goal": "call a single authoritative function to create an API key",
+        "benefit": "key format, hashing, expiry calculation, and one-active-key enforcement are consistently applied across all creation paths"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "accepts parameters `(tx db.Executor, userID string, expiresDays int, logger echo.Logger)` and returns `(*APIKeyResult, error)`",
+          "return_contract": "`*APIKeyResult` with `FullKey`, `KeyID`, `SecretHash`, and `ExpiresAt` populated on success; non-nil error on failure"
+        },
+        {
+          "id": "10-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "returns an error immediately at the function level before touching the database",
+          "return_contract": "Non-nil error; no database writes occur",
+          "trigger": "called with `expiresDays` not in `{0, 30, 60, 90}`"
+        },
+        {
+          "id": "10-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "begins an internal transaction, executes the revoke UPDATE and INSERT atomically, and commits on success or rolls back on failure",
+          "return_contract": "On success: committed transaction with revoked old key(s) and inserted new key. On failure: rolled-back transaction leaving all existing keys unmodified",
+          "trigger": "called with a `*sql.DB` value as `tx`"
+        },
+        {
+          "id": "10-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "executes the revoke UPDATE and INSERT within the caller's transaction without beginning a nested transaction; caller is responsible for commit/rollback",
+          "return_contract": "Writes executed within caller's transaction; no commit or rollback performed by `GenerateAPIKey`",
+          "trigger": "called with a `*sql.Tx` value as `tx`"
+        },
+        {
+          "id": "10-REQ-2.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "executes `UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL` before inserting a new key, covering both active keys and expired-but-not-explicitly-revoked keys",
+          "return_contract": "Zero rows affected is treated as silent no-op success; no error is returned and execution proceeds to INSERT"
+        },
+        {
+          "id": "10-REQ-2.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "generates a random 8-character `key_id` and 32-character `secret`, computes `secret_hash` as the SHA-256 hex digest of `secret`, and inserts a new row into `api_keys`",
+          "return_contract": "`APIKeyResult.FullKey` = `<TokenPrefix>_<key_id>_<secret>`; `APIKeyResult.SecretHash` = lowercase 64-char hex SHA-256 of the secret"
+        },
+        {
+          "id": "10-REQ-2.7",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "retries random generation of a new `key_id` (not re-executing the revocation UPDATE) up to 3 total attempts within the same transaction before returning an error",
+          "return_contract": "On success within retry budget: `*APIKeyResult` with new `key_id`. After 3 failed attempts: non-nil error surfaced as HTTP 500 `\"internal server error\"`",
+          "trigger": "the INSERT into `api_keys` fails due to a unique constraint violation on `key_id` (as detected by `db.WrapError`)"
+        },
+        {
+          "id": "10-REQ-2.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "calculates `ExpiresAt` as nil when `expiresDays` is 0, or as `time.Now().UTC().Add(time.Duration(expiresDays) * 24 * time.Hour)` for `expiresDays` in `{30, 60, 90}`",
+          "return_contract": "`APIKeyResult.ExpiresAt` is nil for indefinite keys; pointer to a UTC timestamp exactly `N * 24h` from creation for finite keys"
+        },
+        {
+          "id": "10-REQ-2.9",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "emits a structured INFO log entry via the provided `logger` parameter with at minimum `user_id` and `key_id` fields, after the successful database write",
+          "return_contract": "Log entry emitted; no log entry emitted on failure paths",
+          "trigger": "a new key is successfully inserted into `api_keys`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`GenerateAPIKey`",
+          "action": "rolls back the internal transaction so the revocation UPDATE is also undone, leaving the user's prior key with `revoked_at` still NULL",
+          "return_contract": "Non-nil error; user's existing key record is unchanged",
+          "error_condition": "called with `*sql.DB` and the INSERT fails after the revocation UPDATE has executed"
+        },
+        {
+          "id": "10-REQ-2.E2",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "executes the revocation UPDATE (affecting zero rows) and proceeds to INSERT without error",
+          "return_contract": "`*APIKeyResult` populated correctly; no error from zero-row UPDATE",
+          "trigger": "called for a user with no existing keys (first-time user)"
+        },
+        {
+          "id": "10-REQ-2.E3",
+          "ears_pattern": "unwanted",
+          "system": "`GenerateAPIKey`",
+          "action": "returns the error immediately without retrying",
+          "return_contract": "Non-nil error; surfaces as HTTP 500 `\"internal server error\"` to the caller",
+          "error_condition": "a non-constraint-violation database error occurs during INSERT"
+        },
+        {
+          "id": "10-REQ-2.E4",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "uses type assertion `if _, ok := tx.(*sql.DB); ok { ... }` to distinguish between `*sql.DB` (begin internal transaction) and `*sql.Tx` (use caller's transaction), with no additional wrapper type introduced",
+          "return_contract": "Correct transaction behavior based on runtime type of `tx`"
+        },
+        {
+          "id": "10-REQ-2.E5",
+          "ears_pattern": "unwanted",
+          "system": "`GenerateAPIKey`",
+          "action": "returns an error after exhausting the retry budget; the transaction is rolled back (if internal) or left in a failed state for the caller to roll back",
+          "return_contract": "Non-nil error; surfaces as HTTP 500 `\"internal server error\"`",
+          "error_condition": "all 3 `key_id` collision retry attempts fail with unique constraint violations"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-3",
+      "title": "Public Re-export of GenerateAPIKey and APIKeyResult",
+      "user_story": {
+        "role": "consuming project or OAuth callback handler (spec 06)",
+        "goal": "import `GenerateAPIKey` and `APIKeyResult` from the root `apikit` package",
+        "benefit": "I have a stable, minimal public API surface without exposure to internal implementation details"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "root `apikit` package",
+          "action": "re-exports `APIKeyResult` as a type alias (`type APIKeyResult = keys.APIKeyResult`) and `GenerateAPIKey` as a wrapper function delegating to `keys.GenerateAPIKey`",
+          "return_contract": "Consumers calling `apikit.GenerateAPIKey` receive identical behavior to calling `keys.GenerateAPIKey` directly"
+        },
+        {
+          "id": "10-REQ-3.2",
+          "ears_pattern": "ubiquitous",
+          "system": "root `apikit` package",
+          "action": "does NOT re-export any other symbols from `internal/keys` — no custom error types, constants, or internal helpers",
+          "return_contract": "Only `APIKeyResult` and `GenerateAPIKey` are accessible from the `apikit` package namespace"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "10-REQ-4",
+      "title": "Handler Registration",
+      "user_story": {
+        "role": "server bootstrap code",
+        "goal": "register all API key lifecycle endpoints on the correct Echo group in one call",
+        "benefit": "all three endpoints are available under `/api/v1` with correct middleware inheritance"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`RegisterKeyHandlers`",
+          "action": "accepts `(group *echo.Group, database *sql.DB)` and registers `GET /user/keys`, `POST /user/keys/:key_id/refresh`, and `DELETE /user/keys/:key_id` on the provided Echo group",
+          "return_contract": "Three routes registered on the group; no return value"
+        },
+        {
+          "id": "10-REQ-4.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`RegisterKeyHandlers`",
+          "action": "inherits `Cache-Control: no-store` from the parent Echo group's `CacheMiddleware(CacheNoStore)` and does not apply any additional cache middleware",
+          "return_contract": "All three endpoints respond with `Cache-Control: no-store` header"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "10-REQ-5",
+      "title": "GET /api/v1/user/keys — List API Keys",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "list my API key metadata",
+        "benefit": "I can inspect my key's status, expiry, and revocation without exposing the plaintext secret"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "queries `api_keys` for all rows belonging to the authenticated user ordered by `created_at DESC` and returns a JSON array of key metadata objects",
+          "return_contract": "HTTP 200 with JSON array; each object contains `key_id` (string), `created_at` (RFC 3339 UTC), `expires_at` (string or null), `revoked_at` (string or null). `secret_hash` and `expires_days` are never included.",
+          "trigger": "an authenticated user sends GET `/api/v1/user/keys`"
+        },
+        {
+          "id": "10-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "returns HTTP 200 with an empty JSON array; does not set an ETag header and does not evaluate `If-None-Match`",
+          "return_contract": "HTTP 200 with body `[]`; no `ETag` response header",
+          "trigger": "the authenticated user has no keys in `api_keys`"
+        },
+        {
+          "id": "10-REQ-5.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "includes all historical key records (active, expired, and revoked) in the response with no row limit, ordered by `created_at DESC`",
+          "return_contract": "Response array contains all rows from `api_keys` for the user; first element is the most recently created or refreshed key"
+        },
+        {
+          "id": "10-REQ-5.4",
+          "ears_pattern": "event_driven",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "computes `etag_ts` as `MAX(MAX(created_at, COALESCE(revoked_at, created_at)))` across all user keys, reformats it via `FormatUTC()`, passes it to `SetETag()`, and evaluates the request's `If-None-Match` header via `CheckETag()`",
+          "return_contract": "If `If-None-Match` matches: HTTP 304 with empty body. Otherwise: HTTP 200 with full response body and `ETag` header set",
+          "trigger": "the user has at least one key"
+        },
+        {
+          "id": "10-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "accepts authentication via API key or PAT with `keys:read` permission",
+          "return_contract": "HTTP 200 on success; authentication failures handled by auth middleware (spec 05)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "scans the result as `sql.NullString`; when `Valid` is false, skips ETag setting and `If-None-Match` evaluation entirely",
+          "return_contract": "HTTP 200 with `[]`; no `ETag` header in response",
+          "error_condition": "the ETag derivation query (`etag_ts`) returns a NULL result (no keys)"
+        },
+        {
+          "id": "10-REQ-5.E2",
+          "ears_pattern": "event_driven",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "recomputes `etag_ts` incorporating the updated `revoked_at`; the new ETag does not match, so the full response is returned",
+          "return_contract": "HTTP 200 with updated listing; prior ETag is invalidated",
+          "trigger": "a key is revoked via DELETE and the client sends GET with the prior `If-None-Match`"
+        },
+        {
+          "id": "10-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "returns HTTP 500 via `APIError`",
+          "return_contract": "HTTP 500 with `\"internal server error\"` error body",
+          "error_condition": "database query fails"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-6",
+      "title": "POST /api/v1/user/keys/:key_id/refresh — Refresh API Key Secret",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "rotate my API key secret without losing my key_id",
+        "benefit": "I can maintain the same key identifier in logs and external integrations while obtaining new credentials"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-6.1",
+          "ears_pattern": "state_driven",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "generates a new 32-character alphanumeric `secret` via `crypto/rand`, computes the new `secret_hash`, updates `api_keys` with the new `secret_hash`, current UTC as `created_at`, and recalculated `expires_at` from the stored `expires_days`, then constructs `FullKey` as `<TokenPrefix>_<key_id>_<new_secret>`",
+          "return_contract": "HTTP 200 with JSON `{\"key\": \"<full_key>\", \"key_id\": \"<key_id>\", \"expires_at\": <string_or_null>}`",
+          "state": "authenticated user holds an active, non-revoked, non-expired key matching `key_id` in the path"
+        },
+        {
+          "id": "10-REQ-6.2",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 401 via `APIError` without performing any database operation",
+          "return_contract": "HTTP 401 with `\"API key authentication required\"`",
+          "error_condition": "the request is authenticated via PAT (as detected by the credential-type context value from spec 05)"
+        },
+        {
+          "id": "10-REQ-6.3",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 404 via `APIError`; no format validation is performed on the path parameter value",
+          "return_contract": "HTTP 404 with `\"key not found\"`",
+          "error_condition": "the `key_id` path parameter does not match any row in `api_keys`"
+        },
+        {
+          "id": "10-REQ-6.4",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 404 via `APIError` (not 403) to prevent information leakage about key existence",
+          "return_contract": "HTTP 404 with `\"key not found\"`",
+          "error_condition": "the key exists but belongs to a different user than the authenticated user"
+        },
+        {
+          "id": "10-REQ-6.5",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 400 via `APIError`",
+          "return_contract": "HTTP 400 with `\"cannot refresh a revoked key\"`",
+          "error_condition": "the key has `revoked_at` set (is already revoked)"
+        },
+        {
+          "id": "10-REQ-6.6",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 400 via `APIError`",
+          "return_contract": "HTTP 400 with `\"cannot refresh an expired key\"`",
+          "error_condition": "the key has `expires_at` in the past relative to `time.Now().UTC()` (key is expired)"
+        },
+        {
+          "id": "10-REQ-6.7",
+          "ears_pattern": "event_driven",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "emits a structured INFO log entry via `c.Logger()` with at minimum `user_id` and `key_id` fields, after the successful database write",
+          "return_contract": "Log entry emitted; response is HTTP 200 with new full key",
+          "trigger": "the key is successfully refreshed (UPDATE commits)"
+        },
+        {
+          "id": "10-REQ-6.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "accepts authentication via API key only; PAT authentication is rejected regardless of PAT permission scopes",
+          "return_contract": "HTTP 401 if PAT detected; otherwise proceeds with validation chain"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 404 via `APIError` rather than HTTP 500",
+          "return_contract": "HTTP 404 with `\"key not found\"`",
+          "error_condition": "the UPDATE (`UPDATE api_keys SET secret_hash = ?, expires_at = ?, created_at = ? WHERE key_id = ? AND user_id = ?`) affects 0 rows due to a race condition (e.g., concurrent DELETE between ownership validation and UPDATE)"
+        },
+        {
+          "id": "10-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 500 via `APIError` immediately; no retries attempted; no database write occurs",
+          "return_contract": "HTTP 500 with `\"internal server error\"`",
+          "error_condition": "`crypto/rand.Read()` fails during new secret generation"
+        },
+        {
+          "id": "10-REQ-6.E3",
+          "ears_pattern": "event_driven",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "sets `expires_at` to NULL in the UPDATE and returns `\"expires_at\": null` in the response",
+          "return_contract": "HTTP 200 with `\"expires_at\": null` in response body",
+          "trigger": "key was created with `expires_days = 0` (indefinite)"
+        },
+        {
+          "id": "10-REQ-6.E4",
+          "ears_pattern": "unwanted",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "returns HTTP 500 via `APIError`",
+          "return_contract": "HTTP 500 with `\"internal server error\"`",
+          "error_condition": "database error (non-race-condition failure) occurs during SELECT or UPDATE"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-7",
+      "title": "DELETE /api/v1/user/keys/:key_id — Revoke API Key",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "permanently revoke one of my API keys",
+        "benefit": "I can invalidate a compromised or unused key and maintain a clean audit trail"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-7.1",
+          "ears_pattern": "state_driven",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "sets `revoked_at` to the current UTC timestamp via `UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND user_id = ?` and returns the `key_id` and `revoked_at`",
+          "return_contract": "HTTP 200 with JSON `{\"key_id\": \"<key_id>\", \"revoked_at\": \"<RFC3339_UTC>\"}`",
+          "state": "the `key_id` path parameter matches a key belonging to the authenticated user that has not yet been revoked"
+        },
+        {
+          "id": "10-REQ-7.2",
+          "ears_pattern": "unwanted",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "returns HTTP 404 via `APIError`; no format validation performed on the path parameter",
+          "return_contract": "HTTP 404 with `\"key not found\"`",
+          "error_condition": "the `key_id` path parameter does not match any row in `api_keys`"
+        },
+        {
+          "id": "10-REQ-7.3",
+          "ears_pattern": "unwanted",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "returns HTTP 404 via `APIError` (not 403) to prevent information leakage",
+          "return_contract": "HTTP 404 with `\"key not found\"`",
+          "error_condition": "the key exists but belongs to a different user"
+        },
+        {
+          "id": "10-REQ-7.4",
+          "ears_pattern": "unwanted",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "returns HTTP 400 via `APIError`",
+          "return_contract": "HTTP 400 with `\"key is already revoked\"`",
+          "error_condition": "the key already has `revoked_at` set (is already revoked)"
+        },
+        {
+          "id": "10-REQ-7.5",
+          "ears_pattern": "event_driven",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "permits the deletion and sets `revoked_at` to the current UTC timestamp, making the final disposition explicit in the audit trail",
+          "return_contract": "HTTP 200 with `{\"key_id\": \"<key_id>\", \"revoked_at\": \"<RFC3339_UTC>\"}`",
+          "trigger": "the key is expired (`expires_at` is in the past) but `revoked_at IS NULL`"
+        },
+        {
+          "id": "10-REQ-7.6",
+          "ears_pattern": "event_driven",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "emits a structured INFO log entry via `c.Logger()` with at minimum `user_id` and `key_id` fields, after the successful database write",
+          "return_contract": "Log entry emitted; response is HTTP 200",
+          "trigger": "the key is successfully revoked"
+        },
+        {
+          "id": "10-REQ-7.7",
+          "ears_pattern": "event_driven",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "completes the revocation successfully because the auth middleware validated the credential before handler execution and does not re-validate mid-flight",
+          "return_contract": "HTTP 200 with `revoked_at` set; subsequent requests with the same key are rejected by the auth middleware",
+          "trigger": "the authenticated user revokes the API key they are currently authenticating with (self-revocation)"
+        },
+        {
+          "id": "10-REQ-7.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "accepts authentication via API key or PAT with `keys:manage` permission",
+          "return_contract": "HTTP 200 on success; authentication failures handled by auth middleware (spec 05)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "returns HTTP 500 via `APIError`",
+          "return_contract": "HTTP 500 with `\"internal server error\"`",
+          "error_condition": "database error occurs during SELECT or UPDATE"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-8",
+      "title": "One-Active-Key-Per-User Invariant",
+      "user_story": {
+        "role": "system designer",
+        "goal": "ensure each user has at most one active API key at any moment",
+        "benefit": "authentication state is unambiguous and audit logs clearly show the current credential"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`GenerateAPIKey`",
+          "action": "revokes all keys where `revoked_at IS NULL` for the user before inserting the new key, with the revoke+insert executed atomically when called with `*sql.DB`",
+          "return_contract": "After successful `GenerateAPIKey` call: exactly one key with `revoked_at IS NULL` exists for the user"
+        },
+        {
+          "id": "10-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "updates the existing key in-place (same `key_id`) rather than inserting a new row, preserving the one-active-key invariant without additional revocation logic",
+          "return_contract": "After refresh: the key count for the user is unchanged; the refreshed key has updated `secret_hash`, `created_at`, and `expires_at`"
+        },
+        {
+          "id": "10-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "SQLite database",
+          "action": "enforces serialized write mode so concurrent `GenerateAPIKey` calls for the same user execute sequentially, preventing duplicate active keys without application-level locking",
+          "return_contract": "At most one active key per user after any sequence of concurrent `GenerateAPIKey` invocations"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "10-REQ-8.E1",
+          "ears_pattern": "event_driven",
+          "system": "`GenerateAPIKey`",
+          "action": "revokes the expired key (setting `revoked_at`) as part of the pre-INSERT revocation UPDATE, ensuring no key with `revoked_at IS NULL` remains other than the new one",
+          "return_contract": "Prior expired key's `revoked_at` is set; new key is the only row with `revoked_at IS NULL`",
+          "trigger": "called when the user has an expired key with `revoked_at IS NULL`"
+        }
+      ]
+    },
+    {
+      "id": "10-REQ-9",
+      "title": "Structured Logging for Key Lifecycle Events",
+      "user_story": {
+        "role": "operations engineer",
+        "goal": "find structured log entries for every key lifecycle event",
+        "benefit": "I can audit key generation, refresh, and revocation events by user and key"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`internal/keys` package",
+          "action": "uses no package-level logger singleton; HTTP handlers obtain the logger from `c.Logger()` (Echo context logger) per request, and `GenerateAPIKey` accepts an explicit `logger echo.Logger` parameter",
+          "return_contract": "No global state for logging; logger is always request-scoped or explicitly injected"
+        },
+        {
+          "id": "10-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "`internal/keys` package",
+          "action": "emits a structured log entry at INFO level including at minimum `user_id` and `key_id` fields; no log entry is emitted on failure paths",
+          "return_contract": "Log entry present in output after success; absent on failure",
+          "trigger": "a key lifecycle event (generation, refresh, or revocation) completes with a successful database write"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "10-REQ-10",
+      "title": "Secret Hashing",
+      "user_story": {
+        "role": "security engineer",
+        "goal": "ensure the plaintext secret is never persisted to the database",
+        "benefit": "a database compromise does not expose usable API key secrets"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "10-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`internal/keys` package",
+          "action": "stores only the SHA-256 hash of the secret (encoded as a lowercase 64-character hex string) in `api_keys.secret_hash`; the plaintext secret is never written to the database",
+          "return_contract": "`secret_hash` column contains `hex(sha256(secret))`; plaintext secret is only present in the returned `APIKeyResult.FullKey` and the refresh response body"
+        },
+        {
+          "id": "10-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`GET /api/v1/user/keys` handler",
+          "action": "never includes `secret_hash`, the plaintext secret, or any derivation of the secret in the response body",
+          "return_contract": "Response objects contain only `key_id`, `created_at`, `expires_at`, and `revoked_at`"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "10-PROP-1",
+      "title": "One Active Key Per User",
+      "for_any": "user with a given `user_id` in the `api_keys` table",
+      "invariant": "at most one row exists where `revoked_at IS NULL` and (`expires_at IS NULL` OR `expires_at > now`) for a given `user_id`",
+      "validates": [
+        "10-REQ-8.1",
+        "10-REQ-8.2",
+        "10-REQ-8.3"
+      ]
+    },
+    {
+      "id": "10-PROP-2",
+      "title": "Secret Never Stored in Plaintext",
+      "for_any": "row in `api_keys`",
+      "invariant": "`secret_hash` equals `hex(sha256(secret))` and the plaintext `secret` is not present in any column of `api_keys`",
+      "validates": [
+        "10-REQ-10.1",
+        "10-REQ-2.6"
+      ]
+    },
+    {
+      "id": "10-PROP-3",
+      "title": "Key Format Correctness",
+      "for_any": "`FullKey` value returned by `GenerateAPIKey` or the refresh endpoint",
+      "invariant": "`FullKey` matches the pattern `^[a-zA-Z0-9]+_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$` where the prefix segment equals `TokenPrefix`, the second segment equals `KeyID` (8 chars), and the third segment is the plaintext secret (32 chars)",
+      "validates": [
+        "10-REQ-1.1",
+        "10-REQ-1.2",
+        "10-REQ-2.6"
+      ]
+    },
+    {
+      "id": "10-PROP-4",
+      "title": "Expiry Calculation Correctness",
+      "for_any": "call to `GenerateAPIKey` with a valid `expiresDays` value",
+      "invariant": "when `expiresDays` is 0, `ExpiresAt` is nil and `expires_at` is NULL in `api_keys`; when `expiresDays` is in `{30, 60, 90}`, `ExpiresAt` equals `created_at + (expiresDays * 24h)` within a 1-second tolerance",
+      "validates": [
+        "10-REQ-2.8",
+        "10-REQ-6.3"
+      ]
+    },
+    {
+      "id": "10-PROP-5",
+      "title": "Listing Response Never Exposes Secret",
+      "for_any": "response from `GET /api/v1/user/keys`",
+      "invariant": "no field named `secret`, `secret_hash`, `key`, or `expires_days` appears in any element of the JSON response array",
+      "validates": [
+        "10-REQ-5.1",
+        "10-REQ-10.2"
+      ]
+    },
+    {
+      "id": "10-PROP-6",
+      "title": "Revocation Atomicity Under Failure",
+      "for_any": "call to `GenerateAPIKey` with a `*sql.DB` argument that fails after the revocation UPDATE",
+      "invariant": "the prior key's `revoked_at` remains NULL (the internal transaction is rolled back); no orphaned state is written",
+      "validates": [
+        "10-REQ-2.3",
+        "10-REQ-2.E1"
+      ]
+    },
+    {
+      "id": "10-PROP-7",
+      "title": "Ordered Key Listing",
+      "for_any": "response from `GET /api/v1/user/keys` when the user has at least two keys",
+      "invariant": "the `created_at` values in the response array are non-increasing (each element's `created_at` is >= the next element's `created_at`)",
+      "validates": [
+        "10-REQ-5.1",
+        "10-REQ-5.3"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "10-PATH-1",
+      "title": "OAuth Callback Creates First API Key",
+      "steps": [
+        {
+          "actor": "OAuth callback handler (spec 06)",
+          "action": "completes OAuth token exchange and obtains a `*sql.Tx` from an active transaction that upserts the user"
+        },
+        {
+          "actor": "OAuth callback handler (spec 06)",
+          "action": "calls `apikit.GenerateAPIKey(tx, userID, 90, logger)` passing the active `*sql.Tx`"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "validates `expiresDays = 90`, detects `tx` is `*sql.Tx` via type assertion, executes revocation UPDATE (`UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`) — affects 0 rows for a new user (no-op)"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "generates random 8-char `key_id` and 32-char `secret` via `crypto/rand`, computes `secret_hash = hex(sha256(secret))`, calculates `expires_at = now + 90 * 24h`"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "inserts new row into `api_keys` with all fields, emits INFO log entry with `user_id` and `key_id`, returns `*APIKeyResult`"
+        },
+        {
+          "actor": "OAuth callback handler (spec 06)",
+          "action": "commits the `*sql.Tx` (user upsert + key insert committed atomically)"
+        },
+        {
+          "actor": "OAuth callback handler (spec 06)",
+          "action": "returns the full key in the OAuth callback response to the user"
+        }
+      ]
+    },
+    {
+      "id": "10-PATH-2",
+      "title": "User Lists API Keys with ETag Caching",
+      "steps": [
+        {
+          "actor": "Authenticated user",
+          "action": "sends `GET /api/v1/user/keys` with no `If-None-Match` header"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates API key or PAT with `keys:read`, injects `user_id` into request context"
+        },
+        {
+          "actor": "`GET /api/v1/user/keys` handler",
+          "action": "queries `api_keys` for ETag derivation: `SELECT MAX(MAX(created_at, COALESCE(revoked_at, created_at))) FROM api_keys WHERE user_id = ?`; scans as `sql.NullString`"
+        },
+        {
+          "actor": "`GET /api/v1/user/keys` handler",
+          "action": "reformats `etag_ts` via `FormatUTC()`, calls `SetETag()` to set ETag header; calls `CheckETag()` — no match since no `If-None-Match` sent"
+        },
+        {
+          "actor": "`GET /api/v1/user/keys` handler",
+          "action": "queries `SELECT key_id, created_at, expires_at, revoked_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC` and serializes result as JSON array"
+        },
+        {
+          "actor": "`GET /api/v1/user/keys` handler",
+          "action": "returns HTTP 200 with JSON array and `ETag` header; `Cache-Control: no-store` inherited from group middleware"
+        },
+        {
+          "actor": "Authenticated user",
+          "action": "sends a second `GET /api/v1/user/keys` with `If-None-Match: <prior_etag>`"
+        },
+        {
+          "actor": "`GET /api/v1/user/keys` handler",
+          "action": "recomputes `etag_ts`, calls `CheckETag()` — ETag matches, returns HTTP 304 with empty body"
+        }
+      ]
+    },
+    {
+      "id": "10-PATH-3",
+      "title": "User Refreshes Active API Key",
+      "steps": [
+        {
+          "actor": "Authenticated user",
+          "action": "sends `POST /api/v1/user/keys/:key_id/refresh` authenticated with their API key"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates API key, injects `user_id` and credential type into request context"
+        },
+        {
+          "actor": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "reads credential-type context value; confirms it is an API key (not PAT)"
+        },
+        {
+          "actor": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "queries `SELECT key_id, user_id, secret_hash, expires_days, expires_at, revoked_at, created_at FROM api_keys WHERE key_id = ?` and verifies `user_id` matches, key is not revoked, key is not expired"
+        },
+        {
+          "actor": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "generates new 32-char `secret` via `crypto/rand`, computes new `secret_hash = hex(sha256(secret))`, recalculates `expires_at` from stored `expires_days`"
+        },
+        {
+          "actor": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "executes `UPDATE api_keys SET secret_hash = ?, expires_at = ?, created_at = ? WHERE key_id = ? AND user_id = ?`; checks rows affected > 0"
+        },
+        {
+          "actor": "`POST /api/v1/user/keys/:key_id/refresh` handler",
+          "action": "emits INFO log entry with `user_id` and `key_id`, returns HTTP 200 with `{\"key\": \"<full_key>\", \"key_id\": \"<key_id>\", \"expires_at\": <value>}`"
+        }
+      ]
+    },
+    {
+      "id": "10-PATH-4",
+      "title": "User Revokes Their Own Active API Key",
+      "steps": [
+        {
+          "actor": "Authenticated user",
+          "action": "sends `DELETE /api/v1/user/keys/:key_id` authenticated with their API key or PAT with `keys:manage`"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates credential, injects `user_id` into request context"
+        },
+        {
+          "actor": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "queries `api_keys` for the `key_id`, verifies key exists, belongs to authenticated user, and `revoked_at IS NULL`"
+        },
+        {
+          "actor": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "executes `UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND user_id = ?` with current UTC timestamp"
+        },
+        {
+          "actor": "`DELETE /api/v1/user/keys/:key_id` handler",
+          "action": "emits INFO log entry with `user_id` and `key_id`, returns HTTP 200 with `{\"key_id\": \"<key_id>\", \"revoked_at\": \"<RFC3339_UTC>\"}`"
+        }
+      ]
+    },
+    {
+      "id": "10-PATH-5",
+      "title": "GenerateAPIKey Standalone (Replaces Existing Key)",
+      "steps": [
+        {
+          "actor": "Caller (e.g., refresh handler or test)",
+          "action": "calls `GenerateAPIKey(db.SqlDB, userID, 30, logger)` passing `*sql.DB` directly"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "validates `expiresDays = 30`, detects `tx` is `*sql.DB` via type assertion, begins an internal transaction"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "executes `UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`; existing active key's `revoked_at` is stamped with current UTC"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "generates random `key_id` and `secret`, computes `secret_hash`, calculates `expires_at = now + 30 * 24h`, inserts into `api_keys`"
+        },
+        {
+          "actor": "`GenerateAPIKey` (`internal/keys`)",
+          "action": "commits internal transaction, emits INFO log entry with `user_id` and `key_id`, returns `*APIKeyResult` with `FullKey`, `KeyID`, `SecretHash`, `ExpiresAt`"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "10-ERR-1",
+      "condition": "`key_id` path parameter does not match any row in `api_keys` (including malformed values passed directly to the DB query)",
+      "behavior": "Handler returns HTTP 404 with body `{\"error\": \"key not found\"}` via `APIError`; no format validation is performed",
+      "requirement_id": "10-REQ-6.3"
+    },
+    {
+      "id": "10-ERR-2",
+      "condition": "Key found in `api_keys` but `user_id` does not match the authenticated user",
+      "behavior": "Handler returns HTTP 404 with body `{\"error\": \"key not found\"}` via `APIError`; 403 is not returned to prevent information leakage",
+      "requirement_id": "10-REQ-6.4"
+    },
+    {
+      "id": "10-ERR-3",
+      "condition": "Refresh requested on a key where `revoked_at IS NOT NULL`",
+      "behavior": "Handler returns HTTP 400 with body `{\"error\": \"cannot refresh a revoked key\"}` via `APIError`",
+      "requirement_id": "10-REQ-6.5"
+    },
+    {
+      "id": "10-ERR-4",
+      "condition": "Refresh requested on a key where `expires_at` is in the past relative to `time.Now().UTC()`",
+      "behavior": "Handler returns HTTP 400 with body `{\"error\": \"cannot refresh an expired key\"}` via `APIError`",
+      "requirement_id": "10-REQ-6.6"
+    },
+    {
+      "id": "10-ERR-5",
+      "condition": "Delete requested on a key where `revoked_at IS NOT NULL`",
+      "behavior": "Handler returns HTTP 400 with body `{\"error\": \"key is already revoked\"}` via `APIError`",
+      "requirement_id": "10-REQ-7.4"
+    },
+    {
+      "id": "10-ERR-6",
+      "condition": "Refresh endpoint receives a request authenticated with a PAT credential (as detected via credential-type context value from spec 05)",
+      "behavior": "Handler returns HTTP 401 with body `{\"error\": \"API key authentication required\"}` via `APIError`; no database operations are performed",
+      "requirement_id": "10-REQ-6.2"
+    },
+    {
+      "id": "10-ERR-7",
+      "condition": "`crypto/rand.Read()` returns an error during `key_id` or `secret` generation",
+      "behavior": "Function returns non-nil error immediately with no retries; caller surfaces as HTTP 500 with body `{\"error\": \"internal server error\"}` via `APIError`; no database state is written",
+      "requirement_id": "10-REQ-1.3"
+    },
+    {
+      "id": "10-ERR-8",
+      "condition": "`key_id` unique constraint violation persists after 3 retry attempts in `GenerateAPIKey`",
+      "behavior": "Function returns non-nil error; surfaced as HTTP 500 with body `{\"error\": \"internal server error\"}` via `APIError`",
+      "requirement_id": "10-REQ-2.E5"
+    },
+    {
+      "id": "10-ERR-9",
+      "condition": "Database error (non-constraint-violation) occurs during any query or mutation in any handler or in `GenerateAPIKey`",
+      "behavior": "Returns HTTP 500 with body `{\"error\": \"internal server error\"}` via `APIError`",
+      "requirement_id": "10-REQ-2.E3"
+    },
+    {
+      "id": "10-ERR-10",
+      "condition": "Refresh UPDATE affects 0 rows (race condition: key deleted between validation SELECT and UPDATE)",
+      "behavior": "Handler returns HTTP 404 with body `{\"error\": \"key not found\"}` via `APIError`; not treated as internal server error",
+      "requirement_id": "10-REQ-6.E1"
+    },
+    {
+      "id": "10-ERR-11",
+      "condition": "`expiresDays` passed to `GenerateAPIKey` is not in `{0, 30, 60, 90}`",
+      "behavior": "`GenerateAPIKey` returns a non-nil Go error immediately before any database access; the error propagates to the caller (e.g., OAuth callback handler in spec 06) which is responsible for surfacing it appropriately",
+      "requirement_id": "10-REQ-2.2"
+    },
+    {
+      "id": "10-ERR-12",
+      "condition": "`DELETE /api/v1/user/keys/:key_id` — `key_id` path parameter does not match any row in `api_keys`",
+      "behavior": "Handler returns HTTP 404 with body `{\"error\": \"key not found\"}` via `APIError`",
+      "requirement_id": "10-REQ-7.2"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4.x",
+      "symbols": [
+        {
+          "name": "Logger",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Logger interface",
+          "notes": "Echo logger interface used for structured logging; obtained via `c.Logger()` in handlers and passed explicitly to `GenerateAPIKey`"
+        },
+        {
+          "name": "Context.Logger",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "func (c Context) Logger() Logger",
+          "notes": "Returns the per-request Echo logger from the Echo context"
+        },
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct",
+          "notes": "Echo route group on which `RegisterKeyHandlers` registers the three key lifecycle endpoints"
+        }
+      ]
+    },
+    {
+      "package": "crypto/rand",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "Read",
+          "import_path": "crypto/rand",
+          "signature": "func Read(b []byte) (n int, err error)",
+          "notes": "Used to generate cryptographically secure random bytes for `key_id` and `secret` generation; failure is immediately fatal with no retries"
+        }
+      ]
+    },
+    {
+      "package": "crypto/sha256",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "Sum256",
+          "import_path": "crypto/sha256",
+          "signature": "func Sum256(data []byte) [32]byte",
+          "notes": "Used to hash the plaintext secret; result is hex-encoded via `encoding/hex.EncodeToString` to produce `secret_hash`"
+        }
+      ]
+    },
+    {
+      "package": "database/sql",
+      "version": "go1.25+",
+      "symbols": [
+        {
+          "name": "DB",
+          "import_path": "database/sql",
+          "signature": "type DB struct",
+          "notes": "Concrete database handle passed to `RegisterKeyHandlers`; detected via type assertion in `GenerateAPIKey` to determine whether an internal transaction should be started"
+        },
+        {
+          "name": "Tx",
+          "import_path": "database/sql",
+          "signature": "type Tx struct",
+          "notes": "Concrete transaction type; when passed as `tx` to `GenerateAPIKey`, the function participates in the caller's transaction without beginning a new one"
+        },
+        {
+          "name": "NullString",
+          "import_path": "database/sql",
+          "signature": "type NullString struct { String string; Valid bool }",
+          "notes": "Used to scan the `etag_ts` ETag derivation query result; `Valid = false` means no keys exist and no ETag is set"
+        }
+      ]
+    }
+  ]
+}

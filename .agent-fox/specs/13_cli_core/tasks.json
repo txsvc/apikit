@@ -1,0 +1,1730 @@
+{
+  "$schema": null,
+  "spec_id": "13",
+  "spec_name": "cli_core",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/cli/... ./cmd/akc/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "12",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "CLI wraps Go SDK client for all API calls. Every CLI command creates an apikit.Client and calls the corresponding SDK method. The CLI reuses the SDK's typed response structs and *APIError for error handling.",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "01",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Uses build-time TokenPrefix variable coordinated with the server build. The TokenPrefix determines the config directory path $HOME/.<prefix>/ and must match the server's compiled value.",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: binary entry point, Execute() wrapper, root command, and persistent flags",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for main.go entry point and Execute() wrapper",
+          "details": [
+            "In internal/cli/root_test.go: test Execute() calls PrintError on non-nil error and returns that error (TS-13-2).",
+            "Test that rootCmd.SilenceErrors and rootCmd.SilenceUsage are both true (TS-13-3).",
+            "Test stub command RunE calling PrintJSON on success writes valid JSON, no error envelope (TS-13-4).",
+            "Test stub command RunE returning error produces exactly one error envelope on stdout via Execute() (TS-13-5).",
+            "In cmd/akc/main_test.go (or source review): verify main.go source contains no fmt.Print/os.Stdout calls, only cli.ExitCode and os.Exit (TS-13-1, TS-13-63).",
+            "Test edge case TS-13-E1: Execute() calls PrintError exactly once on error, never on success."
+          ],
+          "test_spec_refs": [
+            "TS-13-1",
+            "TS-13-2",
+            "TS-13-3",
+            "TS-13-4",
+            "TS-13-5"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.1",
+            "13-REQ-1.2",
+            "13-REQ-1.3",
+            "13-REQ-1.4",
+            "13-REQ-1.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for root command persistent flags and bare invocation",
+          "details": [
+            "In internal/cli/root_test.go: inspect PersistentFlags() for endpoint-url (string), user-id (string), api-key (string), json (bool) (TS-13-6).",
+            "Test bare invocation (no subcommand, no flags) prints help text to stdout and returns nil error (TS-13-7).",
+            "Test that 'akc version --json' and 'akc version' produce identical stdout output; --json silently ignored on non-help command (TS-13-8).",
+            "Test apikit.RootCommand() returns non-nil *cobra.Command with Use containing 'akc' (TS-13-9).",
+            "Test edge TS-13-E2: unrecognized flag produces JSON error envelope on stdout with code:0, stderr empty, exit code 2."
+          ],
+          "test_spec_refs": [
+            "TS-13-6",
+            "TS-13-7",
+            "TS-13-8",
+            "TS-13-9",
+            "TS-13-E2"
+          ],
+          "requirement_refs": [
+            "13-REQ-2.1",
+            "13-REQ-2.2",
+            "13-REQ-2.3",
+            "13-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for build-time variables and TokenPrefix validation",
+          "details": [
+            "In internal/cli/version_info_test.go (or root_test.go): assert Version=='dev', Build=='unknown', TokenPrefix=='ak' when compiled without -ldflags (TS-13-10, TS-13-57).",
+            "Test PersistentPreRunE with TokenPrefix set to '' returns exit-2 error with exact message 'TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value'; stdout envelope has code:0 (TS-13-11).",
+            "Test TokenPrefix='myapp' causes config directory to be $HOME/.myapp/ and version output to contain 'prefix':'myapp' (TS-13-58).",
+            "Test edge TS-13-E3: auth-exempt command with TokenPrefix='' skips TokenPrefix validation, proceeds without error."
+          ],
+          "test_spec_refs": [
+            "TS-13-10",
+            "TS-13-11",
+            "TS-13-57",
+            "TS-13-58",
+            "TS-13-E3"
+          ],
+          "requirement_refs": [
+            "13-REQ-3.1",
+            "13-REQ-3.2",
+            "13-REQ-13.1",
+            "13-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test files compile without error: go build ./internal/cli/... ./cmd/akc/...",
+          "Spec tests for this group pass: go test ./internal/cli/... ./cmd/akc/... -run 'TestExecute|TestRootCmd|TestPersistentFlags|TestBareInvocation|TestJSONFlag|TestRootCommand|TestBuildVars|TestTokenPrefix' -count=1 -v",
+          "No linter warnings introduced: go vet ./internal/cli/... ./cmd/akc/...",
+          "Requirements 13-REQ-1.1–1.5, 13-REQ-2.1–2.4, 13-REQ-3.1–3.2, 13-REQ-13.1–13.2 test coverage present"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: config init, loading, saving, and CLIConfig struct",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for InitConfig directory and file creation",
+          "details": [
+            "In internal/cli/config_test.go: test InitConfig creates directory with mode 0700 when missing (TS-13-12).",
+            "Test InitConfig creates config.toml from hard-coded template with mode 0600; content has exactly three lines: endpoint_url=\\\"\\\", user_id=\\\"\\\", api_key=\\\"\\\" (TS-13-13).",
+            "Test InitConfig does not modify existing config.toml with custom content (TS-13-14).",
+            "Test CLIConfig struct TOML round-trip: marshal/unmarshal verifies all three field tags (TS-13-15).",
+            "Test edge TS-13-E4: PersistentPreRunE with unresolvable $HOME produces code:0 envelope with exact message, exit code 2, no config init attempted.",
+            "Test edge TS-13-E5: unwritable HOME causes InitConfig failure propagated as exit-2 error envelope."
+          ],
+          "test_spec_refs": [
+            "TS-13-12",
+            "TS-13-13",
+            "TS-13-14",
+            "TS-13-15",
+            "TS-13-E4",
+            "TS-13-E5"
+          ],
+          "requirement_refs": [
+            "13-REQ-4.1",
+            "13-REQ-4.2",
+            "13-REQ-4.3",
+            "13-REQ-4.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for LoadConfig parsing and malformed file rejection",
+          "details": [
+            "In internal/cli/config_test.go: test LoadConfig returns (*CLIConfig, nil) with correct field values from valid TOML (TS-13-16).",
+            "Test LoadConfig with syntactically invalid TOML returns (nil, error) with message starting 'config file is unparseable:' (TS-13-17).",
+            "Test edge TS-13-E6: partially valid TOML (two valid fields, one invalid) causes LoadConfig to return (nil, error), no partial result.",
+            "Test LoadConfig with empty-value fields returns CLIConfig with all empty strings (not nil).",
+            "Test LoadConfig with missing optional key returns CLIConfig with that field as empty string."
+          ],
+          "test_spec_refs": [
+            "TS-13-16",
+            "TS-13-17",
+            "TS-13-E6"
+          ],
+          "requirement_refs": [
+            "13-REQ-5.1",
+            "13-REQ-5.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for SaveConfig atomic write behavior",
+          "details": [
+            "In internal/cli/config_test.go: test SaveConfig writes CLIConfig to config.toml with mode 0600, valid TOML content, no temp files remaining (TS-13-33).",
+            "Test SaveConfig with unwritable config directory returns error immediately; no temp file left (TS-13-34).",
+            "Test SaveConfig with injected os.Rename failure: deferred os.Remove cleans up temp file; original config.toml unchanged; error returned (TS-13-35).",
+            "Test SaveConfig creates temp file in configDir (same directory as target) to guarantee same-filesystem rename (TS-13-36).",
+            "Test edge TS-13-E11: two concurrent SaveConfig calls result in config.toml containing exactly one valid update, no partial writes, no temp files."
+          ],
+          "test_spec_refs": [
+            "TS-13-33",
+            "TS-13-34",
+            "TS-13-35",
+            "TS-13-36",
+            "TS-13-E11"
+          ],
+          "requirement_refs": [
+            "13-REQ-8.1",
+            "13-REQ-8.2",
+            "13-REQ-8.3",
+            "13-REQ-8.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All config test files compile: go build ./internal/cli/...",
+          "Spec tests for this group pass: go test ./internal/cli/... -run 'TestInitConfig|TestLoadConfig|TestSaveConfig|TestCLIConfig' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-4.1–4.4, 13-REQ-5.1–5.2, 13-REQ-8.1–8.4 test coverage present"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests: credential resolution (ResolveField, ResolveEndpointURL, PersistentPreRunE)",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for ResolveField precedence and canonical error messages",
+          "details": [
+            "In internal/cli/config_test.go: test ResolveField returns flagValue when flagChanged=true regardless of env/config (TS-13-18).",
+            "Test ResolveField returns env value when flag not changed and env non-empty (TS-13-19).",
+            "Test ResolveField returns config value when flag not changed and env empty (TS-13-20).",
+            "Test ResolveField returns canonical error when required=true and all sources unset; exact message format verified (TS-13-21).",
+            "Test ResolveField returns ('', nil) when required=false and all sources unset (TS-13-22).",
+            "Test ResolveField canonical error message for api_key field (TS-13-23).",
+            "Test edge TS-13-E7: empty string config value treated as unset."
+          ],
+          "test_spec_refs": [
+            "TS-13-18",
+            "TS-13-19",
+            "TS-13-20",
+            "TS-13-21",
+            "TS-13-22",
+            "TS-13-23"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.1",
+            "13-REQ-6.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for PersistentPreRunE credential resolution and auth annotation skip",
+          "details": [
+            "In internal/cli/root_test.go: test PersistentPreRunE resolves endpoint_url and api_key as required; user_id as optional (empty string in context without error) (TS-13-24).",
+            "Test PersistentPreRunE uses cmd.Flags().Changed() on the leaf command for flag detection (TS-13-25).",
+            "Test ResolveEndpointURL returns empty string (not error) when no endpoint configured (TS-13-26).",
+            "Test edge TS-13-E8: auth-exempt command skips all credential resolution; LoadConfig call count == 0.",
+            "Test edge TS-13-E9: PersistentPreRunE reads 'auth' annotation from cmd argument (leaf command), not root."
+          ],
+          "test_spec_refs": [
+            "TS-13-24",
+            "TS-13-25",
+            "TS-13-26",
+            "TS-13-E8",
+            "TS-13-E9"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.3",
+            "13-REQ-6.4",
+            "13-REQ-6.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "Spec tests for this group pass: go test ./internal/cli/... -run 'TestResolveField|TestResolveEndpointURL|TestPersistentPreRunE|TestAuthAnnotation' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-6.1–6.5 test coverage present",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write tests: context storage, output formatting, and exit codes",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests for context storage helpers and key safety",
+          "details": [
+            "In internal/cli/context_test.go (or root_test.go): verify clientContextKey and userIDContextKey are zero-size unexported struct types (TS-13-27).",
+            "Test ClientFromContext returns nil on plain context.Background() (TS-13-28).",
+            "Test ClientFromContext returns stored *apikit.Client after context.WithValue (TS-13-29).",
+            "Test UserIDFromContext returns empty string on plain context (TS-13-30).",
+            "Test UserIDFromContext returns stored string after context.WithValue (TS-13-31).",
+            "Test PersistentPreRunE stores client and user_id in context; user_id not passed to apikit.NewClient (TS-13-32).",
+            "Test edge TS-13-E10: consuming project string key 'client' does not interfere with ClientFromContext."
+          ],
+          "test_spec_refs": [
+            "TS-13-27",
+            "TS-13-28",
+            "TS-13-29",
+            "TS-13-30",
+            "TS-13-31",
+            "TS-13-32"
+          ],
+          "requirement_refs": [
+            "13-REQ-7.1",
+            "13-REQ-7.2",
+            "13-REQ-7.3",
+            "13-REQ-7.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for PrintJSON, PrintError, and ExitCode",
+          "details": [
+            "In internal/cli/output_test.go: test PrintJSON produces valid indented JSON (two-space indent) on stdout (TS-13-37).",
+            "Test PrintError with plain error writes envelope with code:0 to stdout only; stderr empty (TS-13-38).",
+            "Test PrintError with *apikit.APIError uses error's HTTP status code (>=400) and message; code != 0 (TS-13-39).",
+            "Test ExitCode returns 0/nil, 1/*apikit.APIError, 2/plain error (TS-13-40).",
+            "Test human-readable messages go to stderr only; stdout contains only JSON (TS-13-41).",
+            "Test edge TS-13-E12: plain error → code:0; *apikit.APIError{Code:500} → code:500, never 0."
+          ],
+          "test_spec_refs": [
+            "TS-13-37",
+            "TS-13-38",
+            "TS-13-39",
+            "TS-13-40",
+            "TS-13-41",
+            "TS-13-E12"
+          ],
+          "requirement_refs": [
+            "13-REQ-9.1",
+            "13-REQ-9.2",
+            "13-REQ-9.3",
+            "13-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write tests for exit codes and error envelope consistency",
+          "details": [
+            "In internal/cli/output_test.go and root_test.go: test ExitCode returns 0/1/2 mapping (TS-13-61).",
+            "Test error envelopes written exclusively to stdout; stderr is empty for all error conditions (TS-13-62).",
+            "Review main.go source: assert no fmt.Print/os.Stdout calls; only cli.ExitCode and os.Exit (TS-13-63).",
+            "Test edge TS-13-E18: 4xx/5xx APIError produces code=HTTP status in envelope, exit code 1, stderr empty.",
+            "Test edge TS-13-E19: missing endpoint_url produces code:0, canonical message, exit code 2, stderr empty."
+          ],
+          "test_spec_refs": [
+            "TS-13-61",
+            "TS-13-62",
+            "TS-13-63",
+            "TS-13-E18",
+            "TS-13-E19"
+          ],
+          "requirement_refs": [
+            "13-REQ-14.1",
+            "13-REQ-14.2",
+            "13-REQ-14.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Spec tests for this group pass: go test ./internal/cli/... -run 'TestClientFromContext|TestUserIDFromContext|TestPrintJSON|TestPrintError|TestExitCode|TestErrorEnvelope' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-7.1–7.4, 13-REQ-9.1–9.4, 13-REQ-14.1–14.3 test coverage present",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write tests: version command and hook chaining",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write tests for version command annotations, VersionOutput struct, and RunE behavior",
+          "details": [
+            "In internal/cli/version_test.go: test version command has Annotations['auth']=='none' and Annotations['composite']=='true' (TS-13-42).",
+            "Test VersionOutput struct: marshal with nil ServerVersion produces JSON with cli_version/build/prefix; server_version omitted via omitempty (TS-13-43).",
+            "Test version RunE with mock server: constructs apikit.Client, calls Version(ctx), populates ServerVersion with version/build_time/commit/mount_point (TS-13-44).",
+            "Test version RunE with no endpoint configured: server_version omitted; stderr empty; exit 0 (TS-13-45).",
+            "Test version RunE with configured but unreachable endpoint: server_version omitted; warning on stderr containing 'warning: could not reach server:'; exit 0 (TS-13-46).",
+            "Test edge TS-13-E13: context deadline fires when server hangs; command returns within deadline; server_version omitted; warning on stderr; exit 0."
+          ],
+          "test_spec_refs": [
+            "TS-13-42",
+            "TS-13-43",
+            "TS-13-44",
+            "TS-13-45",
+            "TS-13-46",
+            "TS-13-E13"
+          ],
+          "requirement_refs": [
+            "13-REQ-10.1",
+            "13-REQ-10.2",
+            "13-REQ-10.3",
+            "13-REQ-10.4",
+            "13-REQ-10.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write tests for PersistentPreRunE hook chaining and command annotations enforcement",
+          "details": [
+            "In internal/cli/root_test.go: walk all leaf commands (RunE set) and assert Annotations['auth'] in {'none','api_key','admin'} (TS-13-54).",
+            "Test child command with PreRunE (not PersistentPreRunE) causes root's PersistentPreRunE to run before child's PreRunE; verify invocation order (TS-13-55).",
+            "Test PersistentPreRunE's cmd argument is the leaf command (not root); assert cmd.Annotations reflects leaf annotations (TS-13-56).",
+            "Test edge TS-13-E16: child command defining PersistentPreRunE shadows root's hook; root's PersistentPreRunE does NOT run (negative test documenting forbidden pattern)."
+          ],
+          "test_spec_refs": [
+            "TS-13-54",
+            "TS-13-55",
+            "TS-13-56",
+            "TS-13-E16"
+          ],
+          "requirement_refs": [
+            "13-REQ-12.1",
+            "13-REQ-12.2",
+            "13-REQ-12.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Spec tests for this group pass: go test ./internal/cli/... -run 'TestVersionCmd|TestVersionOutput|TestHookChaining|TestAnnotationEnforcement' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-10.1–10.5, 13-REQ-12.1–12.3 test coverage present",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "tests",
+      "title": "Write tests: agent interface (help --json), flag descriptors, and embeddable command tree",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Write tests for help --json full tree output and custom help subcommand routing",
+          "details": [
+            "In internal/cli/help_test.go: test custom help subcommand outputs full JSON tree when --json is set; delegates to Cobra default when --json is not set (TS-13-47).",
+            "Test help --json root object has name, version, commands array; each command entry has name/description/method/path/args/flags/auth (TS-13-48).",
+            "Test walker collects only leaf commands (RunE + at least one Annotations key); excludes group commands without RunE (TS-13-49).",
+            "Test edge TS-13-E14: 'akc help --json', 'akc help --json user', and 'akc help user --json' all produce identical full JSON tree output.",
+            "Test edge TS-13-E15: command with both RunE and child subcommands appears in commands array as leaf entry."
+          ],
+          "test_spec_refs": [
+            "TS-13-47",
+            "TS-13-48",
+            "TS-13-49",
+            "TS-13-E14",
+            "TS-13-E15"
+          ],
+          "requirement_refs": [
+            "13-REQ-11.1",
+            "13-REQ-11.2",
+            "13-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Write tests for flag descriptors, built-in filtering, per-command help, and consuming project integration",
+          "details": [
+            "In internal/cli/help_test.go: test flag descriptors omit 'default' for zero-value defaults (bool false, string '', int 0); include 'default' for non-zero defaults (bool true) (TS-13-50).",
+            "Test custom SetHelpFunc outputs single command JSON when --json set ('akc version --help --json'); falls back to Cobra default without --json (TS-13-51).",
+            "Test unannotated command (no Annotations keys) is excluded from help --json output; all appearing commands have at least one Annotations key (TS-13-52).",
+            "Test consuming project command added via AddCommand with 'auth' annotation automatically appears in help --json output (TS-13-53)."
+          ],
+          "test_spec_refs": [
+            "TS-13-50",
+            "TS-13-51",
+            "TS-13-52",
+            "TS-13-53"
+          ],
+          "requirement_refs": [
+            "13-REQ-11.4",
+            "13-REQ-11.5",
+            "13-REQ-11.6",
+            "13-REQ-11.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Write tests for embeddable command tree and internal package visibility",
+          "details": [
+            "Test apikit.RootCommand() returns non-nil *cobra.Command that can be added to consuming project root via AddCommand (TS-13-59).",
+            "Verify internal package protection: attempt to import internal/cli from external module fails at compile time with 'internal' error (TS-13-60).",
+            "Test edge TS-13-E17: mismatched TokenPrefix produces missing-credential error envelope (not a prefix-mismatch error), exit code 2."
+          ],
+          "test_spec_refs": [
+            "TS-13-59",
+            "TS-13-60",
+            "TS-13-E17"
+          ],
+          "requirement_refs": [
+            "13-REQ-13.3",
+            "13-REQ-13.4",
+            "13-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Spec tests for this group pass: go test ./internal/cli/... -run 'TestHelpJSON|TestFlagDescriptors|TestWalker|TestSetHelpFunc|TestAnnotationFilter|TestEmbeddable' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-11.1–11.7, 13-REQ-13.3–13.4 test coverage present",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "tests",
+      "title": "Write property tests and smoke test scaffolding",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Write property tests for error envelope invariants and exit code consistency",
+          "details": [
+            "In internal/cli/output_test.go or a dedicated property_test.go: implement TS-13-P1 — for arbitrary error values (*apikit.APIError, plain errors, wrapped errors), PrintError writes exactly one valid JSON envelope to stdout; stderr empty.",
+            "Implement TS-13-P2 — for nil/*apikit.APIError/plain error, ExitCode always returns exactly 0/1/2 respectively; no other value ever returned.",
+            "Use go test with subtests for different error type variants; cover wrapped errors via errors.Wrap."
+          ],
+          "test_spec_refs": [
+            "TS-13-P1",
+            "TS-13-P2"
+          ],
+          "requirement_refs": [
+            "13-REQ-9.2",
+            "13-REQ-9.3",
+            "13-REQ-14.1",
+            "13-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Write property tests for credential resolution, atomic write, and auth-exempt invariants",
+          "details": [
+            "Implement TS-13-P3 — for all 2^3 source-set combinations of (flagChanged, envValue, configValue), ResolveField returns exactly one deterministic value per precedence; no two sources tie.",
+            "Implement TS-13-P4 — for any SaveConfig call with injected failures at each step, config.toml is never partially written and no temp files remain.",
+            "Implement TS-13-P5 — for commands annotated with 'auth':'none', PersistentPreRunE never loads config, resolves credentials, or constructs apikit.Client; use call counters."
+          ],
+          "test_spec_refs": [
+            "TS-13-P3",
+            "TS-13-P4",
+            "TS-13-P5"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.1",
+            "13-REQ-8.1",
+            "13-REQ-8.2",
+            "13-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Write property tests for help --json live tree and context key safety",
+          "details": [
+            "Implement TS-13-P6 — for any command registered via AddCommand with at least one Annotations key, it appears in help --json output automatically; test with random sets of annotated commands.",
+            "Implement TS-13-P7 — for any value stored in context under any external key type (string, int, custom struct), ClientFromContext and UserIDFromContext return only values stored under the unexported struct key types."
+          ],
+          "test_spec_refs": [
+            "TS-13-P6",
+            "TS-13-P7"
+          ],
+          "requirement_refs": [
+            "13-REQ-11.3",
+            "13-REQ-11.7",
+            "13-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Write smoke test scaffolding and integration test stubs",
+          "details": [
+            "In internal/cli/smoke_test.go: create scaffolding for all 6 smoke tests with TODO markers for real components not yet implemented.",
+            "Register stub 'user show' and 'admin users list' commands as test fixtures in help_test.go TestMain or helper function for walker integration tests.",
+            "Create mock httptest.Server returning VersionResponse JSON for TS-13-SMOKE-4 and TS-13-44.",
+            "Ensure smoke tests can be skipped (t.Skip) when real SDK client is unavailable; document preconditions in test comments."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-1",
+            "TS-13-SMOKE-2",
+            "TS-13-SMOKE-3",
+            "TS-13-SMOKE-4",
+            "TS-13-SMOKE-5",
+            "TS-13-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.1",
+            "13-REQ-1.2",
+            "13-REQ-6.1",
+            "13-REQ-10.3",
+            "13-REQ-11.1",
+            "13-REQ-8.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "All property and smoke test files compile: go build ./internal/cli/...",
+          "Property tests pass: go test ./internal/cli/... -run 'TestProperty|TestProp|TestSmoke' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement binary entry point, version_info, and root command skeleton",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Create version_info.go with build-time variable declarations",
+          "details": [
+            "Create internal/cli/version_info.go with package-level var declarations: Version = \"dev\", Build = \"unknown\", TokenPrefix = \"ak\".",
+            "Add go:build tags if needed; ensure variables are injectable via -ldflags \"-X github.com/txsvc/apikit/internal/cli.Version=...\".",
+            "Document the -ldflags paths for all three variables in a comment block."
+          ],
+          "test_spec_refs": [
+            "TS-13-10",
+            "TS-13-57"
+          ],
+          "requirement_refs": [
+            "13-REQ-3.1",
+            "13-REQ-13.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Create cmd/akc/main.go binary entry point",
+          "details": [
+            "Create cmd/akc/main.go with package main importing github.com/txsvc/apikit/internal/cli.",
+            "Implement main() calling cli.Execute() and os.Exit(cli.ExitCode(err)) on non-nil error.",
+            "Ensure no fmt.Print, os.Stdout.Write, or any output call exists in main.go — sole responsibility is exit code."
+          ],
+          "test_spec_refs": [
+            "TS-13-1",
+            "TS-13-63"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.1",
+            "13-REQ-14.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Create internal/cli/root.go with root command, persistent flags, Execute(), and ExitCode()",
+          "details": [
+            "Create internal/cli/root.go; define package-level rootCmd *cobra.Command with Use='akc', SilenceErrors=true, SilenceUsage=true, no RunE.",
+            "Register persistent flags: --endpoint-url (string), --user-id (string), --api-key (string), --json (bool) on rootCmd.PersistentFlags().",
+            "Implement Execute() error: wraps rootCmd.Execute(); calls PrintError(err) on non-nil error; returns err.",
+            "Implement ExitCode(err error) int: nil→0, errors.As(*apikit.APIError)→1, else→2.",
+            "Export RootCommand() *cobra.Command from internal/cli returning rootCmd."
+          ],
+          "test_spec_refs": [
+            "TS-13-2",
+            "TS-13-3",
+            "TS-13-6",
+            "TS-13-7",
+            "TS-13-8"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.2",
+            "13-REQ-1.3",
+            "13-REQ-2.1",
+            "13-REQ-2.2",
+            "13-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Create root apikit package shim for RootCommand()",
+          "details": [
+            "In the root apikit package (e.g., apikit.go), add RootCommand() *cobra.Command that delegates to internal/cli.RootCommand().",
+            "Ensure internal/cli is only imported by the root package shim; no other external package import path.",
+            "Verify Go toolchain internal package protection: external test module attempting to import internal/cli fails at compile time."
+          ],
+          "test_spec_refs": [
+            "TS-13-9",
+            "TS-13-59",
+            "TS-13-60"
+          ],
+          "requirement_refs": [
+            "13-REQ-2.4",
+            "13-REQ-13.3",
+            "13-REQ-13.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Binary compiles: go build ./cmd/akc/",
+          "Tests for entry point and root command pass: go test ./internal/cli/... -run 'TestExecute|TestRootCmd|TestPersistentFlags|TestBareInvocation|TestExitCode|TestBuildVars' -count=1 -v",
+          "No linter warnings: go vet ./cmd/akc/... ./internal/cli/...",
+          "Requirements 13-REQ-1.1–1.3, 13-REQ-2.1–2.4, 13-REQ-3.1, 13-REQ-13.1–13.4 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement context storage and output formatting helpers",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement context.go with unexported key types and retrieval helpers",
+          "details": [
+            "Create internal/cli/context.go with unexported zero-size struct types: type clientContextKey struct{} and type userIDContextKey struct{}.",
+            "Implement ClientFromContext(ctx context.Context) *apikit.Client using ctx.Value(clientContextKey{}).(*apikit.Client); return nil if not present.",
+            "Implement UserIDFromContext(ctx context.Context) string using ctx.Value(userIDContextKey{}).(string); return empty string if not present.",
+            "Do NOT export the key types; only the helper functions are exported."
+          ],
+          "test_spec_refs": [
+            "TS-13-27",
+            "TS-13-28",
+            "TS-13-29",
+            "TS-13-30",
+            "TS-13-31"
+          ],
+          "requirement_refs": [
+            "13-REQ-7.1",
+            "13-REQ-7.2",
+            "13-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement output.go with PrintJSON, PrintError, and error envelope types",
+          "details": [
+            "Create internal/cli/output.go; define unexported errorEnvelope and errorBody structs matching {\"error\":{\"code\":<int>,\"message\":\"<string>\"}} JSON shape.",
+            "Implement PrintJSON(v interface{}) error using json.MarshalIndent with two-space indent; write to os.Stdout.",
+            "Implement PrintError(err error): use errors.As to detect *apikit.APIError → use apiErr.Code and apiErr.Message; else use code:0 and err.Error(). Write to os.Stdout only.",
+            "Human-readable messages (warnings, progress) use fmt.Fprintf(os.Stderr, ...) — add a package-level Warnf helper for convenience."
+          ],
+          "test_spec_refs": [
+            "TS-13-37",
+            "TS-13-38",
+            "TS-13-39",
+            "TS-13-40",
+            "TS-13-41"
+          ],
+          "requirement_refs": [
+            "13-REQ-9.1",
+            "13-REQ-9.2",
+            "13-REQ-9.3",
+            "13-REQ-9.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "Tests for context and output pass: go test ./internal/cli/... -run 'TestClientFromContext|TestUserIDFromContext|TestPrintJSON|TestPrintError|TestExitCode' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-7.1–7.4, 13-REQ-9.1–9.4 acceptance criteria met",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement config.go: CLIConfig, InitConfig, LoadConfig, SaveConfig, and ResolveField",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement CLIConfig struct, InitConfig, and LoadConfig",
+          "details": [
+            "Create internal/cli/config.go; define CLIConfig struct with TOML tags: endpoint_url, user_id, api_key.",
+            "Implement InitConfig(configDir string) error: use os.MkdirAll(configDir, 0700); if config.toml missing, write hard-coded template string with os.WriteFile and mode 0600. Hard-coded template: 'endpoint_url = \"\"\\nuser_id = \"\"\\napi_key = \"\"\\n'. Do not modify existing file.",
+            "Implement LoadConfig(configDir string) (*CLIConfig, error): read config.toml; parse via toml.Decode or toml.NewDecoder; on any parse error return (nil, fmt.Errorf(\"config file is unparseable: %w\", parseErr))."
+          ],
+          "test_spec_refs": [
+            "TS-13-12",
+            "TS-13-13",
+            "TS-13-14",
+            "TS-13-15",
+            "TS-13-16",
+            "TS-13-17"
+          ],
+          "requirement_refs": [
+            "13-REQ-4.1",
+            "13-REQ-4.2",
+            "13-REQ-4.3",
+            "13-REQ-4.4",
+            "13-REQ-5.1",
+            "13-REQ-5.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement SaveConfig atomic write and ResolveField credential resolution",
+          "details": [
+            "Implement SaveConfig(configDir string, cfg *CLIConfig) error: os.CreateTemp(configDir, \"config*.toml\"); immediately defer os.Remove(tmp.Name()); marshal via toml.NewEncoder(tmp).Encode(cfg); chmod tmp to 0600; close tmp; os.Rename(tmp.Name(), configPath). Return os.CreateTemp error immediately (no deferred remove registered yet).",
+            "Implement ResolveField(fieldName, flagName, flagValue string, flagChanged bool, envVarName, configValue string, required bool) (string, error): precedence: flagChanged+non-empty flagValue > os.Getenv(envVarName) non-empty > non-empty configValue > error (required=true) or (\"\",nil) (required=false). Canonical error message composed internally from fieldName, flagName, envVarName."
+          ],
+          "test_spec_refs": [
+            "TS-13-33",
+            "TS-13-34",
+            "TS-13-35",
+            "TS-13-36",
+            "TS-13-18",
+            "TS-13-21",
+            "TS-13-22",
+            "TS-13-23"
+          ],
+          "requirement_refs": [
+            "13-REQ-8.1",
+            "13-REQ-8.2",
+            "13-REQ-8.3",
+            "13-REQ-8.4",
+            "13-REQ-6.1",
+            "13-REQ-6.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Implement ResolveEndpointURL helper for auth-exempt commands",
+          "details": [
+            "Implement ResolveEndpointURL(cmd *cobra.Command) string in internal/cli/config.go (or root.go): read --endpoint-url flag and its Changed state from cmd.Root().PersistentFlags(); load config file from default config path; call ResolveField with required=false; return empty string on any error or missing value.",
+            "Ensure ResolveEndpointURL never returns an error to the caller — always returns a string (empty or non-empty).",
+            "Document the intent: for auth-exempt commands that optionally need endpoint_url without going through PersistentPreRunE."
+          ],
+          "test_spec_refs": [
+            "TS-13-26",
+            "TS-13-E7"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Config tests pass: go test ./internal/cli/... -run 'TestInitConfig|TestLoadConfig|TestSaveConfig|TestCLIConfig|TestResolveField|TestResolveEndpointURL' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-4.1–4.4, 13-REQ-5.1–5.2, 13-REQ-6.1–6.2, 13-REQ-6.5, 13-REQ-8.1–8.4 acceptance criteria met",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "standard",
+      "title": "Implement PersistentPreRunE hook on the root command",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Implement PersistentPreRunE with ordered validation steps 1–4",
+          "details": [
+            "In internal/cli/root.go, set rootCmd.PersistentPreRunE to a function implementing the ordered steps.",
+            "Step 1: check cmd.Annotations[\"auth\"] == \"none\" → return nil immediately (auth annotation reads from leaf cmd, not rootCmd).",
+            "Step 2: validate TokenPrefix != \"\" → return fmt.Errorf(\"TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value\") wrapped as exit-2 error.",
+            "Step 3: call os.UserHomeDir(); if error or empty → return error with message \"cannot determine home directory: $HOME is not set or unresolvable\".",
+            "Step 4: derive configDir as filepath.Join(homeDir, \".\"+TokenPrefix); call InitConfig(configDir)."
+          ],
+          "test_spec_refs": [
+            "TS-13-11",
+            "TS-13-E3",
+            "TS-13-E4",
+            "TS-13-56"
+          ],
+          "requirement_refs": [
+            "13-REQ-3.2",
+            "13-REQ-4.E1",
+            "13-REQ-6.E2",
+            "13-REQ-6.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Implement PersistentPreRunE validation steps 5–7: config load, credential resolution, and client construction",
+          "details": [
+            "Step 5: call LoadConfig(configDir); return error on failure.",
+            "Step 6: resolve endpoint_url (required=true) and api_key (required=true) via ResolveField using cmd.Flags().Changed() for flag detection; resolve user_id (required=false) storing empty string without error.",
+            "Step 7: construct apikit.Client via apikit.NewClient(endpointURL, apikit.WithAPIKey(apiKey)); store client under clientContextKey{} and resolvedUserID under userIDContextKey{} via context.WithValue; update cmd.SetContext(ctx).",
+            "Ensure cmd argument (leaf command) is used for flag checking and annotation reading, not rootCmd — guard against the common Cobra pitfall."
+          ],
+          "test_spec_refs": [
+            "TS-13-24",
+            "TS-13-25",
+            "TS-13-32",
+            "TS-13-55"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.3",
+            "13-REQ-6.4",
+            "13-REQ-7.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "PersistentPreRunE tests pass: go test ./internal/cli/... -run 'TestPersistentPreRunE|TestTokenPrefix|TestHomeDir|TestCredential|TestContextStorage|TestHookChaining' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-3.2, 13-REQ-4.E1, 13-REQ-6.3–6.4, 13-REQ-7.4, 13-REQ-12.3 acceptance criteria met",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "checkpoint",
+      "title": "Checkpoint: core infrastructure complete — config, credentials, context, output",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Run full test suite and verify all core infrastructure tests pass",
+          "details": [
+            "Run go test ./internal/cli/... ./cmd/akc/... -count=1 -v and verify all tests pass.",
+            "Run go vet ./... and confirm zero linter warnings.",
+            "Verify binary builds successfully: go build ./cmd/akc/.",
+            "Confirm no panic(\"not implemented\") or // TODO stubs remain in config.go, output.go, context.go, root.go, version_info.go."
+          ],
+          "test_spec_refs": [
+            "TS-13-1",
+            "TS-13-2",
+            "TS-13-12",
+            "TS-13-16",
+            "TS-13-18",
+            "TS-13-27",
+            "TS-13-33",
+            "TS-13-37"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.1",
+            "13-REQ-1.2",
+            "13-REQ-4.1",
+            "13-REQ-5.1",
+            "13-REQ-6.1",
+            "13-REQ-7.1",
+            "13-REQ-8.1",
+            "13-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Verify property test invariants and edge case coverage for core infrastructure",
+          "details": [
+            "Run property tests: go test ./internal/cli/... -run 'TestProperty|TestProp' -count=1 -v.",
+            "Verify ResolveField precedence property (TS-13-P3) passes for all 2^3 source combinations.",
+            "Verify atomic write property (TS-13-P4) passes with injected failures at each step.",
+            "Verify error envelope property (TS-13-P1) passes for all error type variants."
+          ],
+          "test_spec_refs": [
+            "TS-13-P3",
+            "TS-13-P4",
+            "TS-13-P1"
+          ],
+          "requirement_refs": [
+            "13-REQ-6.1",
+            "13-REQ-8.1",
+            "13-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "Full test suite passes: go test ./internal/cli/... ./cmd/akc/... -count=1",
+          "Binary compiles without errors: go build ./cmd/akc/",
+          "No linter warnings: go vet ./...",
+          "No panic(\"not implemented\") markers in core infrastructure files: grep -r 'not implemented' internal/cli/config.go internal/cli/output.go internal/cli/context.go internal/cli/root.go returns no results",
+          "Requirements 13-REQ-1, 13-REQ-4, 13-REQ-5, 13-REQ-6, 13-REQ-7, 13-REQ-8, 13-REQ-9 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "standard",
+      "title": "Implement version command (version.go)",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Define VersionOutput struct embedding apikit.VersionResponse",
+          "details": [
+            "Create internal/cli/version.go; define VersionOutput struct: CLIVersion string (json:\"cli_version\"), Build string (json:\"build\"), Prefix string (json:\"prefix\"), ServerVersion *apikit.VersionResponse (json:\"server_version,omitempty\").",
+            "Verify at compile time that apikit.VersionResponse exists in the imported SDK (spec 12); note any gap in a TODO if the struct is not yet available.",
+            "Add a unit test to confirm JSON marshaling with nil ServerVersion omits the server_version key entirely."
+          ],
+          "test_spec_refs": [
+            "TS-13-43"
+          ],
+          "requirement_refs": [
+            "13-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.2",
+          "title": "Implement version command RunE with auth-exempt annotation and optional server version fetch",
+          "details": [
+            "In internal/cli/version.go: create versionCmd *cobra.Command with Annotations: {\"auth\":\"none\", \"composite\":\"true\"}.",
+            "Register versionCmd with rootCmd.AddCommand in an init() or explicit setup function.",
+            "RunE: call ResolveEndpointURL(cmd); if non-empty URL, construct minimal apikit.Client with a bounded context (e.g., 10s timeout via context.WithTimeout); call client.Version(ctx).",
+            "If Version() succeeds, set output.ServerVersion; if unreachable, print warning to stderr via fmt.Fprintf(os.Stderr, \"warning: could not reach server: %v\\n\", err); if no endpoint, omit ServerVersion silently.",
+            "Call PrintJSON(output) on success; return nil (exit 0 even when server_version is omitted)."
+          ],
+          "test_spec_refs": [
+            "TS-13-42",
+            "TS-13-44",
+            "TS-13-45",
+            "TS-13-46",
+            "TS-13-E13"
+          ],
+          "requirement_refs": [
+            "13-REQ-10.1",
+            "13-REQ-10.3",
+            "13-REQ-10.4",
+            "13-REQ-10.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "Version command tests pass: go test ./internal/cli/... -run 'TestVersionCmd|TestVersionOutput' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-10.1–10.5 acceptance criteria met",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "standard",
+      "title": "Implement agent interface: help command and SetHelpFunc (help.go)",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Implement help --json command tree walker and JSON structure builder",
+          "details": [
+            "Create internal/cli/help.go; implement walkCommands(cmd *cobra.Command) []CommandEntry recursively.",
+            "Collect only leaf commands: cmd.RunE != nil AND len(cmd.Annotations) > 0. Commands with both RunE and children are included as leaves.",
+            "For each leaf: extract full space-separated path (cmd.CommandPath()), description (cmd.Short), annotations (method, path, auth, composite), flags, args.",
+            "Flag descriptor: name (\"--\"+flag.Name), type (flag.Value.Type()), required (from cobra required annotation), description (flag.Usage). Omit 'default' if value equals type zero value (\"\" for string, 0 for int, false for bool, [] for stringSlice).",
+            "Annotation filter: commands with zero Annotations entries are excluded (Cobra built-ins).",
+            "Build root JSON object: {name: rootCmd.Use, version: Version, commands: [...]}}."
+          ],
+          "test_spec_refs": [
+            "TS-13-48",
+            "TS-13-49",
+            "TS-13-50",
+            "TS-13-52",
+            "TS-13-E14",
+            "TS-13-E15"
+          ],
+          "requirement_refs": [
+            "13-REQ-11.2",
+            "13-REQ-11.3",
+            "13-REQ-11.4",
+            "13-REQ-11.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Implement custom help subcommand and SetHelpFunc for per-command JSON help",
+          "details": [
+            "In internal/cli/help.go: create custom helpCmd *cobra.Command that replaces Cobra's default help command (rootCmd.SetHelpCommand(helpCmd) or equivalent).",
+            "helpCmd.RunE: check if persistent --json flag is set via rootCmd.PersistentFlags().Changed(\"json\"); if true, call walkCommands and PrintJSON the full tree (ignore positional args). If false, delegate to Cobra's default help behavior for any positional arguments.",
+            "Set rootCmd.SetHelpFunc to a function that checks the --json flag; if set, output single command JSON entry; else call defaultHelpFunc.",
+            "Ensure Cobra's completion command is NOT registered (shell completion is a non-goal); do not call rootCmd.InitDefaultCompletionCmd() or similar.",
+            "Consuming project commands added via AddCommand with at least one Annotations key automatically appear in walker output — no additional registration needed."
+          ],
+          "test_spec_refs": [
+            "TS-13-47",
+            "TS-13-51",
+            "TS-13-53",
+            "TS-13-E14"
+          ],
+          "requirement_refs": [
+            "13-REQ-11.1",
+            "13-REQ-11.5",
+            "13-REQ-11.7"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "Help/agent interface tests pass: go test ./internal/cli/... -run 'TestHelpJSON|TestFlagDescriptors|TestWalker|TestSetHelpFunc|TestAnnotationFilter|TestEmbeddable|TestHelpRouting' -count=1 -v",
+          "No linter warnings: go vet ./internal/cli/...",
+          "Requirements 13-REQ-11.1–11.7 acceptance criteria met",
+          "Completion command is NOT registered: binary invocation 'akc completion' produces error, not a completion subcommand",
+          "All existing tests still pass: go test ./internal/cli/... -count=1"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "kind": "checkpoint",
+      "title": "Checkpoint: full feature set complete — version command and agent interface",
+      "subtasks": [
+        {
+          "id": "15.1",
+          "title": "Run full test suite including property tests and verify all pass",
+          "details": [
+            "Run go test ./... -count=1 and verify all tests pass including property tests.",
+            "Run go vet ./... and confirm zero warnings.",
+            "Verify 'akc help --json', 'akc help --json user', and 'akc help user --json' all produce identical output (TS-13-E14).",
+            "Verify 'akc completion' is not a registered command."
+          ],
+          "test_spec_refs": [
+            "TS-13-P5",
+            "TS-13-P6",
+            "TS-13-P7"
+          ],
+          "requirement_refs": [
+            "13-REQ-10.1",
+            "13-REQ-11.1",
+            "13-REQ-12.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "15.2",
+          "title": "Audit for stub markers and confirm no dead code in implemented files",
+          "details": [
+            "Search for panic(\"not implemented\"), // TODO, and bare return nil in non-trivial paths across all internal/cli/*.go files.",
+            "Confirm version.go RunE has real implementation: context timeout set, client.Version() called, VersionOutput populated.",
+            "Confirm help.go walkCommands is fully implemented: recursion, leaf detection, flag descriptors, annotation filter.",
+            "Confirm help.go custom help subcommand routing is implemented: --json → full tree, no --json → Cobra delegation."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-4",
+            "TS-13-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.2",
+            "13-REQ-10.3",
+            "13-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "15.V",
+        "checks": [
+          "Full test suite passes: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "No stub markers found: grep -r 'panic(\"not implemented\")' internal/cli/ returns empty",
+          "Requirements 13-REQ-10, 13-REQ-11, 13-REQ-12 acceptance criteria met",
+          "Binary compiles and 'akc help --json' produces valid JSON: go build ./cmd/akc/ && ./akc help --json | go run encoding/json (validate via go test)"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration, smoke tests, and stub audit",
+      "subtasks": [
+        {
+          "id": "16.1",
+          "title": "Trace execution paths and verify function call chains are complete",
+          "details": [
+            "Trace 13-PATH-1: verify main() → cli.Execute() → rootCmd.Execute() → PersistentPreRunE → InitConfig → LoadConfig → ResolveField → apikit.NewClient → context.WithValue → RunE → PrintJSON → os.Exit(0). No stubs or panic in any link.",
+            "Trace 13-PATH-2: verify API error path RunE returns *apikit.APIError → Execute() calls PrintError → code from apiErr.Code → os.Exit(1). Confirm no RunE calls PrintError directly.",
+            "Trace 13-PATH-3: verify missing credential path → ResolveField returns canonical error → PersistentPreRunE returns error → Execute() calls PrintError with code:0 → os.Exit(2).",
+            "Run smoke tests TS-13-SMOKE-1, TS-13-SMOKE-2, TS-13-SMOKE-3 with real components and mock SDK server."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-1",
+            "TS-13-SMOKE-2",
+            "TS-13-SMOKE-3"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.1",
+            "13-REQ-1.2",
+            "13-REQ-6.3",
+            "13-REQ-7.4",
+            "13-REQ-8.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.2",
+          "title": "Trace version command and help --json execution paths; verify return value propagation",
+          "details": [
+            "Trace 13-PATH-4: verify version RunE → PersistentPreRunE returns nil (auth:none) → ResolveEndpointURL → apikit.NewClient → client.Version(ctx) with bounded context → VersionOutput.ServerVersion populated → PrintJSON → os.Exit(0).",
+            "Trace 13-PATH-5: verify help RunE → --json detected → walkCommands traverses full tree → annotation filter applied → CommandEntry structs built → PrintJSON → os.Exit(0).",
+            "Verify return values propagate: walkCommands returns []CommandEntry to help RunE; VersionOutput.ServerVersion is *apikit.VersionResponse pointer (not copied struct); all callers use returned values rather than discarding them."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-4",
+            "TS-13-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "13-REQ-10.3",
+            "13-REQ-11.1",
+            "13-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.3",
+          "title": "Run atomic write smoke test and verify SaveConfig end-to-end wiring",
+          "details": [
+            "Trace 13-PATH-6: verify spec-14/15 stub command → SaveConfig → os.CreateTemp in configDir → defer os.Remove → toml.NewEncoder.Encode → chmod 0600 → os.Rename → config.toml updated atomically → no temp files remain.",
+            "Verify deferred os.Remove on rename failure path: inject rename failure and confirm temp file is cleaned up and original config.toml is intact.",
+            "Run smoke test TS-13-SMOKE-6 with a stub spec-14/15 command calling SaveConfig directly."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "13-REQ-8.1",
+            "13-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.4",
+          "title": "Dead-code and stub marker audit across all implementation files",
+          "details": [
+            "Search all internal/cli/*.go and cmd/akc/main.go for Go stub markers: panic(\"not implemented\"), // TODO (blocking), bare return nil in non-trivial functions, empty function bodies.",
+            "Confirm no Cobra completion command registration: grep -r 'InitDefaultCompletionCmd\\|completion' internal/cli/ shows no registration calls.",
+            "Confirm SilenceErrors and SilenceUsage are set in code (not just tests): grep 'SilenceErrors\\|SilenceUsage' internal/cli/root.go shows true assignments.",
+            "Confirm clientContextKey and userIDContextKey are unexported: grep -n 'type clientContextKey\\|type userIDContextKey' internal/cli/context.go shows lowercase (unexported) type names."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-1",
+            "TS-13-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "13-REQ-1.2",
+            "13-REQ-6.1",
+            "13-REQ-9.1",
+            "13-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.5",
+          "title": "Cross-spec entry point verification and full smoke test run",
+          "details": [
+            "Verify cross-spec entry points: apikit.RootCommand() in the root package shim calls internal/cli.RootCommand() in production code (not test code).",
+            "Verify spec 12 dependency: apikit.NewClient and *apikit.APIError are called/used from production paths in root.go and output.go; apikit.VersionResponse is the type of VersionOutput.ServerVersion.",
+            "Run all 6 smoke tests: go test ./internal/cli/... ./cmd/akc/... -run 'TestSmoke' -count=1 -v; all must pass with real components.",
+            "Run full final test suite: go test ./... -count=1; all tests pass.",
+            "Final linter pass: go vet ./...; zero warnings."
+          ],
+          "test_spec_refs": [
+            "TS-13-SMOKE-1",
+            "TS-13-SMOKE-2",
+            "TS-13-SMOKE-3",
+            "TS-13-SMOKE-4",
+            "TS-13-SMOKE-5",
+            "TS-13-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "13-REQ-2.4",
+            "13-REQ-13.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "16.V",
+        "checks": [
+          "All smoke tests pass with real components: go test ./internal/cli/... ./cmd/akc/... -run 'TestSmoke' -count=1 -v",
+          "Full test suite passes: go test ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "No stub markers: grep -r 'panic(\\\"not implemented\\\")' internal/cli/ cmd/akc/ returns empty",
+          "No Cobra completion command registered: go build ./cmd/akc/ && ./akc completion 2>&1 | grep -i 'unknown command'",
+          "Binary produces valid JSON on help: go build ./cmd/akc/ && ./akc help --json | jq . > /dev/null",
+          "apikit.RootCommand() shim calls internal/cli.RootCommand() in production code: grep -n 'internal/cli' apikit.go confirms delegation",
+          "All 13 requirements (13-REQ-1 through 13-REQ-14) acceptance criteria met as evidenced by passing tests"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "13-REQ-1.1",
+      "test_spec_id": "TS-13-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-1.2",
+      "test_spec_id": "TS-13-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-1.3",
+      "test_spec_id": "TS-13-3",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-1.4",
+      "test_spec_id": "TS-13-4",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-1.5",
+      "test_spec_id": "TS-13-5",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-2.1",
+      "test_spec_id": "TS-13-6",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-2.2",
+      "test_spec_id": "TS-13-7",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-2.3",
+      "test_spec_id": "TS-13-8",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-2.4",
+      "test_spec_id": "TS-13-9",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-3.1",
+      "test_spec_id": "TS-13-10",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-3.2",
+      "test_spec_id": "TS-13-11",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-4.1",
+      "test_spec_id": "TS-13-12",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-4.2",
+      "test_spec_id": "TS-13-13",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-4.3",
+      "test_spec_id": "TS-13-14",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-4.4",
+      "test_spec_id": "TS-13-15",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-5.1",
+      "test_spec_id": "TS-13-16",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-5.2",
+      "test_spec_id": "TS-13-17",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.1",
+      "test_spec_id": "TS-13-18",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.1",
+      "test_spec_id": "TS-13-19",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.1",
+      "test_spec_id": "TS-13-20",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.1",
+      "test_spec_id": "TS-13-21",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.1",
+      "test_spec_id": "TS-13-22",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.2",
+      "test_spec_id": "TS-13-23",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.3",
+      "test_spec_id": "TS-13-24",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.4",
+      "test_spec_id": "TS-13-25",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-6.5",
+      "test_spec_id": "TS-13-26",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.1",
+      "test_spec_id": "TS-13-27",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.2",
+      "test_spec_id": "TS-13-28",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.2",
+      "test_spec_id": "TS-13-29",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.3",
+      "test_spec_id": "TS-13-30",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.3",
+      "test_spec_id": "TS-13-31",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-7.4",
+      "test_spec_id": "TS-13-32",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-9.1",
+      "test_spec_id": "TS-13-37",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-9.2",
+      "test_spec_id": "TS-13-38",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-9.2",
+      "test_spec_id": "TS-13-39",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-9.3",
+      "test_spec_id": "TS-13-40",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-9.4",
+      "test_spec_id": "TS-13-41",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-14.1",
+      "test_spec_id": "TS-13-61",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-14.2",
+      "test_spec_id": "TS-13-62",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-14.3",
+      "test_spec_id": "TS-13-63",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-10.1",
+      "test_spec_id": "TS-13-42",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-10.2",
+      "test_spec_id": "TS-13-43",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-10.3",
+      "test_spec_id": "TS-13-44",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-10.4",
+      "test_spec_id": "TS-13-45",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-10.5",
+      "test_spec_id": "TS-13-46",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-12.1",
+      "test_spec_id": "TS-13-54",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-12.2",
+      "test_spec_id": "TS-13-55",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-12.3",
+      "test_spec_id": "TS-13-56",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.1",
+      "test_spec_id": "TS-13-47",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.2",
+      "test_spec_id": "TS-13-48",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.3",
+      "test_spec_id": "TS-13-49",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.4",
+      "test_spec_id": "TS-13-50",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.5",
+      "test_spec_id": "TS-13-51",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.6",
+      "test_spec_id": "TS-13-52",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-11.7",
+      "test_spec_id": "TS-13-53",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-13.3",
+      "test_spec_id": "TS-13-59",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-13.4",
+      "test_spec_id": "TS-13-60",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-8.1",
+      "test_spec_id": "TS-13-33",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-8.2",
+      "test_spec_id": "TS-13-34",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-8.3",
+      "test_spec_id": "TS-13-35",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-8.4",
+      "test_spec_id": "TS-13-36",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-13.1",
+      "test_spec_id": "TS-13-57",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "13-REQ-13.2",
+      "test_spec_id": "TS-13-58",
+      "task_id": "1.3",
+      "test_path": null
+    }
+  ]
+}

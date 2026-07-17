@@ -1,0 +1,1250 @@
+{
+  "$schema": null,
+  "spec_id": "11",
+  "spec_name": "python_sdk",
+  "schema_version": 1,
+  "introduction": "This spec defines the requirements for the Python SDK (`apikit`) \u2014 a typed, synchronous Python client library for the apikit built-in API endpoints, managed with `uv` under packages/sdk-python/. Note: requirements referencing `httpx` and `respx` APIs are based on PRD assumptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "APIError": "The base exception class raised by the SDK whenever the server returns a 4xx or 5xx HTTP response.",
+    "APIKeyWithSecret": "Response dataclass representing the secret-bearing API key returned by key creation and refresh operations; contains `key`, `key_id`, and `expires_at` only.",
+    "AuthCallbackRequest": "Internal request dataclass used to serialize the body for the OAuth code exchange endpoint; `expires` field is in days.",
+    "AuthCallbackResponse": "Response dataclass returned by the OAuth code exchange endpoint, containing a `User` and an `APIKeyWithSecret`.",
+    "ConflictError": "Subclass of `APIError` raised on HTTP 409 responses.",
+    "CreateTokenRequest": "Internal request dataclass used to serialize the body for PAT creation; `expires` field is in days.",
+    "ErrorDetail": "Internal dataclass representing the `{\"code\": N, \"message\": \"...\"}` structure nested under the `error` key in API error response bodies.",
+    "ForbiddenError": "Subclass of `APIError` raised on HTTP 403 responses.",
+    "HealthStatus": "Response dataclass for health probe endpoints containing a `status` string field.",
+    "NotFoundError": "Subclass of `APIError` raised on HTTP 404 responses.",
+    "NotModifiedError": "Exception raised when the server returns HTTP 304 in response to a conditional GET request; does not subclass `APIError`.",
+    "OAuthProvider": "Response dataclass representing an OAuth provider entry with `name` and `authorize_url` fields.",
+    "PAT": "Personal Access Token response dataclass with fields `token_id`, `name`, `permissions`, `created_at`, `expires_at`, and `revoked_at`.",
+    "PATWithSecret": "Response dataclass representing a Personal Access Token with its secret value, returned by token creation operations.",
+    "UnauthorizedError": "Subclass of `APIError` raised on HTTP 401 responses.",
+    "VersionInfo": "Response dataclass for the `/version` endpoint containing `version`, `build_time`, `commit`, and `mount_point` fields.",
+    "apikit": "The import name and package name of the Python SDK (`packages/sdk-python/src/apikit/`).",
+    "base_url": "The server root URL passed to the Client constructor, against which health probe and version endpoints are resolved directly (without any mount point prefix).",
+    "from_dict": "Classmethod on each response dataclass that constructs an instance from a plain dict, parsing datetime strings and nested objects.",
+    "httpx": "The HTTP client library (`httpx`) used as the transport layer in the SDK.",
+    "if_none_match": "Optional keyword argument accepted by conditional GET methods; when provided, the value is sent as an `If-None-Match` request header.",
+    "include_blocked": "Query parameter accepted by list endpoints to control whether blocked users or organizations are included in the response.",
+    "key_id": "Unique identifier string for an API key resource.",
+    "last_etag": "Client instance property storing the ETag header value from the most recent successful GET response, or None if absent.",
+    "last_request_id": "Client instance property storing the X-Request-ID header value from the most recent successful response, or None if absent.",
+    "mount_point": "The path prefix (default `/api/v1`) appended to `base_url` when constructing URLs for all non-health, non-version API endpoints.",
+    "provider_id": "External OAuth provider's identifier for the user account.",
+    "pyproject.toml": "The project configuration file for the Python SDK, managed by `uv`, declaring dependencies and tool settings.",
+    "refresh_key": "Client method that sends a POST to `/user/keys/{key_id}/refresh` and parses the HTTP 200 response as `APIKeyWithSecret`.",
+    "respx": "The `respx` library used to mock `httpx` transports in pytest tests without a live server.",
+    "to_dict": "Instance method on each request dataclass that serializes the dataclass to a plain dict suitable for JSON encoding, omitting None optional fields.",
+    "token_id": "Unique identifier string for a Personal Access Token resource.",
+    "uv": "The Python package manager used to manage the SDK project, configured via `pyproject.toml`.",
+    "Client": "The main SDK client class instantiated with `base_url`, `mount_point`, `api_key`, and `timeout` parameters.",
+    "APIKey": "Response dataclass representing API key metadata in listings, with fields `key_id`, `created_at`, `expires_at`, and `revoked_at`.",
+    "User": "Response dataclass representing a user profile with fields matching the OpenAPI User schema.",
+    "Organization": "Response dataclass representing an organization with fields matching the OpenAPI Organization schema.",
+    "CreateUserRequest": "Internal request dataclass for creating a user with fields `username`, `email`, `provider`, and `provider_id`.",
+    "CreateOrgRequest": "Internal request dataclass for creating an organization with fields `name`, `slug`, and optional `url`.",
+    "UpdateUserRequest": "Internal request dataclass for updating a user profile with field `full_name`.",
+    "UpdateOrgRequest": "Internal request dataclass for updating an organization with optional fields `name` and `url`.",
+    "Content-Type: application/json": "The required HTTP Content-Type header value for requests with a JSON body.",
+    "Accept: application/json": "The HTTP Accept header value set on all SDK requests.",
+    "Authorization": "The HTTP header used to transmit Bearer authentication tokens.",
+    "If-None-Match": "HTTP conditional request header carrying an ETag value for cache validation.",
+    "ETag": "HTTP response header containing an opaque version identifier for conditional GET support.",
+    "X-Request-ID": "HTTP response header containing a UUID for request tracing and correlation with server logs.",
+    "httpx.Client": "The underlying HTTP transport client from the `httpx` library used internally by the SDK Client.",
+    "__init__": "Python constructor method used by the Client and dataclass types.",
+    "__enter__": "Python context manager entry method returning the Client instance.",
+    "__exit__": "Python context manager exit method that closes the underlying httpx.Client and never suppresses exceptions.",
+    "pytest": "Python testing framework used to run the SDK test suite.",
+    "ruff": "Python linter and formatter used for code quality checks.",
+    "mypy": "Python static type checker used in strict mode for the SDK codebase.",
+    "dataclass": "Python standard library decorator from the `dataclasses` module used to define typed model classes.",
+    "datetime": "Python standard library datetime type used for timestamp fields parsed from RFC 3339 strings.",
+    "None": "Python's null value, used as return type for DELETE/PUT 204 responses and for absent optional fields.",
+    "str": "Python string type used for most model fields including status and role (no enum enforcement).",
+    "int": "Python integer type used for the `expires` field (days) and the `code` field in error responses.",
+    "list": "Python list type used for collection responses (e.g., `list[User]`, `list[APIKey]`).",
+    "bool": "Python boolean type used for query parameters like `include_blocked`.",
+    "dict": "Python dictionary type used internally for JSON serialization/deserialization.",
+    "Any": "Python typing.Any used in from_dict/to_dict type signatures.",
+    "KeyError": "Python built-in exception raised when a required field is missing from the input dict in from_dict.",
+    "TypeError": "Python built-in exception raised when positional arguments are passed to keyword-only methods.",
+    "ValueError": "Python built-in exception raised when datetime parsing fails on malformed RFC 3339 strings.",
+    "RuntimeError": "Python built-in exception used in tests to verify __exit__ exception propagation behavior.",
+    "204": "HTTP status code for successful DELETE/PUT operations with no response body.",
+    "200": "HTTP status code for successful GET/PATCH/POST operations returning a response body.",
+    "201": "HTTP status code for successful POST creation operations returning the created resource.",
+    "304": "HTTP status code for Not Modified conditional GET responses.",
+    "isinstance": "Python built-in function used to verify exception class hierarchy in tests.",
+    "issubclass": "Python built-in function used to verify exception inheritance relationships.",
+    "self": "Python instance reference used in method signatures.",
+    "close": "Method on httpx.Client to release HTTP transport resources.",
+    "json": "Python method/parameter for JSON serialization and deserialization.",
+    "params": "Keyword argument for passing URL query parameters to httpx requests.",
+    "strict": "Mypy configuration mode requiring complete type annotations throughout the codebase.",
+    "status": "String field on User and Organization models indicating active/blocked state.",
+    "role": "String field on User model indicating admin/user access level.",
+    "slug": "URL-safe identifier string field on Organization.",
+    "full_name": "Optional string field on User representing the display name, and the only field updatable via PATCH.",
+    "permissions": "List of resource_type:action strings on PAT models defining fine-grained access scope.",
+    "expires": "Integer field on token/key creation requests specifying expiry duration in days (0, 30, 60, or 90).",
+    "expires_at": "Nullable datetime field on key/token models indicating when the credential expires; null when expires=0.",
+    "revoked_at": "Nullable datetime field on key/token metadata models indicating when the credential was revoked.",
+    "created_at": "Datetime field on models indicating when the resource was created.",
+    "updated_at": "Datetime field on User and Organization models indicating when the resource was last modified.",
+    "email": "String field on User containing the user's email address, set at creation and immutable via PATCH.",
+    "username": "String field on User containing the display name, set at creation and immutable via PATCH.",
+    "provider": "String field on User identifying the OAuth provider (e.g., 'github').",
+    "name": "String field on Organization and PAT used as a human-readable identifier.",
+    "url": "Optional string field on Organization for an external URL.",
+    "key": "String field on APIKeyWithSecret containing the full plaintext API key.",
+    "token": "String field on PATWithSecret containing the full plaintext PAT.",
+    "code": "Integer field on APIError/ErrorDetail containing the HTTP status code.",
+    "message": "String field on APIError/ErrorDetail containing the human-readable error description.",
+    "error": "Top-level key in the API error envelope JSON containing the ErrorDetail object."
+  },
+  "requirements": [
+    {
+      "id": "11-REQ-1",
+      "title": "Project configuration and package structure",
+      "user_story": {
+        "role": "developer",
+        "goal": "have a properly structured Python package with correct dependencies declared in pyproject.toml",
+        "benefit": "I can install and use the SDK in the monorepo without extra configuration"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "pyproject.toml",
+          "action": "declares package name `apikit`, Python requirement >=3.12, runtime dependency httpx>=0.27, and dev/test dependencies respx>=0.21, mypy>=1.10, ruff>=0.4, and `pytest`",
+          "return_contract": "The file exists at packages/sdk-python/pyproject.toml and is valid TOML parseable by `uv`"
+        },
+        {
+          "id": "11-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "package layout",
+          "action": "provides source files at packages/sdk-python/src/apikit/__init__.py, client.py, models.py, and exceptions.py, and test files under packages/sdk-python/tests/",
+          "return_contract": "All listed files exist and are importable as the `apikit` package"
+        },
+        {
+          "id": "11-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`apikit` package __init__.py",
+          "action": "exports `Client`, all response model dataclasses, and all exception types as the public API surface",
+          "return_contract": "from apikit import Client, APIError, User, Organization succeeds without error"
+        },
+        {
+          "id": "11-REQ-1.4",
+          "ears_pattern": "ubiquitous",
+          "system": "pyproject.toml",
+          "action": "contains no PyPI publishing configuration (no [project.urls] publish target, no twine or flit configuration)",
+          "return_contract": "The package is intended for internal/monorepo use only"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "11-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "pyproject.toml",
+          "action": "mypy enforces requires-python = \">=3.12\" and reports an error if the runtime Python version is below 3.12",
+          "return_contract": "mypy exits with a non-zero status and an actionable version error message",
+          "error_condition": "a developer attempts uv run mypy . with the wrong Python version"
+        }
+      ]
+    },
+    {
+      "id": "11-REQ-2",
+      "title": "Client class construction and URL normalization",
+      "user_story": {
+        "role": "developer",
+        "goal": "instantiate a Client with a base URL, optional mount point, optional API key, and optional timeout",
+        "benefit": "I can point the SDK at any apikit server without manually constructing URLs"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "accepts constructor parameters base_url: str (required), mount_point: str (optional, default \"/api/v1\"), api_key: str | None (optional), and timeout: float | None (optional, default 30.0)",
+          "return_contract": "A `Client` instance is created without raising any exception"
+        },
+        {
+          "id": "11-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "strips trailing slashes from `base_url` and `mount_point` at construction time so that base_url='https://api.example.com/' is stored as 'https://api.example.com' and mount_point='/api/v1/' is stored as '/api/v1'",
+          "return_contract": "Subsequent URL construction never produces double slashes"
+        },
+        {
+          "id": "11-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "constructs URLs for healthz(), readyz(), and version() as base_url + path (no `mount_point`), and constructs URLs for all other endpoint methods as base_url + mount_point + path",
+          "return_contract": "The correct URL is sent in the outgoing `httpx` request for every endpoint category"
+        },
+        {
+          "id": "11-REQ-2.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "initializes an `httpx.Client` with the timeout value supplied at construction time",
+          "return_contract": "`httpx.Client` is configured with timeout=30.0 by default; passing timeout=None disables the timeout"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "11-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Client`",
+          "action": "strips all trailing slashes so the stored value is 'https://api.example.com'",
+          "return_contract": "No double slashes appear in any constructed request URL",
+          "error_condition": "`base_url` is provided with multiple trailing slashes (e.g. 'https://api.example.com///')"
+        },
+        {
+          "id": "11-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "`Client`",
+          "action": "stores `mount_point` as an empty string after stripping (no-op), so all non-health endpoint URLs are constructed as base_url + path",
+          "return_contract": "URL construction remains correct and produces no double slashes",
+          "error_condition": "`mount_point` is provided as an empty string"
+        }
+      ]
+    },
+    {
+      "id": "11-REQ-3",
+      "title": "Context manager protocol",
+      "user_story": {
+        "role": "developer",
+        "goal": "use the Client as a context manager",
+        "benefit": "the underlying httpx connection pool is always closed even if an exception occurs inside the with block"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "implements `__enter__` returning `self` and `__exit__` that closes the underlying `httpx.Client` unconditionally",
+          "return_contract": "with Client(...) as c: syntax works and the `httpx.Client` is closed after the block exits"
+        },
+        {
+          "id": "11-REQ-3.2",
+          "ears_pattern": "unwanted",
+          "system": "Client.__exit__",
+          "action": "closes the underlying `httpx.Client` and returns `None` (falsy) so the exception propagates to the caller without suppression",
+          "return_contract": "The original exception is re-raised; no exception suppression occurs",
+          "error_condition": "an exception is raised inside the with block"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "11-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "Client.__exit__",
+          "action": "the close exception propagates; no special wrapping or suppression is applied",
+          "return_contract": "The close-time exception is surfaced to the caller",
+          "error_condition": "closing the underlying `httpx.Client` itself raises an exception"
+        }
+      ]
+    },
+    {
+      "id": "11-REQ-4",
+      "title": "Authentication via Bearer token",
+      "user_story": {
+        "role": "developer",
+        "goal": "configure an API key once at client construction time",
+        "benefit": "every authenticated request automatically carries the correct Authorization header without me manually setting it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-4.1",
+          "ears_pattern": "state_driven",
+          "system": "`Client`",
+          "action": "sends Authorization: Bearer <api_key> on every outgoing request",
+          "return_contract": "The `Authorization` header is present with the correct value in all requests",
+          "state": "api_key is set to a non-None string at construction time"
+        },
+        {
+          "id": "11-REQ-4.2",
+          "ears_pattern": "state_driven",
+          "system": "`Client`",
+          "action": "omits the `Authorization` header from all requests",
+          "return_contract": "No `Authorization` header is sent",
+          "state": "api_key is `None`"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-5",
+      "title": "Standard HTTP request headers",
+      "user_story": {
+        "role": "developer",
+        "goal": "have the SDK set correct Content-Type and Accept headers automatically",
+        "benefit": "I don't need to configure headers manually and the server always receives well-formed requests"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "sets `Accept: application/json` on every outgoing request",
+          "return_contract": "The Accept header is present on all requests"
+        },
+        {
+          "id": "11-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "sets `Content-Type: application/json` on the request",
+          "return_contract": "The Content-Type header is present on all body-bearing requests",
+          "trigger": "a request with a body is sent (POST or PATCH)"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-6",
+      "title": "Response header capture (ETag and X-Request-ID)",
+      "user_story": {
+        "role": "developer",
+        "goal": "access the ETag and X-Request-ID from the last response",
+        "benefit": "I can implement conditional requests and correlate requests with server logs"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "resets `last_etag` and `last_request_id` to `None` at the start of every request, then populates them from the `ETag` and `X-Request-ID` response headers respectively if present",
+          "return_contract": "client.last_etag and client.last_request_id reflect the most recent response's headers"
+        },
+        {
+          "id": "11-REQ-6.2",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "leaves `last_etag` as `None` after the request completes",
+          "return_contract": "client.last_etag is None",
+          "trigger": "a response does not include an `ETag` header"
+        },
+        {
+          "id": "11-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "leaves `last_request_id` as `None` after the request completes",
+          "return_contract": "client.last_request_id is None",
+          "trigger": "a response does not include an `X-Request-ID` header"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-7",
+      "title": "ETag / If-None-Match conditional GET support",
+      "user_story": {
+        "role": "developer",
+        "goal": "perform conditional GET requests using ETags",
+        "benefit": "I can avoid re-processing unchanged resources and detect when the server signals 304 Not Modified"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "sends an `If-None-Match` header with the provided ETag value",
+          "return_contract": "The `If-None-Match` header is present in the outgoing request",
+          "trigger": "a conditional GET method is called with a non-None `if_none_match` value"
+        },
+        {
+          "id": "11-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "raises `NotModifiedError`",
+          "return_contract": "`NotModifiedError` is raised; the exception does not subclass `APIError`",
+          "trigger": "the server responds with HTTP 304 to a conditional GET"
+        },
+        {
+          "id": "11-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "omits the `If-None-Match` header from the request",
+          "return_contract": "No `If-None-Match` header is sent",
+          "trigger": "a conditional GET method is called with if_none_match=None"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-8",
+      "title": "Error handling and typed exceptions",
+      "user_story": {
+        "role": "developer",
+        "goal": "receive typed exceptions that carry the HTTP status code and message when the server returns an error",
+        "benefit": "I can write precise error handling logic without parsing raw HTTP responses"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIError`",
+          "action": "defines __init__(self, code: int, message: str) storing both as instance attributes self.code and self.message, and calling super().__init__(message)",
+          "return_contract": "`APIError` can be caught as an Exception; e.code and e.message are accessible"
+        },
+        {
+          "id": "11-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "raises `APIError` (or the appropriate subclass) with `code` set to the envelope's `code` field and `message` set to the envelope's `message` field",
+          "return_contract": "e.code matches the envelope code integer; e.message matches the envelope message string",
+          "trigger": "the server returns a 4xx or 5xx response with a valid JSON error envelope {\"error\": {\"code\": N, \"message\": \"...\"}}"
+        },
+        {
+          "id": "11-REQ-8.3",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "raises `APIError` with the HTTP status code as `code` and the raw response text as `message`",
+          "return_contract": "e.code equals the HTTP status code; e.message equals the raw response body text",
+          "trigger": "the server returns a 4xx or 5xx response whose body is not valid JSON or lacks the expected error envelope structure"
+        },
+        {
+          "id": "11-REQ-8.4",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "raises `APIError` with the HTTP status code as `code` and \"Unexpected error\" as `message`",
+          "return_contract": "e.code equals the HTTP status code; e.message == \"Unexpected error\"",
+          "trigger": "the server returns a 4xx or 5xx response with an empty body"
+        },
+        {
+          "id": "11-REQ-8.5",
+          "ears_pattern": "ubiquitous",
+          "system": "exception hierarchy",
+          "action": "defines UnauthorizedError(APIError) raised on 401, ForbiddenError(APIError) raised on 403, NotFoundError(APIError) raised on 404, and ConflictError(APIError) raised on 409",
+          "return_contract": "Each subclass is an instance of `APIError` and can be caught by either its specific type or `APIError`"
+        },
+        {
+          "id": "11-REQ-8.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`NotModifiedError`",
+          "action": "is defined as a direct subclass of Exception, not of `APIError`",
+          "return_contract": "isinstance(NotModifiedError(), APIError) is False"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "11-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Client`",
+          "action": "falls back to raising `APIError` with the HTTP status code as `code` and the raw response text as `message`",
+          "return_contract": "No `KeyError` or AttributeError is raised; `APIError` is raised with the HTTP status code",
+          "error_condition": "the server returns a 5xx response with a JSON body that has an `error` key but the nested object is missing the `code` or `message` sub-fields"
+        }
+      ]
+    },
+    {
+      "id": "11-REQ-9",
+      "title": "Typed response dataclasses",
+      "user_story": {
+        "role": "developer",
+        "goal": "work with fully-typed Python dataclasses for all API responses",
+        "benefit": "I get IDE autocompletion, mypy type checking, and clear field documentation"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "response dataclasses",
+          "action": "defines `User`, `APIKey`, `APIKeyWithSecret`, `PAT`, `PATWithSecret`, `Organization`, `OAuthProvider`, `AuthCallbackResponse`, `VersionInfo`, and `HealthStatus` as Python dataclasses with full type annotations matching the OpenAPI schema shapes",
+          "return_contract": "All dataclasses pass mypy --strict without errors"
+        },
+        {
+          "id": "11-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "response dataclasses",
+          "action": "uses snake_case field names matching JSON keys directly (e.g., `key_id`, `created_at`, `provider_id`) with no camelCase mapping required",
+          "return_contract": "Field names on each dataclass exactly match the corresponding JSON key names in the API response"
+        },
+        {
+          "id": "11-REQ-9.3",
+          "ears_pattern": "ubiquitous",
+          "system": "response dataclasses",
+          "action": "types `status` on `User` and `Organization` and `role` on `User` as plain `str` without enum enforcement",
+          "return_contract": "Any string value returned by the server is accepted without raising a validation error"
+        },
+        {
+          "id": "11-REQ-9.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`APIKeyWithSecret`",
+          "action": "defines only the fields key: str, key_id: str, and expires_at: datetime | None; `created_at` and `revoked_at` are intentionally absent",
+          "return_contract": "`APIKeyWithSecret` has exactly three fields and passes mypy --strict"
+        },
+        {
+          "id": "11-REQ-9.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`AuthCallbackResponse`",
+          "action": "defines user: User and api_key: APIKeyWithSecret as its fields",
+          "return_contract": "AuthCallbackResponse.user is a `User` instance and AuthCallbackResponse.api_key is an `APIKeyWithSecret` instance"
+        },
+        {
+          "id": "11-REQ-9.6",
+          "ears_pattern": "ubiquitous",
+          "system": "response dataclasses",
+          "action": "no separate OrgMember type is defined; list_org_members returns list[User] directly",
+          "return_contract": "list_org_members return type annotation is list[User]"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-10",
+      "title": "from_dict classmethod for response deserialization",
+      "user_story": {
+        "role": "developer",
+        "goal": "have response JSON automatically deserialized into typed dataclass instances",
+        "benefit": "I work with structured Python objects rather than raw dicts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "every response dataclass",
+          "action": "exposes a from_dict(data: dict) -> Self classmethod that constructs an instance by parsing RFC 3339 datetime strings into `datetime` objects, constructing nested dataclass instances from nested dicts, and passing all other fields through directly",
+          "return_contract": "The returned instance is correctly typed and all field values match the input dict"
+        },
+        {
+          "id": "11-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`from_dict`",
+          "action": "silently ignores any extra/unknown keys present in the input dict that are not defined as fields on the dataclass",
+          "return_contract": "No `TypeError` or `KeyError` is raised when the server includes new fields not yet in the SDK"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "11-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "`from_dict`",
+          "action": "raises a `ValueError` with a message indicating the malformed field value",
+          "return_contract": "The caller receives a `ValueError`; no partial or corrupt dataclass instance is returned",
+          "error_condition": "a required datetime field contains a malformed string that cannot be parsed as RFC 3339"
+        },
+        {
+          "id": "11-REQ-10.E2",
+          "ears_pattern": "unwanted",
+          "system": "`from_dict`",
+          "action": "raises a `KeyError` or `TypeError` surfaced from normal dataclass construction \u2014 no special handling is applied",
+          "return_contract": "A `KeyError` or `TypeError` propagates to the caller",
+          "error_condition": "a required non-optional field is missing from the input dict"
+        }
+      ]
+    },
+    {
+      "id": "11-REQ-11",
+      "title": "to_dict method for request serialization",
+      "user_story": {
+        "role": "developer",
+        "goal": "have request objects automatically serialize to dicts for JSON encoding",
+        "benefit": "optional fields that are None are omitted without me writing boilerplate"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "internal request dataclasses",
+          "action": "exposes a to_dict() -> dict method that serializes fields to a plain dict suitable for JSON encoding, omitting any optional field whose value is `None`",
+          "return_contract": "The returned dict contains no keys with `None` values for optional fields"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-12",
+      "title": "Internal request dataclasses",
+      "user_story": {
+        "role": "developer",
+        "goal": "have typed internal structures for request bodies",
+        "benefit": "request serialization is type-checked by mypy and consistent across methods"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "internal request dataclasses",
+          "action": "defines UpdateUserRequest(full_name: str), CreateUserRequest(username: str, email: str, provider: str, provider_id: str), CreateTokenRequest(name: str, permissions: list[str], expires: int = 90), CreateOrgRequest(name: str, slug: str, url: str | None = None), UpdateOrgRequest(name: str | None = None, url: str | None = None), and AuthCallbackRequest(provider: str, code: str, redirect_uri: str, expires: int = 90) as internal dataclasses",
+          "return_contract": "All internal dataclasses pass mypy --strict; none appear in public `Client` method signatures"
+        },
+        {
+          "id": "11-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`CreateTokenRequest` and `AuthCallbackRequest`",
+          "action": "document that `expires` is expressed in **days** with valid values 0, 30, 60, or 90 and default 90; expiry is calculated as exactly 24 h \u00d7 N from the creation timestamp",
+          "return_contract": "The `expires` field is typed as `int` with default 90"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-13",
+      "title": "Health and meta endpoint methods",
+      "user_story": {
+        "role": "developer",
+        "goal": "check server health and version without authentication",
+        "benefit": "I can probe the server state as part of startup checks or CI pipelines"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides healthz() -> HealthStatus sending GET to base_url + /healthz, readyz() -> HealthStatus sending GET to base_url + /readyz, and version() -> VersionInfo sending GET to base_url + /version \u2014 all resolved against `base_url` without any `mount_point` prefix",
+          "return_contract": "Each method returns a correctly deserialized dataclass instance on HTTP 200"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-14",
+      "title": "Auth endpoint methods",
+      "user_story": {
+        "role": "developer",
+        "goal": "list OAuth providers and exchange an OAuth authorization code for an API key",
+        "benefit": "I can automate OAuth-based authentication flows without implementing HTTP details"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides get_providers() -> list[OAuthProvider] sending GET to mount_point + /auth/providers",
+          "return_contract": "Returns a list of `OAuthProvider` instances on HTTP 200"
+        },
+        {
+          "id": "11-REQ-14.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides exchange_oauth_code(*, provider: str, code: str, redirect_uri: str, expires: int = 90) -> AuthCallbackResponse sending POST to mount_point + /auth/callback with a JSON body serialized from `AuthCallbackRequest`",
+          "return_contract": "Returns an `AuthCallbackResponse` instance on HTTP 200 or 201"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-15",
+      "title": "Authenticated user (self) endpoint methods",
+      "user_story": {
+        "role": "authenticated developer",
+        "goal": "manage my own user profile, API keys, tokens, and organization memberships via the SDK",
+        "benefit": "I can automate self-service operations without writing raw HTTP calls"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-15.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides get_user(*, if_none_match: str | None = None) -> User sending GET to mount_point + /user",
+          "return_contract": "Returns a `User` on HTTP 200; raises `NotModifiedError` on HTTP 304"
+        },
+        {
+          "id": "11-REQ-15.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides update_user(*, full_name: str) -> User sending PATCH to mount_point + /user with body {\"full_name\": full_name}",
+          "return_contract": "Returns a `User` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-15.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_keys() -> list[APIKey] sending GET to mount_point + /user/keys",
+          "return_contract": "Returns a list of `APIKey` instances on HTTP 200"
+        },
+        {
+          "id": "11-REQ-15.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides refresh_key(key_id: str) -> APIKeyWithSecret sending POST to mount_point + /user/keys/{key_id}/refresh and parsing the HTTP 200 response (not 201) as `APIKeyWithSecret`",
+          "return_contract": "Returns an `APIKeyWithSecret` instance on HTTP 200; `key_id` is interpolated into the URL path"
+        },
+        {
+          "id": "11-REQ-15.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides revoke_key(key_id: str) -> None sending DELETE to mount_point + /user/keys/{key_id}",
+          "return_contract": "Returns `None` on HTTP 204"
+        },
+        {
+          "id": "11-REQ-15.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_tokens() -> list[PAT] sending GET to mount_point + /user/tokens",
+          "return_contract": "Returns a list of `PAT` instances on HTTP 200"
+        },
+        {
+          "id": "11-REQ-15.7",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides create_token(*, name: str, permissions: list[str], expires: int = 90) -> PATWithSecret sending POST to mount_point + /user/tokens with a JSON body serialized from `CreateTokenRequest`",
+          "return_contract": "Returns a `PATWithSecret` instance on HTTP 201"
+        },
+        {
+          "id": "11-REQ-15.8",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides get_token(token_id: str, *, if_none_match: str | None = None) -> PAT sending GET to mount_point + /user/tokens/{token_id}",
+          "return_contract": "Returns a `PAT` on HTTP 200; raises `NotModifiedError` on HTTP 304"
+        },
+        {
+          "id": "11-REQ-15.9",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides revoke_token(token_id: str) -> None sending DELETE to mount_point + /user/tokens/{token_id}",
+          "return_contract": "Returns `None` on HTTP 204"
+        },
+        {
+          "id": "11-REQ-15.10",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_user_orgs() -> list[Organization] sending GET to mount_point + /user/orgs",
+          "return_contract": "Returns a list of `Organization` instances on HTTP 200"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-16",
+      "title": "Admin user management endpoint methods",
+      "user_story": {
+        "role": "admin developer",
+        "goal": "manage all users, their keys, and their tokens via the SDK",
+        "benefit": "I can automate user lifecycle management without writing raw HTTP calls"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-16.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_users(*, include_blocked: bool = False) -> list[User] sending GET to mount_point + /users with include_blocked=true query parameter when include_blocked=True",
+          "return_contract": "Returns a list of `User` instances on HTTP 200; the `include_blocked` query parameter is only added to the URL when its value is True"
+        },
+        {
+          "id": "11-REQ-16.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides get_user_by_id(user_id: str, *, if_none_match: str | None = None) -> User sending GET to mount_point + /users/{id}",
+          "return_contract": "Returns a `User` on HTTP 200; raises `NotModifiedError` on HTTP 304"
+        },
+        {
+          "id": "11-REQ-16.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides create_user(*, username: str, email: str, provider: str, provider_id: str) -> User sending POST to mount_point + /users with a JSON body serialized from `CreateUserRequest`",
+          "return_contract": "Returns a `User` on HTTP 201"
+        },
+        {
+          "id": "11-REQ-16.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides update_user_by_id(user_id: str, *, full_name: str) -> User sending PATCH to mount_point + /users/{id} with a JSON body serialized from `UpdateUserRequest`",
+          "return_contract": "Returns a `User` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-16.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides promote_user(user_id: str) -> User, demote_user(user_id: str) -> User, block_user(user_id: str) -> User, and unblock_user(user_id: str) -> User each sending POST to the respective mount_point + /users/{id}/promote, /demote, /block, /unblock paths",
+          "return_contract": "Each returns a `User` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-16.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_user_keys(user_id: str) -> list[APIKey] sending GET to mount_point + /users/{id}/keys and revoke_user_key(user_id: str, key_id: str) -> None sending DELETE to mount_point + /users/{id}/keys/{key_id}",
+          "return_contract": "list_user_keys returns a list of `APIKey` on HTTP 200; revoke_user_key returns `None` on HTTP 204"
+        },
+        {
+          "id": "11-REQ-16.7",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_user_tokens(user_id: str) -> list[PAT] sending GET to mount_point + /users/{id}/tokens and revoke_user_token(user_id: str, token_id: str) -> None sending DELETE to mount_point + /users/{id}/tokens/{token_id}",
+          "return_contract": "list_user_tokens returns a list of `PAT` on HTTP 200; revoke_user_token returns `None` on HTTP 204"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-17",
+      "title": "Organization management endpoint methods",
+      "user_story": {
+        "role": "admin developer",
+        "goal": "create, list, update, and manage organizations and their members via the SDK",
+        "benefit": "I can automate organization lifecycle operations without writing raw HTTP calls"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-17.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides create_org(*, name: str, slug: str, url: str | None = None) -> Organization sending POST to mount_point + /orgs with a JSON body serialized from `CreateOrgRequest`",
+          "return_contract": "Returns an `Organization` on HTTP 201"
+        },
+        {
+          "id": "11-REQ-17.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_orgs(*, include_blocked: bool = False) -> list[Organization] sending GET to mount_point + /orgs with include_blocked=true query parameter when include_blocked=True",
+          "return_contract": "Returns a list of `Organization` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-17.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides get_org(org_id: str, *, if_none_match: str | None = None) -> Organization sending GET to mount_point + /orgs/{id}",
+          "return_contract": "Returns an `Organization` on HTTP 200; raises `NotModifiedError` on HTTP 304"
+        },
+        {
+          "id": "11-REQ-17.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides update_org(org_id: str, *, name: str | None = None, url: str | None = None) -> Organization sending PATCH to mount_point + /orgs/{id} with a JSON body serialized from `UpdateOrgRequest` (None fields omitted)",
+          "return_contract": "Returns an `Organization` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-17.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides delete_org(org_id: str) -> None sending DELETE to mount_point + /orgs/{id}, block_org(org_id: str) -> Organization sending POST to mount_point + /orgs/{id}/block, and unblock_org(org_id: str) -> Organization sending POST to mount_point + /orgs/{id}/unblock",
+          "return_contract": "delete_org returns `None` on HTTP 204; block_org and unblock_org return `Organization` on HTTP 200"
+        },
+        {
+          "id": "11-REQ-17.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`Client`",
+          "action": "provides list_org_members(org_id: str) -> list[User] sending GET to mount_point + /orgs/{id}/members, add_org_member(org_id: str, user_id: str) -> None sending PUT to mount_point + /orgs/{id}/members/{user_id}, and remove_org_member(org_id: str, user_id: str) -> None sending DELETE to mount_point + /orgs/{id}/members/{user_id}",
+          "return_contract": "list_org_members returns list[User] on HTTP 200; add_org_member and remove_org_member return `None` on HTTP 204"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-18",
+      "title": "HTTP status code parsing rules",
+      "user_story": {
+        "role": "developer",
+        "goal": "have the SDK correctly interpret all HTTP status codes returned by the server",
+        "benefit": "I get the right return value or exception for every server response without manual status code checks"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-18.1",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "parses the response body JSON into the documented return type for the called method",
+          "return_contract": "The return value is a correctly typed dataclass instance",
+          "trigger": "the server returns HTTP 200 or 201"
+        },
+        {
+          "id": "11-REQ-18.2",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "returns `None` without attempting to parse the response body",
+          "return_contract": "The method returns `None`",
+          "trigger": "a DELETE or PUT endpoint returns HTTP 204"
+        },
+        {
+          "id": "11-REQ-18.3",
+          "ears_pattern": "event_driven",
+          "system": "`Client`",
+          "action": "parses the response body as `APIKeyWithSecret` (not as HTTP 201 Created)",
+          "return_contract": "Returns an `APIKeyWithSecret` instance",
+          "trigger": "`refresh_key` receives HTTP 200"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-19",
+      "title": "Public method signatures use keyword arguments only",
+      "user_story": {
+        "role": "developer",
+        "goal": "call Client methods with named keyword arguments rather than positional request objects",
+        "benefit": "method calls are self-documenting and less error-prone"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-19.1",
+          "ears_pattern": "ubiquitous",
+          "system": "all public `Client` methods with request body parameters",
+          "action": "accept individual fields as explicit keyword arguments (using * in the signature to enforce keyword-only passing); no method accepts a typed request dataclass as a public parameter",
+          "return_contract": "Calling a method with positional arguments for body fields raises `TypeError`"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "11-REQ-20",
+      "title": "Tooling quality gates",
+      "user_story": {
+        "role": "developer",
+        "goal": "run tests, type checking, and linting with a single command per tool",
+        "benefit": "I can verify SDK correctness and quality without external infrastructure"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "11-REQ-20.1",
+          "ears_pattern": "ubiquitous",
+          "system": "SDK test suite",
+          "action": "all tests pass when running cd packages/sdk-python && uv run pytest -q using `respx` to mock `httpx` with no live server required",
+          "return_contract": "pytest exits with code 0"
+        },
+        {
+          "id": "11-REQ-20.2",
+          "ears_pattern": "ubiquitous",
+          "system": "SDK codebase",
+          "action": "passes cd packages/sdk-python && uv run ruff check . with no errors",
+          "return_contract": "ruff exits with code 0"
+        },
+        {
+          "id": "11-REQ-20.3",
+          "ears_pattern": "ubiquitous",
+          "system": "SDK codebase",
+          "action": "passes cd packages/sdk-python && uv run mypy . in strict mode with no errors",
+          "return_contract": "mypy exits with code 0"
+        },
+        {
+          "id": "11-REQ-20.4",
+          "ears_pattern": "ubiquitous",
+          "system": "SDK test suite",
+          "action": "covers URL construction for all endpoint categories (base_url-only vs. mount_point paths, trailing-slash normalization), correct request headers, request body serialization, response deserialization including datetime parsing, unknown field ignoring in `from_dict`, all error/exception scenarios, conditional GET with ETag, context manager protocol, and `refresh_key` 200-response parsing",
+          "return_contract": "All documented test scenarios have at least one corresponding pytest test case"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "11-PROP-1",
+      "title": "No double slashes in constructed URLs",
+      "for_any": "`Client` instance constructed with any `base_url` and `mount_point` combination with or without trailing slashes",
+      "invariant": "every URL sent by the client contains no double slashes (//) in the path portion after the scheme",
+      "validates": [
+        "11-REQ-2.2",
+        "11-REQ-2.E1"
+      ]
+    },
+    {
+      "id": "11-PROP-2",
+      "title": "Health/version endpoints never include mount_point",
+      "for_any": "`Client` instance with any non-empty `mount_point` value",
+      "invariant": "URLs sent for healthz(), readyz(), and version() never contain the `mount_point` string in the path",
+      "validates": [
+        "11-REQ-2.3",
+        "11-REQ-13.1"
+      ]
+    },
+    {
+      "id": "11-PROP-3",
+      "title": "last_etag and last_request_id always reset at request start",
+      "for_any": "any sequence of `Client` method calls",
+      "invariant": "`last_etag` and `last_request_id` are set to `None` at the beginning of each request before any response header is inspected",
+      "validates": [
+        "11-REQ-6.1"
+      ]
+    },
+    {
+      "id": "11-PROP-4",
+      "title": "from_dict never raises on extra fields",
+      "for_any": "any response dict passed to any dataclass `from_dict` classmethod containing arbitrary additional keys",
+      "invariant": "`from_dict` completes without raising any exception due to unknown keys; only malformed required field values cause exceptions",
+      "validates": [
+        "11-REQ-10.2"
+      ]
+    },
+    {
+      "id": "11-PROP-5",
+      "title": "to_dict omits None optional fields",
+      "for_any": "any internal request dataclass instance with some optional fields set to `None`",
+      "invariant": "the dict returned by to_dict() contains no keys whose value is `None`",
+      "validates": [
+        "11-REQ-11.1"
+      ]
+    },
+    {
+      "id": "11-PROP-6",
+      "title": "APIError subclasses are catchable as APIError",
+      "for_any": "any 401, 403, 404, or 409 server response",
+      "invariant": "the raised exception is an instance of both its specific subclass (`UnauthorizedError`, `ForbiddenError`, `NotFoundError`, or `ConflictError`) and the base `APIError` class",
+      "validates": [
+        "11-REQ-8.5"
+      ]
+    },
+    {
+      "id": "11-PROP-7",
+      "title": "NotModifiedError is not an APIError",
+      "for_any": "any 304 server response to a conditional GET",
+      "invariant": "isinstance(raised_exception, APIError) is False when a 304 triggers `NotModifiedError`",
+      "validates": [
+        "11-REQ-8.6",
+        "11-REQ-7.2"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "11-PATH-1",
+      "title": "Successful authenticated GET with ETag caching",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Instantiates `Client` with `base_url`, `mount_point`, and api_key; trailing slashes are stripped from both URL components"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Resets `last_etag` and `last_request_id` to `None`"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Constructs URL as base_url + mount_point + /user; sets Authorization: Bearer <api_key>, `Accept: application/json`, and (if provided) `If-None-Match` headers"
+        },
+        {
+          "actor": "`httpx.Client`",
+          "action": "Sends the GET request to the constructed URL with the configured timeout"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Receives HTTP 200 response; sets `last_etag` from `ETag` header and `last_request_id` from `X-Request-ID` header"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Calls User.from_dict(response.json()), which parses datetime strings and silently ignores unknown fields"
+        },
+        {
+          "actor": "Developer",
+          "action": "Receives a typed `User` instance and optionally reads client.last_etag for subsequent conditional requests"
+        }
+      ]
+    },
+    {
+      "id": "11-PATH-2",
+      "title": "API error response with typed exception",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Calls client.get_user_by_id(user_id) for a non-existent user"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Resets `last_etag` and `last_request_id` to `None`; constructs URL and sends GET to mount_point + /users/{id}"
+        },
+        {
+          "actor": "`httpx.Client`",
+          "action": "Receives HTTP 404 response with JSON body {\"error\": {\"code\": 404, \"message\": \"user not found\"}}"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Detects 4xx status; parses the error envelope and determines status is 404"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Raises NotFoundError(code=404, message=\"user not found\")"
+        },
+        {
+          "actor": "Developer",
+          "action": "Catches `NotFoundError` (or `APIError`) and handles the missing-resource case"
+        }
+      ]
+    },
+    {
+      "id": "11-PATH-3",
+      "title": "Conditional GET raising NotModifiedError",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Calls client.get_org(org_id, if_none_match=previously_stored_etag)"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Resets `last_etag` and `last_request_id` to `None`; constructs URL as mount_point + /orgs/{id} and adds If-None-Match: <etag> header"
+        },
+        {
+          "actor": "`httpx.Client`",
+          "action": "Sends GET request; server responds with HTTP 304 (resource unchanged)"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Detects HTTP 304; raises `NotModifiedError`"
+        },
+        {
+          "actor": "Developer",
+          "action": "Catches `NotModifiedError` and uses the previously cached `Organization` object"
+        }
+      ]
+    },
+    {
+      "id": "11-PATH-4",
+      "title": "Context manager with exception propagation",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Opens with Client(base_url, api_key=key) as client: block and calls a method that raises an exception"
+        },
+        {
+          "actor": "Client.__exit__",
+          "action": "Is called with the exception details; closes the underlying `httpx.Client` unconditionally"
+        },
+        {
+          "actor": "Client.__exit__",
+          "action": "Returns `None` (falsy) so the exception is not suppressed"
+        },
+        {
+          "actor": "Developer",
+          "action": "Receives the original exception propagated out of the with block"
+        }
+      ]
+    },
+    {
+      "id": "11-PATH-5",
+      "title": "OAuth code exchange end-to-end",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Calls client.exchange_oauth_code(provider=\"github\", code=\"abc\", redirect_uri=\"https://app.example.com/cb\", expires=30)"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Constructs AuthCallbackRequest(provider=\"github\", code=\"abc\", redirect_uri=\"https://app.example.com/cb\", expires=30) and serializes it via to_dict()"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Sends POST to mount_point + /auth/callback with JSON body and `Content-Type: application/json`"
+        },
+        {
+          "actor": "`httpx.Client`",
+          "action": "Receives HTTP 200 or 201 response with `AuthCallbackResponse` JSON"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Calls AuthCallbackResponse.from_dict(response.json()), constructing a nested `User` and `APIKeyWithSecret`"
+        },
+        {
+          "actor": "Developer",
+          "action": "Receives `AuthCallbackResponse` with .user and .api_key populated"
+        }
+      ]
+    },
+    {
+      "id": "11-PATH-6",
+      "title": "Health probe URL resolution (no mount point)",
+      "steps": [
+        {
+          "actor": "Developer",
+          "action": "Instantiates Client(\"https://api.example.com/\", mount_point=\"/api/v1/\") \u2014 both with trailing slashes"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Strips trailing slashes: stores base_url=\"https://api.example.com\" and mount_point=\"/api/v1\""
+        },
+        {
+          "actor": "Developer",
+          "action": "Calls client.healthz()"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Constructs URL as \"https://api.example.com\" + \"/healthz\" (no `mount_point`); sends GET"
+        },
+        {
+          "actor": "`httpx.Client`",
+          "action": "Receives HTTP 200 with {\"status\": \"ok\"}"
+        },
+        {
+          "actor": "`Client`",
+          "action": "Calls HealthStatus.from_dict({\"status\": \"ok\"}) and returns the result"
+        },
+        {
+          "actor": "Developer",
+          "action": "Receives HealthStatus(status=\"ok\") with correct URL routing confirmed"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "11-ERR-1",
+      "condition": "Server returns a 4xx or 5xx response with a valid JSON error envelope",
+      "behavior": "Parse error.code and error.message from the body; raise the appropriate `APIError` subclass (`UnauthorizedError` for 401, `ForbiddenError` for 403, `NotFoundError` for 404, `ConflictError` for 409, base `APIError` for all others)",
+      "requirement_id": "11-REQ-8.2"
+    },
+    {
+      "id": "11-ERR-2",
+      "condition": "Server returns a 4xx or 5xx response whose body is not valid JSON or lacks the expected error envelope keys",
+      "behavior": "Raise `APIError` with `code` set to the HTTP status code and `message` set to the raw response body text",
+      "requirement_id": "11-REQ-8.3"
+    },
+    {
+      "id": "11-ERR-3",
+      "condition": "Server returns a 4xx or 5xx response with an empty body",
+      "behavior": "Raise `APIError` with `code` set to the HTTP status code and message = \"Unexpected error\"",
+      "requirement_id": "11-REQ-8.4"
+    },
+    {
+      "id": "11-ERR-4",
+      "condition": "Server returns HTTP 304 in response to a conditional GET with `if_none_match`",
+      "behavior": "Raise `NotModifiedError` (subclass of Exception, not `APIError`)",
+      "requirement_id": "11-REQ-7.2"
+    },
+    {
+      "id": "11-ERR-5",
+      "condition": "An exception is raised inside a with Client(...) as c: block",
+      "behavior": "`__exit__` closes the underlying `httpx.Client` and returns `None` so the exception propagates without suppression",
+      "requirement_id": "11-REQ-3.2"
+    },
+    {
+      "id": "11-ERR-6",
+      "condition": "A required datetime field in `from_dict` contains a string that cannot be parsed as RFC 3339",
+      "behavior": "Raise `ValueError` with a message indicating the malformed value; no partial dataclass instance is returned",
+      "requirement_id": "11-REQ-10.E1"
+    },
+    {
+      "id": "11-ERR-7",
+      "condition": "Server returns a 5xx response with a JSON body containing an `error` key but missing `code` or `message` sub-fields",
+      "behavior": "Fall back to raising `APIError` with the HTTP status code as `code` and the raw response text as `message`; no `KeyError` or AttributeError propagates",
+      "requirement_id": "11-REQ-8.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "httpx",
+      "version": ">=0.27",
+      "symbols": [
+        {
+          "name": "Client",
+          "import_path": "httpx",
+          "signature": "httpx.Client(timeout: float | None = ..., **kwargs) -> httpx.Client",
+          "notes": "Used as the synchronous HTTP transport. The timeout parameter is passed from the SDK `Client` constructor. The instance is closed via .close() in `__exit__`."
+        },
+        {
+          "name": "Response",
+          "import_path": "httpx",
+          "signature": "httpx.Response",
+          "notes": "Returned by httpx.Client.get(), .post(), .patch(), .delete(), .put(). Fields used: .status_code, .text, .json(), .headers."
+        }
+      ]
+    },
+    {
+      "package": "respx",
+      "version": ">=0.21",
+      "symbols": [
+        {
+          "name": "mock",
+          "import_path": "respx",
+          "signature": "respx.mock",
+          "notes": "Context manager or decorator used in pytest tests to intercept and mock `httpx` requests without a live server."
+        },
+        {
+          "name": "MockRouter",
+          "import_path": "respx",
+          "signature": "respx.MockRouter",
+          "notes": "Router object returned by respx.mock that allows registering route handlers for specific URLs and HTTP methods."
+        }
+      ]
+    }
+  ]
+}

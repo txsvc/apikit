@@ -1,0 +1,1662 @@
+{
+  "$schema": null,
+  "spec_id": "10",
+  "spec_name": "api_key_lifecycle",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/keys/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 6,
+      "to_group": 1,
+      "relationship": "internal/keys uses APIError(), NowUTC(), FormatUTC(), TokenPrefix, SetETag(), CheckETag(), CacheMiddleware(CacheNoStore) from spec 01 server_core",
+      "sentinel": true
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 6,
+      "to_group": 1,
+      "relationship": "internal/keys queries and mutates api_keys via db.SqlDB, uses db.Executor interface, db.FormatTime(), db.WrapError(), and db.WithTx from spec 02 database_layer",
+      "sentinel": true
+    },
+    {
+      "depends_on_spec": "05",
+      "from_group": 7,
+      "to_group": 1,
+      "relationship": "All three endpoints require authentication enforced by auth_middleware spec 05; handlers read user_id and credential-type context values injected by spec 05",
+      "sentinel": true
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests: Random Generation, Key Format, and Hashing",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for random string generation (alphanumeric charset, correct lengths)",
+          "details": [
+            "Create internal/keys/generate_test.go",
+            "Test that GenerateAPIKey returns FullKey matching ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$",
+            "Test that KeyID is exactly 8 chars and secret segment is exactly 32 chars",
+            "Test that both KeyID and secret contain only [0-9A-Za-z]"
+          ],
+          "test_spec_refs": [
+            "TS-10-1",
+            "TS-10-2"
+          ],
+          "requirement_refs": [
+            "10-REQ-1.1",
+            "10-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for crypto/rand failure (immediately fatal, no retries, no DB writes)",
+          "details": [
+            "Use an injectable rand reader to simulate crypto/rand.Read() failures",
+            "Verify GenerateAPIKey returns non-nil error immediately on first call failure",
+            "Verify no rows are inserted into api_keys",
+            "Verify that rand failure during retry (after collision) is also immediately fatal — no further retries attempted"
+          ],
+          "test_spec_refs": [
+            "TS-10-3",
+            "TS-10-E1"
+          ],
+          "requirement_refs": [
+            "10-REQ-1.3",
+            "10-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for SHA-256 hashing and secret hash storage correctness",
+          "details": [
+            "Verify SecretHash in APIKeyResult equals lowercase hex SHA-256 of the secret portion of FullKey",
+            "Verify SecretHash is exactly 64 chars matching ^[0-9a-f]{64}$",
+            "Verify api_keys row has secret_hash matching computed hash",
+            "Verify no column in api_keys row contains the plaintext secret"
+          ],
+          "test_spec_refs": [
+            "TS-10-9",
+            "TS-10-43"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.6",
+            "10-REQ-10.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write unit tests for expiry calculation (all valid expiresDays values and invalid rejection)",
+          "details": [
+            "Test expiresDays=0 → ExpiresAt==nil and expires_at IS NULL in DB",
+            "Test expiresDays=30, 60, 90 → ExpiresAt approximately now + N*24h within 2 seconds",
+            "Test invalid values (1, 15, 45, 100, -1, 365) → non-nil error returned, no DB writes",
+            "Verify expires_at in DB matches ExpiresAt in result within 1 second"
+          ],
+          "test_spec_refs": [
+            "TS-10-5",
+            "TS-10-11"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.2",
+            "10-REQ-2.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write unit tests for APIKeyResult signature and public re-exports",
+          "details": [
+            "Verify GenerateAPIKey accepts (db.Executor, string, int, echo.Logger) and returns (*APIKeyResult, error)",
+            "Verify all fields of APIKeyResult (FullKey, KeyID, SecretHash, ExpiresAt) are populated on success",
+            "Verify apikit.GenerateAPIKey delegates to keys.GenerateAPIKey with identical results",
+            "Verify apikit.APIKeyResult is a type alias assignable without conversion",
+            "Compile-time check: ErrKeyRevoked, ErrKeyExpired not accessible from apikit package namespace"
+          ],
+          "test_spec_refs": [
+            "TS-10-4",
+            "TS-10-13",
+            "TS-10-14"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.1",
+            "10-REQ-3.1",
+            "10-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write unit tests for type assertion transaction detection and no-package-level-logger",
+          "details": [
+            "Verify source code of GenerateAPIKey contains '_, ok := tx.(*sql.DB)' type assertion pattern",
+            "Verify no wrapper type or TxDetector interface is introduced in internal/keys",
+            "Verify internal/keys has no package-level logger variable of type echo.Logger or log.Logger",
+            "Verify GenerateAPIKey function signature includes 'logger echo.Logger' parameter"
+          ],
+          "test_spec_refs": [
+            "TS-10-E5",
+            "TS-10-41"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.E4",
+            "10-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test files in internal/keys/ compile without errors: go build ./internal/keys/...",
+          "All written unit tests pass (with stub implementations using panic('not implemented')): go test ./internal/keys/... -count=1 -run 'TestGenerate|TestFormat|TestHash|TestExpiry|TestPublicAPI|TestTypeAssertion'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-1.1, 10-REQ-1.2, 10-REQ-1.3, 10-REQ-2.1, 10-REQ-2.2, 10-REQ-2.6, 10-REQ-2.8, 10-REQ-3.1, 10-REQ-3.2, 10-REQ-2.E4, 10-REQ-9.1, 10-REQ-10.1 test cases are present and skipped/failing (not yet implemented)"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests: GenerateAPIKey Integration (Transaction Behavior, Revocation, Retry)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write integration tests for GenerateAPIKey with *sql.DB (internal transaction, atomicity rollback)",
+          "details": [
+            "Set up SQLite in-memory DB with api_keys table schema from spec 02",
+            "Test: existing active key is revoked and new key is inserted atomically when called with *sql.DB",
+            "Test rollback: force all INSERT attempts to fail (exhaust 3 retries); verify prior key's revoked_at remains NULL",
+            "Verify no new row exists for user beyond the original after failure",
+            "Use db.WithTx or direct tx management to simulate and verify atomic behavior"
+          ],
+          "test_spec_refs": [
+            "TS-10-6",
+            "TS-10-E2"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.3",
+            "10-REQ-2.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write integration tests for GenerateAPIKey with *sql.Tx (caller-owned transaction, commit and rollback)",
+          "details": [
+            "Test: call GenerateAPIKey with *sql.Tx from db.WithTx, commit — verify key is persisted",
+            "Test: call GenerateAPIKey with *sql.Tx, rollback — verify no key is persisted",
+            "Verify GenerateAPIKey does not call Commit or Rollback on the caller's transaction",
+            "Confirm tx is *sql.Tx detected via type assertion (not *sql.DB path)"
+          ],
+          "test_spec_refs": [
+            "TS-10-7"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write integration tests for GenerateAPIKey zero-rows revocation (first-time user) and expired-key revocation",
+          "details": [
+            "Test first-time user (no prior keys): zero-rows-affected revocation UPDATE is silent no-op; new key inserted correctly",
+            "Test expired-but-not-revoked key: insert key with past expires_at and revoked_at IS NULL, call GenerateAPIKey, verify expired key's revoked_at is now set",
+            "Test: new key is only row with revoked_at IS NULL after expired-key scenario"
+          ],
+          "test_spec_refs": [
+            "TS-10-8",
+            "TS-10-E3",
+            "TS-10-E15"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.5",
+            "10-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write integration tests for GenerateAPIKey key_id collision retry (bounded to 3 attempts)",
+          "details": [
+            "Test: pre-insert a row with the first expected key_id; verify GenerateAPIKey retries and succeeds on second attempt",
+            "Verify only one new active key exists after successful retry",
+            "Verify revocation UPDATE is NOT re-executed on retry",
+            "Test: force all 3 attempts to collide; verify GenerateAPIKey returns non-nil error after exactly 3 INSERT attempts",
+            "Verify property test TS-10-P8: total INSERT calls == K+1 for K collisions within budget, == 3 when all fail"
+          ],
+          "test_spec_refs": [
+            "TS-10-10",
+            "TS-10-E6"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.7",
+            "10-REQ-2.E5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write integration tests for GenerateAPIKey logging and non-constraint DB error handling",
+          "details": [
+            "Test: inject capturing test logger; verify exactly one INFO entry emitted with user_id and key_id after successful INSERT",
+            "Test failure case: mock rand always fails; verify zero INFO log entries emitted",
+            "Test non-constraint DB error during INSERT: verify GenerateAPIKey returns error immediately, no retry (INSERT called exactly once)",
+            "Verify error from non-constraint failure surfaces as HTTP 500 'internal server error' to callers"
+          ],
+          "test_spec_refs": [
+            "TS-10-12",
+            "TS-10-E4"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.9",
+            "10-REQ-2.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.6",
+          "title": "Write integration tests for one-active-key invariant and concurrent GenerateAPIKey",
+          "details": [
+            "Test: user has one active key; call GenerateAPIKey; verify exactly one row with revoked_at IS NULL remains and it's the new key",
+            "Test: call GenerateAPIKey twice sequentially; verify prior key revoked, only one active key",
+            "Concurrent test: spawn 5 goroutines calling GenerateAPIKey for same user; after all complete verify exactly one row with revoked_at IS NULL",
+            "Rely on SQLite serialized writes — no application-level locking added"
+          ],
+          "test_spec_refs": [
+            "TS-10-38",
+            "TS-10-40"
+          ],
+          "requirement_refs": [
+            "10-REQ-8.1",
+            "10-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All integration test files compile: go build ./internal/keys/...",
+          "Integration tests pass against stub implementation (or are correctly marked as failing): go test ./internal/keys/... -count=1 -run 'TestGenerateAPIKey'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-2.3, 10-REQ-2.4, 10-REQ-2.5, 10-REQ-2.7, 10-REQ-2.9, 10-REQ-8.1, 10-REQ-8.3, 10-REQ-2.E1, 10-REQ-2.E3, 10-REQ-8.E1 test cases are present"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests: Handler Registration and GET /api/v1/user/keys",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write integration tests for RegisterKeyHandlers (route registration and Cache-Control inheritance)",
+          "details": [
+            "Verify three routes are registered: GET /api/v1/user/keys, POST /api/v1/user/keys/:key_id/refresh, DELETE /api/v1/user/keys/:key_id",
+            "Verify all three endpoints return Cache-Control: no-store (from parent group CacheMiddleware(CacheNoStore))",
+            "Use Echo's Routes() inspection and HTTP test requests with mock auth context"
+          ],
+          "test_spec_refs": [
+            "TS-10-15",
+            "TS-10-16"
+          ],
+          "requirement_refs": [
+            "10-REQ-4.1",
+            "10-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write integration tests for GET /api/v1/user/keys happy path and metadata-only response",
+          "details": [
+            "Test HTTP 200 with JSON array of key metadata objects",
+            "Verify each object contains only key_id, created_at, expires_at, revoked_at",
+            "Verify secret, secret_hash, key, expires_days are NOT present in any response object",
+            "Verify set(obj.keys()) == {key_id, created_at, expires_at, revoked_at} for all objects"
+          ],
+          "test_spec_refs": [
+            "TS-10-17",
+            "TS-10-44"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.1",
+            "10-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write integration tests for GET /api/v1/user/keys empty result and ordering",
+          "details": [
+            "Test no-keys case: HTTP 200 with body '[]' (not null), no ETag header",
+            "Test ordering contract: multiple keys (active, revoked, expired) returned with created_at DESC; first element is most recent",
+            "Test all historical keys (active + revoked + expired) appear with no row limit"
+          ],
+          "test_spec_refs": [
+            "TS-10-18",
+            "TS-10-19"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.2",
+            "10-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write integration tests for GET /api/v1/user/keys ETag caching (set, match, revocation invalidation)",
+          "details": [
+            "Test: first GET returns ETag; second GET with matching If-None-Match returns HTTP 304 empty body",
+            "Test no-keys case: NULL etag_ts → no ETag header set; If-None-Match not evaluated even if sent",
+            "Test revocation invalidation: GET → capture ETag → DELETE key → GET with original If-None-Match → verify HTTP 200 (not 304) with new ETag",
+            "Verify ETag input is MAX(MAX(created_at, COALESCE(revoked_at, created_at))) reformatted via FormatUTC before SetETag"
+          ],
+          "test_spec_refs": [
+            "TS-10-20",
+            "TS-10-E7",
+            "TS-10-E8"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.4",
+            "10-REQ-5.E1",
+            "10-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write integration tests for GET /api/v1/user/keys auth acceptance and DB error handling",
+          "details": [
+            "Test HTTP 200 for API key authentication",
+            "Test HTTP 200 for PAT with keys:read permission",
+            "Test DB error path: mock DB returns generic error; verify HTTP 500 'internal server error' via APIError envelope"
+          ],
+          "test_spec_refs": [
+            "TS-10-21",
+            "TS-10-E9"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.5",
+            "10-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All test files in internal/keys/ compile: go build ./internal/keys/...",
+          "Handler registration and GET handler tests are present and compilable: go test ./internal/keys/... -count=1 -run 'TestRegisterKeyHandlers|TestListKeys|TestGetKeys'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-4.1, 10-REQ-4.2, 10-REQ-5.1–10-REQ-5.5, 10-REQ-10.2 test cases are present"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests: POST /api/v1/user/keys/:key_id/refresh",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write integration tests for refresh happy path and indefinite expiry",
+          "details": [
+            "Test HTTP 200: same key_id, new 32-char alphanumeric secret, updated secret_hash in DB, updated created_at, recalculated expires_at",
+            "Verify old secret no longer validates against new secret_hash",
+            "Test indefinite key (expires_days=0): expires_at remains null in DB and response",
+            "Verify in-place update: row count unchanged, same key_id, no new row inserted"
+          ],
+          "test_spec_refs": [
+            "TS-10-22",
+            "TS-10-E12",
+            "TS-10-39"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.1",
+            "10-REQ-6.E3",
+            "10-REQ-8.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write integration tests for refresh PAT rejection and auth acceptance",
+          "details": [
+            "Test PAT authentication → HTTP 401 'API key authentication required'; no DB operations performed",
+            "Test PAT with keys:read → HTTP 401",
+            "Test PAT with keys:manage → HTTP 401",
+            "Test API key authentication → HTTP 200 (accepted)",
+            "Verify credential-type context value from spec 05 is checked before any DB access"
+          ],
+          "test_spec_refs": [
+            "TS-10-23",
+            "TS-10-29"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.2",
+            "10-REQ-6.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write integration tests for refresh validation errors (not found, wrong user, revoked, expired)",
+          "details": [
+            "Test nonexistent key_id → HTTP 404 'key not found' (no format validation)",
+            "Test malformed key_id (wrong length, non-alphanumeric) → HTTP 404 'key not found' (DB returns no rows)",
+            "Test key belonging to different user → HTTP 404 'key not found' (not 403)",
+            "Test revoked key → HTTP 400 'cannot refresh a revoked key'",
+            "Test expired key (directly set past expires_at in DB) → HTTP 400 'cannot refresh an expired key'"
+          ],
+          "test_spec_refs": [
+            "TS-10-24",
+            "TS-10-25",
+            "TS-10-26",
+            "TS-10-27"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.3",
+            "10-REQ-6.4",
+            "10-REQ-6.5",
+            "10-REQ-6.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write integration tests for refresh logging, race condition, and crypto/rand failure",
+          "details": [
+            "Test successful refresh emits INFO log entry with user_id and key_id via c.Logger()",
+            "Test race condition (0-rows UPDATE): simulate concurrent delete between SELECT and UPDATE → HTTP 404 'key not found'",
+            "Test crypto/rand failure during secret generation → HTTP 500 'internal server error'; secret_hash unchanged in DB",
+            "Test generic DB error during SELECT or UPDATE → HTTP 500 'internal server error'"
+          ],
+          "test_spec_refs": [
+            "TS-10-28",
+            "TS-10-E10",
+            "TS-10-E11",
+            "TS-10-E13"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.7",
+            "10-REQ-6.E1",
+            "10-REQ-6.E2",
+            "10-REQ-6.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All refresh handler test files compile: go build ./internal/keys/...",
+          "Refresh handler tests are present and compilable: go test ./internal/keys/... -count=1 -run 'TestRefreshKey'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-6.1–10-REQ-6.8, 10-REQ-6.E1–10-REQ-6.E4, 10-REQ-8.2 test cases are present"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write Tests: DELETE /api/v1/user/keys/:key_id and Property/Smoke Tests",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write integration tests for DELETE happy path, validation errors, and expired-key deletion",
+          "details": [
+            "Test happy path: HTTP 200 with {key_id, revoked_at}; revoked_at set in DB to approximately now()",
+            "Test nonexistent key_id → HTTP 404 'key not found'; malformed key_id → HTTP 404",
+            "Test key belonging to different user → HTTP 404 'key not found' (not 403)",
+            "Test already-revoked key → HTTP 400 'key is already revoked'",
+            "Test expired-but-not-revoked key → HTTP 200 with revoked_at set (deletion permitted)"
+          ],
+          "test_spec_refs": [
+            "TS-10-30",
+            "TS-10-31",
+            "TS-10-32",
+            "TS-10-33",
+            "TS-10-34"
+          ],
+          "requirement_refs": [
+            "10-REQ-7.1",
+            "10-REQ-7.2",
+            "10-REQ-7.3",
+            "10-REQ-7.4",
+            "10-REQ-7.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write integration tests for DELETE logging, auth, self-revocation, and DB error",
+          "details": [
+            "Test successful delete emits INFO log entry with user_id and key_id",
+            "Test self-revocation: DELETE the key used for authentication → HTTP 200; subsequent request with same key → HTTP 401",
+            "Test API key auth → HTTP 200; PAT with keys:manage → HTTP 200",
+            "Test generic DB error during SELECT or UPDATE → HTTP 500 'internal server error'"
+          ],
+          "test_spec_refs": [
+            "TS-10-35",
+            "TS-10-36",
+            "TS-10-37",
+            "TS-10-E14"
+          ],
+          "requirement_refs": [
+            "10-REQ-7.6",
+            "10-REQ-7.7",
+            "10-REQ-7.8",
+            "10-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write property tests for one-active-key invariant, secret storage, and key format",
+          "details": [
+            "Property TS-10-P1: for any sequence of 1–10 GenerateAPIKey calls for same user, at most one active key exists after each call",
+            "Property TS-10-P2: for any row in api_keys, secret_hash == hex(sha256(secret)) and no column contains plaintext secret",
+            "Property TS-10-P3: for any FullKey from GenerateAPIKey or refresh, matches ^[a-zA-Z0-9]+_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$"
+          ],
+          "test_spec_refs": [
+            "TS-10-P1",
+            "TS-10-P2",
+            "TS-10-P3"
+          ],
+          "requirement_refs": [
+            "10-REQ-8.1",
+            "10-REQ-10.1",
+            "10-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Write property tests for expiry calculation, listing response safety, and retry bound",
+          "details": [
+            "Property TS-10-P4: expiresDays=0 → ExpiresAt nil; expiresDays in {30,60,90} → ExpiresAt == created_at + N*24h within 2s",
+            "Property TS-10-P5: GET /api/v1/user/keys response never contains secret, secret_hash, key, or expires_days",
+            "Property TS-10-P7: created_at values in listing are non-increasing (ORDER BY created_at DESC contract)",
+            "Property TS-10-P8: retry loop bounded at 3; for K>=3 collisions GenerateAPIKey fails after exactly 3 INSERT attempts"
+          ],
+          "test_spec_refs": [
+            "TS-10-P4",
+            "TS-10-P5",
+            "TS-10-P7",
+            "TS-10-P8"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.7",
+            "10-REQ-2.8",
+            "10-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Write property test for revocation atomicity and smoke test stubs",
+          "details": [
+            "Property TS-10-P6: when GenerateAPIKey fails after revocation UPDATE with *sql.DB, prior key's revoked_at remains NULL",
+            "Integration test TS-10-42: verify INFO log entries emitted for generation, refresh, and revocation; not emitted on failure paths",
+            "Write smoke test stubs covering all 5 execution paths (10-PATH-1 through 10-PATH-5)"
+          ],
+          "test_spec_refs": [
+            "TS-10-P6",
+            "TS-10-42",
+            "TS-10-SMOKE-1",
+            "TS-10-SMOKE-2",
+            "TS-10-SMOKE-3",
+            "TS-10-SMOKE-4",
+            "TS-10-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.3",
+            "10-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All DELETE handler and property test files compile: go build ./internal/keys/...",
+          "DELETE and property tests are present: go test ./internal/keys/... -count=1 -run 'TestDeleteKey|TestProperty|TestSmoke'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-7.1–10-REQ-7.8, 10-REQ-7.E1, 10-REQ-9.2 test cases are present"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement Core Package: Random Generation, Hashing, and GenerateAPIKey",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement random string generation helper (crypto/rand, alphanumeric charset, modular arithmetic)",
+          "details": [
+            "Create internal/keys/generate.go",
+            "Implement private randAlphanumeric(n int) (string, error) using crypto/rand.Read()",
+            "Use 62-char alphanumeric charset [0-9A-Za-z] with byte % 62 modular arithmetic",
+            "Return error immediately on crypto/rand.Read() failure — no retries, no partial state",
+            "Ensure generated strings contain only [0-9A-Za-z] of exactly the specified length"
+          ],
+          "test_spec_refs": [
+            "TS-10-1",
+            "TS-10-2",
+            "TS-10-3"
+          ],
+          "requirement_refs": [
+            "10-REQ-1.1",
+            "10-REQ-1.2",
+            "10-REQ-1.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement APIKeyResult struct and secret hashing",
+          "details": [
+            "Define APIKeyResult struct with FullKey string, KeyID string, SecretHash string, ExpiresAt *time.Time",
+            "Implement SHA-256 hashing: hash := sha256.Sum256([]byte(secret)); hexHash := hex.EncodeToString(hash[:])",
+            "Construct FullKey as apikit.TokenPrefix + '_' + keyID + '_' + secret",
+            "Ensure plaintext secret is never written to any DB column"
+          ],
+          "test_spec_refs": [
+            "TS-10-4",
+            "TS-10-9",
+            "TS-10-43"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.1",
+            "10-REQ-2.6",
+            "10-REQ-10.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement GenerateAPIKey: expiry validation, transaction detection, revocation UPDATE",
+          "details": [
+            "Validate expiresDays ∈ {0, 30, 60, 90} — return error immediately if invalid",
+            "Detect *sql.DB vs *sql.Tx via type assertion: if _, ok := tx.(*sql.DB); ok { begin internal tx }",
+            "Execute revocation UPDATE: 'UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL'",
+            "Zero rows affected is silent no-op success; proceed to INSERT",
+            "Use db.FormatTime() from spec 02 for timestamp storage"
+          ],
+          "test_spec_refs": [
+            "TS-10-5",
+            "TS-10-6",
+            "TS-10-7",
+            "TS-10-8",
+            "TS-10-E5"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.2",
+            "10-REQ-2.3",
+            "10-REQ-2.4",
+            "10-REQ-2.5",
+            "10-REQ-2.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Implement GenerateAPIKey: INSERT with key_id collision retry (up to 3 attempts), expiry calculation, logging",
+          "details": [
+            "Generate key_id and secret via randAlphanumeric; compute secret_hash and ExpiresAt",
+            "Calculate expires_at: nil when expiresDays=0; time.Now().UTC().Add(time.Duration(expiresDays)*24*time.Hour) otherwise",
+            "INSERT into api_keys with all fields; retry up to 3 times on unique constraint violation (detected by db.WrapError())",
+            "Non-constraint-violation DB error → return error immediately, no retry",
+            "If internal transaction: rollback on any failure (revocation UPDATE is also rolled back)",
+            "On success: emit structured INFO log via logger with user_id and key_id fields; return *APIKeyResult"
+          ],
+          "test_spec_refs": [
+            "TS-10-10",
+            "TS-10-11",
+            "TS-10-12",
+            "TS-10-E2",
+            "TS-10-E4",
+            "TS-10-E6"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.7",
+            "10-REQ-2.8",
+            "10-REQ-2.9",
+            "10-REQ-2.E1",
+            "10-REQ-2.E3",
+            "10-REQ-2.E5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.5",
+          "title": "Implement root apikit package re-exports for APIKeyResult and GenerateAPIKey",
+          "details": [
+            "Add to root apikit package: type APIKeyResult = keys.APIKeyResult",
+            "Add wrapper: func GenerateAPIKey(tx db.Executor, userID string, expiresDays int, logger echo.Logger) (*APIKeyResult, error) { return keys.GenerateAPIKey(tx, userID, expiresDays, logger) }",
+            "Do NOT re-export any other symbols from internal/keys",
+            "No custom error types, constants, or helpers exposed from apikit package namespace"
+          ],
+          "test_spec_refs": [
+            "TS-10-13",
+            "TS-10-14"
+          ],
+          "requirement_refs": [
+            "10-REQ-3.1",
+            "10-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Core generation tests pass: go test ./internal/keys/... -count=1 -run 'TestGenerate|TestFormat|TestHash|TestExpiry'",
+          "Integration tests for GenerateAPIKey pass: go test ./internal/keys/... -count=1 -run 'TestGenerateAPIKey'",
+          "Public re-export tests pass: go test ./... -count=1 -run 'TestPublicAPI'",
+          "go vet ./... reports no issues",
+          "No panic('not implemented') stubs remain in internal/keys/generate.go or root apikit re-exports"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement RegisterKeyHandlers and GET /api/v1/user/keys Handler",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement RegisterKeyHandlers function",
+          "details": [
+            "Create internal/keys/handlers.go",
+            "Implement RegisterKeyHandlers(group *echo.Group, database *sql.DB)",
+            "Register: GET /user/keys, POST /user/keys/:key_id/refresh, DELETE /user/keys/:key_id",
+            "Do NOT apply additional cache middleware — Cache-Control: no-store is inherited from parent group's CacheMiddleware(CacheNoStore)",
+            "Store *sql.DB for use by handlers (closure or struct)"
+          ],
+          "test_spec_refs": [
+            "TS-10-15",
+            "TS-10-16"
+          ],
+          "requirement_refs": [
+            "10-REQ-4.1",
+            "10-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement GET /api/v1/user/keys handler: listing query and metadata serialization",
+          "details": [
+            "Read user_id from auth middleware context (spec 05)",
+            "Execute: SELECT key_id, created_at, expires_at, revoked_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+            "Serialize as JSON array; return [] (not null) when no rows — use []KeyMetadata{} initialized empty, not nil slice",
+            "Response objects contain ONLY key_id, created_at, expires_at, revoked_at — never secret_hash, secret, expires_days",
+            "Return HTTP 200 with c.JSON()"
+          ],
+          "test_spec_refs": [
+            "TS-10-17",
+            "TS-10-18",
+            "TS-10-19",
+            "TS-10-21",
+            "TS-10-44"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.1",
+            "10-REQ-5.2",
+            "10-REQ-5.3",
+            "10-REQ-5.5",
+            "10-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement GET /api/v1/user/keys ETag logic (etag_ts derivation, SetETag, CheckETag, NullString handling)",
+          "details": [
+            "Execute ETag query: SELECT MAX(MAX(created_at, COALESCE(revoked_at, created_at))) AS etag_ts FROM api_keys WHERE user_id = ?",
+            "Scan result as sql.NullString; if Valid==false (no keys): skip ETag setting and If-None-Match evaluation entirely",
+            "If Valid==true: reformat via FormatUTC() from spec 01, pass to SetETag(); evaluate If-None-Match via CheckETag()",
+            "If CheckETag matches: return HTTP 304 empty body",
+            "DB error on either query → HTTP 500 'internal server error' via APIError()"
+          ],
+          "test_spec_refs": [
+            "TS-10-20",
+            "TS-10-E7",
+            "TS-10-E8",
+            "TS-10-E9"
+          ],
+          "requirement_refs": [
+            "10-REQ-5.4",
+            "10-REQ-5.E1",
+            "10-REQ-5.E2",
+            "10-REQ-5.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Handler registration tests pass: go test ./internal/keys/... -count=1 -run 'TestRegisterKeyHandlers|TestListKeys|TestGetKeys'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-4.1, 10-REQ-4.2, 10-REQ-5.1–10-REQ-5.5, 10-REQ-5.E1–10-REQ-5.E3 acceptance criteria met",
+          "No panic('not implemented') stubs remain in GET handler or RegisterKeyHandlers"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement POST /api/v1/user/keys/:key_id/refresh Handler",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement refresh handler: PAT rejection and key lookup with ownership/state validation",
+          "details": [
+            "Check credential-type context value from spec 05; if PAT detected → return HTTP 401 'API key authentication required' via APIError() before any DB access",
+            "Execute: SELECT key_id, user_id, secret_hash, expires_days, expires_at, revoked_at, created_at FROM api_keys WHERE key_id = ?",
+            "If no rows → HTTP 404 'key not found'; no format validation on key_id path parameter",
+            "If row.user_id != authenticated user_id → HTTP 404 'key not found' (not 403)",
+            "If revoked_at IS NOT NULL → HTTP 400 'cannot refresh a revoked key'",
+            "If expires_at IS NOT NULL AND expires_at < time.Now().UTC() → HTTP 400 'cannot refresh an expired key'"
+          ],
+          "test_spec_refs": [
+            "TS-10-23",
+            "TS-10-24",
+            "TS-10-25",
+            "TS-10-26",
+            "TS-10-27",
+            "TS-10-29"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.2",
+            "10-REQ-6.3",
+            "10-REQ-6.4",
+            "10-REQ-6.5",
+            "10-REQ-6.6",
+            "10-REQ-6.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement refresh handler: new secret generation, UPDATE, race condition handling, and logging",
+          "details": [
+            "Generate new 32-char secret via randAlphanumeric(32); if crypto/rand fails → HTTP 500 immediately, no retry",
+            "Compute new secret_hash; recalculate expires_at from stored expires_days (nil if expires_days==0)",
+            "Execute: UPDATE api_keys SET secret_hash=?, expires_at=?, created_at=? WHERE key_id=? AND user_id=?",
+            "If rows affected == 0 → HTTP 404 'key not found' (race condition treated as missing key, not 500)",
+            "Construct FullKey = TokenPrefix + '_' + key_id + '_' + new_secret",
+            "Emit INFO log via c.Logger() with user_id and key_id after successful UPDATE; return HTTP 200 with {key, key_id, expires_at}"
+          ],
+          "test_spec_refs": [
+            "TS-10-22",
+            "TS-10-28",
+            "TS-10-E10",
+            "TS-10-E11",
+            "TS-10-E12",
+            "TS-10-E13"
+          ],
+          "requirement_refs": [
+            "10-REQ-6.1",
+            "10-REQ-6.7",
+            "10-REQ-6.E1",
+            "10-REQ-6.E2",
+            "10-REQ-6.E3",
+            "10-REQ-6.E4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Refresh handler tests pass: go test ./internal/keys/... -count=1 -run 'TestRefreshKey'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-6.1–10-REQ-6.8, 10-REQ-6.E1–10-REQ-6.E4 acceptance criteria met",
+          "No panic('not implemented') stubs remain in refresh handler"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement DELETE /api/v1/user/keys/:key_id Handler",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement DELETE handler: key lookup, ownership and revocation state validation",
+          "details": [
+            "Execute: SELECT key_id, user_id, revoked_at FROM api_keys WHERE key_id = ?",
+            "If no rows → HTTP 404 'key not found'; no format validation on key_id path parameter",
+            "If row.user_id != authenticated user_id → HTTP 404 'key not found' (not 403)",
+            "If revoked_at IS NOT NULL → HTTP 400 'key is already revoked'",
+            "Expired-but-not-revoked keys (expires_at in past, revoked_at IS NULL) are permitted for deletion — no check on expires_at",
+            "Accept API key or PAT with keys:manage permission (enforced by auth middleware spec 05)"
+          ],
+          "test_spec_refs": [
+            "TS-10-31",
+            "TS-10-32",
+            "TS-10-33",
+            "TS-10-34",
+            "TS-10-37"
+          ],
+          "requirement_refs": [
+            "10-REQ-7.2",
+            "10-REQ-7.3",
+            "10-REQ-7.4",
+            "10-REQ-7.5",
+            "10-REQ-7.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement DELETE handler: revocation UPDATE, self-revocation, logging, and DB error handling",
+          "details": [
+            "Execute: UPDATE api_keys SET revoked_at=? WHERE key_id=? AND user_id=? with current UTC timestamp",
+            "Self-revocation is permitted: auth middleware validated the key before handler executed — no re-validation mid-flight",
+            "Emit INFO log via c.Logger() with user_id and key_id after successful UPDATE",
+            "DB error during SELECT or UPDATE → HTTP 500 'internal server error' via APIError()",
+            "Return HTTP 200 with {key_id, revoked_at} (RFC 3339 UTC)"
+          ],
+          "test_spec_refs": [
+            "TS-10-30",
+            "TS-10-35",
+            "TS-10-36",
+            "TS-10-E14"
+          ],
+          "requirement_refs": [
+            "10-REQ-7.1",
+            "10-REQ-7.6",
+            "10-REQ-7.7",
+            "10-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "DELETE handler tests pass: go test ./internal/keys/... -count=1 -run 'TestDeleteKey'",
+          "go vet ./internal/keys/... reports no issues",
+          "Requirements 10-REQ-7.1–10-REQ-7.8, 10-REQ-7.E1 acceptance criteria met",
+          "No panic('not implemented') stubs remain in DELETE handler"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "checkpoint",
+      "title": "Checkpoint: Full Test Suite and Property/Smoke Verification",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Run all unit and integration tests for the complete internal/keys package",
+          "details": [
+            "Run: go test ./internal/keys/... -count=1 -v",
+            "Verify all unit tests pass with implemented functions",
+            "Verify all integration tests pass with real SQLite in-memory DB",
+            "Confirm no tests are skipped unexpectedly"
+          ],
+          "test_spec_refs": [
+            "TS-10-1",
+            "TS-10-4",
+            "TS-10-17",
+            "TS-10-22",
+            "TS-10-30"
+          ],
+          "requirement_refs": [
+            "10-REQ-1.1",
+            "10-REQ-2.1",
+            "10-REQ-5.1",
+            "10-REQ-6.1",
+            "10-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Run property tests and verify invariants",
+          "details": [
+            "Run property tests: go test ./internal/keys/... -count=1 -run 'TestProperty'",
+            "Verify one-active-key invariant holds for any sequence of GenerateAPIKey calls",
+            "Verify secret never stored in plaintext for any row",
+            "Verify retry loop is bounded at exactly 3 attempts",
+            "Verify ORDER BY created_at DESC contract holds for all listing responses"
+          ],
+          "test_spec_refs": [
+            "TS-10-P1",
+            "TS-10-P2",
+            "TS-10-P3",
+            "TS-10-P4",
+            "TS-10-P5",
+            "TS-10-P6",
+            "TS-10-P7",
+            "TS-10-P8"
+          ],
+          "requirement_refs": [
+            "10-REQ-8.1",
+            "10-REQ-10.1",
+            "10-REQ-2.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Run smoke tests against real components",
+          "details": [
+            "Run smoke tests: go test ./internal/keys/... -count=1 -run 'TestSmoke'",
+            "SMOKE-1: OAuth callback path — GenerateAPIKey within *sql.Tx; commit; verify DB state and log",
+            "SMOKE-2: List keys with ETag caching — 200, then 304 on matching If-None-Match",
+            "SMOKE-3: Refresh active key — new secret in response; DB updated in-place; log emitted",
+            "SMOKE-4: Revoke active key — HTTP 200; revoked_at set; log emitted",
+            "SMOKE-5: GenerateAPIKey with *sql.DB replacing existing key — prior key revoked atomically"
+          ],
+          "test_spec_refs": [
+            "TS-10-SMOKE-1",
+            "TS-10-SMOKE-2",
+            "TS-10-SMOKE-3",
+            "TS-10-SMOKE-4",
+            "TS-10-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.3",
+            "10-REQ-5.4",
+            "10-REQ-6.1",
+            "10-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.4",
+          "title": "Verify error handling table coverage and stub/dead-code audit",
+          "details": [
+            "Verify all 12 error conditions in 10-ERR-1 through 10-ERR-12 produce the correct HTTP status and error message",
+            "Search for panic('not implemented') in internal/keys/: grep -r 'panic(\"not implemented\")' internal/keys/",
+            "Search for bare TODO comments: grep -r '// TODO' internal/keys/",
+            "Confirm no stubs or dead-code markers remain in production code paths"
+          ],
+          "test_spec_refs": [
+            "TS-10-3",
+            "TS-10-E4",
+            "TS-10-E9",
+            "TS-10-E11",
+            "TS-10-E14"
+          ],
+          "requirement_refs": [
+            "10-REQ-1.3",
+            "10-REQ-2.E3",
+            "10-REQ-6.E2",
+            "10-REQ-7.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Full test suite passes: go test ./... -count=1",
+          "go vet ./... reports no issues",
+          "All smoke tests pass with real components (no mocks except logger): go test ./internal/keys/... -count=1 -run 'TestSmoke'",
+          "All property tests pass: go test ./internal/keys/... -count=1 -run 'TestProperty'",
+          "grep -r 'panic(\"not implemented\")' internal/keys/ returns no results",
+          "All 12 error conditions (10-ERR-1 through 10-ERR-12) verified by test coverage"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Cross-Spec Entry Points",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Trace execution paths — verify each path's entry point calls the next function in the chain",
+          "details": [
+            "10-PATH-1: Verify apikit.GenerateAPIKey → keys.GenerateAPIKey → revocation UPDATE → INSERT → log is fully wired with no stubs",
+            "10-PATH-2: Verify GET /api/v1/user/keys → ETag query → listing query → SetETag/CheckETag → c.JSON() is fully wired",
+            "10-PATH-3: Verify POST .../refresh → PAT check → SELECT → crypto/rand → UPDATE → log → c.JSON() is fully wired",
+            "10-PATH-4: Verify DELETE handler → SELECT → UPDATE → log → c.JSON() is fully wired",
+            "10-PATH-5: Verify GenerateAPIKey with *sql.DB → type assertion → internal tx → revoke UPDATE → INSERT → commit is fully wired"
+          ],
+          "test_spec_refs": [
+            "TS-10-SMOKE-1",
+            "TS-10-SMOKE-2",
+            "TS-10-SMOKE-3",
+            "TS-10-SMOKE-4",
+            "TS-10-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.1",
+            "10-REQ-4.1",
+            "10-REQ-5.1",
+            "10-REQ-6.1",
+            "10-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Verify return value propagation — callers receive and use all return values correctly",
+          "details": [
+            "Verify internal transaction's Commit/Rollback return errors are handled (not silently dropped)",
+            "Verify refresh handler correctly checks rows affected from UPDATE and returns 404 on 0 rows (not 500)",
+            "Verify apikit.GenerateAPIKey wrapper correctly propagates all return values from keys.GenerateAPIKey",
+            "Verify db.WrapError() return values are checked to detect unique constraint violations for retry logic",
+            "Verify APIError() from spec 01 is used for all error responses (not raw c.String or c.JSON with manual error format)"
+          ],
+          "test_spec_refs": [
+            "TS-10-7",
+            "TS-10-E10",
+            "TS-10-13"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.3",
+            "10-REQ-2.4",
+            "10-REQ-6.E1",
+            "10-REQ-3.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Run all smoke tests with real components — verify no stubs remain in production paths",
+          "details": [
+            "Run: go test ./internal/keys/... -count=1 -run 'TestSmoke' with real SQLite DB, real crypto/rand, real SHA-256",
+            "Only echo.Logger is replaced with a capturing test logger",
+            "Verify INFO log entries are emitted with user_id and key_id for generation (SMOKE-1), refresh (SMOKE-3), and revocation (SMOKE-4)",
+            "Verify ETag round-trip works end-to-end with real SetETag/CheckETag/FormatUTC from spec 01 (SMOKE-2)"
+          ],
+          "test_spec_refs": [
+            "TS-10-SMOKE-1",
+            "TS-10-SMOKE-2",
+            "TS-10-SMOKE-3",
+            "TS-10-SMOKE-4",
+            "TS-10-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "10-REQ-2.9",
+            "10-REQ-5.4",
+            "10-REQ-6.7",
+            "10-REQ-7.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.4",
+          "title": "Stub and dead-code audit across internal/keys and root apikit re-exports",
+          "details": [
+            "Search for panic('not implemented'): grep -rn 'panic(\"not implemented\")' internal/keys/ — must return 0 results",
+            "Search for bare TODO: grep -rn '// TODO' internal/keys/ — review and resolve all",
+            "Verify no package-level logger variable in internal/keys: grep -rn 'var.*[Ll]og.*echo\\.Logger' internal/keys/",
+            "Verify apikit package exports only APIKeyResult and GenerateAPIKey from keys: inspect exported symbol list",
+            "Verify no ErrKeyRevoked, ErrKeyExpired, or other unexported symbols appear in apikit package"
+          ],
+          "test_spec_refs": [
+            "TS-10-14",
+            "TS-10-41"
+          ],
+          "requirement_refs": [
+            "10-REQ-3.1",
+            "10-REQ-3.2",
+            "10-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.5",
+          "title": "Cross-spec entry point verification — confirm production callers are wired",
+          "details": [
+            "Verify spec 06 (oauth_provider_registry) calls apikit.GenerateAPIKey in its OAuth callback production code path (not a stub call)",
+            "Verify RegisterKeyHandlers is called from server bootstrap (spec 01's server startup code) with the concrete *sql.DB",
+            "Verify auth middleware (spec 05) is applied to the /api/v1 group before RegisterKeyHandlers mounts its routes",
+            "Verify CacheMiddleware(CacheNoStore) is applied to the parent Echo group before RegisterKeyHandlers is called",
+            "Confirm SQLite is in serialized write mode (required for one-active-key invariant under concurrent calls)"
+          ],
+          "test_spec_refs": [
+            "TS-10-15",
+            "TS-10-38",
+            "TS-10-40"
+          ],
+          "requirement_refs": [
+            "10-REQ-3.1",
+            "10-REQ-4.1",
+            "10-REQ-8.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "Full test suite passes with no failures: go test ./... -count=1",
+          "go vet ./... reports zero issues",
+          "All 5 smoke tests pass with real components: go test ./internal/keys/... -count=1 -run 'TestSmoke'",
+          "grep -rn 'panic(\"not implemented\")' internal/keys/ returns 0 results",
+          "grep -rn '// TODO' internal/keys/ reviewed and all resolved",
+          "Cross-spec wiring confirmed: spec 06 calls apikit.GenerateAPIKey and server bootstrap calls RegisterKeyHandlers in production code",
+          "All traceability links (10-REQ-1 through 10-REQ-10) have corresponding passing test cases"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "10-REQ-1.1",
+      "test_spec_id": "TS-10-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-1.2",
+      "test_spec_id": "TS-10-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-1.3",
+      "test_spec_id": "TS-10-3",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-1.E1",
+      "test_spec_id": "TS-10-E1",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.1",
+      "test_spec_id": "TS-10-4",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.2",
+      "test_spec_id": "TS-10-5",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.3",
+      "test_spec_id": "TS-10-6",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.4",
+      "test_spec_id": "TS-10-7",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.5",
+      "test_spec_id": "TS-10-8",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.6",
+      "test_spec_id": "TS-10-9",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.7",
+      "test_spec_id": "TS-10-10",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.8",
+      "test_spec_id": "TS-10-11",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.9",
+      "test_spec_id": "TS-10-12",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.E1",
+      "test_spec_id": "TS-10-E2",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.E2",
+      "test_spec_id": "TS-10-E3",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.E3",
+      "test_spec_id": "TS-10-E4",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.E4",
+      "test_spec_id": "TS-10-E5",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-2.E5",
+      "test_spec_id": "TS-10-E6",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-3.1",
+      "test_spec_id": "TS-10-13",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-3.2",
+      "test_spec_id": "TS-10-14",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-4.1",
+      "test_spec_id": "TS-10-15",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-4.2",
+      "test_spec_id": "TS-10-16",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.1",
+      "test_spec_id": "TS-10-17",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.2",
+      "test_spec_id": "TS-10-18",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.3",
+      "test_spec_id": "TS-10-19",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.4",
+      "test_spec_id": "TS-10-20",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.5",
+      "test_spec_id": "TS-10-21",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.E1",
+      "test_spec_id": "TS-10-E7",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.E2",
+      "test_spec_id": "TS-10-E8",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-5.E3",
+      "test_spec_id": "TS-10-E9",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.1",
+      "test_spec_id": "TS-10-22",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.2",
+      "test_spec_id": "TS-10-23",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.3",
+      "test_spec_id": "TS-10-24",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.4",
+      "test_spec_id": "TS-10-25",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.5",
+      "test_spec_id": "TS-10-26",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.6",
+      "test_spec_id": "TS-10-27",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.7",
+      "test_spec_id": "TS-10-28",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.8",
+      "test_spec_id": "TS-10-29",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.E1",
+      "test_spec_id": "TS-10-E10",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.E2",
+      "test_spec_id": "TS-10-E11",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.E3",
+      "test_spec_id": "TS-10-E12",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-6.E4",
+      "test_spec_id": "TS-10-E13",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.1",
+      "test_spec_id": "TS-10-30",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.2",
+      "test_spec_id": "TS-10-31",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.3",
+      "test_spec_id": "TS-10-32",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.4",
+      "test_spec_id": "TS-10-33",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.5",
+      "test_spec_id": "TS-10-34",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.6",
+      "test_spec_id": "TS-10-35",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.7",
+      "test_spec_id": "TS-10-36",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.8",
+      "test_spec_id": "TS-10-37",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-7.E1",
+      "test_spec_id": "TS-10-E14",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-8.1",
+      "test_spec_id": "TS-10-38",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-8.2",
+      "test_spec_id": "TS-10-39",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-8.3",
+      "test_spec_id": "TS-10-40",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-8.E1",
+      "test_spec_id": "TS-10-E15",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-9.1",
+      "test_spec_id": "TS-10-41",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-9.2",
+      "test_spec_id": "TS-10-42",
+      "task_id": "5.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-10.1",
+      "test_spec_id": "TS-10-43",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "10-REQ-10.2",
+      "test_spec_id": "TS-10-44",
+      "task_id": "3.2",
+      "test_path": null
+    }
+  ]
+}

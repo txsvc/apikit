@@ -1,0 +1,993 @@
+{
+  "$schema": null,
+  "spec_id": "15",
+  "spec_name": "cli_user_commands",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-15-1",
+      "requirement_id": "15-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify that cmd/akc/main.go registers all five command groups on the root command via explicit AddCommand calls and uses no init() functions.",
+      "preconditions": [
+        "Go source tree is available under cmd/akc/main.go and internal/cli/",
+        "All constructor functions (NewLoginCmd, NewUserCmd, NewKeysCmd, NewTokensCmd, NewOrgsCmd) are implemented"
+      ],
+      "input": "Execute the compiled akc binary with no arguments or with --help",
+      "expected": "Root command's Commands() slice contains exactly login, user, keys, tokens, and orgs sub-commands; no init() registration side effects occur",
+      "assertion_pseudocode": "root := clicore.NewRootCmd(); root.AddCommand(cli.NewLoginCmd(), cli.NewUserCmd(), cli.NewKeysCmd(), cli.NewTokensCmd(), cli.NewOrgsCmd()); names := [cmd.Name() for cmd in root.Commands()]; assert names contains 'login', 'user', 'keys', 'tokens', 'orgs'; assert len(names) == 5"
+    },
+    {
+      "id": "TS-15-2",
+      "requirement_id": "15-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify that every Cobra command constructor populates Use, Short, Long, Args, RunE, flag definitions, and help-json annotations on the returned command.",
+      "preconditions": [
+        "All constructor functions are implemented in internal/cli/"
+      ],
+      "input": "Call each constructor function and inspect the returned *cobra.Command",
+      "expected": "Each *cobra.Command has non-empty Use, Short, Long; RunE is non-nil; help-json annotations contain name, description, method, path, args, flags, auth fields",
+      "assertion_pseudocode": "for each constructor in [NewLoginCmd, NewUserShowCmd, NewUserUpdateCmd, NewKeysListCmd, NewKeysRefreshCmd, NewKeysRevokeCmd, NewTokensListCmd, NewTokensCreateCmd, NewTokensShowCmd, NewTokensRevokeCmd, NewOrgsListCmd, NewOrgsShowCmd, NewOrgsMembersCmd]: cmd = constructor(); assert cmd.Use != ''; assert cmd.Short != ''; assert cmd.RunE != nil; assert cmd.Annotations['help-json'] contains 'name', 'description', 'method', 'path', 'auth'"
+    },
+    {
+      "id": "TS-15-3",
+      "requirement_id": "15-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that the login command's help-json annotation sets composite=true, method=null, path=null, and auth='none'.",
+      "preconditions": [
+        "NewLoginCmd() is implemented in internal/cli/login.go"
+      ],
+      "input": "Call NewLoginCmd() and inspect its Annotations map",
+      "expected": "help-json annotation has composite=true, method=null, path=null, auth='none'",
+      "assertion_pseudocode": "cmd = NewLoginCmd(); meta = parse_json(cmd.Annotations['help-json']); assert meta['composite'] == true; assert meta['method'] == null; assert meta['path'] == null; assert meta['auth'] == 'none'"
+    },
+    {
+      "id": "TS-15-4",
+      "requirement_id": "15-REQ-1.4",
+      "kind": "unit",
+      "description": "Verify that all non-login commands have auth='api_key' and non-null HTTP method and path in their help-json annotations.",
+      "preconditions": [
+        "All non-login command constructors are implemented in internal/cli/"
+      ],
+      "input": "Call each non-login constructor and inspect its Annotations map",
+      "expected": "Each non-login command has auth='api_key', method is a non-null HTTP verb string, path is a non-null API path string",
+      "assertion_pseudocode": "for each constructor in [NewUserShowCmd, NewUserUpdateCmd, NewKeysListCmd, NewKeysRefreshCmd, NewKeysRevokeCmd, NewTokensListCmd, NewTokensCreateCmd, NewTokensShowCmd, NewTokensRevokeCmd, NewOrgsListCmd, NewOrgsShowCmd, NewOrgsMembersCmd]: cmd = constructor(); meta = parse_json(cmd.Annotations['help-json']); assert meta['auth'] == 'api_key'; assert meta['method'] != null; assert meta['path'] != null"
+    },
+    {
+      "id": "TS-15-5",
+      "requirement_id": "15-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify that the login command accepts --provider flag defaulting to 'github' and --expires flag defaulting to 90.",
+      "preconditions": [
+        "NewLoginCmd() is implemented"
+      ],
+      "input": "Call NewLoginCmd() and inspect flag definitions without setting any flags",
+      "expected": "providerFlag.DefValue == 'github'; expiresFlag.DefValue == '90'",
+      "assertion_pseudocode": "cmd = NewLoginCmd(); providerFlag = cmd.Flags().Lookup('provider'); assert providerFlag != nil; assert providerFlag.DefValue == 'github'; expiresFlag = cmd.Flags().Lookup('expires'); assert expiresFlag != nil; assert expiresFlag.DefValue == '90'"
+    },
+    {
+      "id": "TS-15-6",
+      "requirement_id": "15-REQ-2.2",
+      "kind": "integration",
+      "description": "Verify that the login command constructs an unauthenticated SDK client and calls GetProviders when invoked with a valid endpoint_url.",
+      "preconditions": [
+        "httptest.Server is configured to handle GET /providers and return a providers list",
+        "No api_key is configured (login is unauthenticated)",
+        "endpoint_url is set to the httptest.Server URL"
+      ],
+      "input": "Call runLogin with valid provider='github', expires=90, endpoint_url=mockServerURL and a short timeout",
+      "expected": "Mock server receives GET /providers request; response is parsed without error; flow proceeds to provider lookup",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_providers); opts = loginOpts{provider: 'github', expires: 90, endpointURL: server.URL}; err = runLogin(ctx, 200ms, opts); assert server.requestLog contains 'GET /providers'; assert err is not 'endpoint URL required' error"
+    },
+    {
+      "id": "TS-15-7",
+      "requirement_id": "15-REQ-2.3",
+      "kind": "integration",
+      "description": "Verify that the login command exits with code 1 and provider-not-found error JSON when the requested provider is absent from the server's list.",
+      "preconditions": [
+        "httptest.Server returns a providers list that does NOT include 'gitlab'",
+        "endpoint_url is set to the mock server URL"
+      ],
+      "input": "Run login command with --provider gitlab against the mock server",
+      "expected": "stdout contains {\"error\":{\"code\":404,\"message\":\"provider 'gitlab' not found\"}}; exit code is 1",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_providers_without_gitlab); stdout, stderr, exitCode = run_login_cmd(provider='gitlab', endpointURL=server.URL); assert exitCode == 1; parsed = parse_json(stdout); assert parsed['error']['code'] == 404; assert parsed['error']['message'] == \"provider 'gitlab' not found\""
+    },
+    {
+      "id": "TS-15-8",
+      "requirement_id": "15-REQ-2.4",
+      "kind": "unit",
+      "description": "Verify that the generated OAuth state parameter is exactly 64 lowercase hex characters derived from 32 random bytes.",
+      "preconditions": [
+        "internal/cli/helpers.go or login.go state generation function is available"
+      ],
+      "input": "Call the state generation logic (crypto/rand.Read 32 bytes, hex.EncodeToString)",
+      "expected": "Returned string has length 64; contains only characters [0-9a-f]; different calls produce different values",
+      "assertion_pseudocode": "state1 = generateState(); assert len(state1) == 64; assert state1 matches regex '^[0-9a-f]{64}$'; state2 = generateState(); assert state1 != state2"
+    },
+    {
+      "id": "TS-15-9",
+      "requirement_id": "15-REQ-2.5",
+      "kind": "integration",
+      "description": "Verify that the callback server binds to 127.0.0.1 on a random port and returns HTTP 404 for any path other than /callback.",
+      "preconditions": [
+        "Login flow is initialized with a mock provider",
+        "Callback server is started as part of runLogin"
+      ],
+      "input": "Send GET /favicon.ico to the running callback server's address",
+      "expected": "HTTP response status is 404; neither codeCh nor errCh receives a value; server continues listening",
+      "assertion_pseudocode": "codeCh = make(chan string, 1); errCh = make(chan error, 1); server, addr = startCallbackServer(state, codeCh, errCh); resp = http_get('http://' + addr + '/favicon.ico'); assert resp.StatusCode == 404; select { case <-codeCh: fail('unexpected code'); case <-errCh: fail('unexpected error'); default: pass }"
+    },
+    {
+      "id": "TS-15-10",
+      "requirement_id": "15-REQ-2.6",
+      "kind": "unit",
+      "description": "Verify that the authorization URL preserves existing query parameters from authorize_url and appends redirect_uri, state, and response_type=code without duplicating client_id.",
+      "preconditions": [
+        "Provider authorize_url is 'https://auth.example.com/oauth?client_id=abc123&scope=read'"
+      ],
+      "input": "Call the authorization URL construction logic with redirectURI='http://127.0.0.1:12345/callback', state='deadbeef...', existing authorize_url",
+      "expected": "Final URL contains client_id=abc123, scope=read, redirect_uri=http://127.0.0.1:12345/callback, state=deadbeef..., response_type=code; client_id appears exactly once",
+      "assertion_pseudocode": "authorizeURL = 'https://auth.example.com/oauth?client_id=abc123&scope=read'; state = 'deadbeef'; redirectURI = 'http://127.0.0.1:12345/callback'; finalURL = buildAuthURL(authorizeURL, redirectURI, state); params = parse_query(finalURL); assert params['client_id'] == 'abc123'; assert params['scope'] == 'read'; assert params['redirect_uri'] == redirectURI; assert params['state'] == state; assert params['response_type'] == 'code'; assert count_occurrences(finalURL, 'client_id') == 1"
+    },
+    {
+      "id": "TS-15-11",
+      "requirement_id": "15-REQ-2.7",
+      "kind": "unit",
+      "description": "Verify that the login command prints the browser-opening message to stderr and falls back to printing the URL if openBrowser fails.",
+      "preconditions": [
+        "openBrowser is replaced with a stub that returns an error"
+      ],
+      "input": "Run login flow with openBrowser stub that returns error",
+      "expected": "stderr contains 'Opening browser for authentication...'; stderr also contains 'Open this URL in your browser: <url>'; login flow continues without error",
+      "assertion_pseudocode": "stderrBuf = buffer(); openBrowserFn = func(url) { return error('no display') }; runLoginWithStubs(stderrBuf, openBrowserFn); assert stderrBuf contains 'Opening browser for authentication...'; assert stderrBuf contains 'Open this URL in your browser:'"
+    },
+    {
+      "id": "TS-15-12",
+      "requirement_id": "15-REQ-2.8",
+      "kind": "unit",
+      "description": "Verify that the login flow uses runLogin with a timeout derived from loginTimeoutSeconds and that the main goroutine selects on codeCh, errCh, and ctx.Done().",
+      "preconditions": [
+        "login.go defines loginTimeoutSeconds = 120 as a package-level constant",
+        "runLogin function signature is func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error"
+      ],
+      "input": "Inspect the loginTimeoutSeconds constant value and the RunE implementation that calls runLogin",
+      "expected": "loginTimeoutSeconds == 120; RunE passes time.Duration(loginTimeoutSeconds)*time.Second to runLogin; runLogin selects on codeCh, errCh, ctx.Done()",
+      "assertion_pseudocode": "assert loginTimeoutSeconds == 120; cmd = NewLoginCmd(); // inspect RunE source or via reflection that it calls runLogin with 120s timeout; // call runLogin directly with 50ms timeout and no callback server signal; err = runLogin(ctx, 50*ms, opts); assert err.message contains 'timed out'"
+    },
+    {
+      "id": "TS-15-13",
+      "requirement_id": "15-REQ-2.9",
+      "kind": "integration",
+      "description": "Verify that the callback server handler responds with HTTP 200 and the verbatim success HTML page and sends the code on codeCh when a valid state and code are provided.",
+      "preconditions": [
+        "Callback server is running with a known state value",
+        "codeCh and errCh channels are created"
+      ],
+      "input": "Send GET /callback?state=<correct_state>&code=authcode123 to the callback server",
+      "expected": "HTTP response status is 200; body is exactly '<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>'; codeCh receives 'authcode123'",
+      "assertion_pseudocode": "state = 'validstate64chars'; codeCh = make(chan string, 1); errCh = make(chan error, 1); server, addr = startCallbackServer(state, codeCh, errCh); resp = http_get('http://' + addr + '/callback?state=' + state + '&code=authcode123'); assert resp.StatusCode == 200; assert resp.Body == '<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>'; code = <-codeCh; assert code == 'authcode123'"
+    },
+    {
+      "id": "TS-15-14",
+      "requirement_id": "15-REQ-2.10",
+      "kind": "integration",
+      "description": "Verify that a state mismatch on the callback causes HTTP 400 with the error HTML page, sends an error on errCh, and results in exit code 2 with CSRF error JSON.",
+      "preconditions": [
+        "Callback server is running with known state='correctstate'",
+        "codeCh and errCh channels are created"
+      ],
+      "input": "Send GET /callback?state=wrongstate&code=authcode123 to the callback server",
+      "expected": "HTTP response status is 400; body is exactly the state-mismatch HTML page; errCh receives non-nil error; login command exits with code 2 and OAuth state mismatch error JSON to stdout",
+      "assertion_pseudocode": "state = 'correctstate'; codeCh = make(chan string, 1); errCh = make(chan error, 1); server, addr = startCallbackServer(state, codeCh, errCh); resp = http_get('http://' + addr + '/callback?state=wrongstate&code=auth123'); assert resp.StatusCode == 400; assert resp.Body == '<html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>'; err = <-errCh; assert err != nil; // full command: stdout, exitCode = run_login_cmd_with_bad_state(); assert exitCode == 2; assert parse_json(stdout)['error']['message'] contains 'OAuth state mismatch'"
+    },
+    {
+      "id": "TS-15-15",
+      "requirement_id": "15-REQ-2.11",
+      "kind": "integration",
+      "description": "Verify that upon receiving the code from codeCh, the login command calls ExchangeOAuthCode with the correct provider, code, redirect_uri, and expires.",
+      "preconditions": [
+        "Mock server handles GET /providers and POST /auth/callback",
+        "Callback server is configured to send a valid code",
+        "endpoint_url points to mock server"
+      ],
+      "input": "Complete login flow up to code exchange with provider='github', expires=30, code='testcode'",
+      "expected": "Mock server receives POST to exchange endpoint with body containing provider='github', code='testcode', redirect_uri matching http://127.0.0.1:<port>/callback, expires=30",
+      "assertion_pseudocode": "capturedBody = nil; server = httptest.NewServer(func(req) { if req.URL.Path == '/auth/callback': capturedBody = parse_json(req.Body); return success_response }); run_login_with_code_injection('testcode', 'github', 30, server.URL); assert capturedBody['provider'] == 'github'; assert capturedBody['code'] == 'testcode'; assert capturedBody['redirect_uri'] matches 'http://127.0.0.1:[0-9]+/callback'; assert capturedBody['expires'] == 30"
+    },
+    {
+      "id": "TS-15-16",
+      "requirement_id": "15-REQ-2.12",
+      "kind": "integration",
+      "description": "Verify that after a successful code exchange the login command saves endpoint_url, user_id, and api_key to config, prints user JSON to stdout, and prints the success message to stderr.",
+      "preconditions": [
+        "Mock server returns a valid ExchangeOAuthCode response with user.id='user-123', user.username='alice', api_key.key='ak_keyid_secret'",
+        "Config save function (CLI Core atomic write) is available",
+        "endpoint_url is configured"
+      ],
+      "input": "Complete full login flow ending in successful code exchange",
+      "expected": "Config file contains endpoint_url, user_id='user-123', api_key='ak_keyid_secret'; stdout contains user JSON with username='alice'; stderr contains 'Logged in as alice'",
+      "assertion_pseudocode": "stdout, stderr, exitCode = run_full_login_flow(mockServer); assert exitCode == 0; config = load_config(); assert config['endpoint_url'] != ''; assert config['user_id'] == 'user-123'; assert config['api_key'] == 'ak_keyid_secret'; user = parse_json(stdout); assert user['username'] == 'alice'; assert stderr contains 'Logged in as alice'"
+    },
+    {
+      "id": "TS-15-17",
+      "requirement_id": "15-REQ-2.13",
+      "kind": "integration",
+      "description": "Verify that the callback server is shut down using a fresh 5-second background context after login completes.",
+      "preconditions": [
+        "Full login flow is completed successfully",
+        "http.Server.Shutdown is instrumented to capture the context used"
+      ],
+      "input": "Complete full login flow",
+      "expected": "Server.Shutdown is called with a context derived from context.Background() (not the login context); the context has a 5-second deadline",
+      "assertion_pseudocode": "// Instrument or wrap http.Server.Shutdown to capture its context argument; shutdownCtx = captured_shutdown_ctx; assert shutdownCtx != loginCtx; deadline, ok = shutdownCtx.Deadline(); assert ok == true; assert deadline is approximately 5 seconds from now"
+    },
+    {
+      "id": "TS-15-18",
+      "requirement_id": "15-REQ-2.14",
+      "kind": "integration",
+      "description": "Verify that when the login context times out before a callback arrives, the command exits with code 2 and the timeout error JSON.",
+      "preconditions": [
+        "runLogin is called directly with a 100ms timeout",
+        "No callback is sent to the server"
+      ],
+      "input": "Call runLogin with timeout=100ms and a mock server that never sends a callback",
+      "expected": "runLogin returns an error containing 'login timed out waiting for browser callback'; exit code is 2",
+      "assertion_pseudocode": "opts = loginOpts{provider: 'github', expires: 90, endpointURL: mockServerURL}; err = runLogin(context.Background(), 100*ms, opts); assert err != nil; assert err.Error() contains 'login timed out waiting for browser callback'; stdout, exitCode = run_login_cmd_with_timeout(100ms); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] == 'login timed out waiting for browser callback'"
+    },
+    {
+      "id": "TS-15-19",
+      "requirement_id": "15-REQ-2.15",
+      "kind": "unit",
+      "description": "Verify that the login command exits with code 2 and the missing endpoint URL error JSON when endpoint_url is absent.",
+      "preconditions": [
+        "No endpoint_url in config file, environment variables, or flags",
+        "No api_key configured"
+      ],
+      "input": "Run akc login without providing --endpoint-url, ENDPOINT_URL env var, or config file entry",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL\"}}; exit code is 2; no API calls made",
+      "assertion_pseudocode": "clearEnv('ENDPOINT_URL'); clearConfig(); stdout, exitCode = run_cmd('akc login'); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert parsed['error']['message'] == 'endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL'"
+    },
+    {
+      "id": "TS-15-20",
+      "requirement_id": "15-REQ-2.16",
+      "kind": "unit",
+      "description": "Verify that the login command exits with code 2 and the expires validation error JSON when --expires is an invalid value.",
+      "preconditions": [
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc login --expires 45 --endpoint-url https://api.example.com",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}; exit code is 2; no API calls made",
+      "assertion_pseudocode": "stdout, exitCode = run_cmd('akc login --expires 45 --endpoint-url https://api.example.com'); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert parsed['error']['message'] == '--expires must be 0, 30, 60, or 90'"
+    },
+    {
+      "id": "TS-15-21",
+      "requirement_id": "15-REQ-3.1",
+      "kind": "integration",
+      "description": "Verify that user show constructs an authenticated client, calls GetUser, and prints response.Data as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured in config file",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /user and returns a User JSON object"
+      ],
+      "input": "Run akc user show against mock server",
+      "expected": "stdout contains indented User JSON with two-space indentation; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_user_json); setConfig(apiKey='ak_keyid_secret', endpointURL=server.URL); stdout, exitCode = run_cmd('akc user show'); assert exitCode == 0; user = parse_json(stdout); assert user != nil; assert stdout contains '  ' (two-space indent pattern)"
+    },
+    {
+      "id": "TS-15-22",
+      "requirement_id": "15-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify that user show exits with code 2 and the missing API key error JSON when api_key is absent, without making any network request.",
+      "preconditions": [
+        "No api_key in config, environment, or flags",
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc user show with no api_key configured",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}; exit code is 2; mock server receives no requests",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); clearApiKey(); stdout, exitCode = run_cmd('akc user show'); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert parsed['error']['message'] contains 'no API key configured'; assert server.requestCount == 0"
+    },
+    {
+      "id": "TS-15-23",
+      "requirement_id": "15-REQ-4.1",
+      "kind": "integration",
+      "description": "Verify that user update calls UpdateUser with the provided --full-name value and prints the updated User as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles PATCH /user and returns updated User JSON"
+      ],
+      "input": "Run akc user update --full-name 'Alice Smith' against mock server",
+      "expected": "Mock server receives PATCH request with body containing full_name='Alice Smith'; stdout contains updated User JSON; exit code is 0",
+      "assertion_pseudocode": "capturedBody = nil; server = httptest.NewServer(func(req) { capturedBody = parse_json(req.Body); return updated_user }); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc user update --full-name \"Alice Smith\"'); assert exitCode == 0; assert capturedBody['full_name'] == 'Alice Smith'; user = parse_json(stdout); assert user != nil"
+    },
+    {
+      "id": "TS-15-24",
+      "requirement_id": "15-REQ-4.2",
+      "kind": "integration",
+      "description": "Verify that a 422 server error from user update surfaces as exit code 1 with the server's error envelope JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles PATCH /user and returns HTTP 422 with error envelope"
+      ],
+      "input": "Run akc user update --full-name '' against mock server that returns 422",
+      "expected": "stdout contains the server's error envelope JSON; exit code is 1",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_422_error_envelope); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc user update --full-name \"\"'); assert exitCode == 1; parsed = parse_json(stdout); assert parsed['error'] != nil"
+    },
+    {
+      "id": "TS-15-25",
+      "requirement_id": "15-REQ-5.1",
+      "kind": "integration",
+      "description": "Verify that keys list calls ListKeys and prints the []*APIKeyMeta array as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /keys and returns a JSON array of APIKeyMeta objects"
+      ],
+      "input": "Run akc keys list against mock server",
+      "expected": "stdout contains a JSON array of APIKeyMeta objects with two-space indentation; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_key_meta_array); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc keys list'); assert exitCode == 0; arr = parse_json(stdout); assert type(arr) == array"
+    },
+    {
+      "id": "TS-15-26",
+      "requirement_id": "15-REQ-6.1",
+      "kind": "integration",
+      "description": "Verify that keys refresh parses key_id, calls RefreshKey, updates config with the new api_key, prints APIKeyFull JSON to stdout, and prints the success message to stderr.",
+      "preconditions": [
+        "api_key='ak_keyid123_secret' is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles the refresh endpoint and returns APIKeyFull with key='ak_newkeyid_newsecret'"
+      ],
+      "input": "Run akc keys refresh against mock server",
+      "expected": "Mock server receives refresh request with key_id='keyid123'; config api_key is updated to 'ak_newkeyid_newsecret'; stdout contains APIKeyFull JSON; stderr contains 'API key refreshed'; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_api_key_full); setConfig(apiKey='ak_keyid123_secret', endpointURL=server.URL); stdout, stderr, exitCode = run_cmd('akc keys refresh'); assert exitCode == 0; config = load_config(); assert config['api_key'] == 'ak_newkeyid_newsecret'; keyFull = parse_json(stdout); assert keyFull != nil; assert stderr contains 'API key refreshed'"
+    },
+    {
+      "id": "TS-15-27",
+      "requirement_id": "15-REQ-6.2",
+      "kind": "unit",
+      "description": "Verify that keys refresh exits with code 2 and the invalid key format error JSON when the api_key has fewer than 3 underscore-delimited segments.",
+      "preconditions": [
+        "api_key='badkey' (no underscores) is configured",
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc keys refresh with api_key='badkey'",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}; exit code is 2; no network request made",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); setConfig(apiKey='badkey', endpointURL=server.URL); stdout, exitCode = run_cmd('akc keys refresh'); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] == 'invalid API key format'; assert server.requestCount == 0"
+    },
+    {
+      "id": "TS-15-28",
+      "requirement_id": "15-REQ-7.1",
+      "kind": "integration",
+      "description": "Verify that keys revoke parses key_id, calls RevokeKey, clears api_key and user_id in config, prints RevokeKeyResponse JSON to stdout, and prints the revocation message to stderr.",
+      "preconditions": [
+        "api_key='ak_keyid123_secret' and user_id='user-123' are configured",
+        "endpoint_url is configured",
+        "httptest.Server handles the revoke endpoint and returns RevokeKeyResponse"
+      ],
+      "input": "Run akc keys revoke against mock server",
+      "expected": "Config api_key and user_id are set to empty strings; stdout contains RevokeKeyResponse JSON; stderr contains \"API key revoked. Run 'akc login' to obtain a new key.\"; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_revoke_response); setConfig(apiKey='ak_keyid123_secret', userID='user-123', endpointURL=server.URL); stdout, stderr, exitCode = run_cmd('akc keys revoke'); assert exitCode == 0; config = load_config(); assert config['api_key'] == ''; assert config['user_id'] == ''; revokeResp = parse_json(stdout); assert revokeResp != nil; assert stderr contains \"API key revoked. Run 'akc login' to obtain a new key.\""
+    },
+    {
+      "id": "TS-15-29",
+      "requirement_id": "15-REQ-7.2",
+      "kind": "unit",
+      "description": "Verify that keys revoke exits with code 2 and the invalid key format error JSON when the api_key has fewer than 3 underscore-delimited segments.",
+      "preconditions": [
+        "api_key='onlyone' (no underscores) is configured",
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc keys revoke with api_key='onlyone'",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"invalid API key format\"}}; exit code is 2; no network request made",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); setConfig(apiKey='onlyone', endpointURL=server.URL); stdout, exitCode = run_cmd('akc keys revoke'); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] == 'invalid API key format'; assert server.requestCount == 0"
+    },
+    {
+      "id": "TS-15-30",
+      "requirement_id": "15-REQ-8.1",
+      "kind": "integration",
+      "description": "Verify that tokens list calls ListTokens and prints the []*PAT array as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /tokens and returns a JSON array of PAT objects"
+      ],
+      "input": "Run akc tokens list against mock server",
+      "expected": "stdout contains a JSON array of PAT objects; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_pat_array); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc tokens list'); assert exitCode == 0; arr = parse_json(stdout); assert type(arr) == array"
+    },
+    {
+      "id": "TS-15-31",
+      "requirement_id": "15-REQ-9.1",
+      "kind": "integration",
+      "description": "Verify that tokens create parses permissions, validates expires, calls CreateToken, prints PATFull JSON to stdout, and prints the warning to stderr.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles POST /tokens and returns PATFull JSON"
+      ],
+      "input": "Run akc tokens create --name ci-bot --permissions 'users:read,orgs:read' --expires 30",
+      "expected": "Mock server receives POST with name='ci-bot', permissions=['users:read','orgs:read'], expires=30; stdout contains PATFull JSON; stderr contains the save-token warning; exit code is 0",
+      "assertion_pseudocode": "capturedBody = nil; server = httptest.NewServer(func(req) { capturedBody = parse_json(req.Body); return pat_full }); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, stderr, exitCode = run_cmd(\"akc tokens create --name ci-bot --permissions 'users:read,orgs:read' --expires 30\"); assert exitCode == 0; assert capturedBody['name'] == 'ci-bot'; assert capturedBody['permissions'] == ['users:read', 'orgs:read']; assert capturedBody['expires'] == 30; assert parse_json(stdout) != nil; assert stderr contains 'Save the token value'"
+    },
+    {
+      "id": "TS-15-32",
+      "requirement_id": "15-REQ-9.2",
+      "kind": "unit",
+      "description": "Verify that tokens create exits with code 2 and the empty permissions error JSON when --permissions resolves to an empty slice.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc tokens create --name ci-bot --permissions '' --expires 90",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"--permissions must not be empty\"}}; exit code is 2; no network request made",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd(\"akc tokens create --name ci-bot --permissions '' --expires 90\"); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] == '--permissions must not be empty'; assert server.requestCount == 0"
+    },
+    {
+      "id": "TS-15-33",
+      "requirement_id": "15-REQ-9.3",
+      "kind": "unit",
+      "description": "Verify that tokens create exits with code 2 and the expires validation error JSON when --expires is an invalid value.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured"
+      ],
+      "input": "Run akc tokens create --name ci-bot --permissions 'users:read' --expires 15",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"--expires must be 0, 30, 60, or 90\"}}; exit code is 2; no network request made",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd(\"akc tokens create --name ci-bot --permissions 'users:read' --expires 15\"); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] == '--expires must be 0, 30, 60, or 90'; assert server.requestCount == 0"
+    },
+    {
+      "id": "TS-15-34",
+      "requirement_id": "15-REQ-10.1",
+      "kind": "integration",
+      "description": "Verify that tokens show calls GetToken with the positional token_id argument and prints response.Data as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /tokens/{id} and returns Response[PAT] JSON"
+      ],
+      "input": "Run akc tokens show tok-abc123 against mock server",
+      "expected": "Mock server receives GET request with tok-abc123 in the path; stdout contains PAT JSON; exit code is 0",
+      "assertion_pseudocode": "capturedPath = ''; server = httptest.NewServer(func(req) { capturedPath = req.URL.Path; return response_pat }); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc tokens show tok-abc123'); assert exitCode == 0; assert 'tok-abc123' in capturedPath; pat = parse_json(stdout); assert pat != nil"
+    },
+    {
+      "id": "TS-15-35",
+      "requirement_id": "15-REQ-11.1",
+      "kind": "integration",
+      "description": "Verify that tokens revoke calls RevokeToken with the positional token_id, prints {} to stdout on success (HTTP 204), and prints the revocation message to stderr.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles DELETE /tokens/{id} and returns HTTP 204 (no body)"
+      ],
+      "input": "Run akc tokens revoke tok-abc123 against mock server",
+      "expected": "stdout contains exactly '{}'; stderr contains 'Token tok-abc123 revoked'; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_204); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, stderr, exitCode = run_cmd('akc tokens revoke tok-abc123'); assert exitCode == 0; assert strip_whitespace(stdout) == '{}'; assert stderr contains 'Token tok-abc123 revoked'"
+    },
+    {
+      "id": "TS-15-36",
+      "requirement_id": "15-REQ-12.1",
+      "kind": "integration",
+      "description": "Verify that orgs list calls ListUserOrgs and prints the []*Organization array as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /orgs and returns a JSON array of Organization objects"
+      ],
+      "input": "Run akc orgs list against mock server",
+      "expected": "stdout contains a JSON array of Organization objects; exit code is 0",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_org_array); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc orgs list'); assert exitCode == 0; arr = parse_json(stdout); assert type(arr) == array"
+    },
+    {
+      "id": "TS-15-37",
+      "requirement_id": "15-REQ-13.1",
+      "kind": "integration",
+      "description": "Verify that orgs show calls GetOrg with the positional id argument and prints response.Data as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /orgs/{id} and returns Response[Organization] JSON"
+      ],
+      "input": "Run akc orgs show org-uuid-abc against mock server",
+      "expected": "Mock server receives GET request with org-uuid-abc in the path; stdout contains Organization JSON; exit code is 0",
+      "assertion_pseudocode": "capturedPath = ''; server = httptest.NewServer(func(req) { capturedPath = req.URL.Path; return response_org }); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc orgs show org-uuid-abc'); assert exitCode == 0; assert 'org-uuid-abc' in capturedPath; org = parse_json(stdout); assert org != nil"
+    },
+    {
+      "id": "TS-15-38",
+      "requirement_id": "15-REQ-14.1",
+      "kind": "integration",
+      "description": "Verify that orgs members calls ListOrgMembers with the positional id argument and prints the []*User array as indented JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /orgs/{id}/members and returns a JSON array of User objects"
+      ],
+      "input": "Run akc orgs members org-uuid-abc against mock server",
+      "expected": "Mock server receives GET request with org-uuid-abc in the path; stdout contains User array JSON; exit code is 0",
+      "assertion_pseudocode": "capturedPath = ''; server = httptest.NewServer(func(req) { capturedPath = req.URL.Path; return user_array }); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc orgs members org-uuid-abc'); assert exitCode == 0; assert 'org-uuid-abc' in capturedPath; arr = parse_json(stdout); assert type(arr) == array"
+    },
+    {
+      "id": "TS-15-39",
+      "requirement_id": "15-REQ-15.1",
+      "kind": "unit",
+      "description": "Verify that parseKeyID correctly extracts the penultimate segment from various valid API key formats.",
+      "preconditions": [
+        "parseKeyID is implemented in internal/cli/helpers.go"
+      ],
+      "input": "Call parseKeyID with 'ak_abc12345_secret', 'myapp_abc12345_secret', 'my_app_abc12345_secret'",
+      "expected": "All three calls return 'abc12345' as key_id and nil error",
+      "assertion_pseudocode": "keyID, err = parseKeyID('ak_abc12345_secret'); assert err == nil; assert keyID == 'abc12345'; keyID, err = parseKeyID('myapp_abc12345_secret'); assert err == nil; assert keyID == 'abc12345'; keyID, err = parseKeyID('my_app_abc12345_secret'); assert err == nil; assert keyID == 'abc12345'"
+    },
+    {
+      "id": "TS-15-40",
+      "requirement_id": "15-REQ-15.2",
+      "kind": "unit",
+      "description": "Verify that parseKeyID returns an error when the api_key string has fewer than 3 underscore-delimited segments.",
+      "preconditions": [
+        "parseKeyID is implemented in internal/cli/helpers.go"
+      ],
+      "input": "Call parseKeyID with 'badkey', 'onlytwo_segments'",
+      "expected": "Both calls return an empty string and a non-nil error",
+      "assertion_pseudocode": "keyID, err = parseKeyID('badkey'); assert err != nil; assert keyID == ''; keyID, err = parseKeyID('onlytwo_segments'); assert err != nil; assert keyID == ''"
+    },
+    {
+      "id": "TS-15-41",
+      "requirement_id": "15-REQ-16.1",
+      "kind": "unit",
+      "description": "Verify that validateExpires returns nil for 0, 30, 60, 90 and a non-nil error for all other integers.",
+      "preconditions": [
+        "validateExpires is implemented in internal/cli/helpers.go"
+      ],
+      "input": "Call validateExpires with 0, 30, 60, 90, 1, 15, 45, 91, -1, 100",
+      "expected": "Returns nil for {0, 30, 60, 90}; returns non-nil error for all others",
+      "assertion_pseudocode": "for v in [0, 30, 60, 90]: assert validateExpires(v) == nil; for v in [1, 15, 45, 91, -1, 100]: err = validateExpires(v); assert err != nil; assert err.Error() contains '--expires must be 0, 30, 60, or 90'"
+    },
+    {
+      "id": "TS-15-42",
+      "requirement_id": "15-REQ-17.1",
+      "kind": "unit",
+      "description": "Verify that parsePermissions correctly splits comma-separated input, trims whitespace, and returns a non-empty slice.",
+      "preconditions": [
+        "parsePermissions is implemented in internal/cli/helpers.go"
+      ],
+      "input": "Call parsePermissions with 'users:read,orgs:read', 'users:read, orgs:read', 'users:read'",
+      "expected": "Returns [\"users:read\",\"orgs:read\"] for the first two inputs; returns [\"users:read\"] for the single-entry input",
+      "assertion_pseudocode": "perms, err = parsePermissions('users:read,orgs:read'); assert err == nil; assert perms == ['users:read', 'orgs:read']; perms, err = parsePermissions('users:read, orgs:read'); assert err == nil; assert perms == ['users:read', 'orgs:read']; perms, err = parsePermissions('users:read'); assert err == nil; assert perms == ['users:read']"
+    },
+    {
+      "id": "TS-15-43",
+      "requirement_id": "15-REQ-17.2",
+      "kind": "unit",
+      "description": "Verify that parsePermissions returns an error with the expected message when input is empty or contains only whitespace and commas.",
+      "preconditions": [
+        "parsePermissions is implemented in internal/cli/helpers.go"
+      ],
+      "input": "Call parsePermissions with '' and '  , '",
+      "expected": "Both return nil slice and non-nil error with message '--permissions must not be empty'",
+      "assertion_pseudocode": "perms, err = parsePermissions(''); assert perms == nil; assert err != nil; assert err.Error() == '--permissions must not be empty'; perms, err = parsePermissions('  , '); assert perms == nil; assert err != nil; assert err.Error() == '--permissions must not be empty'"
+    },
+    {
+      "id": "TS-15-44",
+      "requirement_id": "15-REQ-18.1",
+      "kind": "unit",
+      "description": "Verify that openBrowser executes 'open' on darwin and 'xdg-open' on linux for the given URL.",
+      "preconditions": [
+        "openBrowser is implemented in internal/cli/helpers.go",
+        "os/exec is used; test may stub exec.Command to capture invocation"
+      ],
+      "input": "Call openBrowser with url='https://auth.example.com' on each platform (mocked GOOS)",
+      "expected": "On darwin: exec.Command called with 'open', 'https://auth.example.com'; on linux: exec.Command called with 'xdg-open', 'https://auth.example.com'; returns non-nil error if command fails",
+      "assertion_pseudocode": "// Stub exec.Command to capture args; capturedCmd = nil; execCmd = func(name, args...) { capturedCmd = (name, args) }; openBrowserWithExec(execCmd, 'darwin', 'https://auth.example.com'); assert capturedCmd == ('open', 'https://auth.example.com'); openBrowserWithExec(execCmd, 'linux', 'https://auth.example.com'); assert capturedCmd == ('xdg-open', 'https://auth.example.com')"
+    },
+    {
+      "id": "TS-15-45",
+      "requirement_id": "15-REQ-19.1",
+      "kind": "integration",
+      "description": "Verify that all authenticated commands exit with code 2 and the missing API key error without making any network request when api_key is absent.",
+      "preconditions": [
+        "No api_key in config, environment, or flags",
+        "endpoint_url is configured",
+        "httptest.Server is running and recording requests"
+      ],
+      "input": "Run each authenticated command (user show, keys list, keys refresh, keys revoke, tokens list, tokens create, tokens show, tokens revoke, orgs list, orgs show, orgs members) without api_key",
+      "expected": "Each command exits with code 2; stdout contains {\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}; mock server receives 0 requests",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_that_records_requests); clearApiKey(); for cmd in ['akc user show', 'akc keys list', 'akc tokens list', 'akc orgs list', ...]: stdout, exitCode = run_cmd(cmd); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['message'] contains 'no API key configured'; assert server.requestCount == 0; server.requestCount = 0"
+    },
+    {
+      "id": "TS-15-46",
+      "requirement_id": "15-REQ-20.1",
+      "kind": "unit",
+      "description": "Verify that all commands format successful output using json.MarshalIndent with two-space indentation and no HTML escaping, writing to stdout, and write human-readable messages to stderr.",
+      "preconditions": [
+        "Mock server returns a user object containing HTML-sensitive characters like '<', '>', '&'",
+        "api_key and endpoint_url are configured"
+      ],
+      "input": "Run akc user show against mock server returning user with display_name='<Admin & Owner>'",
+      "expected": "stdout contains the display_name unescaped as '<Admin & Owner>' (not '\\u003cAdmin \\u0026 Owner\\u003e'); output uses two-space indentation",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_user_with_html_chars); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc user show'); assert exitCode == 0; assert '<Admin & Owner>' in stdout; assert '\\u003c' not in stdout; lines = stdout.split('\\n'); assert any(line.startswith('  ') for line in lines)"
+    },
+    {
+      "id": "TS-15-47",
+      "requirement_id": "15-REQ-20.2",
+      "kind": "integration",
+      "description": "Verify that a 401 server error from any command surfaces as exit code 1 with the server's error envelope JSON to stdout.",
+      "preconditions": [
+        "api_key is configured",
+        "endpoint_url is configured",
+        "httptest.Server handles GET /user and returns HTTP 401 with error envelope JSON"
+      ],
+      "input": "Run akc user show against mock server returning 401",
+      "expected": "stdout contains server's error envelope JSON; exit code is 1",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_401); setConfig(apiKey='ak_k_s', endpointURL=server.URL); stdout, exitCode = run_cmd('akc user show'); assert exitCode == 1; parsed = parse_json(stdout); assert parsed['error'] != nil"
+    },
+    {
+      "id": "TS-15-48",
+      "requirement_id": "15-REQ-21.1",
+      "kind": "integration",
+      "description": "Verify that config-mutating commands (login, keys refresh, keys revoke) use the CLI Core atomic write and preserve unchanged config fields.",
+      "preconditions": [
+        "Config file contains endpoint_url, user_id, api_key, and an extra field 'custom_field'='preserved'",
+        "Mock server handles keys refresh endpoint"
+      ],
+      "input": "Run akc keys refresh to trigger a config mutation",
+      "expected": "Config file is written atomically (temp file + rename); api_key is updated; custom_field='preserved' still present in config",
+      "assertion_pseudocode": "setConfig(apiKey='ak_k_s', userID='u1', endpointURL='https://ep', customField='preserved'); server = httptest.NewServer(handler_returns_new_key); run_cmd('akc keys refresh'); config = load_config(); assert config['api_key'] != 'ak_k_s'; assert config['custom_field'] == 'preserved'; assert config['endpoint_url'] == 'https://ep'"
+    },
+    {
+      "id": "TS-15-49",
+      "requirement_id": "15-REQ-22.1",
+      "kind": "unit",
+      "description": "Verify that login.go defines loginTimeoutSeconds=120 as a package-level constant and that RunE calls runLogin with time.Duration(loginTimeoutSeconds)*time.Second.",
+      "preconditions": [
+        "internal/cli/login.go is implemented"
+      ],
+      "input": "Inspect the loginTimeoutSeconds constant and the RunE function of NewLoginCmd()",
+      "expected": "loginTimeoutSeconds == 120; runLogin is called with 120s timeout in RunE; runLogin accepts a timeout time.Duration parameter",
+      "assertion_pseudocode": "assert loginTimeoutSeconds == 120; // Call runLogin directly with short timeout; err = runLogin(context.Background(), 50*ms, minimalOpts); assert err.Error() contains 'timed out'; // Verify constant unchanged after call; assert loginTimeoutSeconds == 120"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-15-P1",
+      "property_id": "15-PROP-1",
+      "validates": [
+        "15-REQ-2.4"
+      ],
+      "description": "For any login invocation, the generated state parameter is exactly 64 lowercase hex characters derived from 32 bytes of crypto/rand output.",
+      "for_any_strategy": "Generate N=100 state parameters by calling the state generation function",
+      "invariant_check": "Each generated state has len == 64; matches regex ^[0-9a-f]{64}$; no two consecutive calls return the same value"
+    },
+    {
+      "id": "TS-15-P2",
+      "property_id": "15-PROP-2",
+      "validates": [
+        "15-REQ-2.6"
+      ],
+      "description": "For any OAuth authorization URL constructed by the login command, all existing query parameters from authorize_url are preserved and only redirect_uri, state, and response_type=code are added.",
+      "for_any_strategy": "Generate random authorize_url strings with arbitrary sets of existing query parameters (including client_id, scope, and custom params)",
+      "invariant_check": "For each generated authorize_url: all original params appear unchanged in final URL; redirect_uri, state, response_type=code are present; client_id appears exactly once; no parameters are removed or overwritten"
+    },
+    {
+      "id": "TS-15-P3",
+      "property_id": "15-PROP-3",
+      "validates": [
+        "15-REQ-2.5",
+        "15-REQ-2.E2"
+      ],
+      "description": "For any HTTP request to the callback server at a path other than /callback, the server responds with HTTP 404 and neither codeCh nor errCh receives a value.",
+      "for_any_strategy": "Generate arbitrary URL paths excluding '/callback' (e.g., /favicon.ico, /robots.txt, /, /other)",
+      "invariant_check": "For each path: HTTP response is 404; codeCh is empty after 20ms; errCh is empty after 20ms; server continues to accept further requests"
+    },
+    {
+      "id": "TS-15-P4",
+      "property_id": "15-PROP-4",
+      "validates": [
+        "15-REQ-2.E1"
+      ],
+      "description": "For any login flow where code exchange succeeds but config write fails, stdout contains only the error envelope and no credential data.",
+      "for_any_strategy": "Generate arbitrary valid ExchangeOAuthCode responses (varying user.id, username, api_key.key values) with config write always failing",
+      "invariant_check": "stdout does not contain any of: the generated user.id, username, api_key.key values; stdout parses as a JSON error envelope with code 2"
+    },
+    {
+      "id": "TS-15-P5",
+      "property_id": "15-PROP-5",
+      "validates": [
+        "15-REQ-15.1"
+      ],
+      "description": "parseKeyID always returns the penultimate underscore-delimited segment regardless of the number of underscores in the prefix.",
+      "for_any_strategy": "Generate api_key strings of the form <prefix>_<keyid>_<secret> where prefix may contain 0 to 5 underscores, keyid is alphanumeric, secret is alphanumeric",
+      "invariant_check": "parseKeyID returns the keyid segment (penultimate) and nil error for all generated strings with >= 3 segments; error is returned for strings with < 3 segments"
+    },
+    {
+      "id": "TS-15-P6",
+      "property_id": "15-PROP-6",
+      "validates": [
+        "15-REQ-19.1"
+      ],
+      "description": "For any invocation of any authenticated command without a configured api_key, no network request is issued and the command exits with code 2 before any SDK method is called.",
+      "for_any_strategy": "Enumerate all authenticated commands (user show, user update, keys list, keys refresh, keys revoke, tokens list, tokens create, tokens show, tokens revoke, orgs list, orgs show, orgs members) with no api_key configured",
+      "invariant_check": "For each command: mock server request count remains 0; exit code is 2; stdout contains error envelope with 'no API key configured'"
+    },
+    {
+      "id": "TS-15-P7",
+      "property_id": "15-PROP-7",
+      "validates": [
+        "15-REQ-16.1",
+        "15-REQ-2.16",
+        "15-REQ-9.3"
+      ],
+      "description": "validateExpires accepts exactly {0, 30, 60, 90} and rejects all other integers.",
+      "for_any_strategy": "Test all integers in range [-10, 100] and a selection of large values (e.g., 1000, -1000)",
+      "invariant_check": "validateExpires(v) == nil if and only if v in {0, 30, 60, 90}; for all other tested values, validateExpires returns non-nil error containing '--expires must be 0, 30, 60, or 90'"
+    },
+    {
+      "id": "TS-15-P8",
+      "property_id": "15-PROP-8",
+      "validates": [
+        "15-REQ-2.13",
+        "15-REQ-2.E5"
+      ],
+      "description": "The callback server shutdown always uses a fresh context derived from context.Background() with a 5-second deadline, regardless of the login context state.",
+      "for_any_strategy": "Trigger login flow termination via all three paths: success, timeout, and state mismatch",
+      "invariant_check": "In each termination path: the context passed to http.Server.Shutdown is not the login context; the context has a deadline between now and now+5s; the context is not already Done"
+    },
+    {
+      "id": "TS-15-P9",
+      "property_id": "15-PROP-9",
+      "validates": [
+        "15-REQ-11.1"
+      ],
+      "description": "For any successful akc tokens revoke invocation, stdout contains exactly the JSON object {} regardless of SDK response content.",
+      "for_any_strategy": "Run tokens revoke with various token_id values against mock servers returning HTTP 204",
+      "invariant_check": "strip_whitespace(stdout) == '{}'; parse_json(stdout) is a valid empty object; exit code is 0"
+    },
+    {
+      "id": "TS-15-P10",
+      "property_id": "15-PROP-10",
+      "validates": [
+        "15-REQ-22.1"
+      ],
+      "description": "loginTimeoutSeconds remains 120 throughout all invocations of the login command and runLogin.",
+      "for_any_strategy": "Call runLogin multiple times with short timeouts (simulating tests) and inspect loginTimeoutSeconds after each call",
+      "invariant_check": "loginTimeoutSeconds == 120 before, during, and after every runLogin call regardless of outcome (timeout, success, error)"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-15-E1",
+      "requirement_id": "15-REQ-2.E1",
+      "kind": "integration",
+      "description": "Verify that when the config write fails after successful code exchange, the login command exits with code 2 with the config failure error JSON and does NOT print credentials to stdout.",
+      "preconditions": [
+        "Mock server returns a valid ExchangeOAuthCode response",
+        "CLI Core atomic write function is stubbed to return an error",
+        "endpoint_url and provider are configured"
+      ],
+      "input": "Complete full login flow with config save stubbed to fail",
+      "expected": "stdout contains {\"error\":{\"code\":2,\"message\":\"failed to save config: <detail>\"}}; no user JSON or api_key value appears in stdout; exit code is 2",
+      "assertion_pseudocode": "saveConfigFn = func(...) { return error('disk full') }; stdout, exitCode = run_login_with_save_stub(saveConfigFn); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert parsed['error']['message'] contains 'failed to save config'; assert 'api_key' not in stdout; assert 'username' not in stdout"
+    },
+    {
+      "id": "TS-15-E2",
+      "requirement_id": "15-REQ-2.E2",
+      "kind": "integration",
+      "description": "Verify that a request to a non-/callback path (e.g., /favicon.ico) returns HTTP 404 and does not signal codeCh or errCh, leaving the server running.",
+      "preconditions": [
+        "Callback server is running with a known state",
+        "codeCh and errCh channels are created with buffer of 1"
+      ],
+      "input": "Send GET /favicon.ico to the callback server",
+      "expected": "HTTP response status is 404; codeCh is empty; errCh is empty; server continues listening on the port",
+      "assertion_pseudocode": "codeCh = make(chan string, 1); errCh = make(chan error, 1); server, addr = startCallbackServer('validstate', codeCh, errCh); resp = http_get('http://' + addr + '/favicon.ico'); assert resp.StatusCode == 404; sleep(10ms); select { case <-codeCh: fail('unexpected code'); case <-errCh: fail('unexpected error'); default: pass }; // verify server still responds; resp2 = http_get('http://' + addr + '/favicon.ico'); assert resp2.StatusCode == 404"
+    },
+    {
+      "id": "TS-15-E3",
+      "requirement_id": "15-REQ-2.E3",
+      "kind": "integration",
+      "description": "Verify that when loginTimeoutSeconds elapses (using short timeout in test) without a valid /callback, runLogin returns a timeout error and the callback server is shut down.",
+      "preconditions": [
+        "runLogin is called directly with a 100ms timeout",
+        "Mock server is configured for GetProviders but no callback is sent"
+      ],
+      "input": "Call runLogin with timeout=100ms, no callback sent within timeout",
+      "expected": "runLogin returns error with message 'login timed out waiting for browser callback'; callback server is no longer accepting connections after return",
+      "assertion_pseudocode": "opts = loginOpts{provider: 'github', expires: 90, endpointURL: mockServer.URL}; err = runLogin(context.Background(), 100*ms, opts); assert err != nil; assert err.Error() contains 'login timed out waiting for browser callback'; // Verify server is shut down; resp = http_get_with_timeout(callbackAddr, 50ms); assert resp is connection_refused_error"
+    },
+    {
+      "id": "TS-15-E4",
+      "requirement_id": "15-REQ-2.E4",
+      "kind": "unit",
+      "description": "Verify that when openBrowser fails, the fallback URL is printed to stderr and the login flow continues without treating the failure as fatal.",
+      "preconditions": [
+        "openBrowser is replaced with a stub returning an error",
+        "stderr is captured"
+      ],
+      "input": "Run login flow with openBrowser stub returning an error",
+      "expected": "stderr contains 'Open this URL in your browser: <url>'; login flow does not exit early due to browser open failure",
+      "assertion_pseudocode": "stderrBuf = buffer(); openBrowserStub = func(url) { return error('no display') }; // inject stub into login flow; runLoginWithBrowserStub(stderrBuf, openBrowserStub, endpointURL=mockServer.URL); assert stderrBuf contains 'Open this URL in your browser:'; assert stderrBuf contains 'https://'"
+    },
+    {
+      "id": "TS-15-E5",
+      "requirement_id": "15-REQ-2.E5",
+      "kind": "integration",
+      "description": "Verify that the callback server shutdown always uses a fresh context.Background() with a 5-second timeout even when the login context is already cancelled.",
+      "preconditions": [
+        "Login flow reaches shutdown step with the login context already cancelled (e.g., after state mismatch)"
+      ],
+      "input": "Trigger state mismatch to cancel login context, then observe server shutdown context",
+      "expected": "http.Server.Shutdown is called with a context derived from context.Background() (not the cancelled login context); server shuts down successfully within 5 seconds",
+      "assertion_pseudocode": "capturedShutdownCtx = nil; serverShutdownFn = func(ctx) { capturedShutdownCtx = ctx; return nil }; trigger_state_mismatch_and_capture_shutdown(serverShutdownFn); assert capturedShutdownCtx != nil; deadline, ok = capturedShutdownCtx.Deadline(); assert ok == true; remaining = deadline - now(); assert remaining > 0 and remaining <= 5000ms"
+    },
+    {
+      "id": "TS-15-E6",
+      "requirement_id": "15-REQ-6.E1",
+      "kind": "integration",
+      "description": "Verify that when the config write fails after a successful RefreshKey response, keys refresh exits with code 2 with a config failure error envelope and does NOT print the new key.",
+      "preconditions": [
+        "api_key='ak_keyid_secret' is configured",
+        "Mock server returns APIKeyFull successfully",
+        "CLI Core atomic write is stubbed to fail after keys refresh"
+      ],
+      "input": "Run akc keys refresh with config save stubbed to fail",
+      "expected": "stdout contains config-failure error envelope; exit code is 2; new key value NOT in stdout",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_api_key_full); setConfig(apiKey='ak_keyid_secret', endpointURL=server.URL); saveConfigStub = func(...) { return error('io error') }; stdout, exitCode = run_keys_refresh_with_save_stub(saveConfigStub); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert 'ak_newkeyid_newsecret' not in stdout"
+    },
+    {
+      "id": "TS-15-E7",
+      "requirement_id": "15-REQ-21.E1",
+      "kind": "integration",
+      "description": "Verify that when the CLI Core atomic write fails during any config-mutating command, the command exits with code 2 and the data that would have been printed on success is NOT printed.",
+      "preconditions": [
+        "api_key is configured for keys revoke scenario",
+        "Mock server returns RevokeKeyResponse successfully",
+        "CLI Core atomic write is stubbed to return an error"
+      ],
+      "input": "Run akc keys revoke with config save stubbed to fail",
+      "expected": "stdout contains config-failure error envelope; exit code is 2; RevokeKeyResponse JSON NOT in stdout",
+      "assertion_pseudocode": "server = httptest.NewServer(handler_returns_revoke_response); setConfig(apiKey='ak_keyid_secret', endpointURL=server.URL); saveConfigStub = func(...) { return error('permission denied') }; stdout, exitCode = run_keys_revoke_with_save_stub(saveConfigStub); assert exitCode == 2; parsed = parse_json(stdout); assert parsed['error']['code'] == 2; assert 'revoked' not in stdout or parsed['error'] != nil"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-15-SMOKE-1",
+      "execution_path_id": "15-PATH-1",
+      "description": "End-to-end smoke test of the full login OAuth flow: providers fetched, browser opened, callback received with valid state, code exchanged, config saved, user JSON printed to stdout.",
+      "trigger": "Run akc login --provider github --expires 90 --endpoint-url <mockServerURL> in a test environment with simulated browser callback",
+      "real_components": [
+        "internal/cli/login.go (runLogin, callback server, openBrowser stub)",
+        "internal/cli/helpers.go (validateExpires, openBrowser)",
+        "CLI Core config save function (spec 13)",
+        "Go SDK client.GetProviders and client.ExchangeOAuthCode (spec 12)"
+      ],
+      "mockable": [
+        "httptest.Server replacing the apikit server (handles GET /providers and POST /auth/callback)",
+        "openBrowser replaced with a no-op stub",
+        "Simulated browser callback via direct HTTP request to callback server with correct state and code"
+      ],
+      "expected_effects": [
+        "GET /providers is called on the mock server",
+        "Callback server starts on 127.0.0.1:0",
+        "Authorization URL is constructed with redirect_uri, state, response_type=code preserving existing params",
+        "POST to exchange endpoint is called with correct provider, code, redirect_uri, expires",
+        "Config file atomically updated with endpoint_url, user_id, api_key",
+        "stdout contains indented user JSON",
+        "stderr contains 'Logged in as <username>'",
+        "Exit code is 0",
+        "Callback server is shut down via fresh 5-second background context"
+      ]
+    },
+    {
+      "id": "TS-15-SMOKE-2",
+      "execution_path_id": "15-PATH-2",
+      "description": "Smoke test for akc user show happy path: authenticated client constructed, GetUser called, user JSON printed to stdout.",
+      "trigger": "Run akc user show with api_key and endpoint_url configured pointing to a mock server",
+      "real_components": [
+        "internal/cli/user.go (NewUserShowCmd)",
+        "CLI Core NewAuthenticatedClient (spec 13)",
+        "Go SDK client.GetUser (spec 12)"
+      ],
+      "mockable": [
+        "httptest.Server handling GET /user returning a User JSON object"
+      ],
+      "expected_effects": [
+        "NewAuthenticatedClient succeeds (api_key present)",
+        "GET /user is called on the mock server with authentication headers",
+        "stdout contains indented User JSON (response.Data)",
+        "Exit code is 0"
+      ]
+    },
+    {
+      "id": "TS-15-SMOKE-3",
+      "execution_path_id": "15-PATH-3",
+      "description": "Smoke test for akc keys refresh: key_id parsed from api_key, RefreshKey called, config updated with new key, APIKeyFull JSON printed to stdout.",
+      "trigger": "Run akc keys refresh with api_key='ak_keyid123_secret' configured, pointing to mock server",
+      "real_components": [
+        "internal/cli/keys.go (NewKeysRefreshCmd)",
+        "internal/cli/helpers.go (parseKeyID)",
+        "CLI Core NewAuthenticatedClient and atomic write (spec 13)",
+        "Go SDK client.RefreshKey (spec 12)"
+      ],
+      "mockable": [
+        "httptest.Server handling the refresh endpoint returning APIKeyFull with key='ak_newkeyid_newsecret'"
+      ],
+      "expected_effects": [
+        "parseKeyID extracts 'keyid123' from 'ak_keyid123_secret'",
+        "RefreshKey is called with keyID='keyid123'",
+        "Config api_key is atomically updated to 'ak_newkeyid_newsecret'",
+        "stdout contains indented APIKeyFull JSON",
+        "stderr contains 'API key refreshed'",
+        "Exit code is 0"
+      ]
+    },
+    {
+      "id": "TS-15-SMOKE-4",
+      "execution_path_id": "15-PATH-4",
+      "description": "Smoke test for login timeout: runLogin called with 100ms timeout and no callback sent, command exits with timeout error.",
+      "trigger": "Call runLogin directly with timeout=100ms, mock server returns providers but no callback is triggered",
+      "real_components": [
+        "internal/cli/login.go (runLogin, callback server)",
+        "internal/cli/helpers.go (validateExpires)",
+        "Go SDK client.GetProviders (spec 12)"
+      ],
+      "mockable": [
+        "httptest.Server handling GET /providers",
+        "openBrowser replaced with no-op stub (no actual browser opened)"
+      ],
+      "expected_effects": [
+        "runLogin returns error containing 'login timed out waiting for browser callback'",
+        "Exit code is 2 when surfaced through command",
+        "stdout contains timeout error envelope JSON",
+        "No credentials saved to config",
+        "Callback server is shut down after timeout"
+      ]
+    },
+    {
+      "id": "TS-15-SMOKE-5",
+      "execution_path_id": "15-PATH-5",
+      "description": "Smoke test for akc tokens create: permissions parsed, expires validated, CreateToken called with correct request body, PATFull JSON printed to stdout.",
+      "trigger": "Run akc tokens create --name ci-bot --permissions 'users:read,orgs:read' --expires 30 with api_key configured",
+      "real_components": [
+        "internal/cli/tokens.go (NewTokensCreateCmd)",
+        "internal/cli/helpers.go (parsePermissions, validateExpires)",
+        "CLI Core NewAuthenticatedClient (spec 13)",
+        "Go SDK client.CreateToken (spec 12)"
+      ],
+      "mockable": [
+        "httptest.Server handling POST /tokens returning PATFull JSON with plaintext token"
+      ],
+      "expected_effects": [
+        "parsePermissions returns ['users:read', 'orgs:read']",
+        "validateExpires(30) returns nil",
+        "CreateToken is called with name='ci-bot', permissions=['users:read','orgs:read'], expires=30",
+        "stdout contains indented PATFull JSON including plaintext token",
+        "stderr contains 'Save the token value'",
+        "Exit code is 0"
+      ]
+    },
+    {
+      "id": "TS-15-SMOKE-6",
+      "execution_path_id": "15-PATH-6",
+      "description": "Smoke test for pre-validation firing before network: running akc orgs list without api_key exits with code 2 and no HTTP request is made.",
+      "trigger": "Run akc orgs list with no api_key in config, env, or flags, with endpoint_url pointing to a mock server",
+      "real_components": [
+        "internal/cli/orgs.go (NewOrgsListCmd)",
+        "CLI Core NewAuthenticatedClient (spec 13)"
+      ],
+      "mockable": [
+        "httptest.Server recording all incoming requests"
+      ],
+      "expected_effects": [
+        "NewAuthenticatedClient returns error immediately (no api_key)",
+        "Mock server receives 0 HTTP requests",
+        "stdout contains {\"error\":{\"code\":2,\"message\":\"no API key configured — run 'akc login' first\"}}",
+        "Exit code is 2"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

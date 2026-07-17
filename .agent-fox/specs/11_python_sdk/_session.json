@@ -1,0 +1,334 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The Python SDK PRD is comprehensive and well-structured. It clearly articulates intent, goals, non-goals, technical stack, package structure, detailed requirements, and concrete acceptance criteria. All four required sections (Intent, Goals, Non-Goals, Background/Source Reference) are present and of high quality. The spec correctly declares a dependency on `openapi_specification` (spec 03). No blocking overlaps with other active specs are identified \u2014 the SDK is a downstream consumer, not a reimplementation of any server-side spec. A few minor refinements could improve the spec but none are blocking.",
+      "gaps": [
+        "Background section is implicit (via 'Source Reference') rather than a dedicated ## Background section \u2014 minor structural deviation from the expected spec format.",
+        "The health probe path handling note ('base URL without the mount point suffix') introduces ambiguity: there is no explicit rule for how the client resolves absolute paths like /healthz vs. mount-point-relative paths. The constructor only takes a single base_url, creating a potential implementation trap.",
+        "No versioning or release strategy is defined (e.g., PyPI publishing, version numbering scheme, changelog policy).",
+        "The 'last_etag' property approach for ETag propagation is noted as 'preferred' but is not thread-safe for concurrent use; this caveat is unacknowledged given the synchronous-only constraint.",
+        "No mention of how the SDK handles pagination if any endpoints return paginated results in the future \u2014 even a non-goal statement would clarify scope.",
+        "Owner field is empty \u2014 no designated owner for this spec."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How should the Client resolve health probe paths (/healthz, /readyz) when the base_url already includes a mount point suffix (e.g., https://api.example.com/api/v1)? Should the constructor accept a separate server_url parameter, or should the client strip the mount point automatically?",
+          "context": "The spec states health probes are 'absolute (outside the mount point)' and the client 'must handle this by using the base URL without the mount point suffix,' but the constructor only accepts a single base_url. This creates an implementation ambiguity that could lead to incorrect URL construction.",
+          "options": [
+            "Add a separate server_url constructor parameter for the base host (used for health probes), keeping base_url for API calls.",
+            "Document that base_url must be the server root (e.g., https://api.example.com) and the mount point is appended internally by the client.",
+            "Have the client attempt to strip a known mount point suffix (e.g., /api/v1) automatically \u2014 document the stripping logic explicitly."
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the Python SDK be published to PyPI (or a private registry), and if so, what is the versioning strategy (e.g., semver tied to the apikit server version, independent semver)?",
+          "context": "The spec covers local development and testing but says nothing about distribution or release lifecycle. This affects pyproject.toml metadata, CI/CD pipeline requirements, and how consumers install the SDK.",
+          "options": [
+            "Internal/monorepo use only \u2014 no PyPI publishing in the first iteration.",
+            "Publish to PyPI under a package name (e.g., apikit-sdk) with independent semver.",
+            "Publish to PyPI with version mirroring the apikit server release."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "The spec references a 'Go SDK' as a parallel artifact ('provides the same capabilities as the Go SDK'). Does a Go SDK spec exist or is it planned? Should the Python SDK spec declare a dependency or alignment requirement with it?",
+          "context": "The Go SDK is referenced as a capability baseline but does not appear in the active spec landscape. Clarifying whether it exists, is planned, or is out of scope prevents confusion during implementation.",
+          "options": [
+            "The Go SDK is an existing artifact not tracked as a spec \u2014 no action needed.",
+            "A Go SDK spec will be created separately; the Python SDK should be loosely aligned but not formally dependent.",
+            "Remove the Go SDK reference and define the Python SDK's scope independently against the OpenAPI spec."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The Python SDK PRD is now comprehensive and spec-ready. All three user answers have been cleanly incorporated: (1) the URL construction ambiguity is fully resolved with a two-parameter constructor (`base_url` + `mount_point`) and explicit routing rules for health probe vs. API endpoints; (2) PyPI publishing is explicitly called out as a Non-Goal; (3) the Go SDK relationship is clarified \u2014 loose alignment, no formal dependency, both derive from OpenAPI. A thread-safety caveat has been added for the `last_etag`/`last_request_id` properties. A dedicated `## Background` section now exists. Acceptance criteria are updated to match the revised constructor. No blocking gaps remain.",
+      "gaps": [
+        "Owner field is still empty \u2014 no designated owner for this spec (minor organizational gap, not a technical blocker).",
+        "No explicit test coverage targets or minimum test count expectations are stated \u2014 acceptable for a first iteration but worth tracking.",
+        "The 'version()' endpoint path resolution (base_url only, no mount point) is now documented but should be validated against the actual server_core spec to confirm /version is indeed outside the mount point."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Who is the designated owner or maintainer of the Python SDK spec and package?",
+          "context": "The owner field is empty. Assigning an owner establishes accountability for keeping the SDK in sync with OpenAPI spec changes and for reviewing PRs against this package.",
+          "options": [],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Is the /version endpoint confirmed to live outside the mount point (i.e., at the server root), consistent with /healthz and /readyz?",
+          "context": "The updated spec routes healthz, readyz, and version all to base_url without the mount point. If /version is actually mounted under /api/v1/version, the URL construction rule and acceptance criterion #3 would need correction.",
+          "options": [
+            "Yes, /version is at the server root alongside /healthz and /readyz",
+            "No, /version is under the mount point (e.g., /api/v1/version)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "The PRD is well-structured and covers the majority of requirements for a Python SDK. It includes clear goals, a defined technical stack, a detailed package structure, typed models, exception hierarchy, endpoint method tables, URL construction rules, ETag support, and acceptance criteria. However, several gaps exist around testing strategy, error-handling edge cases, model serialization details, versioning/compatibility, and a few ambiguities in the method signatures and field definitions that would benefit from clarification before implementation begins.",
+      "gaps": [
+        "No description of how dataclasses are serialized to/from JSON (e.g., snake_case vs camelCase field mapping, datetime parsing format, custom encoder/decoder strategy).",
+        "No minimum test coverage requirement or description of what must be tested (unit vs integration, mocking strategy for httpx).",
+        "The `last_etag` property is described as being set after each successful GET that returns an ETag header, but it is unclear whether it is reset (set to None) when a response has no ETag header.",
+        "No description of how the client handles non-JSON error responses (e.g., a 500 from a proxy that returns HTML).",
+        "The `APIError` class is shown with class-level attributes but no constructor signature \u2014 it is unclear whether it uses `__init__` arguments, `dataclass`, or another pattern.",
+        "No timeout configuration is mentioned for the underlying httpx.Client, which is an important operational concern.",
+        "No versioning strategy for the SDK package itself (SemVer, CalVer, manual bump, etc.) or how it tracks the OpenAPI spec version it was built against.",
+        "The `CreateTokenRequest.expires` default of 90 and `AuthCallbackRequest.expires` default of 90 are stated in the models section but the units (days? seconds?) are not specified.",
+        "The `OrgMember` model entry states 'A User object (members are returned as User objects)' \u2014 it is unclear if `OrgMember` is a type alias or a separate dataclass, which has import/type-checking implications.",
+        "No description of how trailing slashes in `base_url` or `mount_point` are handled (normalization rules)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How should dataclass fields be mapped to/from JSON keys? Specifically, are JSON keys camelCase (e.g., `keyId`, `createdAt`) while Python fields are snake_case (e.g., `key_id`, `created_at`), and if so, what mechanism handles the conversion (e.g., a custom `from_dict` classmethod, a dataclass field with `metadata`, or a third-party library like `dacite`)?",
+          "context": "Without a clear serialization strategy, implementers may make inconsistent choices across models, leading to runtime errors when the API returns camelCase keys that don't match snake_case dataclass fields.",
+          "options": [
+            "Use a custom `from_dict` / `to_dict` classmethod on each dataclass with explicit key mapping",
+            "Use `dacite` or `mashumaro` with a camelCase-to-snake_case key transformer",
+            "JSON keys are already snake_case (no mapping needed)",
+            "Use a different approach (please describe)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "How should the client behave when the server returns a non-JSON error response (e.g., a 502 Bad Gateway returning an HTML body from a proxy)? Should it raise a generic `APIError` with the raw body as the message, raise a different exception type, or do something else?",
+          "context": "The current spec only describes parsing the `{\"error\": {\"code\": N, \"message\": \"...\"}}` envelope. A proxy or load balancer can return non-JSON 5xx responses, and the SDK needs a defined fallback behavior to avoid an unhandled JSON parse exception.",
+          "options": [
+            "Raise APIError with status code and the raw response text as the message",
+            "Raise a new `TransportError` exception type distinct from APIError",
+            "Re-raise the underlying httpx exception",
+            "Let the JSON parse error propagate as-is (no special handling)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "What is the unit for the `expires` field in `CreateTokenRequest` and `AuthCallbackRequest` (the integer with default 90)? Is it days, hours, or seconds?",
+          "context": "The field is named `expires` with a default of 90 in both request models, but without knowing the unit, implementers cannot correctly document or validate the field, and callers will not know what value to pass.",
+          "options": [
+            "Days",
+            "Hours",
+            "Seconds",
+            "It is a Unix timestamp (epoch seconds)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Is `OrgMember` a standalone dataclass, a type alias for `User`, or simply not a separate type at all (i.e., `list_org_members` returns `list[User]` directly)?",
+          "context": "The models section lists `OrgMember` as a response model but says 'A User object (members are returned as User objects)'. The method table for `list_org_members` already shows the return type as `list[User]`. Having a named `OrgMember` type that is just a User creates ambiguity in imports and type checking.",
+          "options": [
+            "OrgMember is a type alias: `OrgMember = User`",
+            "OrgMember is not a separate type; remove it from the models section and use `User` directly everywhere",
+            "OrgMember is a distinct dataclass that happens to share the same fields as User",
+            "OrgMember wraps a User with additional membership metadata (please describe the extra fields)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Should the `Client` constructor accept an optional `timeout` parameter (in seconds) for the underlying `httpx.Client`? If so, what should the default be?",
+          "context": "No timeout is currently specified. A production SDK without a timeout can hang indefinitely on a slow or unresponsive server. Defining a sensible default (e.g., 30 seconds) prevents this while still being overridable.",
+          "options": [
+            "Yes \u2014 add a `timeout` parameter with a default of 30 seconds",
+            "Yes \u2014 add a `timeout` parameter with no default (caller must specify)",
+            "No \u2014 leave timeout configuration to the caller via httpx directly",
+            "Yes \u2014 but a different default (please specify)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "How should the client handle trailing slashes in `base_url` or `mount_point`? For example, if a caller passes `base_url='https://api.example.com/'` and `mount_point='/api/v1/'`, should the client normalize these to avoid double slashes in constructed URLs?",
+          "context": "Without explicit normalization rules, implementers may produce URLs like `https://api.example.com//api/v1//user`, which can cause request failures depending on the server.",
+          "options": [
+            "Strip trailing slashes from `base_url` and `mount_point` on construction",
+            "Raise a ValueError if trailing slashes are detected",
+            "Document it as the caller's responsibility (no normalization)",
+            "Use urllib/httpx URL joining which handles this automatically"
+          ],
+          "required": false
+        },
+        {
+          "id": "q7",
+          "text": "What is the minimum test coverage requirement, and what testing approach should be used? Should tests mock `httpx` at the transport layer (e.g., using `httpx`'s built-in `MockTransport` or `respx`), or is a live test server expected?",
+          "context": "The acceptance criteria only state that `pytest -q` must pass, but without a coverage threshold or mocking strategy, the test suite could be minimal and miss critical edge cases.",
+          "options": [
+            "Use `respx` to mock httpx at the transport layer; no coverage threshold required",
+            "Use `httpx.MockTransport`; target \u226580% coverage",
+            "Use a live local test server; no mocking",
+            "No specific requirement \u2014 tests just need to pass"
+          ],
+          "required": false
+        },
+        {
+          "id": "q8",
+          "text": "What versioning scheme should the SDK package use, and should the `pyproject.toml` record which version of the OpenAPI spec it was built against?",
+          "context": "Without a versioning strategy, it becomes difficult to track compatibility between the SDK and the API. Recording the OpenAPI spec version (e.g., as a package metadata field or a constant in `__init__.py`) would make it easy to detect drift.",
+          "options": [
+            "SemVer (MAJOR.MINOR.PATCH), no OpenAPI spec version tracking needed",
+            "SemVer with an `openapi_version` constant in `__init__.py`",
+            "CalVer (YYYY.MM.DD or similar)",
+            "No formal versioning for now (internal use only)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD that is largely implementation-ready. It clearly defines the package structure, client API, typed models, exception hierarchy, URL construction rules, ETag handling, testing strategy, and acceptance criteria. The document is internally consistent, references its upstream sources appropriately, and explicitly calls out non-goals and edge cases. A few minor gaps exist around model field completeness, test coverage expectations for specific edge cases, and some implicit behavioral assumptions that could be made explicit.",
+      "gaps": [
+        "The response models table does not explicitly define the `status` field type/enum values for `User` and `Organization` (e.g., is `status` a string enum like `active`/`blocked`?), nor the `role` field values for `User` (e.g., `admin`/`user`). This affects both the dataclass definition and test assertions.",
+        "The `APIKeyWithSecret` model includes `key` and `key_id` and `expires_at`, but does not include `created_at` or `revoked_at` \u2014 it is unclear whether this is intentional trimming of fields vs. an omission, and whether this is explicitly derived from the OpenAPI spec.",
+        "The `refresh_key(key_id)` method returns `APIKeyWithSecret`, but there is no documentation of what HTTP verb/status code the refresh endpoint uses beyond `POST`. It is unclear if it returns 200 or 201, which affects parsing logic.",
+        "The PRD states methods accept 'individual fields as keyword arguments for convenience' alongside typed request objects, but does not specify the exact method signatures for methods that take request objects (e.g., does `exchange_oauth_code` also accept an `AuthCallbackRequest` object?). This dual-interface pattern is underspecified.",
+        "No explicit guidance on how `from_dict` should handle unknown/extra fields in the response JSON \u2014 whether they are silently ignored or cause an error.",
+        "The `HealthStatus` model only has a `status` field, but the PRD does not document what values `status` can take (e.g., `ok`, `error`) or whether the field maps to a string or an enum.",
+        "The pyproject.toml contents (beyond Python version and key dependencies) are not specified \u2014 e.g., minimum `httpx` version, ruff/mypy configuration defaults, package name on import (`apikit`), or entry points.",
+        "There is no explicit statement about whether the `Client.__exit__` method should suppress exceptions or re-raise them (standard context manager behavior expectation)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What are the valid string values for the `status` field on `User` and `Organization` models, and the valid values for `role` on `User`? Should these be typed as `str` or as `Literal[...]` / `Enum` types in the dataclasses?",
+          "context": "The response model definitions reference `status` and `role` fields but do not enumerate their valid values. This determines whether the dataclass uses plain `str` or a more restrictive type, and affects model validation and test assertions.",
+          "options": [
+            "Use plain `str` for all (no enum enforcement in the SDK)",
+            "Use `Literal['active', 'blocked']` for status and `Literal['admin', 'user']` for role",
+            "Define Python `Enum` classes (e.g., `UserStatus`, `UserRole`, `OrgStatus`) and use them as field types"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "When a method supports both a typed request object and individual keyword arguments, what is the intended method signature? For example, should `exchange_oauth_code` accept an `AuthCallbackRequest` as a positional argument, or only accept individual fields as keyword arguments?",
+          "context": "The PRD states methods accept 'typed request objects' and also 'individual fields as keyword arguments for convenience' but does not clarify if both interfaces are supported simultaneously, or if one is preferred. This determines the public API surface and mypy signature.",
+          "options": [
+            "Accept only individual keyword arguments (no request object parameter on the method)",
+            "Accept an optional request object as a positional arg, with keyword args as fallback",
+            "Accept only a typed request object (no individual keyword arg interface on the method)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "How should `from_dict` handle unknown/extra fields present in the API response JSON that are not defined on the dataclass?",
+          "context": "APIs sometimes add new fields over time. The handling strategy (silently ignore vs. raise) affects forward-compatibility and strictness of the SDK.",
+          "options": [
+            "Silently ignore unknown fields (forward-compatible)",
+            "Raise a TypeError or ValueError on unknown fields (strict mode)",
+            "No preference \u2014 leave it to the implementation"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Does `refresh_key` return an HTTP 200 or 201 response? And does `APIKeyWithSecret` intentionally omit `created_at` and `revoked_at` fields that are present on `APIKey`?",
+          "context": "The `refresh_key` method returns `APIKeyWithSecret` but the PRD does not state whether the endpoint returns 200 or 201. Additionally, `APIKey` has `created_at` and `revoked_at` fields that `APIKeyWithSecret` does not \u2014 confirming this is intentional (vs. an omission) matters for model completeness.",
+          "options": [
+            "refresh_key returns 200; APIKeyWithSecret intentionally omits created_at and revoked_at (it's a secret-bearing subset)",
+            "refresh_key returns 201; APIKeyWithSecret intentionally omits created_at and revoked_at",
+            "APIKeyWithSecret should also include created_at and revoked_at \u2014 add them to the model"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Should `Client.__exit__` suppress exceptions (return True) or re-raise them (return False / None), and should it always close the underlying httpx.Client even if an exception occurred?",
+          "context": "Context manager exit behavior is a common source of bugs. Clarifying whether exceptions are suppressed and whether cleanup always runs ensures correct implementation and test coverage.",
+          "options": [
+            "Always close httpx.Client on exit, never suppress exceptions (standard behavior)",
+            "Always close httpx.Client on exit, suppress only specific exception types",
+            "Leave to implementation discretion"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should the pyproject.toml pin a minimum version for `httpx` (and optionally `respx`, `mypy`, `ruff`)? What should the package's importable name be \u2014 `apikit` as shown in the structure, or something else like `apikit_sdk`?",
+          "context": "The package structure shows `src/apikit/` suggesting the import name is `apikit`, but this could conflict with any upstream `apikit` server package in the same monorepo. Pinning dependency versions is also relevant for reproducibility.",
+          "options": [
+            "Import name is `apikit`; no minimum versions required beyond Python 3.12",
+            "Import name is `apikit_sdk` to avoid monorepo collisions; no minimum versions required",
+            "Import name is `apikit`; specify minimum versions for httpx (>=0.27), respx (>=0.21), mypy (>=1.10), ruff (>=0.4)"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now implementation-ready. All six previously identified gaps have been resolved: field types for `status`/`role` are specified as plain `str` with known values documented; method signatures are unambiguously keyword-argument-only with no dual-interface confusion; `from_dict` unknown-field handling is explicitly specified as silently-ignored; `refresh_key` return status (200) and `APIKeyWithSecret` field intentionality are confirmed; `__exit__` context manager behavior is fully specified; and `pyproject.toml` minimum dependency versions and import name are defined. The document is internally consistent, well-structured, and covers all behavioral edge cases an implementer needs.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Document that base_url must be the server root (e.g., https://api.example.com) and the mount point is appended internally by the client. The Client constructor accepts base_url (server root) and an optional mount_point parameter (default '/api/v1'). Health probes use base_url directly; API endpoints use base_url + mount_point.",
+        "q2": "Internal/monorepo use only \u2014 no PyPI publishing in the first iteration. This is a non-goal for now.",
+        "q3": "A Go SDK spec will be created separately; the Python SDK should be loosely aligned but not formally dependent. The Python SDK derives from the OpenAPI spec, not the Go SDK."
+      },
+      "timestamp": "2026-07-17T12:24:01.571870+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "No designated owner \u2014 this is a solo project.",
+        "q2": "Yes, /version is at the server root alongside /healthz and /readyz. This is confirmed in the master PRD which lists all three health probe endpoints as 'public, outside mount point'."
+      },
+      "timestamp": "2026-07-17T12:25:28.604110+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "JSON keys are already snake_case (no mapping needed). The apikit API uses snake_case JSON keys throughout (e.g., key_id, created_at, provider_id) as documented in the master PRD. Python dataclass field names match the JSON keys directly. A simple from_dict classmethod handles datetime parsing from RFC 3339 strings and nested object construction.",
+        "q2": "Raise APIError with status code and the raw response text as the message. When the response body is not valid JSON or does not contain the expected error envelope, the client raises APIError with the HTTP status code and the raw response text (or a generic message like 'Unexpected error') as the message field.",
+        "q3": "Days. The expires field is in days, consistent with the master PRD which documents valid values as 0 (no expiry), 30, 60, or 90 days. Expiry is calculated as exactly 24h x N from the creation timestamp.",
+        "q4": "OrgMember is not a separate type; remove it from the models section and use User directly everywhere. The API returns User objects for organization member listings, so list_org_members returns list[User].",
+        "q5": "Yes \u2014 add a timeout parameter with a default of 30 seconds.",
+        "q6": "Strip trailing slashes from base_url and mount_point on construction. The client normalizes both values by stripping trailing slashes to prevent double-slash URL construction.",
+        "q7": "Use respx to mock httpx at the transport layer; no coverage threshold required. Tests mock the HTTP layer using respx and verify correct URL construction, header handling, request/response serialization, and exception raising.",
+        "q8": "No formal versioning for now (internal use only). PyPI publishing is a non-goal for the first iteration."
+      },
+      "timestamp": "2026-07-17T12:29:42.124708+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "Use plain str for all (no enum enforcement in the SDK). The SDK is a thin client that passes through values from the server. Type narrowing is the responsibility of the caller. The valid values are documented in the PRD (status: active/blocked, role: admin/user) but the SDK does not enforce them.",
+        "q2": "Accept only individual keyword arguments (no request object parameter on the method). The request models in the models section are internal implementation details used for serialization, not part of the public method signatures. Method signatures use explicit keyword arguments for clarity and IDE discoverability.",
+        "q3": "Silently ignore unknown fields (forward-compatible). This ensures the SDK remains functional when the server adds new fields in future versions.",
+        "q4": "refresh_key returns 200; APIKeyWithSecret intentionally omits created_at and revoked_at (it's a secret-bearing subset). The APIKeyWithSecret model represents the response from creation and refresh operations where the plaintext secret is returned. It contains only key, key_id, and expires_at, matching the OpenAPI spec auth callback response shape.",
+        "q5": "Always close httpx.Client on exit, never suppress exceptions (standard behavior).",
+        "q6": "Import name is apikit; specify minimum versions for httpx (>=0.27), respx (>=0.21), mypy (>=1.10), ruff (>=0.4). The Python SDK's import name is apikit, matching the package directory. There is no collision concern because the Go server is not a Python package."
+      },
+      "timestamp": "2026-07-17T12:32:11.625415+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

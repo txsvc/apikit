@@ -1,0 +1,1888 @@
+{
+  "$schema": null,
+  "spec_id": "14",
+  "spec_name": "cli_admin_commands",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/cli/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./internal/cli/..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "13",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Uses CLI infrastructure: loadConfig, newClient, handleError, printJSON, warnf, Cobra root command registration",
+      "sentinel": true
+    },
+    {
+      "depends_on_spec": "12",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "All commands delegate to Go SDK admin client methods and use SDK types for request/response shapes",
+      "sentinel": true
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests for admin command tree structure and common execution pattern",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for NewAdminCmd tree structure (REQ-1.1 – REQ-1.6)",
+          "details": [
+            "Create internal/cli/admin_test.go with TestNewAdminCmdStructure verifying Use='admin', RunE==nil, HasSubCommands()==true.",
+            "Test newAdminUsersCmd() returns exactly {list,show,create,update,promote,demote,block,unblock}.",
+            "Test newAdminOrgsCmd() returns {list,create,update,delete,block,unblock,members}; members subtree has {list,add,remove}.",
+            "Test newAdminKeysCmd() and newAdminTokensCmd() each return exactly {list,revoke}.",
+            "Assert that only NewAdminCmd is exported from internal/cli/admin*.go files (unexported others)."
+          ],
+          "test_spec_refs": [
+            "TS-14-1",
+            "TS-14-2",
+            "TS-14-3",
+            "TS-14-4",
+            "TS-14-5",
+            "TS-14-6"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.1",
+            "14-REQ-1.2",
+            "14-REQ-1.3",
+            "14-REQ-1.4",
+            "14-REQ-1.5",
+            "14-REQ-1.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for common execution pattern: success, APIError, network error, loadConfig failure (REQ-2.1 – REQ-2.4)",
+          "details": [
+            "In admin_users_test.go define adminUsersClient interface covering all user SDK methods.",
+            "Write TestCommonSuccessPattern: mock ListUsers returns users, verify printJSON called and exit code 0.",
+            "Write TestCommonAPIError: mock GetUserByID returns *apikit.APIError{Code:403}, verify stdout JSON error envelope and exit code 1.",
+            "Write TestCommonNetworkError: mock ListUsers returns plain error, verify code-0 envelope on stdout and exit code 2.",
+            "Write TestCommonLoadConfigError: loadConfig stub returns error, verify code-0 envelope and exit code 2 without SDK call."
+          ],
+          "test_spec_refs": [
+            "TS-14-7",
+            "TS-14-8",
+            "TS-14-9",
+            "TS-14-10"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.1",
+            "14-REQ-2.2",
+            "14-REQ-2.3",
+            "14-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for context.Background() usage and no direct HTTP calls (REQ-2.5, REQ-2.6)",
+          "details": [
+            "Write TestContextIsBackground: capturing mock records ctx arg; assert ctx.Deadline() returns hasDeadline==false.",
+            "Write TestNoDirectHTTPImports as a static analysis test: parse import graphs of internal/cli/admin*.go files and assert 'net/http' is absent.",
+            "This test can use go/packages or a simple grep-based approach via os/exec in the test file."
+          ],
+          "test_spec_refs": [
+            "TS-14-11",
+            "TS-14-12"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.5",
+            "14-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write tests for argument and flag validation (REQ-3.1 – REQ-3.5)",
+          "details": [
+            "Write TestMissingPositionalArg: invoke 'admin users show' with no args, assert exit code 2 and JSON error envelope {code:0, message:'missing required argument: id'}.",
+            "Write TestMissingRequiredFlag: invoke 'admin users create' without --username, assert exit code 2 and JSON error envelope for --username.",
+            "Write TestExtraArgsRejected: invoke 'admin users show id1 id2', assert Cobra rejects before RunE via ExactArgs(1).",
+            "Write TestNonUUIDPassthrough: invoke 'admin users show not-a-uuid' with mock returning 404, assert mock.CapturedID=='not-a-uuid' and exit code 1.",
+            "Write TestEmptyStringFlagPassthrough: invoke create with --username '' and verify CreateUser is called with Username==''."
+          ],
+          "test_spec_refs": [
+            "TS-14-13",
+            "TS-14-14",
+            "TS-14-15",
+            "TS-14-16",
+            "TS-14-17"
+          ],
+          "requirement_refs": [
+            "14-REQ-3.1",
+            "14-REQ-3.2",
+            "14-REQ-3.3",
+            "14-REQ-3.4",
+            "14-REQ-3.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write tests for admin users list and show commands (REQ-4, REQ-5)",
+          "details": [
+            "Write TestAdminUsersListCommand: default invocation, assert ListUsers called with IncludeBlocked:false, stdout is JSON array, exit 0.",
+            "Write TestAdminUsersListIncludeBlocked: --include-blocked flag, assert IncludeBlocked:true.",
+            "Write TestAdminUsersListAgentInterface: run help --json, assert entry has method=GET, path=/users, auth=admin, flag include-blocked bool default false.",
+            "Write TestAdminUsersShowCommand: mock returns User{ID:'u1'}, assert GetUserByID called with 'u1', stdout is user JSON, exit 0.",
+            "Write TestAdminUsersShowMissingID: no args, assert exit code 2, message 'missing required argument: id'.",
+            "Write TestAdminUsersShowAgentInterface: assert method=GET, path=/users/:id, auth=admin."
+          ],
+          "test_spec_refs": [
+            "TS-14-18",
+            "TS-14-19",
+            "TS-14-20",
+            "TS-14-21",
+            "TS-14-22",
+            "TS-14-E4"
+          ],
+          "requirement_refs": [
+            "14-REQ-4.1",
+            "14-REQ-4.2",
+            "14-REQ-4.3",
+            "14-REQ-5.1",
+            "14-REQ-5.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write tests for admin users create command (REQ-6)",
+          "details": [
+            "Write TestAdminUsersCreateCommand: all four flags provided, assert CreateUser called with correct struct fields, stdout is user JSON, exit 0.",
+            "Write TestAdminUsersCreateAgentInterface: assert method=POST, path=/users, auth=admin, four flags all required.",
+            "Write TestAdminUsersCreateMissingUsername: assert exit 2 and message 'missing required flag: --username'.",
+            "Write TestAdminUsersCreateMissingEmail: assert exit 2 and message 'missing required flag: --email'.",
+            "Write TestAdminUsersCreateMissingProvider: assert exit 2 and message 'missing required flag: --provider'.",
+            "Write TestAdminUsersCreateMissingProviderID: assert exit 2 and message 'missing required flag: --provider-id'."
+          ],
+          "test_spec_refs": [
+            "TS-14-23",
+            "TS-14-24",
+            "TS-14-E5",
+            "TS-14-E6",
+            "TS-14-E7",
+            "TS-14-E8"
+          ],
+          "requirement_refs": [
+            "14-REQ-6.1",
+            "14-REQ-6.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestNewAdminCmd|TestCommon|TestContext|TestNoDirectHTTP|TestMissing|TestExtraArgs|TestNonUUID|TestEmptyString|TestAdminUsersList|TestAdminUsersShow|TestAdminUsersCreate' compiles and all referenced tests are present (may fail with 'not implemented' stubs at this stage)",
+          "go vet ./internal/cli/... reports no errors",
+          "Test files admin_test.go and admin_users_test.go exist under internal/cli/",
+          "All test-scoped interfaces (adminUsersClient etc.) are unexported and defined only in _test.go files",
+          "Requirements 14-REQ-1.1 through 14-REQ-6.2 are referenced in at least one test_spec_refs entry"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests for admin users update/promote/demote/block/unblock commands (REQ-7 – REQ-11)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for admin users update command (REQ-7)",
+          "details": [
+            "Write TestAdminUsersUpdateCommand: provide id and --full-name 'Alice B', assert UpdateUserByID called with {id:'u1', FullName:'Alice B'}, stdout is user JSON, exit 0.",
+            "Write TestAdminUsersUpdateEmptyFullName: --full-name '' is valid; assert UpdateUserByID called with FullName=='', exit 0.",
+            "Write TestAdminUsersUpdateAgentInterface: assert method=PATCH, path=/users/:id, auth=admin, args=[id], flags=[full-name required].",
+            "Write TestAdminUsersUpdateMissingID: no positional arg, assert exit 2 and message 'missing required argument: id'.",
+            "Write TestAdminUsersUpdateMissingFullName: flag absent entirely, assert exit 2 and message 'missing required flag: --full-name', SDK not called."
+          ],
+          "test_spec_refs": [
+            "TS-14-25",
+            "TS-14-26",
+            "TS-14-27",
+            "TS-14-E9",
+            "TS-14-E10"
+          ],
+          "requirement_refs": [
+            "14-REQ-7.1",
+            "14-REQ-7.2",
+            "14-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for admin users promote and demote commands (REQ-8, REQ-9)",
+          "details": [
+            "Write TestAdminUsersPromoteCommand: assert PromoteUser called with id, stdout is user JSON, exit 0.",
+            "Write TestAdminUsersPromoteAgentInterface: method=POST, path=/users/:id/promote, auth=admin.",
+            "Write TestAdminUsersPromoteMissingID: assert exit 2.",
+            "Write TestAdminUsersDemoteCommand: assert DemoteUser called, stdout is user JSON, exit 0 (no client-side last-admin check).",
+            "Write TestAdminUsersDemoteAgentInterface: method=POST, path=/users/:id/demote, auth=admin.",
+            "Write TestAdminUsersDemoteMissingID: assert exit 2.",
+            "Write TestAdminUsersDemoteLastAdmin: mock returns APIError{Code:409, Message:'cannot demote the last admin'}, assert stdout error envelope and exit 1."
+          ],
+          "test_spec_refs": [
+            "TS-14-28",
+            "TS-14-29",
+            "TS-14-30",
+            "TS-14-31",
+            "TS-14-E11",
+            "TS-14-E12",
+            "TS-14-E13"
+          ],
+          "requirement_refs": [
+            "14-REQ-8.1",
+            "14-REQ-8.2",
+            "14-REQ-9.1",
+            "14-REQ-9.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for admin users block and unblock commands (REQ-10, REQ-11)",
+          "details": [
+            "Write TestAdminUsersBlockCommand: mock BlockUser returns User{Blocked:true}, assert called with id, stdout is user JSON, exit 0.",
+            "Write TestAdminUsersBlockAgentInterface: method=POST, path=/users/:id/block, auth=admin.",
+            "Write TestAdminUsersBlockMissingID: assert exit 2.",
+            "Write TestAdminUsersUnblockCommand: mock UnblockUser returns User{Blocked:false}, assert called, exit 0.",
+            "Write TestAdminUsersUnblockAgentInterface: method=POST, path=/users/:id/unblock, auth=admin.",
+            "Write TestAdminUsersUnblockMissingID: assert exit 2."
+          ],
+          "test_spec_refs": [
+            "TS-14-32",
+            "TS-14-33",
+            "TS-14-34",
+            "TS-14-35",
+            "TS-14-E14",
+            "TS-14-E15"
+          ],
+          "requirement_refs": [
+            "14-REQ-10.1",
+            "14-REQ-10.2",
+            "14-REQ-11.1",
+            "14-REQ-11.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write tests for admin users API and network error forwarding (REQ-26)",
+          "details": [
+            "Write TestAdminUsersAPIError403: ListUsers returns APIError{Code:403, Message:'forbidden'}, assert stdout {error:{code:403,message:'forbidden'}}, exit 1.",
+            "Write TestAdminUsersAPIError404: GetUserByID returns APIError{Code:404, Message:'user not found'}, assert exit 1 and correct envelope.",
+            "Write TestAdminUsersNetworkError: ListUsers returns plain error, assert stdout {error:{code:0,...}}, exit 2.",
+            "Write TestExitCodeInvariants: parameterized test verifying exit code is exactly 0, 1, or 2 across success/APIError/networkError scenarios."
+          ],
+          "test_spec_refs": [
+            "TS-14-68",
+            "TS-14-69",
+            "TS-14-70",
+            "TS-14-71"
+          ],
+          "requirement_refs": [
+            "14-REQ-26.1",
+            "14-REQ-26.2",
+            "14-REQ-26.3",
+            "14-REQ-26.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminUsersUpdate|TestAdminUsersPromote|TestAdminUsersDemote|TestAdminUsersBlock|TestAdminUsersUnblock|TestAdminUsersAPIError|TestAdminUsersNetworkError|TestExitCode' compiles without errors",
+          "go vet ./internal/cli/... reports no errors",
+          "All test functions for REQ-7 through REQ-11 and REQ-26 are present in admin_users_test.go",
+          "Requirements 14-REQ-7 through 14-REQ-11 acceptance criteria each have at least one test_spec_ref"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests for admin orgs commands (REQ-12 – REQ-17)",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for admin orgs list and create commands (REQ-12, REQ-13)",
+          "details": [
+            "Create admin_orgs_test.go with adminOrgsClient interface covering all org SDK methods.",
+            "Write TestAdminOrgsListCommand: assert ListOrgs called with IncludeBlocked:false, stdout is JSON array, exit 0.",
+            "Write TestAdminOrgsListIncludeBlocked: assert IncludeBlocked:true.",
+            "Write TestAdminOrgsListAgentInterface: method=GET, path=/orgs, auth=admin.",
+            "Write TestAdminOrgsCreateCommand: --name, --slug, --url all provided, assert CreateOrg called with non-nil URL ptr, stdout is org JSON, exit 0.",
+            "Write TestAdminOrgsCreateWithoutURL: omit --url, assert CreateOrgRequest.URL==nil.",
+            "Write TestAdminOrgsCreateMissingName: assert exit 2 and message 'missing required flag: --name'.",
+            "Write TestAdminOrgsCreateMissingSlug: assert exit 2 and message 'missing required flag: --slug'."
+          ],
+          "test_spec_refs": [
+            "TS-14-36",
+            "TS-14-37",
+            "TS-14-38",
+            "TS-14-39",
+            "TS-14-40",
+            "TS-14-41",
+            "TS-14-E16",
+            "TS-14-E17"
+          ],
+          "requirement_refs": [
+            "14-REQ-12.1",
+            "14-REQ-12.2",
+            "14-REQ-12.3",
+            "14-REQ-13.1",
+            "14-REQ-13.2",
+            "14-REQ-13.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for admin orgs update command (REQ-14)",
+          "details": [
+            "Write TestAdminOrgsUpdateCommand: --name and --url provided, assert UpdateOrg called with non-nil pointer fields, exit 0.",
+            "Write TestAdminOrgsUpdateNameOnly: only --name provided, assert req.Name is non-nil ptr, req.URL is nil.",
+            "Write TestAdminOrgsUpdateURLOnly: only --url provided, assert req.Name is nil, req.URL is non-nil ptr.",
+            "Write TestAdminOrgsUpdateNoFlags: no flags; assert warnf warning appears on stderr, UpdateOrg called with both fields nil, stdout is org JSON, exit 0.",
+            "Write TestAdminOrgsUpdateMissingID: no positional arg, assert exit 2 and message 'missing required argument: id'.",
+            "Write TestAdminOrgsUpdateAgentInterface: method=PATCH, path=/orgs/:id, auth=admin, flags name and url both optional."
+          ],
+          "test_spec_refs": [
+            "TS-14-42",
+            "TS-14-43",
+            "TS-14-44",
+            "TS-14-E18"
+          ],
+          "requirement_refs": [
+            "14-REQ-14.1",
+            "14-REQ-14.2",
+            "14-REQ-14.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests for admin orgs delete, block, unblock commands (REQ-15 – REQ-17)",
+          "details": [
+            "Write TestAdminOrgsDeleteCommand: mock DeleteOrg returns nil, assert stdout=='{}', exit 0, no confirmation prompt.",
+            "Write TestAdminOrgsDeleteMissingID: assert exit 2.",
+            "Write TestAdminOrgsDeleteAgentInterface: method=DELETE, path=/orgs/:id, auth=admin.",
+            "Write TestAdminOrgsBlockCommand: mock BlockOrg returns Org{Blocked:true}, assert stdout is org JSON, exit 0.",
+            "Write TestAdminOrgsBlockMissingID: assert exit 2.",
+            "Write TestAdminOrgsUnblockCommand: mock UnblockOrg returns Org{Blocked:false}, assert stdout is org JSON, exit 0.",
+            "Write TestAdminOrgsUnblockMissingID: assert exit 2.",
+            "Write TestAdminOrgsBlockAgentInterface and TestAdminOrgsUnblockAgentInterface: verify method/path/auth."
+          ],
+          "test_spec_refs": [
+            "TS-14-45",
+            "TS-14-46",
+            "TS-14-47",
+            "TS-14-48",
+            "TS-14-49",
+            "TS-14-50",
+            "TS-14-E19",
+            "TS-14-E20",
+            "TS-14-E21"
+          ],
+          "requirement_refs": [
+            "14-REQ-15.1",
+            "14-REQ-15.2",
+            "14-REQ-16.1",
+            "14-REQ-16.2",
+            "14-REQ-17.1",
+            "14-REQ-17.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminOrgsList|TestAdminOrgsCreate|TestAdminOrgsUpdate|TestAdminOrgsDelete|TestAdminOrgsBlock|TestAdminOrgsUnblock' compiles without errors",
+          "go vet ./internal/cli/... reports no errors",
+          "admin_orgs_test.go exists with unexported adminOrgsClient interface",
+          "Requirements 14-REQ-12 through 14-REQ-17 each have at least one passing test reference"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write tests for admin orgs members, keys, tokens commands and cross-cutting properties (REQ-18 – REQ-28)",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests for admin orgs members commands (REQ-18 – REQ-20)",
+          "details": [
+            "Add member methods to adminOrgsClient interface in admin_orgs_test.go.",
+            "Write TestAdminOrgsMembersListCommand: ListOrgMembers called with orgID, stdout is user array, exit 0.",
+            "Write TestAdminOrgsMembersListMissingID: assert exit 2.",
+            "Write TestAdminOrgsMembersAddCommand: AddOrgMember called with orgID+userID, stdout=='{}', exit 0.",
+            "Write TestAdminOrgsMembersAddMissingArgs: missing user_id, assert exit 2.",
+            "Write TestAdminOrgsMembersRemoveCommand: RemoveOrgMember called, stdout=='{}', exit 0.",
+            "Write TestAdminOrgsMembersRemoveMissingArgs: assert exit 2.",
+            "Write agent interface tests for all three members commands."
+          ],
+          "test_spec_refs": [
+            "TS-14-51",
+            "TS-14-52",
+            "TS-14-53",
+            "TS-14-54",
+            "TS-14-55",
+            "TS-14-56",
+            "TS-14-E22",
+            "TS-14-E23",
+            "TS-14-E24"
+          ],
+          "requirement_refs": [
+            "14-REQ-18.1",
+            "14-REQ-18.2",
+            "14-REQ-19.1",
+            "14-REQ-19.2",
+            "14-REQ-20.1",
+            "14-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for admin keys and tokens commands (REQ-21 – REQ-24)",
+          "details": [
+            "Create admin_keys_test.go with adminKeysClient interface; create admin_tokens_test.go with adminTokensClient interface.",
+            "Write TestAdminKeysListCommand: ListUserKeys called with userID, stdout is APIKey array (no secret material), exit 0.",
+            "Write TestAdminKeysListMissingUserID: assert exit 2 and message 'missing required argument: user_id'.",
+            "Write TestAdminKeysRevokeCommand: RevokeUserKey called with userID+keyID, stdout=='{}', exit 0.",
+            "Write TestAdminKeysRevokeMissingArgs: assert exit 2.",
+            "Write TestAdminTokensListCommand: ListUserTokens called with userID, stdout is Token array, exit 0.",
+            "Write TestAdminTokensListMissingUserID: assert exit 2.",
+            "Write TestAdminTokensRevokeCommand: RevokeUserToken called with userID+tokenID, stdout=='{}', exit 0.",
+            "Write TestAdminTokensRevokeMissingArgs: assert exit 2."
+          ],
+          "test_spec_refs": [
+            "TS-14-57",
+            "TS-14-58",
+            "TS-14-59",
+            "TS-14-60",
+            "TS-14-61",
+            "TS-14-62",
+            "TS-14-63",
+            "TS-14-64",
+            "TS-14-E25",
+            "TS-14-E26",
+            "TS-14-E27",
+            "TS-14-E28"
+          ],
+          "requirement_refs": [
+            "14-REQ-21.1",
+            "14-REQ-21.2",
+            "14-REQ-22.1",
+            "14-REQ-22.2",
+            "14-REQ-23.1",
+            "14-REQ-23.2",
+            "14-REQ-24.1",
+            "14-REQ-24.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write tests for JSON output, agent interface, and unit test coverage requirements (REQ-25, REQ-27, REQ-28)",
+          "details": [
+            "Write TestJSONOutputFormatting: verify printJSON uses two-space indented JSON for a user object.",
+            "Write TestVoidResponseCommands: parameterized test over all five void-response commands; assert stdout parses as empty object {}.",
+            "Write TestWarningsGoToStderr: invoke orgs update with no flags; assert 'no fields specified for update' in stderr only, not stdout.",
+            "Write TestAdminCommandsHelpJSON: run help --json, assert all 21 admin commands present with auth=='admin', non-empty method/path/args/flags.",
+            "Write TestMockInterfaceUnexported: static check that adminXxxClient interfaces are defined only in _test.go files.",
+            "Write TestNoIntegrationTestFiles: assert no file in internal/cli/ matches *integration*.go."
+          ],
+          "test_spec_refs": [
+            "TS-14-65",
+            "TS-14-66",
+            "TS-14-67",
+            "TS-14-72",
+            "TS-14-73",
+            "TS-14-74",
+            "TS-14-75",
+            "TS-14-76"
+          ],
+          "requirement_refs": [
+            "14-REQ-25.1",
+            "14-REQ-25.2",
+            "14-REQ-25.3",
+            "14-REQ-27.1",
+            "14-REQ-27.2",
+            "14-REQ-28.1",
+            "14-REQ-28.2",
+            "14-REQ-28.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write property and edge case tests for cross-cutting invariants (PROP-1 – PROP-7, edge cases)",
+          "details": [
+            "Write TestStdoutAlwaysValidJSON (PROP-1): for a sample of commands in success/error/client-error scenarios, parse stdout as JSON; assert no parse errors.",
+            "Write TestExitCodeAlways012 (PROP-2): parameterized over all command+scenario combos, assert exit code in {0,1,2}.",
+            "Write TestNoNetHTTPInAdminFiles (PROP-3): static analysis confirming net/http not imported in production admin files.",
+            "Write TestSDKNotCalledOnValidationFailure (PROP-4): for each command, omit required arg/flag; assert SDK method call counter remains 0.",
+            "Write TestVoidCommandsAlwaysPrintEmpty (PROP-5): for all 5 void commands, assert stdout=='{}' on nil SDK return.",
+            "Write TestParentCommandsExitZeroNoConfig (TS-14-E1): invoke 'admin' with no subcommand; assert exit 0, loadConfig not called.",
+            "Write TestPrintJSONFailureExits2 (TS-14-E2): stub printJSON to return error; assert exit 2.",
+            "Write TestContextNoDeadline (PROP-7): capturing mock asserts ctx.Deadline() has no deadline."
+          ],
+          "test_spec_refs": [
+            "TS-14-P1",
+            "TS-14-P2",
+            "TS-14-P3",
+            "TS-14-P4",
+            "TS-14-P5",
+            "TS-14-P6",
+            "TS-14-P7",
+            "TS-14-E1",
+            "TS-14-E2",
+            "TS-14-E3"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.1",
+            "14-REQ-2.6",
+            "14-REQ-3.1",
+            "14-REQ-3.2",
+            "14-REQ-25.1",
+            "14-REQ-26.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminOrgsMembers|TestAdminKeys|TestAdminTokens|TestJSON|TestVoid|TestWarnings|TestAdminCommandsHelpJSON|TestMockInterface|TestNoIntegration|TestStdout|TestExitCode|TestNoNetHTTP|TestSDKNotCalled|TestParent|TestPrintJSON|TestContext' compiles without errors",
+          "go vet ./internal/cli/... reports no errors",
+          "admin_keys_test.go and admin_tokens_test.go exist with unexported adminKeysClient and adminTokensClient interfaces",
+          "All 7 correctness properties (PROP-1 through PROP-7) have at least one corresponding test",
+          "Requirements 14-REQ-18 through 14-REQ-28 each referenced in at least one test subtask"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement admin command infrastructure: admin.go, NewAdminCmd, and subcommand scaffolding",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Create internal/cli/admin.go with NewAdminCmd and unexported group constructors",
+          "details": [
+            "Create internal/cli/admin.go defining NewAdminCmd() *cobra.Command with Use='admin', Short description, no RunE.",
+            "Wire children: cmd.AddCommand(newAdminUsersCmd(), newAdminOrgsCmd(), newAdminKeysCmd(), newAdminTokensCmd()).",
+            "All subcommand constructors (newAdminUsersCmd etc.) are unexported; only NewAdminCmd is exported.",
+            "NewAdminCmd is the sole exported symbol from admin*.go files — confirmed by TS-14-6 static check."
+          ],
+          "test_spec_refs": [
+            "TS-14-1",
+            "TS-14-6"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.1",
+            "14-REQ-1.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Create internal/cli/admin_users.go scaffold with all user subcommands registered",
+          "details": [
+            "Define newAdminUsersCmd() returning *cobra.Command with Use='users', no RunE.",
+            "Add subcommands: list, show, create, update, promote, demote, block, unblock — each with Use, Short, Args (cobra.ExactArgs or cobra.NoArgs), RunE using panic('not implemented') stubs.",
+            "Register --include-blocked flag on list; --username, --email, --provider, --provider-id flags on create; --full-name flag on update.",
+            "Declare the adminUsersClient interface (unexported) in the production file or prepare injection point for test doubles.",
+            "Ensure all eight subcommands are added to the users parent via AddCommand."
+          ],
+          "test_spec_refs": [
+            "TS-14-2",
+            "TS-14-7"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.2",
+            "14-REQ-2.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Create internal/cli/admin_orgs.go scaffold with all org subcommands and members group",
+          "details": [
+            "Define newAdminOrgsCmd() and newAdminOrgsMembersCmd() with correct Use values and no RunE on parent commands.",
+            "Add org subcommands: list (--include-blocked), create (--name required, --slug required, --url optional), update (--name optional, --url optional), delete, block, unblock — all with panic stub RunE.",
+            "Add members subcommands: list (ExactArgs(1)), add (ExactArgs(2)), remove (ExactArgs(2)) — panic stub RunE.",
+            "Wire newAdminOrgsMembersCmd() into newAdminOrgsCmd() via AddCommand."
+          ],
+          "test_spec_refs": [
+            "TS-14-3",
+            "TS-14-7"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.3",
+            "14-REQ-2.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Create internal/cli/admin_keys.go and admin_tokens.go scaffolds",
+          "details": [
+            "Define newAdminKeysCmd() with subcommands list (ExactArgs(1)) and revoke (ExactArgs(2)), both with panic stub RunE.",
+            "Define newAdminTokensCmd() with subcommands list (ExactArgs(1)) and revoke (ExactArgs(2)), both with panic stub RunE.",
+            "Each file should import cobra and the apikit package but not net/http."
+          ],
+          "test_spec_refs": [
+            "TS-14-4",
+            "TS-14-5"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.4",
+            "14-REQ-1.5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go build ./internal/cli/... succeeds with no compilation errors",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-1 through TS-14-6 (command tree structure tests) pass: go test ./internal/cli/... -count=1 -run 'TestNewAdminCmd|TestAdminUsersCmd|TestAdminOrgsCmd|TestAdminKeysCmd|TestAdminTokensCmd'",
+          "grep -rn 'net/http' internal/cli/admin*.go returns no matches",
+          "All five source files (admin.go, admin_users.go, admin_orgs.go, admin_keys.go, admin_tokens.go) exist under internal/cli/"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement admin users list, show, and create command RunE functions",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement admin users list RunE: loadConfig, newClient, ListUsers, printJSON",
+          "details": [
+            "Replace panic stub in list RunE: call loadConfig(cmd), handle error via handleError+exit(2).",
+            "Call newClient(cfg) to obtain client.",
+            "Read --include-blocked flag value; call client.ListUsers(context.Background(), &apikit.ListUsersOptions{IncludeBlocked: includeBlocked}).",
+            "On success: printJSON(users); os.Exit(0). On *apikit.APIError: handleError; os.Exit(1). On other error: handleError; os.Exit(2)."
+          ],
+          "test_spec_refs": [
+            "TS-14-18",
+            "TS-14-19",
+            "TS-14-7",
+            "TS-14-11"
+          ],
+          "requirement_refs": [
+            "14-REQ-4.1",
+            "14-REQ-4.2",
+            "14-REQ-2.1",
+            "14-REQ-2.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement admin users show RunE: GetUserByID, unwrap Response, printJSON",
+          "details": [
+            "Replace panic stub in show RunE: read args[0] as id.",
+            "Call client.GetUserByID(context.Background(), id); unwrap Response[User].Data field before passing to printJSON.",
+            "Handle *apikit.APIError (exit 1) and other errors (exit 2) via handleError."
+          ],
+          "test_spec_refs": [
+            "TS-14-21",
+            "TS-14-8",
+            "TS-14-9",
+            "TS-14-E4"
+          ],
+          "requirement_refs": [
+            "14-REQ-5.1",
+            "14-REQ-2.2",
+            "14-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement admin users create RunE: required flag validation, CreateUser, printJSON",
+          "details": [
+            "Replace panic stub in create RunE: read --username, --email, --provider, --provider-id flag values.",
+            "For each flag: if the flag was not set (use cmd.Flags().Changed(flagName)), print JSON error envelope with 'missing required flag: --<name>' and os.Exit(2).",
+            "Call client.CreateUser(context.Background(), &apikit.CreateUserRequest{Username:username, Email:email, Provider:provider, ProviderID:providerID}).",
+            "On success: printJSON(user); os.Exit(0). Handle errors per REQ-2.2/2.3."
+          ],
+          "test_spec_refs": [
+            "TS-14-23",
+            "TS-14-14",
+            "TS-14-E5",
+            "TS-14-E6",
+            "TS-14-E7",
+            "TS-14-E8"
+          ],
+          "requirement_refs": [
+            "14-REQ-6.1",
+            "14-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Register agent interface metadata for users list, show, create commands (REQ-4.3, REQ-5.2, REQ-6.2)",
+          "details": [
+            "Use the CLI core agent interface registration mechanism (spec 13) to register metadata for 'admin users list' (GET /users, auth:admin, flag:include-blocked).",
+            "Register 'admin users show' (GET /users/:id, auth:admin, arg:id).",
+            "Register 'admin users create' (POST /users, auth:admin, four required flags).",
+            "Ensure method, path, auth, args, and flags fields are populated per REQ-27.2."
+          ],
+          "test_spec_refs": [
+            "TS-14-20",
+            "TS-14-22",
+            "TS-14-24"
+          ],
+          "requirement_refs": [
+            "14-REQ-4.3",
+            "14-REQ-5.2",
+            "14-REQ-6.2",
+            "14-REQ-27.1",
+            "14-REQ-27.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminUsersList|TestAdminUsersShow|TestAdminUsersCreate' — all related tests pass",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-18, TS-14-19, TS-14-21, TS-14-23 pass: ListUsers/GetUserByID/CreateUser called with correct params, stdout is valid JSON, exit code 0",
+          "TS-14-E5 through TS-14-E8 pass: missing flags produce exit code 2 and JSON error envelopes",
+          "TS-14-20, TS-14-22, TS-14-24 pass: agent interface entries correct for list/show/create",
+          "Requirements 14-REQ-4.1, 14-REQ-5.1, 14-REQ-6.1 acceptance criteria confirmed"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement admin users update, promote, demote, block, unblock command RunE functions",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement admin users update RunE: required --full-name flag validation, UpdateUserByID",
+          "details": [
+            "Replace panic stub in update RunE: read args[0] as id.",
+            "Check cmd.Flags().Changed('full-name'); if not set, print JSON error envelope 'missing required flag: --full-name' and os.Exit(2).",
+            "An empty string (--full-name '') is valid: pass through to UpdateUserByID with FullName=''.",
+            "Call client.UpdateUserByID(context.Background(), id, &apikit.UpdateUserRequest{FullName: fullName}). Handle errors per standard pattern."
+          ],
+          "test_spec_refs": [
+            "TS-14-25",
+            "TS-14-26",
+            "TS-14-E9",
+            "TS-14-E10"
+          ],
+          "requirement_refs": [
+            "14-REQ-7.1",
+            "14-REQ-7.2",
+            "14-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement admin users promote and demote RunE functions",
+          "details": [
+            "Implement promote RunE: read args[0] as id, call client.PromoteUser(context.Background(), id), printJSON on success.",
+            "Implement demote RunE: read args[0] as id, call client.DemoteUser(context.Background(), id), printJSON on success.",
+            "No client-side last-admin safeguard — server enforces this and returns APIError{Code:409} which CLI forwards as exit 1."
+          ],
+          "test_spec_refs": [
+            "TS-14-28",
+            "TS-14-30",
+            "TS-14-E11",
+            "TS-14-E12",
+            "TS-14-E13"
+          ],
+          "requirement_refs": [
+            "14-REQ-8.1",
+            "14-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement admin users block and unblock RunE functions",
+          "details": [
+            "Implement block RunE: read args[0] as id, call client.BlockUser(context.Background(), id), printJSON on success.",
+            "Implement unblock RunE: read args[0] as id, call client.UnblockUser(context.Background(), id), printJSON on success.",
+            "Both commands use the standard error pattern (APIError→exit 1, other→exit 2)."
+          ],
+          "test_spec_refs": [
+            "TS-14-32",
+            "TS-14-34",
+            "TS-14-E14",
+            "TS-14-E15"
+          ],
+          "requirement_refs": [
+            "14-REQ-10.1",
+            "14-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Register agent interface metadata for update, promote, demote, block, unblock (REQ-7.3, REQ-8.2, REQ-9.2, REQ-10.2, REQ-11.2)",
+          "details": [
+            "Register 'admin users update' (PATCH /users/:id, auth:admin, arg:id, required flag:full-name).",
+            "Register 'admin users promote' (POST /users/:id/promote, auth:admin, arg:id).",
+            "Register 'admin users demote' (POST /users/:id/demote, auth:admin, arg:id).",
+            "Register 'admin users block' (POST /users/:id/block, auth:admin, arg:id).",
+            "Register 'admin users unblock' (POST /users/:id/unblock, auth:admin, arg:id)."
+          ],
+          "test_spec_refs": [
+            "TS-14-27",
+            "TS-14-29",
+            "TS-14-31",
+            "TS-14-33",
+            "TS-14-35"
+          ],
+          "requirement_refs": [
+            "14-REQ-7.3",
+            "14-REQ-8.2",
+            "14-REQ-9.2",
+            "14-REQ-10.2",
+            "14-REQ-11.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminUsersUpdate|TestAdminUsersPromote|TestAdminUsersDemote|TestAdminUsersBlock|TestAdminUsersUnblock' — all pass",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-25 passes: UpdateUserByID called with correct id and FullName",
+          "TS-14-E10 passes: absent --full-name flag yields exit code 2 without SDK call",
+          "TS-14-E13 passes: 409 APIError from DemoteUser yields exit code 1 with correct envelope",
+          "Requirements 14-REQ-7 through 14-REQ-11 acceptance criteria confirmed"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement admin orgs list, create, and update command RunE functions",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement admin orgs list RunE: ListOrgs with IncludeBlocked option",
+          "details": [
+            "Replace panic stub in orgs list RunE: read --include-blocked flag.",
+            "Call client.ListOrgs(context.Background(), &apikit.ListOrgsOptions{IncludeBlocked: includeBlocked}).",
+            "printJSON on success, error pattern for failures."
+          ],
+          "test_spec_refs": [
+            "TS-14-36",
+            "TS-14-37"
+          ],
+          "requirement_refs": [
+            "14-REQ-12.1",
+            "14-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement admin orgs create RunE: required flag validation, nil URL pointer, CreateOrg",
+          "details": [
+            "Replace panic stub in orgs create RunE: check cmd.Flags().Changed('name') and 'slug'; exit 2 with JSON error envelope if absent.",
+            "Build CreateOrgRequest: Name=name, Slug=slug; if cmd.Flags().Changed('url'), set URL=&urlStr, else URL=nil.",
+            "Call client.CreateOrg(context.Background(), req). Handle errors per standard pattern."
+          ],
+          "test_spec_refs": [
+            "TS-14-39",
+            "TS-14-40",
+            "TS-14-E16",
+            "TS-14-E17"
+          ],
+          "requirement_refs": [
+            "14-REQ-13.1",
+            "14-REQ-13.2",
+            "14-REQ-3.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement admin orgs update RunE: optional pointer flags, empty-patch warnf, UpdateOrg",
+          "details": [
+            "Replace panic stub in orgs update RunE: read args[0] as id.",
+            "Build UpdateOrgRequest: set Name=&nameStr if cmd.Flags().Changed('name'), else nil; set URL=&urlStr if Changed('url'), else nil.",
+            "If neither flag provided, call warnf('no fields specified for update') to stderr; proceed to call UpdateOrg anyway.",
+            "Call client.UpdateOrg(context.Background(), id, req). printJSON on success."
+          ],
+          "test_spec_refs": [
+            "TS-14-42",
+            "TS-14-43",
+            "TS-14-E18"
+          ],
+          "requirement_refs": [
+            "14-REQ-14.1",
+            "14-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Register agent interface metadata for orgs list, create, update (REQ-12.3, REQ-13.3, REQ-14.3)",
+          "details": [
+            "Register 'admin orgs list' (GET /orgs, auth:admin, flag:include-blocked bool default false).",
+            "Register 'admin orgs create' (POST /orgs, auth:admin, flags: name required, slug required, url optional).",
+            "Register 'admin orgs update' (PATCH /orgs/:id, auth:admin, arg:id, flags: name optional, url optional)."
+          ],
+          "test_spec_refs": [
+            "TS-14-38",
+            "TS-14-41",
+            "TS-14-44"
+          ],
+          "requirement_refs": [
+            "14-REQ-12.3",
+            "14-REQ-13.3",
+            "14-REQ-14.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminOrgsList|TestAdminOrgsCreate|TestAdminOrgsUpdate' — all pass",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-43 passes: warnf warning appears on stderr, UpdateOrg called with nil fields, stdout is org JSON, exit 0",
+          "TS-14-40 passes: --url omitted results in CreateOrgRequest.URL==nil",
+          "TS-14-38, TS-14-41, TS-14-44 pass: agent interface entries correct",
+          "Requirements 14-REQ-12 through 14-REQ-14 acceptance criteria confirmed"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement admin orgs delete, block, unblock and members commands",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement admin orgs delete, block, unblock RunE functions",
+          "details": [
+            "Implement orgs delete RunE: read args[0] as id, call client.DeleteOrg(context.Background(), id); on nil error call printJSON(struct{}{}) to emit '{}', exit 0.",
+            "Implement orgs block RunE: call client.BlockOrg(context.Background(), id); printJSON(org) on success.",
+            "Implement orgs unblock RunE: call client.UnblockOrg(context.Background(), id); printJSON(org) on success.",
+            "All three use standard error pattern. No confirmation prompt for delete."
+          ],
+          "test_spec_refs": [
+            "TS-14-45",
+            "TS-14-47",
+            "TS-14-49",
+            "TS-14-E19",
+            "TS-14-E20",
+            "TS-14-E21"
+          ],
+          "requirement_refs": [
+            "14-REQ-15.1",
+            "14-REQ-16.1",
+            "14-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement admin orgs members list, add, remove RunE functions",
+          "details": [
+            "Implement members list RunE: read args[0] as orgID, call client.ListOrgMembers(context.Background(), orgID), printJSON(users) on success.",
+            "Implement members add RunE: read args[0]=orgID, args[1]=userID, call client.AddOrgMember(context.Background(), orgID, userID); on nil error printJSON(struct{}{}).",
+            "Implement members remove RunE: read args[0]=orgID, args[1]=userID, call client.RemoveOrgMember(context.Background(), orgID, userID); on nil error printJSON(struct{}{}).",
+            "All use standard error pattern."
+          ],
+          "test_spec_refs": [
+            "TS-14-51",
+            "TS-14-53",
+            "TS-14-55",
+            "TS-14-E22",
+            "TS-14-E23",
+            "TS-14-E24"
+          ],
+          "requirement_refs": [
+            "14-REQ-18.1",
+            "14-REQ-19.1",
+            "14-REQ-20.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Register agent interface metadata for delete, block, unblock, and members commands",
+          "details": [
+            "Register 'admin orgs delete' (DELETE /orgs/:id, auth:admin, arg:id).",
+            "Register 'admin orgs block' (POST /orgs/:id/block, auth:admin, arg:id).",
+            "Register 'admin orgs unblock' (POST /orgs/:id/unblock, auth:admin, arg:id).",
+            "Register 'admin orgs members list' (GET /orgs/:id/members, auth:admin, arg:id).",
+            "Register 'admin orgs members add' (PUT /orgs/:id/members/:user_id, auth:admin, args:[org_id, user_id]).",
+            "Register 'admin orgs members remove' (DELETE /orgs/:id/members/:user_id, auth:admin, args:[org_id, user_id])."
+          ],
+          "test_spec_refs": [
+            "TS-14-46",
+            "TS-14-48",
+            "TS-14-50",
+            "TS-14-52",
+            "TS-14-54",
+            "TS-14-56"
+          ],
+          "requirement_refs": [
+            "14-REQ-15.2",
+            "14-REQ-16.2",
+            "14-REQ-17.2",
+            "14-REQ-18.2",
+            "14-REQ-19.2",
+            "14-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminOrgsDelete|TestAdminOrgsBlock|TestAdminOrgsUnblock|TestAdminOrgsMembers' — all pass",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-45 passes: DeleteOrg called, stdout=='{}', exit 0",
+          "TS-14-53 passes: AddOrgMember called with correct IDs, stdout=='{}', exit 0",
+          "TS-14-P5 passes: all five void-response commands print exactly '{}' on success",
+          "Requirements 14-REQ-15 through 14-REQ-20 acceptance criteria confirmed"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement admin keys and tokens commands",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement admin keys list and revoke RunE functions",
+          "details": [
+            "Implement keys list RunE: read args[0] as userID, call client.ListUserKeys(context.Background(), userID), printJSON(keys) — secret material is not included because apikit.APIKey type does not expose it.",
+            "Implement keys revoke RunE: read args[0]=userID, args[1]=keyID, call client.RevokeUserKey(context.Background(), userID, keyID); on nil error printJSON(struct{}{}).",
+            "Both use standard error pattern."
+          ],
+          "test_spec_refs": [
+            "TS-14-57",
+            "TS-14-59",
+            "TS-14-E25",
+            "TS-14-E26"
+          ],
+          "requirement_refs": [
+            "14-REQ-21.1",
+            "14-REQ-22.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement admin tokens list and revoke RunE functions",
+          "details": [
+            "Implement tokens list RunE: read args[0] as userID, call client.ListUserTokens(context.Background(), userID), printJSON(tokens) — no secret material.",
+            "Implement tokens revoke RunE: read args[0]=userID, args[1]=tokenID, call client.RevokeUserToken(context.Background(), userID, tokenID); on nil error printJSON(struct{}{}).",
+            "Both use standard error pattern."
+          ],
+          "test_spec_refs": [
+            "TS-14-61",
+            "TS-14-63",
+            "TS-14-E27",
+            "TS-14-E28"
+          ],
+          "requirement_refs": [
+            "14-REQ-23.1",
+            "14-REQ-24.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Register agent interface metadata for all keys and tokens commands",
+          "details": [
+            "Register 'admin keys list' (GET /users/:id/keys, auth:admin, arg:user_id).",
+            "Register 'admin keys revoke' (DELETE /users/:id/keys/:key_id, auth:admin, args:[user_id, key_id]).",
+            "Register 'admin tokens list' (GET /users/:id/tokens, auth:admin, arg:user_id).",
+            "Register 'admin tokens revoke' (DELETE /users/:id/tokens/:token_id, auth:admin, args:[user_id, token_id])."
+          ],
+          "test_spec_refs": [
+            "TS-14-58",
+            "TS-14-60",
+            "TS-14-62",
+            "TS-14-64"
+          ],
+          "requirement_refs": [
+            "14-REQ-21.2",
+            "14-REQ-22.2",
+            "14-REQ-23.2",
+            "14-REQ-24.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'TestAdminKeysList|TestAdminKeysRevoke|TestAdminTokensList|TestAdminTokensRevoke' — all pass",
+          "go vet ./internal/cli/... reports no errors",
+          "TS-14-57 passes: ListUserKeys called with correct userID, stdout is JSON array, exit 0",
+          "TS-14-63 passes: RevokeUserToken called with correct IDs, stdout=='{}', exit 0",
+          "TS-14-58, TS-14-60, TS-14-62, TS-14-64 pass: agent interface entries correct for all key/token commands",
+          "Requirements 14-REQ-21 through 14-REQ-24 acceptance criteria confirmed"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "checkpoint",
+      "title": "Full test suite pass and cross-cutting property verification",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Run the complete admin CLI test suite and confirm all tests pass",
+          "details": [
+            "Run go test ./internal/cli/... -count=1 -v and verify all named test cases from the PRD Testing Strategy pass.",
+            "Confirm all four test files (admin_users_test.go, admin_orgs_test.go, admin_keys_test.go, admin_tokens_test.go) compile and pass.",
+            "Confirm mock interfaces are unexported and defined only in _test.go files.",
+            "Confirm no integration test file (matching *integration*.go) is present in internal/cli/."
+          ],
+          "test_spec_refs": [
+            "TS-14-74",
+            "TS-14-75"
+          ],
+          "requirement_refs": [
+            "14-REQ-28.1",
+            "14-REQ-28.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Verify stdout-always-valid-JSON and exit-code-012 invariants (PROP-1, PROP-2)",
+          "details": [
+            "Run TS-14-P1 property test: for success/APIError/clientError scenarios across all admin commands, assert stdout is always parseable JSON.",
+            "Run TS-14-P2 property test: assert exit code is exactly in {0, 1, 2} for all scenario combinations.",
+            "Run TS-14-65: verify two-space indented JSON output for admin users show.",
+            "Run TS-14-68 and TS-14-69: verify exit code correctness and error envelope structure."
+          ],
+          "test_spec_refs": [
+            "TS-14-P1",
+            "TS-14-P2",
+            "TS-14-65",
+            "TS-14-68",
+            "TS-14-69"
+          ],
+          "requirement_refs": [
+            "14-REQ-25.1",
+            "14-REQ-26.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Verify no direct HTTP calls, SDK-not-called-on-validation-failure, and void-response invariants (PROP-3, PROP-4, PROP-5)",
+          "details": [
+            "Run TS-14-P3: static analysis confirms net/http not imported in any internal/cli/admin*.go production file.",
+            "Run TS-14-P4: for each command, omit required arg/flag; assert SDK call counter is zero and exit code is 2.",
+            "Run TS-14-P5 and TS-14-66: for all five void-response commands, assert stdout=='{}' and exit code 0 on nil SDK return."
+          ],
+          "test_spec_refs": [
+            "TS-14-P3",
+            "TS-14-P4",
+            "TS-14-P5",
+            "TS-14-66"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.6",
+            "14-REQ-3.1",
+            "14-REQ-3.2",
+            "14-REQ-25.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.4",
+          "title": "Verify agent interface completeness: all 21 admin commands with auth=admin (PROP-6, REQ-27)",
+          "details": [
+            "Run TS-14-72: parse akc help --json output; assert all 21 admin commands present with auth=='admin'.",
+            "Run TS-14-73: for each admin command entry, assert name, description, method, path are non-empty; flags include name/type/required/default/description.",
+            "Run TS-14-P6: enumerate admin command tree recursively and cross-check against help JSON."
+          ],
+          "test_spec_refs": [
+            "TS-14-P6",
+            "TS-14-72",
+            "TS-14-73"
+          ],
+          "requirement_refs": [
+            "14-REQ-27.1",
+            "14-REQ-27.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 exits 0 with all tests passing",
+          "go vet ./internal/cli/... exits 0 with no errors",
+          "go build ./... exits 0 with no compilation errors",
+          "All 7 correctness properties (PROP-1 through PROP-7) confirmed passing via their property tests",
+          "All 21 admin commands present in akc help --json with auth='admin', correct method, path, args, and flags"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration of admin command tree with CLI core and SDK",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Trace execution paths: verify NewAdminCmd is wired into CLI core root command",
+          "details": [
+            "Confirm that spec 13 (CLI core) calls NewAdminCmd() and registers it on the root Cobra command via rootCmd.AddCommand(NewAdminCmd()).",
+            "Verify that invoking 'akc admin users list' reaches the list RunE function — trace: main→rootCmd.Execute()→admin RunE→users RunE→list RunE.",
+            "Run TS-14-SMOKE-1: with mocked loadConfig, newClient, and ListUsers; assert loadConfig called once, newClient called once, ListUsers called with IncludeBlocked:false, stdout is JSON array, exit 0.",
+            "Run TS-14-SMOKE-7: verify agent discovery flow — help --json contains admin users create entry, then invocation calls CreateUser with correct params."
+          ],
+          "test_spec_refs": [
+            "TS-14-SMOKE-1",
+            "TS-14-SMOKE-7"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.6",
+            "14-REQ-2.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Verify return value propagation: SDK responses flow through printJSON to stdout unchanged",
+          "details": [
+            "Run TS-14-SMOKE-2: GetUserByID returns APIError{Code:404}; confirm handleError receives the error and writes {\"error\":{\"code\":404,...}} to stdout; confirm exit code is 1.",
+            "Run TS-14-SMOKE-4: DeleteOrg returns nil; confirm printJSON receives struct{}{} and stdout is '{}'; confirm exit code is 0.",
+            "Confirm that printJSON uses json.MarshalIndent with two-space indent — inspect output for indentation.",
+            "Verify no intermediate layer transforms or drops the SDK response value before printJSON."
+          ],
+          "test_spec_refs": [
+            "TS-14-SMOKE-2",
+            "TS-14-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.1",
+            "14-REQ-25.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.3",
+          "title": "Run all smoke tests with real components and mocked dependencies",
+          "details": [
+            "Run TS-14-SMOKE-3: missing --provider-id; confirm exit 2, JSON error envelope, SDK not called.",
+            "Run TS-14-SMOKE-5: orgs update with no flags; confirm warnf warning on stderr, UpdateOrg called with nil fields, stdout is org JSON, exit 0.",
+            "Run TS-14-SMOKE-6: ListUserKeys with network error; confirm code-0 envelope on stdout, exit 2.",
+            "All 7 SMOKE tests must pass: go test ./internal/cli/... -count=1 -run 'SMOKE'."
+          ],
+          "test_spec_refs": [
+            "TS-14-SMOKE-1",
+            "TS-14-SMOKE-2",
+            "TS-14-SMOKE-3",
+            "TS-14-SMOKE-4",
+            "TS-14-SMOKE-5",
+            "TS-14-SMOKE-6",
+            "TS-14-SMOKE-7"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.1",
+            "14-REQ-2.2",
+            "14-REQ-2.3",
+            "14-REQ-14.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.4",
+          "title": "Stub and dead-code audit: confirm no panic stubs or TODOs remain in production admin files",
+          "details": [
+            "Run: grep -rn 'panic(\"not implemented\")' internal/cli/admin*.go — must return no matches.",
+            "Run: grep -rn 'TODO' internal/cli/admin*.go — review and resolve any remaining TODOs.",
+            "Run: grep -rn 'net/http' internal/cli/admin*.go — must return no matches.",
+            "Confirm all five RunE stub bodies have been replaced with real implementations.",
+            "Confirm each command file compiles and every exported/unexported function has a non-trivial body."
+          ],
+          "test_spec_refs": [
+            "TS-14-P3"
+          ],
+          "requirement_refs": [
+            "14-REQ-2.1",
+            "14-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.5",
+          "title": "Cross-spec entry point verification: confirm spec 13 registration and spec 12 SDK method signatures match",
+          "details": [
+            "Locate the spec 13 CLI core file that calls NewAdminCmd() and confirm rootCmd.AddCommand(NewAdminCmd()) is present in production code (not test code).",
+            "Verify that all 21 SDK method calls in admin command RunE functions use the exact method names from spec 12: ListUsers, GetUserByID, CreateUser, UpdateUserByID, PromoteUser, DemoteUser, BlockUser, UnblockUser, ListOrgs, CreateOrg, UpdateOrg, DeleteOrg, BlockOrg, UnblockOrg, ListOrgMembers, AddOrgMember, RemoveOrgMember, ListUserKeys, RevokeUserKey, ListUserTokens, RevokeUserToken.",
+            "Run go build ./cmd/akc/... to confirm the binary entry point compiles end-to-end.",
+            "Run go test ./... -count=1 to confirm no regressions across the full codebase."
+          ],
+          "test_spec_refs": [
+            "TS-14-6",
+            "TS-14-12"
+          ],
+          "requirement_refs": [
+            "14-REQ-1.6",
+            "14-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "go test ./internal/cli/... -count=1 -run 'SMOKE' — all 7 smoke tests pass",
+          "go test ./... -count=1 exits 0 — no regressions across full codebase",
+          "go build ./cmd/akc/... exits 0 — binary compiles end-to-end",
+          "go vet ./... exits 0 — no vet errors across entire repo",
+          "grep -rn 'panic(\"not implemented\")' internal/cli/admin*.go returns no output",
+          "grep -rn 'net/http' internal/cli/admin*.go returns no output",
+          "NewAdminCmd() registration call present in spec 13 production code (not test code)",
+          "All 21 SDK method names match spec 12 interface exactly — confirmed by go build success and TS-14-12 static analysis test"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "14-REQ-1.1",
+      "test_spec_id": "TS-14-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-1.2",
+      "test_spec_id": "TS-14-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-1.3",
+      "test_spec_id": "TS-14-3",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-1.4",
+      "test_spec_id": "TS-14-4",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-1.5",
+      "test_spec_id": "TS-14-5",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-1.6",
+      "test_spec_id": "TS-14-6",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.1",
+      "test_spec_id": "TS-14-7",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.2",
+      "test_spec_id": "TS-14-8",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.3",
+      "test_spec_id": "TS-14-9",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.4",
+      "test_spec_id": "TS-14-10",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.5",
+      "test_spec_id": "TS-14-11",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-2.6",
+      "test_spec_id": "TS-14-12",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-3.1",
+      "test_spec_id": "TS-14-13",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-3.2",
+      "test_spec_id": "TS-14-14",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-3.3",
+      "test_spec_id": "TS-14-15",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-3.4",
+      "test_spec_id": "TS-14-16",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-3.5",
+      "test_spec_id": "TS-14-17",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-4.1",
+      "test_spec_id": "TS-14-18",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-4.2",
+      "test_spec_id": "TS-14-19",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-4.3",
+      "test_spec_id": "TS-14-20",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-5.1",
+      "test_spec_id": "TS-14-21",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-5.2",
+      "test_spec_id": "TS-14-22",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-6.1",
+      "test_spec_id": "TS-14-23",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-6.2",
+      "test_spec_id": "TS-14-24",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-7.1",
+      "test_spec_id": "TS-14-25",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-7.2",
+      "test_spec_id": "TS-14-26",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-7.3",
+      "test_spec_id": "TS-14-27",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-8.1",
+      "test_spec_id": "TS-14-28",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-8.2",
+      "test_spec_id": "TS-14-29",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-9.1",
+      "test_spec_id": "TS-14-30",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-9.2",
+      "test_spec_id": "TS-14-31",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-10.1",
+      "test_spec_id": "TS-14-32",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-10.2",
+      "test_spec_id": "TS-14-33",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-11.1",
+      "test_spec_id": "TS-14-34",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-11.2",
+      "test_spec_id": "TS-14-35",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-26.1",
+      "test_spec_id": "TS-14-68",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-26.2",
+      "test_spec_id": "TS-14-69",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-26.3",
+      "test_spec_id": "TS-14-70",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-26.4",
+      "test_spec_id": "TS-14-71",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-12.1",
+      "test_spec_id": "TS-14-36",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-12.2",
+      "test_spec_id": "TS-14-37",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-12.3",
+      "test_spec_id": "TS-14-38",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-13.1",
+      "test_spec_id": "TS-14-39",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-13.2",
+      "test_spec_id": "TS-14-40",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-13.3",
+      "test_spec_id": "TS-14-41",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-14.1",
+      "test_spec_id": "TS-14-42",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-14.2",
+      "test_spec_id": "TS-14-43",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-14.3",
+      "test_spec_id": "TS-14-44",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-15.1",
+      "test_spec_id": "TS-14-45",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-15.2",
+      "test_spec_id": "TS-14-46",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-16.1",
+      "test_spec_id": "TS-14-47",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-16.2",
+      "test_spec_id": "TS-14-48",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-17.1",
+      "test_spec_id": "TS-14-49",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-17.2",
+      "test_spec_id": "TS-14-50",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-18.1",
+      "test_spec_id": "TS-14-51",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-18.2",
+      "test_spec_id": "TS-14-52",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-19.1",
+      "test_spec_id": "TS-14-53",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-19.2",
+      "test_spec_id": "TS-14-54",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-20.1",
+      "test_spec_id": "TS-14-55",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-20.2",
+      "test_spec_id": "TS-14-56",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-21.1",
+      "test_spec_id": "TS-14-57",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-21.2",
+      "test_spec_id": "TS-14-58",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-22.1",
+      "test_spec_id": "TS-14-59",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-22.2",
+      "test_spec_id": "TS-14-60",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-23.1",
+      "test_spec_id": "TS-14-61",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-23.2",
+      "test_spec_id": "TS-14-62",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-24.1",
+      "test_spec_id": "TS-14-63",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-24.2",
+      "test_spec_id": "TS-14-64",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-25.1",
+      "test_spec_id": "TS-14-65",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-25.2",
+      "test_spec_id": "TS-14-66",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-25.3",
+      "test_spec_id": "TS-14-67",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-27.1",
+      "test_spec_id": "TS-14-72",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-27.2",
+      "test_spec_id": "TS-14-73",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-28.1",
+      "test_spec_id": "TS-14-74",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-28.2",
+      "test_spec_id": "TS-14-75",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "14-REQ-28.3",
+      "test_spec_id": "TS-14-76",
+      "task_id": "4.3",
+      "test_path": null
+    }
+  ]
+}

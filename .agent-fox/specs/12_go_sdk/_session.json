@@ -1,0 +1,315 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The Go SDK PRD is exceptionally well-written and comprehensive. All four required sections (Intent, Goals, Non-Goals, Background/Source Reference) are present and of high quality. The Intent is clear and concise, Goals are highly specific with concrete API signatures and struct definitions, Non-Goals are explicit and thorough, and the background/source reference clearly situates this spec within the broader project. The PRD goes well beyond minimum requirements, providing detailed functional requirements, a complete HTTP method mapping table, typed struct definitions, error handling taxonomy, testing strategy, design rationale, and a glossary. The dependency on `openapi_specification` (spec 03) is correctly declared. No active spec overlaps were identified \u2014 the `python_sdk` spec covers an analogous client for Python but is a separate language target with no conflict.",
+      "gaps": [
+        "Minor: The Goals section lists GetUser, GetUserByID, GetToken, and GetOrg as the only ETag-capable methods, but the Functional Requirements section confirms this. However, it is not explicitly stated whether future endpoints could opt into ETag support, which could affect the Response[T] wrapper design's extensibility story.",
+        "Minor: The PRD notes that 'shared types between SDK and server' may overlap with server-side types but defers the mapping to server specs. This could create a naming conflict or duplicate type definitions in the root apikit package that is worth tracking, though it is acknowledged as a known design tension.",
+        "Minor: The owner field in the spec metadata is empty (''), though the PRD body correctly lists 'Michael Kuehl' as owner. These should be consistent.",
+        "Minor: The PRD does not specify behavior when the server returns a 2xx status code with an empty or missing response body for endpoints that expect a JSON body (other than 204). The handling of unexpected empty bodies on 200/201 responses is not documented.",
+        "Informational: The python_sdk active spec covers the same API surface for Python. No conflict exists, but a cross-reference or note confirming the two SDKs are intentionally parallel (rather than one depending on the other) would be useful for future maintainers."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The PRD states that SDK types like `User` and `Organization` are defined in `sdk_types.go` in the root `apikit` package, but acknowledges server-side handler code may use the same or internal equivalents. Have potential naming conflicts between SDK types and server-side types in the root package been evaluated and resolved?",
+          "context": "Both the SDK and server live in the root `apikit` package. If server specs (e.g., user_management, organization_management) define their own `User` or `Organization` structs in the same package, there will be a compile-time conflict. Clarifying this upfront prevents rework.",
+          "options": [
+            "Yes, the SDK types will be the canonical shared types used by both client and server handlers.",
+            "The server handlers use internal types; the SDK types are the only exported representations.",
+            "This will be resolved when server specs are implemented \u2014 no conflict is anticipated.",
+            "A separate sub-package (e.g., apikit/types) will be created if conflicts arise."
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What is the expected behavior when a 200/201 response is received from the server but the response body is empty or not valid JSON for an endpoint that expects a typed struct?",
+          "context": "The error handling table covers 4xx/5xx, 304, network errors, and JSON decode errors, but does not explicitly address a successful status code (2xx) with an empty or malformed body. This edge case matters for robustness against misconfigured proxies or partial server implementations.",
+          "options": [
+            "Return a plain error wrapping the JSON decode failure, same as any other JSON decode error.",
+            "Return a nil struct pointer with a descriptive error.",
+            "This case is covered by the existing 'JSON decode error on response' row in the error table \u2014 no change needed.",
+            "Document it explicitly in the error handling table for completeness."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD for the Go SDK component. It is comprehensive, internally consistent, and provides implementation-ready detail across all major areas: client construction, request execution, error handling, typed structs, URL construction, ETag/conditional GET support, JSON serialization rules, testing strategy, design decisions, and a glossary. The spec is clear enough that a Go engineer could begin implementation without further clarification on the vast majority of points. A small number of minor gaps and edge cases are identified below that would benefit from clarification before or during implementation.",
+      "gaps": [
+        "The `APIError.Error()` method's return format is not specified. The testing section says to verify the format, but the spec never defines what it should look like (e.g., `\"API error 404: User not found\"` vs `\"404: User not found\"` vs `\"User not found\"`). This is needed to write the test that verifies it.",
+        "The `Response[T]` wrapper is specified for methods that support conditional GET (`GetUser`, `GetUserByID`, `GetToken`, `GetOrg`), but on a 304 response the `Data` field would be nil. It is not stated whether `StatusCode` and `Header` on `Response[T]` are populated before returning `ErrNotModified`, or whether `Response[T]` itself is nil on a 304. Callers who want to read the Vary or other headers from a 304 need to know this.",
+        "The `UpdateUserRequest.FullName` field is defined as `string` (not `*string`) with no `omitempty` tag, yet it is used for a PATCH endpoint. This means an empty string will always be serialized as `\"full_name\": \"\"`, making it impossible to send a PATCH that does not modify `full_name`. Whether this is intentional (i.e., PATCH /user always sets full_name) or an oversight should be clarified.",
+        "There is no mention of how the SDK handles a non-2xx response where the `Content-Type` is not `application/json` but the body is non-empty binary or plain-text data (beyond the HTML proxy error case). The current spec covers JSON error envelope, non-JSON body (generic message), and 304 \u2014 but does not address e.g. a 413 with plain-text body from a proxy.",
+        "The spec states `AddOrgMember` uses `PUT /orgs/{id}/members/{user_id}` with no body, but does not specify what HTTP status code the server returns for success (200 vs 204), and what the SDK should return. The method signature returns `error` only, suggesting 204, but this should be made explicit in the HTTP method mapping table (which lacks a 'response status' column).",
+        "The spec does not define the maximum supported Go version or go.mod `go` directive, only a minimum of Go 1.25+. Since `Response[T]` uses generics, a minimum of Go 1.18 is implied; Go 1.25 satisfies this, but the go.mod line should be specified.",
+        "There is no specification for how list-endpoint response JSON is wrapped. For example, does `GET /user/keys` return `[{...}, {...}]` (bare array) or `{\"keys\": [{...}, {...}]}` (wrapped object)? The SDK decoding logic depends on this, and it is not explicitly stated in this spec (though it may be in the OpenAPI spec 03)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What should the `APIError.Error()` string return? Please provide the exact format string.",
+          "context": "The testing section says to verify the `APIError.Error()` format, but the spec never defines it. Implementors and test authors need the exact format to avoid inconsistency.",
+          "options": [
+            "\"API error {Code}: {Message}\" (e.g., \"API error 404: User not found\")",
+            "\"{Code}: {Message}\" (e.g., \"404: User not found\")",
+            "\"{Message}\" (e.g., \"User not found\", code omitted)",
+            "\"apikit: {Code} {Message}\" (e.g., \"apikit: 404 User not found\")"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "When a conditional GET returns HTTP 304 and `ErrNotModified` is returned, what is the state of the `*Response[T]` return value \u2014 is it nil, or is it a populated `*Response[T]` with `Data: nil` and headers populated?",
+          "context": "Callers may want to inspect response headers (e.g., Cache-Control, Vary) even on a 304. Defining whether `*Response[T]` is non-nil on 304 determines whether header access is possible without a separate call.",
+          "options": [
+            "Return nil *Response[T] and ErrNotModified (simpler, headers unavailable)",
+            "Return a non-nil *Response[T] with Data: nil and headers populated, plus ErrNotModified (more useful, slightly more complex)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should `UpdateUserRequest.FullName` be a `*string` (pointer, with omitempty) to support partial PATCH semantics, or is it intentionally a plain `string` meaning the field is always sent?",
+          "context": "The current definition `FullName string` with no omitempty means every PATCH /user request always sets full_name (even to empty string). If the intent is to allow callers to send a PATCH that only updates some fields, it should be `*string` with omitempty.",
+          "options": [
+            "Keep as plain string \u2014 PATCH /user always sets full_name (the only patchable field today)",
+            "Change to *string with omitempty \u2014 allows future partial PATCH support and avoids sending empty string unintentionally"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Do list endpoints return a bare JSON array (e.g., `[{...}]`) or a wrapped object (e.g., `{\"keys\": [{...}]}`)?",
+          "context": "The SDK decoding logic for list methods (ListKeys, ListUsers, ListOrgs, etc.) depends on whether the response is a bare JSON array or a named field in an object. This should be explicit in the SDK spec even if it is defined in spec 03.",
+          "options": [
+            "Bare JSON array \u2014 decode directly into []T",
+            "Wrapped object \u2014 each endpoint has a named key (e.g., {\"keys\": [...]})",
+            "Mixed \u2014 some endpoints return bare arrays, some return wrapped objects (please specify which)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "For `AddOrgMember` (PUT /orgs/{id}/members/{user_id}) and similar action endpoints (PromoteUser, DemoteUser, BlockUser, UnblockUser, BlockOrg, UnblockOrg), what HTTP success status codes does the server return, and should the HTTP method mapping table be extended to include expected response status codes?",
+          "context": "The SDK must know whether to expect 200 (with a body to decode), 204 (no body), or 201 (for creates) per endpoint to correctly branch between decoding and no-op paths. The current table only shows HTTP method and path.",
+          "options": [
+            "Yes \u2014 add a 'Response Status' column to the HTTP method mapping table",
+            "No \u2014 document expected response codes inline in each method's description",
+            "These are all covered by the OpenAPI spec (spec 03); reference that instead"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should the go.mod `go` directive be pinned to a specific version (e.g., `go 1.25`), and should the spec include this explicitly?",
+          "context": "The spec says 'Go 1.25+' for the language version. Since generics (used by Response[T]) require Go 1.18+, and Go 1.25 is far above that threshold, the go.mod line is unambiguous \u2014 but explicit documentation avoids future confusion if the minimum is ever lowered.",
+          "options": [
+            "Pin go.mod to go 1.25 and state this explicitly in the spec",
+            "Leave as 'Go 1.25+' \u2014 the go.mod is out of scope for this spec",
+            "Pin to the earliest version that supports generics (go 1.21 for stability) and note Go 1.25 is tested"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written and thorough PRD for the Go SDK component. It is nearly complete and implementation-ready. The spec covers all major areas: client construction, functional options, typed structs, endpoint method signatures, URL construction, error handling (including ETag/304 flow), JSON serialization rules, testing strategy, design decisions, and a glossary. The level of detail is consistent and the internal cross-references (to spec 03) are clear. Only a small number of minor gaps and clarifications remain, none of which block implementation but which would eliminate any remaining ambiguity.",
+      "gaps": [
+        "The spec states 'Go 1.25+' as the minimum supported version, but Go 1.25 does not yet exist as a stable release. This may cause confusion \u2014 the spec should clarify whether this is a future-targeting directive or whether it means the latest stable release (e.g., Go 1.22+ or Go 1.23+).",
+        "The `Response[T]` wrapper is described as returned by ETag-capable methods (`GetUser`, `GetUserByID`, `GetToken`, `GetOrg`), but the Goals section still lists these methods with legacy signatures (e.g., `GetUser(ctx) (*User, error)`). While the Functional Requirements section has the correct `*Response[T]` signatures, the Goals section is inconsistent and could confuse implementors.",
+        "The spec mentions that `AddOrgMember` sends a PUT with no body, but does not clarify what HTTP success status code this endpoint returns (200 vs 201 vs 204). The method returns `error` only, implying 204, but this should be explicit or deferred explicitly to spec 03.",
+        "The `RevokeToken` and `RevokeUserToken` methods return only `error`, implying a 204 response, but the spec does not explicitly state this \u2014 it only states 'DELETE returns no content (204)' for RevokeToken in the test strategy. The HTTP method table should clarify the success status codes for DELETE endpoints that return no body.",
+        "There is no mention of how the SDK handles redirect responses (3xx other than 304). Go's default `http.Client` follows redirects automatically, but this behavior is not documented. If the server or a proxy ever issues a redirect, the SDK's behavior is undefined by this spec.",
+        "The spec does not address thread safety of the `Client` struct. Go users commonly share a single `Client` across goroutines; the spec should explicitly state whether `Client` is safe for concurrent use (which it appears to be, given it holds no mutable state after construction).",
+        "The error wrapping format for JSON decode errors ('wraps the JSON error with status code context') is mentioned but not specified in detail. Implementors do not know whether to use `fmt.Errorf('...%w', err)`, a custom struct, or another mechanism. A concrete format string or example would eliminate ambiguity.",
+        "The spec references `OrgMember` as a type alias for `User` in the Goals section but never defines `OrgMember` as a distinct type in the Typed Structs section \u2014 it is simply `User`. The Goals section should be updated to remove the `OrgMember` alias mention, or the Functional Requirements section should clarify the alias relationship explicitly."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the intended minimum supported Go version? The spec currently states 'Go 1.25+', which does not yet exist as a stable release. Did you mean a specific existing version (e.g., 1.21, 1.22, or 1.23), or is this intentionally forward-looking?",
+          "context": "Go generics (`Response[T]`) require at least Go 1.18. The correct minimum version affects the `go` directive in go.mod and ensures CI/CD toolchains are set up correctly. Specifying a non-existent version may confuse implementors.",
+          "options": [
+            "Go 1.21+ (current LTS-equivalent)",
+            "Go 1.22+",
+            "Go 1.23+",
+            "Go 1.24+",
+            "Intentionally forward-looking \u2014 use whatever the latest stable release is at implementation time"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Is the `Client` struct safe for concurrent use from multiple goroutines after construction? If so, should this be explicitly documented in the spec (e.g., in the Client Construction section or as a doc comment)?",
+          "context": "Go users commonly share a single client instance across goroutines (e.g., in HTTP handlers or CLI commands). If `Client` holds no mutable state after construction \u2014 which appears to be the case \u2014 this should be explicitly stated to set expectations and avoid defensive copying by callers.",
+          "options": [
+            "Yes \u2014 Client is safe for concurrent use; add an explicit statement to the spec",
+            "No \u2014 Client is not safe for concurrent use (requires explanation)",
+            "Not specified; leave it to the implementor to document"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should the Goals section method signatures be updated to reflect `*Response[T]` return types for ETag-capable methods (GetUser, GetUserByID, GetToken, GetOrg), or is the Goals section intentionally kept at a higher level of abstraction?",
+          "context": "The Goals section lists `GetUser(ctx) (*User, error)` while the Functional Requirements section correctly lists `GetUser(ctx context.Context, opts ...RequestOption) (*Response[User], error)`. This inconsistency could mislead implementors who read only the Goals section.",
+          "options": [
+            "Update Goals section to match the correct *Response[T] signatures",
+            "Keep Goals section at a high level; it is intentionally simplified",
+            "Remove method signatures from Goals section entirely \u2014 they are fully defined in Functional Requirements"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What is the expected behavior when the SDK's http.Client follows an HTTP redirect (3xx response other than 304)? Should the SDK disable automatic redirect following, or is the default Go behavior (follow redirects, up to 10 hops) acceptable?",
+          "context": "Go's default http.Client follows redirects automatically. If the server or a proxy issues a redirect, the SDK will silently follow it. This could cause unexpected behavior if the redirected URL does not require authentication (the Authorization header may be stripped on cross-origin redirects). Documenting or explicitly configuring this behavior avoids surprises.",
+          "options": [
+            "Accept default Go redirect behavior (follow up to 10 redirects)",
+            "Disable redirect following entirely \u2014 return an error on any 3xx",
+            "Follow redirects but preserve the Authorization header",
+            "Document the default behavior explicitly without changing it"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What should the JSON decode error format look like for a 2xx response with an empty or malformed body? Should the spec define a concrete error message pattern (e.g., `fmt.Errorf(\"decode response (status %d): %w\", status, err)`), or leave the format to the implementor?",
+          "context": "The spec currently says 'wraps the JSON error with status code context' but provides no concrete format. Integration tests that assert on error messages will need a known format. Specifying it here ensures test authors and implementors are aligned.",
+          "options": [
+            "Define a concrete format: fmt.Errorf(\"decode response (status %d): %w\", statusCode, err)",
+            "Define a concrete format: fmt.Errorf(\"apikit: decode %s response: %w\", status, err)",
+            "Leave the format to the implementor \u2014 only require that the original error is wrapped (errors.Unwrap works)",
+            "Not important \u2014 tests should only check error type, not message format"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD for a Go SDK component. It is thorough, internally consistent, and covers all the major dimensions expected of a spec-format document: intent, goals, non-goals, dependencies, technical stack, repository layout, functional requirements, interfaces, error handling, testing strategy, design decisions, and a glossary. The typed struct definitions, method signatures, URL construction rules, error classification, and testing scenarios are all precisely specified. The document is implementation-ready with very few ambiguities. Only minor gaps exist, primarily around a handful of implementation edge cases and operational concerns that could benefit from explicit clarification.",
+      "gaps": [
+        "There is no explicit specification of how the `do` method should handle a 2xx response with a non-empty but non-JSON body (e.g., a server that returns 200 with plain text). The spec says empty or malformed body on 2xx returns a plain error, but 'malformed' could be interpreted narrowly. A concrete example for non-JSON 2xx bodies would remove ambiguity.",
+        "The `Response[T]` wrapper's `StatusCode` field is defined but the spec never explicitly states what value is set for non-200 2xx responses (e.g., a 201 on GetUser if a proxy misbehaves). This is an edge case, but the field's semantics under partial success codes could be clarified.",
+        "The spec does not address what happens when `NewClient` is called with an empty `baseURL` string \u2014 whether it panics, returns a usable (but broken) client, or validates at construction time. This is important for developer ergonomics.",
+        "There is no specification for how path parameters containing special characters (e.g., slashes, percent signs in `keyID` or `userID`) should be handled \u2014 whether the SDK URL-encodes them or passes them raw.",
+        "The testing strategy mentions 'network error: client pointed at non-existent server' but does not specify whether a DNS resolution failure vs. a connection-refused failure are both acceptable proxies for this test, which could matter in CI environments.",
+        "The spec does not define behavior when `WithMountPoint` is called with an empty string or a string without a leading slash \u2014 whether this is accepted as-is, normalized, or rejected.",
+        "There is no mention of how concurrent requests interact with the `context.Context` passed to each method when the same `*Client` is used across goroutines \u2014 while concurrency safety of `Client` fields is stated, the per-request context lifecycle under concurrent use is not illustrated.",
+        "The spec does not state whether `ListUsersOptions` and `ListOrgsOptions` could be extended in the future with additional filter fields, or if the struct is considered frozen. This affects how implementors should think about forward compatibility of the options structs."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What should `NewClient` do when called with an empty `baseURL` string \u2014 panic, return a client that fails on first use, or validate and return an error?",
+          "context": "Calling `NewClient` with an empty base URL is a likely developer mistake. Specifying the behavior (e.g., panic with a descriptive message, or return a client that surfaces an error on first request) improves predictability and debugging.",
+          "options": [
+            "Panic immediately with a descriptive message (e.g., 'apikit: NewClient: baseURL must not be empty')",
+            "Return a *Client that returns an error on the first method call",
+            "Silently accept it (caller is responsible for providing a valid URL)",
+            "No preference \u2014 leave it to the implementor"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the SDK URL-encode path parameters (e.g., `keyID`, `userID`, `tokenID`) before interpolating them into the request URL?",
+          "context": "If IDs contain characters that are invalid in URL path segments (e.g., slashes, percent signs), passing them raw will produce malformed URLs. Specifying whether `url.PathEscape` is applied to path parameters prevents a class of subtle bugs.",
+          "options": [
+            "Yes \u2014 always apply url.PathEscape to all path parameters before URL construction",
+            "No \u2014 IDs are assumed to be URL-safe (UUIDs or alphanumeric); no escaping needed",
+            "Leave it to the implementor"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What should happen when `WithMountPoint` is called with an empty string or a string without a leading slash (e.g., `\"api/v1\"` instead of `\"/api/v1\"`)?",
+          "context": "An incorrectly formatted mount point will silently produce broken URLs. Specifying normalization (add leading slash if missing) or rejection (panic or ignore) prevents runtime URL construction bugs.",
+          "options": [
+            "Normalize: add a leading slash if missing; strip trailing slash",
+            "Accept as-is (caller is responsible for correct format)",
+            "Panic if the mount point does not start with '/'",
+            "Leave it to the implementor"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Are `ListUsersOptions` and `ListOrgsOptions` expected to be extended with additional filter fields in future iterations, or are they considered stable/frozen for this spec?",
+          "context": "If these structs are expected to grow (e.g., adding pagination, search, or sort options later), it may influence whether the implementor adds forward-compatibility comments or designs the query-parameter construction more generically.",
+          "options": [
+            "Expected to grow \u2014 design query-parameter construction to be easily extensible",
+            "Frozen for this iteration \u2014 no extensibility needed beyond what is specified",
+            "No strong opinion"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now fully implementation-ready. All four user answers have been incorporated cleanly: (1) empty `baseURL` behavior is explicitly specified as silently accepted with errors deferred to request time, documented in Goals, Non-Goals, Client Construction, and the Glossary; (2) path parameter URL-safety assumption is stated in Goals, Client Construction, Non-Goals, and a Design Decision; (3) `WithMountPoint` normalization rules (add leading slash, strip trailing slash) are specified with examples in Goals, the option's doc comment, Client Construction, and a dedicated Design Decision; (4) `ListUsersOptions`/`ListOrgsOptions` extensibility is documented in Goals, Query Parameters, the struct doc comments, the Technical Stack table (adding `net/url`), a Design Decision, and the Glossary. The previously flagged gap about non-JSON 2xx bodies is also resolved with an explicit test case and clarified error-classification language. The `Response[T].StatusCode` semantics are now fully specified. The document is internally consistent, covers all functional requirements, and contains no remaining ambiguities that would block implementation.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Yes, the SDK types will be the canonical shared types used by both client and server handlers.",
+        "q2": "This case is covered by the existing JSON decode error on response row in the error table \u2014 no change needed."
+      },
+      "timestamp": "2026-07-17T12:25:55.356480+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "\"API error {Code}: {Message}\" (e.g., \"API error 404: User not found\")",
+        "q2": "Return nil *Response[T] and ErrNotModified (simpler, headers unavailable)",
+        "q3": "Keep as plain string \u2014 PATCH /user always sets full_name (the only patchable field today)",
+        "q4": "Bare JSON array \u2014 decode directly into []T",
+        "q5": "These are all covered by the OpenAPI spec (spec 03); reference that instead",
+        "q6": "Leave as Go 1.25+ \u2014 the go.mod is out of scope for this spec"
+      },
+      "timestamp": "2026-07-17T12:29:50.783381+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Intentionally forward-looking \u2014 use whatever the latest stable release is at implementation time",
+        "q2": "Yes \u2014 Client is safe for concurrent use; add an explicit statement to the spec",
+        "q3": "Keep Goals section at a high level; it is intentionally simplified",
+        "q4": "Accept default Go redirect behavior (follow up to 10 redirects)",
+        "q5": "Leave the format to the implementor \u2014 only require that the original error is wrapped (errors.Unwrap works)"
+      },
+      "timestamp": "2026-07-17T12:34:15.391763+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "Silently accept it (caller is responsible for providing a valid URL)",
+        "q2": "No \u2014 IDs are assumed to be URL-safe (UUIDs or alphanumeric); no escaping needed",
+        "q3": "Normalize: add a leading slash if missing; strip trailing slash",
+        "q4": "Expected to grow \u2014 design query-parameter construction to be easily extensible"
+      },
+      "timestamp": "2026-07-17T12:39:02.178681+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

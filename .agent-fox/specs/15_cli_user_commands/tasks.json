@@ -1,0 +1,1545 @@
+{
+  "$schema": null,
+  "spec_id": "15",
+  "spec_name": "cli_user_commands",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/cli/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "13",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Uses CLI infrastructure: Cobra root command, config loading/saving, output formatting, error handling, persistent flags, NewAuthenticatedClient, and help --json metadata registration.",
+      "sentinel": true
+    },
+    {
+      "depends_on_spec": "12",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "All commands delegate to Go SDK client methods: GetProviders, ExchangeOAuthCode, GetUser, UpdateUser, ListKeys, RefreshKey, RevokeKey, ListTokens, CreateToken, GetToken, RevokeToken, ListUserOrgs, GetOrg, ListOrgMembers.",
+      "sentinel": true
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write Tests — Helper Functions (parseKeyID, validateExpires, parsePermissions, openBrowser)",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write parseKeyID unit tests",
+          "details": [
+            "Create internal/cli/helpers_test.go.",
+            "TS-15-39: call parseKeyID with 'ak_abc12345_secret', 'myapp_abc12345_secret', 'my_app_abc12345_secret'; assert all return 'abc12345', nil.",
+            "TS-15-40: call parseKeyID with 'badkey', 'onlytwo_segments'; assert both return '', non-nil error.",
+            "Property test TS-15-P5: generate api_key strings with 0-5 underscore prefix variants; assert penultimate segment always returned for >=3 segments; error for <3 segments."
+          ],
+          "test_spec_refs": [
+            "TS-15-39",
+            "TS-15-40"
+          ],
+          "requirement_refs": [
+            "15-REQ-15.1",
+            "15-REQ-15.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write validateExpires unit tests",
+          "details": [
+            "In helpers_test.go, add TestValidateExpires.",
+            "TS-15-41: assert validateExpires returns nil for {0, 30, 60, 90}; non-nil error for {1, 15, 45, 91, -1, 100}.",
+            "Property test TS-15-P7: iterate all integers in [-10, 100]; assert nil iff value in {0,30,60,90}; check large values 1000, -1000.",
+            "Verify error message contains '--expires must be 0, 30, 60, or 90'."
+          ],
+          "test_spec_refs": [
+            "TS-15-41"
+          ],
+          "requirement_refs": [
+            "15-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write parsePermissions unit tests",
+          "details": [
+            "In helpers_test.go, add TestParsePermissions.",
+            "TS-15-42: 'users:read,orgs:read' → ['users:read','orgs:read']; 'users:read, orgs:read' → same (whitespace trimmed); 'users:read' → ['users:read'].",
+            "TS-15-43: '' → nil, error '--permissions must not be empty'; '  , ' → nil, same error.",
+            "Verify no individual entry format validation occurs (e.g. 'notacolon' passes through)."
+          ],
+          "test_spec_refs": [
+            "TS-15-42",
+            "TS-15-43"
+          ],
+          "requirement_refs": [
+            "15-REQ-17.1",
+            "15-REQ-17.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write openBrowser unit tests",
+          "details": [
+            "In helpers_test.go, add TestOpenBrowser.",
+            "TS-15-44: stub exec.Command injection; on darwin GOOS assert 'open' invoked; on linux GOOS assert 'xdg-open' invoked.",
+            "Assert non-nil error returned when stub command fails.",
+            "Implement openBrowser to accept an injectable exec function for testability."
+          ],
+          "test_spec_refs": [
+            "TS-15-44"
+          ],
+          "requirement_refs": [
+            "15-REQ-18.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write state parameter generation and authorization URL construction tests",
+          "details": [
+            "In login_test.go (or helpers_test.go), add TestGenerateState: assert length==64, matches ^[0-9a-f]{64}$, two consecutive calls differ.",
+            "Property test TS-15-P1: generate 100 state params; assert length and pattern invariants.",
+            "TS-15-10: call buildAuthURL with authorize_url='https://auth.example.com/oauth?client_id=abc123&scope=read', redirectURI, state; assert all original params preserved, redirect_uri/state/response_type=code added, client_id appears exactly once.",
+            "Property test TS-15-P2: generate random authorize_url with arbitrary existing params; assert no overwrites, no param removal."
+          ],
+          "test_spec_refs": [
+            "TS-15-8",
+            "TS-15-10"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.4",
+            "15-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write command metadata and flag default unit tests",
+          "details": [
+            "TS-15-1: assert root.Commands() contains exactly 5 groups: login, user, keys, tokens, orgs.",
+            "TS-15-2: for each constructor, assert Use, Short, Long non-empty; RunE non-nil; help-json annotation fields present.",
+            "TS-15-3: NewLoginCmd() annotation: composite=true, method=null, path=null, auth='none'.",
+            "TS-15-4: all non-login commands: auth='api_key', non-null method and path.",
+            "TS-15-5: NewLoginCmd() --provider default='github', --expires default=90."
+          ],
+          "test_spec_refs": [
+            "TS-15-1",
+            "TS-15-2",
+            "TS-15-3",
+            "TS-15-4",
+            "TS-15-5"
+          ],
+          "requirement_refs": [
+            "15-REQ-1.1",
+            "15-REQ-1.2",
+            "15-REQ-1.3",
+            "15-REQ-1.4",
+            "15-REQ-2.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All tests in internal/cli/ compile without errors: go build ./internal/cli/...",
+          "Spec tests pass (currently expected to fail as stubs): go test ./internal/cli/... -count=1 -v -run 'TestParseKeyID|TestValidateExpires|TestParsePermissions|TestOpenBrowser|TestGenerateState|TestBuildAuthURL|TestCommand'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-15.1, 15-REQ-15.2, 15-REQ-16.1, 15-REQ-17.1, 15-REQ-17.2, 15-REQ-18.1, 15-REQ-2.4, 15-REQ-2.6, 15-REQ-1.1–1.4, 15-REQ-2.1 test coverage exists"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write Tests — Login Command (OAuth Flow, Callback Server, Timeout)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write login command precondition and flag validation tests",
+          "details": [
+            "In login_test.go, add TestLoginMissingEndpointURL: clear ENDPOINT_URL and config; run login; assert exit code 2 and error JSON 'endpoint URL is required for login'.",
+            "TS-15-20: run login with --expires 45; assert exit code 2 and '--expires must be 0, 30, 60, or 90' error JSON.",
+            "TS-15-49: assert loginTimeoutSeconds==120; call runLogin with 50ms timeout, assert timeout error returned; verify constant unchanged after call.",
+            "TS-15-12: inspect RunE passes time.Duration(loginTimeoutSeconds)*time.Second to runLogin."
+          ],
+          "test_spec_refs": [
+            "TS-15-19",
+            "TS-15-20",
+            "TS-15-49"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.15",
+            "15-REQ-2.16",
+            "15-REQ-22.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write callback server handler tests (valid callback, state mismatch, non-/callback paths)",
+          "details": [
+            "TS-15-9: start callback server; send GET /favicon.ico; assert HTTP 404; assert neither codeCh nor errCh receives value; assert server still responding.",
+            "Property test TS-15-P3: test arbitrary non-/callback paths; assert HTTP 404 and no channel signals.",
+            "TS-15-13: send GET /callback?state=correct&code=authcode123; assert HTTP 200, verbatim success HTML body, codeCh receives 'authcode123'.",
+            "TS-15-14: send GET /callback?state=wrongstate&code=auth123; assert HTTP 400, verbatim state-mismatch HTML body, errCh receives non-nil error."
+          ],
+          "test_spec_refs": [
+            "TS-15-9",
+            "TS-15-13",
+            "TS-15-14"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.9",
+            "15-REQ-2.10",
+            "15-REQ-2.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write login timeout and browser open fallback tests",
+          "details": [
+            "TS-15-18: call runLogin with timeout=100ms and no callback sent; assert error contains 'login timed out waiting for browser callback'; assert exit code 2 via full command run.",
+            "Edge case TS-15-E3: verify callback server is shut down (connection refused) after timeout.",
+            "TS-15-11: inject openBrowser stub returning error; assert stderr contains 'Opening browser for authentication...' and 'Open this URL in your browser:'; assert login flow continues.",
+            "Edge case TS-15-E4: verify browser failure is non-fatal."
+          ],
+          "test_spec_refs": [
+            "TS-15-11",
+            "TS-15-18"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.14",
+            "15-REQ-2.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write login integration tests (provider not found, GetProviders call, code exchange)",
+          "details": [
+            "TS-15-6: mock server returns providers list; assert GET /providers called; assert flow proceeds to provider lookup.",
+            "TS-15-7: mock returns providers without 'gitlab'; run login --provider gitlab; assert exit code 1, error JSON with code 404 and message 'provider gitlab not found'.",
+            "TS-15-15: complete login flow to code exchange; assert POST body contains provider='github', code='testcode', redirect_uri matches http://127.0.0.1:[0-9]+/callback, expires=30."
+          ],
+          "test_spec_refs": [
+            "TS-15-6",
+            "TS-15-7",
+            "TS-15-15"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.2",
+            "15-REQ-2.3",
+            "15-REQ-2.11"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write login success, config save, and shutdown tests",
+          "details": [
+            "TS-15-16: full login flow; assert config contains endpoint_url, user_id='user-123', api_key='ak_keyid_secret'; stdout contains user JSON with username='alice'; stderr contains 'Logged in as alice'; exit code 0.",
+            "TS-15-17: instrument http.Server.Shutdown to capture context; assert capturedCtx != loginCtx; assert deadline within 5 seconds.",
+            "Property test TS-15-P8: trigger all three termination paths (success, timeout, state mismatch); verify shutdown context is always fresh."
+          ],
+          "test_spec_refs": [
+            "TS-15-16",
+            "TS-15-17"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.12",
+            "15-REQ-2.13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.6",
+          "title": "Write login config write failure and state mismatch exit tests",
+          "details": [
+            "TS-15-E1: stub config save to fail; run full login flow; assert exit code 2; stdout contains 'failed to save config'; assert no user JSON or api_key value in stdout.",
+            "Property test TS-15-P4: vary ExchangeOAuthCode responses; assert no credential data in stdout on config write failure.",
+            "TS-15-E5: trigger state mismatch to cancel login context; capture Server.Shutdown context; assert fresh Background() context with <=5s deadline.",
+            "Edge case TS-15-E2: send /favicon.ico; assert HTTP 404 and server remains up."
+          ],
+          "test_spec_refs": [
+            "TS-15-E1",
+            "TS-15-E5"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.E1",
+            "15-REQ-2.E5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "Login test file compiles: go build ./internal/cli/...",
+          "Login tests run (expected to fail pending implementation): go test ./internal/cli/... -count=1 -v -run 'TestLogin'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-2.2, 15-REQ-2.3, 15-REQ-2.5, 15-REQ-2.7, 15-REQ-2.9, 15-REQ-2.10, 15-REQ-2.11, 15-REQ-2.12, 15-REQ-2.13, 15-REQ-2.14, 15-REQ-2.15, 15-REQ-2.16, 15-REQ-2.E1, 15-REQ-2.E5, 15-REQ-22.1 test coverage exists"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write Tests — User, Keys, and Tokens Commands",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write user show and user update integration tests",
+          "details": [
+            "In user_test.go, TS-15-21: mock GET /user; assert stdout contains indented User JSON; exit code 0.",
+            "TS-15-22: no api_key; assert exit code 2, 'no API key configured' error JSON; mock server receives 0 requests.",
+            "TS-15-23: mock PATCH /user; assert request body full_name='Alice Smith'; stdout contains updated User JSON; exit code 0.",
+            "TS-15-24: mock returns 422; assert exit code 1; stdout contains server error envelope."
+          ],
+          "test_spec_refs": [
+            "TS-15-21",
+            "TS-15-22",
+            "TS-15-23",
+            "TS-15-24"
+          ],
+          "requirement_refs": [
+            "15-REQ-3.1",
+            "15-REQ-3.2",
+            "15-REQ-4.1",
+            "15-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write keys list, refresh, and revoke integration tests",
+          "details": [
+            "In keys_test.go, TS-15-25: mock GET /keys; assert stdout is JSON array; exit code 0.",
+            "TS-15-26: api_key='ak_keyid123_secret'; mock refresh endpoint returns new key; assert config updated, stdout APIKeyFull JSON, stderr 'API key refreshed'.",
+            "TS-15-27: api_key='badkey'; assert exit code 2, 'invalid API key format', server receives 0 requests.",
+            "TS-15-28: api_key='ak_keyid123_secret', user_id='user-123'; mock revoke endpoint; assert config api_key and user_id cleared to empty strings; stdout RevokeKeyResponse; stderr revocation message.",
+            "TS-15-29: api_key='onlyone'; assert exit code 2, 'invalid API key format', server receives 0 requests."
+          ],
+          "test_spec_refs": [
+            "TS-15-25",
+            "TS-15-26",
+            "TS-15-27",
+            "TS-15-28",
+            "TS-15-29"
+          ],
+          "requirement_refs": [
+            "15-REQ-5.1",
+            "15-REQ-6.1",
+            "15-REQ-6.2",
+            "15-REQ-7.1",
+            "15-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write keys refresh and revoke config write failure edge case tests",
+          "details": [
+            "TS-15-48: config contains endpoint_url, user_id, api_key, custom_field='preserved'; run keys refresh; assert custom_field preserved and api_key updated atomically.",
+            "TS-15-E6: stub config save to fail after RefreshKey; assert exit code 2, config failure error envelope; new key NOT in stdout.",
+            "TS-15-E7: stub config save to fail after RevokeKey; assert exit code 2, config failure error envelope; RevokeKeyResponse NOT in stdout."
+          ],
+          "test_spec_refs": [
+            "TS-15-48",
+            "TS-15-E6",
+            "TS-15-E7"
+          ],
+          "requirement_refs": [
+            "15-REQ-6.E1",
+            "15-REQ-21.1",
+            "15-REQ-21.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write tokens list, create (happy path and validation) tests",
+          "details": [
+            "In tokens_test.go, TS-15-30: mock GET /tokens; assert stdout is []*PAT JSON array; exit code 0.",
+            "TS-15-31: mock POST /tokens; assert request body name='ci-bot', permissions=['users:read','orgs:read'], expires=30; stdout PATFull JSON; stderr warning message; exit code 0.",
+            "TS-15-32: --permissions ''; assert exit code 2, '--permissions must not be empty', server receives 0 requests.",
+            "TS-15-33: --expires 15; assert exit code 2, '--expires must be 0, 30, 60, or 90', server receives 0 requests."
+          ],
+          "test_spec_refs": [
+            "TS-15-30",
+            "TS-15-31",
+            "TS-15-32",
+            "TS-15-33"
+          ],
+          "requirement_refs": [
+            "15-REQ-8.1",
+            "15-REQ-9.1",
+            "15-REQ-9.2",
+            "15-REQ-9.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write tokens show and revoke integration tests",
+          "details": [
+            "TS-15-34: mock GET /tokens/{id}; run akc tokens show tok-abc123; assert 'tok-abc123' in captured request path; stdout PAT JSON; exit code 0.",
+            "TS-15-35: mock DELETE /tokens/{id} returns 204; run akc tokens revoke tok-abc123; assert stdout is exactly '{}' (trimmed); stderr contains 'Token tok-abc123 revoked'; exit code 0.",
+            "Property test TS-15-P9: run tokens revoke with varied token_ids; assert strip_whitespace(stdout)=='{}' in all cases."
+          ],
+          "test_spec_refs": [
+            "TS-15-34",
+            "TS-15-35"
+          ],
+          "requirement_refs": [
+            "15-REQ-10.1",
+            "15-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.6",
+          "title": "Write JSON output formatting and API error propagation tests",
+          "details": [
+            "TS-15-46: mock returns user with display_name='<Admin & Owner>'; assert '<Admin & Owner>' in stdout unescaped; assert '\\u003c' NOT in stdout; assert two-space indentation present.",
+            "TS-15-47: mock returns HTTP 401 with error envelope; run akc user show; assert exit code 1; stdout contains server error envelope JSON.",
+            "Verify no HTML escaping for all command outputs by spot-checking one additional command (e.g., orgs list)."
+          ],
+          "test_spec_refs": [
+            "TS-15-46",
+            "TS-15-47"
+          ],
+          "requirement_refs": [
+            "15-REQ-20.1",
+            "15-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "User, keys, tokens test files compile: go build ./internal/cli/...",
+          "Spec tests run: go test ./internal/cli/... -count=1 -v -run 'TestUser|TestKeys|TestTokens'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-3.1, 15-REQ-3.2, 15-REQ-4.1, 15-REQ-4.2, 15-REQ-5.1, 15-REQ-6.1, 15-REQ-6.2, 15-REQ-6.E1, 15-REQ-7.1, 15-REQ-7.2, 15-REQ-8.1, 15-REQ-9.1–9.3, 15-REQ-10.1, 15-REQ-11.1, 15-REQ-20.1, 15-REQ-20.2, 15-REQ-21.1, 15-REQ-21.E1 test coverage exists"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write Tests — Orgs Commands and Cross-Cutting Pre-validation",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write orgs list, show, and members integration tests",
+          "details": [
+            "In orgs_test.go, TS-15-36: mock GET /orgs; assert stdout is JSON array of Organizations; exit code 0.",
+            "TS-15-37: mock GET /orgs/{id}; run akc orgs show org-uuid-abc; assert 'org-uuid-abc' in captured request path; stdout Organization JSON; exit code 0.",
+            "TS-15-38: mock GET /orgs/{id}/members; run akc orgs members org-uuid-abc; assert 'org-uuid-abc' in captured request path; stdout []*User JSON array; exit code 0."
+          ],
+          "test_spec_refs": [
+            "TS-15-36",
+            "TS-15-37",
+            "TS-15-38"
+          ],
+          "requirement_refs": [
+            "15-REQ-12.1",
+            "15-REQ-13.1",
+            "15-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write pre-validation (missing api_key) tests for all authenticated commands",
+          "details": [
+            "TS-15-45: for each of the 11 authenticated commands (user show, user update, keys list, keys refresh, keys revoke, tokens list, tokens create, tokens show, tokens revoke, orgs list, orgs show, orgs members): clear api_key; run command; assert exit code 2; assert 'no API key configured' in stdout; assert mock server.requestCount == 0.",
+            "Property test TS-15-P6: enumerate all authenticated commands with no api_key; assert no HTTP requests and exit code 2 for all."
+          ],
+          "test_spec_refs": [
+            "TS-15-45"
+          ],
+          "requirement_refs": [
+            "15-REQ-19.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write loginTimeoutSeconds constant invariant property test",
+          "details": [
+            "Property test TS-15-P10: call runLogin multiple times with short timeouts; after each call assert loginTimeoutSeconds == 120.",
+            "Verify the constant is defined as a package-level const (not var) in login.go.",
+            "Assert runLogin function signature is func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error."
+          ],
+          "test_spec_refs": [
+            "TS-15-49"
+          ],
+          "requirement_refs": [
+            "15-REQ-22.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Orgs test file compiles: go build ./internal/cli/...",
+          "Spec tests run: go test ./internal/cli/... -count=1 -v -run 'TestOrgs|TestPreValidation|TestLoginTimeout'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-12.1, 15-REQ-13.1, 15-REQ-14.1, 15-REQ-19.1, 15-REQ-22.1 test coverage exists"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement Helper Functions in helpers.go",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement parseKeyID helper",
+          "details": [
+            "Create internal/cli/helpers.go.",
+            "Implement func parseKeyID(apiKey string) (string, error).",
+            "Split on '_'; if len(parts) < 3 return '', fmt.Errorf(\"invalid API key format\").",
+            "Return parts[len(parts)-2] as key_id.",
+            "Handles prefixes with embedded underscores correctly by always taking penultimate segment."
+          ],
+          "test_spec_refs": [
+            "TS-15-39",
+            "TS-15-40"
+          ],
+          "requirement_refs": [
+            "15-REQ-15.1",
+            "15-REQ-15.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement validateExpires helper",
+          "details": [
+            "In helpers.go, implement func validateExpires(v int) error.",
+            "Return nil if v in {0, 30, 60, 90}.",
+            "Return fmt.Errorf(\"--expires must be 0, 30, 60, or 90\") for all other values."
+          ],
+          "test_spec_refs": [
+            "TS-15-41"
+          ],
+          "requirement_refs": [
+            "15-REQ-16.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Implement parsePermissions helper",
+          "details": [
+            "In helpers.go, implement func parsePermissions(s string) ([]string, error).",
+            "Split s on ','; trim whitespace from each entry; discard empty entries.",
+            "If resulting slice is empty, return nil, fmt.Errorf(\"--permissions must not be empty\").",
+            "Return non-empty []string, nil on success.",
+            "Do NOT validate individual entry format (e.g., resource_type:action)."
+          ],
+          "test_spec_refs": [
+            "TS-15-42",
+            "TS-15-43"
+          ],
+          "requirement_refs": [
+            "15-REQ-17.1",
+            "15-REQ-17.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Implement openBrowser helper",
+          "details": [
+            "In helpers.go, implement func openBrowser(url string) error.",
+            "Use runtime.GOOS: 'darwin' → exec.Command(\"open\", url).Run(); 'linux' → exec.Command(\"xdg-open\", url).Run().",
+            "Return the command's error (or a 'unsupported OS' error for other GOOS values).",
+            "Extract exec invocation via an injectable function pointer for testability: e.g., var execCommand = exec.Command."
+          ],
+          "test_spec_refs": [
+            "TS-15-44"
+          ],
+          "requirement_refs": [
+            "15-REQ-18.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Implement state generation and authorization URL builder helpers",
+          "details": [
+            "In login.go (or helpers.go), implement func generateState() (string, error): crypto/rand.Read(make([]byte,32)); hex.EncodeToString; return 64-char hex string.",
+            "Implement func buildAuthURL(authorizeURL, redirectURI, state string) (string, error): url.Parse authorizeURL; q := u.Query(); add redirect_uri, state, response_type=code; u.RawQuery = q.Encode(); return u.String().",
+            "Do NOT add client_id; preserve all existing query params from authorizeURL."
+          ],
+          "test_spec_refs": [
+            "TS-15-8",
+            "TS-15-10"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.4",
+            "15-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Helper unit tests pass: go test ./internal/cli/... -count=1 -v -run 'TestParseKeyID|TestValidateExpires|TestParsePermissions|TestOpenBrowser|TestGenerateState|TestBuildAuthURL'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-15.1, 15-REQ-15.2, 15-REQ-16.1, 15-REQ-17.1, 15-REQ-17.2, 15-REQ-18.1, 15-REQ-2.4, 15-REQ-2.6 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement Login Command (login.go)",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement NewLoginCmd and runLogin skeleton with flags and precondition checks",
+          "details": [
+            "Create internal/cli/login.go.",
+            "Define const loginTimeoutSeconds = 120.",
+            "Define type loginOpts struct { provider string; expires int; endpointURL string }.",
+            "Implement func NewLoginCmd() *cobra.Command with --provider (default 'github') and --expires (default 90) flags.",
+            "Set help-json annotation: composite=true, method=null, path=null, auth='none'.",
+            "RunE: validate endpoint_url present (exit code 2 if missing); call validateExpires (exit code 2 if invalid); call runLogin(ctx, time.Duration(loginTimeoutSeconds)*time.Second, opts).",
+            "Implement func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error as a stub (panic(\"not implemented\")) initially."
+          ],
+          "test_spec_refs": [
+            "TS-15-5",
+            "TS-15-19",
+            "TS-15-20",
+            "TS-15-49"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.1",
+            "15-REQ-2.15",
+            "15-REQ-2.16",
+            "15-REQ-22.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement OAuth callback server and channel-based communication",
+          "details": [
+            "Implement local callback server: net.Listen(\"tcp\", \"127.0.0.1:0\"); &http.Server{Handler: mux}.",
+            "Register handler for /callback only; all other paths: w.WriteHeader(http.StatusNotFound); return.",
+            "Success HTML const: '<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>'.",
+            "Error HTML const: '<html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>'.",
+            "Handler: validate state param; on mismatch send on errCh, write HTTP 400 + error HTML, return; on match write HTTP 200 + success HTML, send code on codeCh.",
+            "Derive redirect_uri as 'http://127.0.0.1:<port>/callback' from listener address."
+          ],
+          "test_spec_refs": [
+            "TS-15-9",
+            "TS-15-13",
+            "TS-15-14"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.5",
+            "15-REQ-2.9",
+            "15-REQ-2.10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement runLogin core flow: GetProviders, browser open, select, code exchange",
+          "details": [
+            "In runLogin: apikit.NewClient(opts.endpointURL); client.GetProviders(ctx); find provider by name; exit code 1 if not found.",
+            "Generate state via generateState(); start callback server; build auth URL via buildAuthURL().",
+            "Print 'Opening browser for authentication...' to stderr; call openBrowser(authURL); on failure print 'Open this URL in your browser: <url>' to stderr.",
+            "Create codeCh chan string and errCh chan error; create context with timeout using time.WithTimeout.",
+            "Select on codeCh (proceed to exchange), errCh (cancel ctx, return CSRF error), ctx.Done() (return timeout error).",
+            "On code: call client.ExchangeOAuthCode(ctx, &apikit.AuthCallbackRequest{Provider, Code, RedirectURI, Expires: &opts.expires})."
+          ],
+          "test_spec_refs": [
+            "TS-15-6",
+            "TS-15-7",
+            "TS-15-11",
+            "TS-15-15"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.2",
+            "15-REQ-2.3",
+            "15-REQ-2.7",
+            "15-REQ-2.8",
+            "15-REQ-2.11"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Implement runLogin config save, output, and graceful server shutdown",
+          "details": [
+            "On successful ExchangeOAuthCode: call CLI Core save function with endpoint_url, user_id=response.User.ID, api_key=response.APIKey.Key.",
+            "On config save failure: return error 'failed to save config: <detail>'; do NOT print user JSON.",
+            "On config save success: marshal response.User as indented JSON (two-space, no HTML escape) to stdout; print 'Logged in as <username>' to stderr.",
+            "Shutdown: shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second); defer cancel(); server.Shutdown(shutdownCtx).",
+            "Always shut down server (defer or explicit) regardless of success/failure path."
+          ],
+          "test_spec_refs": [
+            "TS-15-16",
+            "TS-15-17",
+            "TS-15-E1",
+            "TS-15-E5"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.12",
+            "15-REQ-2.13",
+            "15-REQ-2.E1",
+            "15-REQ-2.E5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Login tests pass: go test ./internal/cli/... -count=1 -v -run 'TestLogin'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-2.1 through 15-REQ-2.16, 15-REQ-2.E1–2.E5, 15-REQ-22.1 acceptance criteria met",
+          "loginTimeoutSeconds == 120 constant defined and never modified"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement User and Keys Commands",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement akc user show and akc user update commands",
+          "details": [
+            "Create internal/cli/user.go.",
+            "Implement NewUserCmd() *cobra.Command: parent command 'user' with no RunE.",
+            "Implement NewUserShowCmd(): no flags; RunE: NewAuthenticatedClient; client.GetUser(ctx); marshal response.Data as indented JSON to stdout.",
+            "Implement NewUserUpdateCmd(): --full-name (string, MarkFlagRequired); no client-side validation; client.UpdateUser(ctx, &apikit.UpdateUserRequest{FullName: fullName}); marshal *User as indented JSON to stdout.",
+            "Set help-json annotations: auth='api_key', method='GET'/'PATCH', appropriate paths.",
+            "Register show and update as subcommands of user parent."
+          ],
+          "test_spec_refs": [
+            "TS-15-21",
+            "TS-15-22",
+            "TS-15-23",
+            "TS-15-24"
+          ],
+          "requirement_refs": [
+            "15-REQ-3.1",
+            "15-REQ-3.2",
+            "15-REQ-4.1",
+            "15-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement akc keys list command",
+          "details": [
+            "Create internal/cli/keys.go.",
+            "Implement NewKeysCmd() *cobra.Command: parent command 'keys'.",
+            "Implement NewKeysListCmd(): no flags; RunE: NewAuthenticatedClient; client.ListKeys(ctx); marshal []*APIKeyMeta as indented JSON to stdout.",
+            "Set help-json annotations: auth='api_key', method='GET'."
+          ],
+          "test_spec_refs": [
+            "TS-15-25"
+          ],
+          "requirement_refs": [
+            "15-REQ-5.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement akc keys refresh command",
+          "details": [
+            "Implement NewKeysRefreshCmd(): no flags.",
+            "RunE: NewAuthenticatedClient (exits code 2 if api_key absent); parseKeyID(apiKey) (exits code 2 on invalid format).",
+            "Call client.RefreshKey(ctx, keyID); on success call CLI Core atomic write to update api_key with response.Key.",
+            "On config write failure: return error 'failed to save config: <detail>'; do NOT print new key.",
+            "On success: marshal APIKeyFull as indented JSON to stdout; print 'API key refreshed' to stderr."
+          ],
+          "test_spec_refs": [
+            "TS-15-26",
+            "TS-15-27",
+            "TS-15-E6"
+          ],
+          "requirement_refs": [
+            "15-REQ-6.1",
+            "15-REQ-6.2",
+            "15-REQ-6.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Implement akc keys revoke command",
+          "details": [
+            "Implement NewKeysRevokeCmd(): no flags.",
+            "RunE: NewAuthenticatedClient; parseKeyID(apiKey) (exits code 2 on invalid format).",
+            "Call client.RevokeKey(ctx, keyID); on success clear api_key and user_id to empty strings via CLI Core atomic write.",
+            "Marshal RevokeKeyResponse as indented JSON to stdout; print 'API key revoked. Run akc login to obtain a new key.' to stderr.",
+            "Register list, refresh, revoke as subcommands of keys parent."
+          ],
+          "test_spec_refs": [
+            "TS-15-28",
+            "TS-15-29"
+          ],
+          "requirement_refs": [
+            "15-REQ-7.1",
+            "15-REQ-7.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "User and keys tests pass: go test ./internal/cli/... -count=1 -v -run 'TestUser|TestKeys'",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-3.1, 15-REQ-3.2, 15-REQ-4.1, 15-REQ-4.2, 15-REQ-5.1, 15-REQ-6.1, 15-REQ-6.2, 15-REQ-6.E1, 15-REQ-7.1, 15-REQ-7.2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement Tokens and Orgs Commands",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement akc tokens list and tokens create commands",
+          "details": [
+            "Create internal/cli/tokens.go.",
+            "Implement NewTokensCmd() *cobra.Command: parent command 'tokens'.",
+            "Implement NewTokensListCmd(): no flags; client.ListTokens(ctx); marshal []*PAT as indented JSON to stdout.",
+            "Implement NewTokensCreateCmd(): --name (MarkFlagRequired), --permissions (MarkFlagRequired), --expires (default 90); parsePermissions (exit code 2 on empty); validateExpires (exit code 2 on invalid); client.CreateToken(ctx, &apikit.CreateTokenRequest{Name, Permissions, Expires: &expires}); marshal PATFull as indented JSON to stdout; print warning to stderr."
+          ],
+          "test_spec_refs": [
+            "TS-15-30",
+            "TS-15-31",
+            "TS-15-32",
+            "TS-15-33"
+          ],
+          "requirement_refs": [
+            "15-REQ-8.1",
+            "15-REQ-9.1",
+            "15-REQ-9.2",
+            "15-REQ-9.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement akc tokens show and tokens revoke commands",
+          "details": [
+            "Implement NewTokensShowCmd(): Args: cobra.ExactArgs(1); client.GetToken(ctx, args[0]); marshal response.Data as indented JSON to stdout.",
+            "Implement NewTokensRevokeCmd(): Args: cobra.ExactArgs(1); client.RevokeToken(ctx, args[0]) returns only error; on success write '{}' to stdout; print 'Token <token_id> revoked' to stderr.",
+            "Register list, create, show, revoke as subcommands of tokens parent.",
+            "Set help-json annotations on all token commands: auth='api_key', appropriate methods and paths."
+          ],
+          "test_spec_refs": [
+            "TS-15-34",
+            "TS-15-35"
+          ],
+          "requirement_refs": [
+            "15-REQ-10.1",
+            "15-REQ-11.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement akc orgs list, orgs show, and orgs members commands",
+          "details": [
+            "Create internal/cli/orgs.go.",
+            "Implement NewOrgsCmd() *cobra.Command: parent command 'orgs'.",
+            "Implement NewOrgsListCmd(): client.ListUserOrgs(ctx); marshal []*Organization as indented JSON to stdout.",
+            "Implement NewOrgsShowCmd(): Args: cobra.ExactArgs(1); client.GetOrg(ctx, args[0]); marshal response.Data as indented JSON to stdout.",
+            "Implement NewOrgsMembersCmd(): Args: cobra.ExactArgs(1); client.ListOrgMembers(ctx, args[0]); marshal []*User as indented JSON to stdout.",
+            "Register list, show, members as subcommands of orgs parent."
+          ],
+          "test_spec_refs": [
+            "TS-15-36",
+            "TS-15-37",
+            "TS-15-38"
+          ],
+          "requirement_refs": [
+            "15-REQ-12.1",
+            "15-REQ-13.1",
+            "15-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Register all command groups in cmd/akc/main.go",
+          "details": [
+            "Update cmd/akc/main.go to call root.AddCommand(cli.NewLoginCmd(), cli.NewUserCmd(), cli.NewKeysCmd(), cli.NewTokensCmd(), cli.NewOrgsCmd()).",
+            "Ensure no init() functions are used for registration.",
+            "Verify binary compiles and runs: go build ./cmd/akc/... and akc --help shows all five command groups."
+          ],
+          "test_spec_refs": [
+            "TS-15-1"
+          ],
+          "requirement_refs": [
+            "15-REQ-1.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Tokens and orgs tests pass: go test ./internal/cli/... -count=1 -v -run 'TestTokens|TestOrgs'",
+          "All spec tests pass: go test ./internal/cli/... -count=1 -v",
+          "Binary compiles and shows all five command groups: go build ./cmd/akc/... && ./akc --help",
+          "go vet ./internal/cli/... reports no issues",
+          "Requirements 15-REQ-8.1, 15-REQ-9.1–9.3, 15-REQ-10.1, 15-REQ-11.1, 15-REQ-12.1, 15-REQ-13.1, 15-REQ-14.1, 15-REQ-1.1 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "checkpoint",
+      "title": "Checkpoint — Full Spec Test Suite Green",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Run full spec test suite and confirm all tests pass",
+          "details": [
+            "Run go test ./internal/cli/... -count=1 -v and confirm all tests pass.",
+            "Run go test ./... -count=1 and confirm no regressions in other packages.",
+            "Confirm TS-15-45 (pre-validation for all 11 authenticated commands) passes.",
+            "Confirm TS-15-46 (no HTML escaping) and TS-15-47 (API error propagation) pass."
+          ],
+          "test_spec_refs": [
+            "TS-15-1",
+            "TS-15-2",
+            "TS-15-3",
+            "TS-15-4",
+            "TS-15-45",
+            "TS-15-46",
+            "TS-15-47"
+          ],
+          "requirement_refs": [
+            "15-REQ-1.1",
+            "15-REQ-1.2",
+            "15-REQ-1.3",
+            "15-REQ-1.4",
+            "15-REQ-19.1",
+            "15-REQ-20.1",
+            "15-REQ-20.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Verify property tests and edge case tests pass",
+          "details": [
+            "Run property tests explicitly: go test ./internal/cli/... -count=1 -v -run 'TestProperty|TestProp'.",
+            "Confirm TS-15-P1 (state 64 hex chars), TS-15-P2 (auth URL preserves params), TS-15-P3 (non-/callback 404), TS-15-P5 (parseKeyID penultimate), TS-15-P7 (validateExpires {0,30,60,90}) all pass.",
+            "Confirm TS-15-P9 (tokens revoke outputs {}), TS-15-P10 (loginTimeoutSeconds constant) pass."
+          ],
+          "test_spec_refs": [
+            "TS-15-P1",
+            "TS-15-P2",
+            "TS-15-P3",
+            "TS-15-P4",
+            "TS-15-P5",
+            "TS-15-P6",
+            "TS-15-P7",
+            "TS-15-P8",
+            "TS-15-P9",
+            "TS-15-P10"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.4",
+            "15-REQ-2.6",
+            "15-REQ-15.1",
+            "15-REQ-16.1",
+            "15-REQ-17.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Verify edge case tests pass",
+          "details": [
+            "Run edge case tests: go test ./internal/cli/... -count=1 -v -run 'TestEdge|TestConfigWriteFail|TestStateMismatch|TestTimeout|TestFavicon'.",
+            "Confirm TS-15-E1 (config write failure in login, no creds in stdout) passes.",
+            "Confirm TS-15-E2 (favicon.ico returns 404, server stays up), TS-15-E3 (timeout shuts server) pass.",
+            "Confirm TS-15-E6 (keys refresh config fail) and TS-15-E7 (keys revoke config fail) pass."
+          ],
+          "test_spec_refs": [
+            "TS-15-E1",
+            "TS-15-E2",
+            "TS-15-E3",
+            "TS-15-E4",
+            "TS-15-E5",
+            "TS-15-E6",
+            "TS-15-E7"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.E1",
+            "15-REQ-2.E2",
+            "15-REQ-2.E3",
+            "15-REQ-2.E4",
+            "15-REQ-2.E5",
+            "15-REQ-6.E1",
+            "15-REQ-21.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All internal/cli tests pass: go test ./internal/cli/... -count=1 -v reports 0 failures",
+          "All tests in repo pass: go test ./... -count=1 reports 0 failures",
+          "go vet ./... reports no issues",
+          "No panic(\"not implemented\") or bare stubs remain in internal/cli/: grep -r 'not implemented' internal/cli/ returns empty"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification — End-to-End Integration and Stub Audit",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Trace execution paths — verify each path's function chain is wired end-to-end",
+          "details": [
+            "15-PATH-1 (login): verify main.go → NewLoginCmd → RunE → runLogin → GetProviders → callback server → ExchangeOAuthCode → CLI Core save → stdout JSON → stderr message; each step calls the next with no stubs.",
+            "15-PATH-2 (user show): verify NewUserShowCmd → RunE → NewAuthenticatedClient → client.GetUser → marshal response.Data → stdout.",
+            "15-PATH-3 (keys refresh): verify NewKeysRefreshCmd → RunE → parseKeyID → client.RefreshKey → CLI Core atomic write → stdout APIKeyFull JSON.",
+            "Confirm all five parent commands (NewLoginCmd, NewUserCmd, NewKeysCmd, NewTokensCmd, NewOrgsCmd) are called in cmd/akc/main.go."
+          ],
+          "test_spec_refs": [
+            "TS-15-SMOKE-1",
+            "TS-15-SMOKE-2",
+            "TS-15-SMOKE-3"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.2",
+            "15-REQ-2.11",
+            "15-REQ-2.12",
+            "15-REQ-3.1",
+            "15-REQ-6.1",
+            "15-REQ-7.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Verify return value propagation — callers receive and use return values",
+          "details": [
+            "Verify runLogin returns error from ExchangeOAuthCode and propagates it to RunE.",
+            "Verify NewKeysRefreshCmd uses response.Key from RefreshKey to update config (not ignoring the return value).",
+            "Verify NewTokensRevokeCmd writes '{}' to stdout — confirm the hardcoded empty object is used, not the (missing) SDK response body.",
+            "Verify CLI Core atomic write return value is checked; error is returned to RunE; not silently dropped."
+          ],
+          "test_spec_refs": [
+            "TS-15-16",
+            "TS-15-26",
+            "TS-15-28",
+            "TS-15-35"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.12",
+            "15-REQ-6.1",
+            "15-REQ-7.1",
+            "15-REQ-11.1",
+            "15-REQ-21.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "TS-15-SMOKE-1: run full login OAuth flow with httptest.Server and simulated browser callback; confirm config saved, stdout user JSON, stderr 'Logged in as', exit 0.",
+            "TS-15-SMOKE-2: run akc user show against mock server; confirm GetUser called with auth header, stdout User JSON, exit 0.",
+            "TS-15-SMOKE-3: run akc keys refresh; confirm parseKeyID extracts key_id, RefreshKey called, config updated, exit 0.",
+            "TS-15-SMOKE-4: run runLogin with 100ms timeout and no callback; confirm timeout error and exit 2.",
+            "TS-15-SMOKE-5: run akc tokens create with --permissions 'users:read,orgs:read' --expires 30; confirm CreateToken body correct, PATFull in stdout.",
+            "TS-15-SMOKE-6: run akc orgs list without api_key; confirm 0 HTTP requests, exit 2, error envelope."
+          ],
+          "test_spec_refs": [
+            "TS-15-SMOKE-1",
+            "TS-15-SMOKE-2",
+            "TS-15-SMOKE-3",
+            "TS-15-SMOKE-4",
+            "TS-15-SMOKE-5",
+            "TS-15-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.2",
+            "15-REQ-2.12",
+            "15-REQ-6.1",
+            "15-REQ-19.1",
+            "15-REQ-9.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.4",
+          "title": "Stub and dead-code audit — search for Go stub markers",
+          "details": [
+            "Run: grep -rn 'panic(\"not implemented\")' internal/cli/ cmd/akc/ — must return empty.",
+            "Run: grep -rn 'TODO' internal/cli/ cmd/akc/ — review any found; confirm none block functionality.",
+            "Run: grep -rn '// FIXME' internal/cli/ cmd/akc/ — review any found.",
+            "Confirm no bare 'return nil' in non-trivial RunE paths where an error or output is expected.",
+            "Confirm runLogin is fully implemented (not panic stub): grep 'panic' internal/cli/login.go returns empty."
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "15-REQ-1.1",
+            "15-REQ-2.8",
+            "15-REQ-22.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.5",
+          "title": "Cross-spec entry point verification — CLI Core and Go SDK integration",
+          "details": [
+            "Confirm NewAuthenticatedClient (spec 13) is called from production code in all 11 authenticated commands — not only in tests.",
+            "Confirm CLI Core atomic write function (spec 13) is called from production code in login, keys refresh, and keys revoke — not bypassed.",
+            "Confirm Go SDK client methods (spec 12) are called with correct argument types: e.g., &apikit.AuthCallbackRequest, &apikit.UpdateUserRequest, &apikit.CreateTokenRequest — not raw maps.",
+            "Run: go build ./... to confirm no import errors or type mismatches across spec boundaries."
+          ],
+          "test_spec_refs": [
+            "TS-15-SMOKE-2",
+            "TS-15-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "15-REQ-2.2",
+            "15-REQ-19.1",
+            "15-REQ-21.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "All tests pass: go test ./... -count=1 reports 0 failures",
+          "go vet ./... reports no issues",
+          "Binary builds cleanly: go build ./cmd/akc/... exits 0",
+          "No stub markers found: grep -rn 'panic(\"not implemented\")' internal/cli/ cmd/akc/ returns empty",
+          "All six smoke tests pass: go test ./internal/cli/... -count=1 -v -run 'TestSmoke' reports 0 failures",
+          "All 15-PATH-* execution paths exercised by at least one passing test",
+          "All 15-PROP-* correctness properties validated by at least one passing property test"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "15-REQ-1.1",
+      "test_spec_id": "TS-15-1",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-1.2",
+      "test_spec_id": "TS-15-2",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-1.3",
+      "test_spec_id": "TS-15-3",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-1.4",
+      "test_spec_id": "TS-15-4",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.1",
+      "test_spec_id": "TS-15-5",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.2",
+      "test_spec_id": "TS-15-6",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.3",
+      "test_spec_id": "TS-15-7",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.4",
+      "test_spec_id": "TS-15-8",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.5",
+      "test_spec_id": "TS-15-9",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.6",
+      "test_spec_id": "TS-15-10",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.7",
+      "test_spec_id": "TS-15-11",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.8",
+      "test_spec_id": "TS-15-12",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.9",
+      "test_spec_id": "TS-15-13",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.10",
+      "test_spec_id": "TS-15-14",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.11",
+      "test_spec_id": "TS-15-15",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.12",
+      "test_spec_id": "TS-15-16",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.13",
+      "test_spec_id": "TS-15-17",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.14",
+      "test_spec_id": "TS-15-18",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.15",
+      "test_spec_id": "TS-15-19",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.16",
+      "test_spec_id": "TS-15-20",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-3.1",
+      "test_spec_id": "TS-15-21",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-3.2",
+      "test_spec_id": "TS-15-22",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-4.1",
+      "test_spec_id": "TS-15-23",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-4.2",
+      "test_spec_id": "TS-15-24",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-5.1",
+      "test_spec_id": "TS-15-25",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-6.1",
+      "test_spec_id": "TS-15-26",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-6.2",
+      "test_spec_id": "TS-15-27",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-6.E1",
+      "test_spec_id": "TS-15-E6",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-7.1",
+      "test_spec_id": "TS-15-28",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-7.2",
+      "test_spec_id": "TS-15-29",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-8.1",
+      "test_spec_id": "TS-15-30",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-9.1",
+      "test_spec_id": "TS-15-31",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-9.2",
+      "test_spec_id": "TS-15-32",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-9.3",
+      "test_spec_id": "TS-15-33",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-10.1",
+      "test_spec_id": "TS-15-34",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-11.1",
+      "test_spec_id": "TS-15-35",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-12.1",
+      "test_spec_id": "TS-15-36",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-13.1",
+      "test_spec_id": "TS-15-37",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-14.1",
+      "test_spec_id": "TS-15-38",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-15.1",
+      "test_spec_id": "TS-15-39",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-15.2",
+      "test_spec_id": "TS-15-40",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-16.1",
+      "test_spec_id": "TS-15-41",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-17.1",
+      "test_spec_id": "TS-15-42",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-17.2",
+      "test_spec_id": "TS-15-43",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-18.1",
+      "test_spec_id": "TS-15-44",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-19.1",
+      "test_spec_id": "TS-15-45",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-20.1",
+      "test_spec_id": "TS-15-46",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-20.2",
+      "test_spec_id": "TS-15-47",
+      "task_id": "3.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-21.1",
+      "test_spec_id": "TS-15-48",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-21.E1",
+      "test_spec_id": "TS-15-E7",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-22.1",
+      "test_spec_id": "TS-15-49",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.E1",
+      "test_spec_id": "TS-15-E1",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.E2",
+      "test_spec_id": "TS-15-E2",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.E3",
+      "test_spec_id": "TS-15-E3",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.E4",
+      "test_spec_id": "TS-15-E4",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "15-REQ-2.E5",
+      "test_spec_id": "TS-15-E5",
+      "task_id": "2.6",
+      "test_path": null
+    }
+  ]
+}

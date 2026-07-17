@@ -1,0 +1,1767 @@
+{
+  "$schema": null,
+  "spec_id": "14",
+  "spec_name": "cli_admin_commands",
+  "schema_version": 1,
+  "introduction": "This spec defines the `akc admin` CLI command group \u2014 a Cobra-based command tree that wraps Go SDK admin-only client methods for user administration, organization administration, and credential (key/token) management, delegating all API communication to the Go SDK (spec 12) and using shared CLI infrastructure (spec 13). Note: requirements referencing apikit SDK APIs (spec 12) and CLI core helpers (spec 13) are based on PRD-stated interfaces and should be cross-checked against the installed packages before implementation.",
+  "glossary": {
+    "AddOrgMember": "SDK method on `apikit.Client` that adds a user to an organization (returns only error; HTTP 204).",
+    "BlockOrg": "SDK method on `apikit.Client` that blocks an organization.",
+    "BlockUser": "SDK method on `apikit.Client` that blocks a user.",
+    "CreateOrg": "SDK method on `apikit.Client` that creates a new organization.",
+    "CreateUser": "SDK method on `apikit.Client` that creates a new user.",
+    "DeleteOrg": "SDK method on `apikit.Client` that deletes an organization (returns only error; HTTP 204).",
+    "DemoteUser": "SDK method on `apikit.Client` that revokes the admin role from a user.",
+    "GetUserByID": "SDK method on `apikit.Client` that retrieves a single user by ID.",
+    "IncludeBlocked": "Boolean field in `apikit.ListUsersOptions` and `apikit.ListOrgsOptions` that controls whether blocked resources appear in list responses.",
+    "ListOrgMembers": "SDK method on `apikit.Client` that lists members of an organization.",
+    "ListOrgs": "SDK method on `apikit.Client` that lists organizations with optional filtering.",
+    "ListUserKeys": "SDK method on `apikit.Client` that lists a user's API key metadata.",
+    "ListUserTokens": "SDK method on `apikit.Client` that lists a user's personal access token metadata.",
+    "ListUsers": "SDK method on `apikit.Client` that lists users with optional filtering options.",
+    "NewAdminCmd": "The exported Go function that returns the root `*cobra.Command` for the admin command tree; called by CLI core (spec 13) to register admin subcommands on the root.",
+    "PromoteUser": "SDK method on `apikit.Client` that grants the admin role to a user.",
+    "RemoveOrgMember": "SDK method on `apikit.Client` that removes a user from an organization (returns only error; HTTP 204).",
+    "RevokeUserKey": "SDK method on `apikit.Client` that revokes a user's API key (returns only error; HTTP 204).",
+    "RevokeUserToken": "SDK method on `apikit.Client` that revokes a user's personal access token (returns only error; HTTP 204).",
+    "UnblockOrg": "SDK method on `apikit.Client` that unblocks an organization.",
+    "UnblockUser": "SDK method on `apikit.Client` that unblocks a user.",
+    "UpdateOrg": "SDK method on `apikit.Client` that updates an organization's fields.",
+    "UpdateUserByID": "SDK method on `apikit.Client` that updates a user's fields by ID.",
+    "admin bootstrap": "The process described in spec 05 that generates the break-glass admin token used for initial administrative access.",
+    "admin_bootstrap": "Spec 05 that generates the break-glass admin token.",
+    "agent interface": "The structured JSON output of `akc help --json` describing all commands with their arguments, flags, HTTP method/path, and auth requirements; format defined in spec 13.",
+    "akc": "The CLI binary for apikit administration.",
+    "akc admin": "The top-level CLI command group requiring admin-level credentials.",
+    "akc help --json": "The agent interface command that emits a structured JSON description of all registered commands, their arguments, flags, HTTP mappings, and auth requirements.",
+    "apikit.APIError": "Go SDK error type (spec 12) representing an API-returned HTTP error with a numeric code and message.",
+    "apikit.APIKeyMeta": "Go SDK type (spec 12) representing API key metadata (never includes secret key material).",
+    "apikit.Client": "The Go SDK client type (spec 12) that exposes all admin API methods used by the CLI.",
+    "apikit.CreateOrgRequest": "Go SDK request struct (spec 12) for `CreateOrg`, containing `Name`, `Slug`, and `URL` (pointer) fields.",
+    "apikit.CreateUserRequest": "Go SDK request struct (spec 12) for `CreateUser`, containing `Username`, `Email`, `Provider`, and `ProviderID` fields.",
+    "apikit.ListOrgsOptions": "Go SDK options struct (spec 12) for `ListOrgs`, containing the `IncludeBlocked` boolean field.",
+    "apikit.ListUsersOptions": "Go SDK options struct (spec 12) for `ListUsers`, containing the `IncludeBlocked` boolean field.",
+    "apikit.Organization": "Go SDK type (spec 12) representing an organization resource; the JSON shape printed by org commands.",
+    "apikit.PAT": "Go SDK type (spec 12) representing personal access token metadata (never includes secret token material).",
+    "apikit.UpdateOrgRequest": "Go SDK request struct (spec 12) for `UpdateOrg`, containing `Name` and `URL` as `*string` pointer fields (nil means do not update).",
+    "apikit.UpdateUserRequest": "Go SDK request struct (spec 12) for `UpdateUserByID`, containing a plain `string` field `FullName`.",
+    "apikit.User": "Go SDK type (spec 12) representing a user resource; the JSON shape printed by user commands.",
+    "break-glass admin token": "A special admin token generated by the admin bootstrap process (spec 05) that grants administrative access for recovery scenarios.",
+    "cobra.ExactArgs": "Cobra validation function that enforces an exact number of positional arguments, rejecting commands with too few or too many.",
+    "context.Background": "The Go standard library context with no deadline or cancellation, used for all SDK calls in the CLI.",
+    "empty patch": "A PATCH call where no fields are modified, e.g. `akc admin orgs update` invoked with neither `--name` nor `--url`; the CLI warns on stderr via `warnf` and still calls the SDK.",
+    "error envelope": "The JSON error format `{\"error\": {\"code\": N, \"message\": \"...\"}}` emitted to stdout for all error conditions.",
+    "handleError": "CLI core helper (spec 13) that formats an error as a JSON error envelope to stdout and returns the appropriate exit code (1 for API errors, 2 for client errors).",
+    "include-blocked": "CLI flag (`--include-blocked`) that causes list commands to include blocked resources in the response.",
+    "internal/cli": "The Go package directory containing all CLI implementation code for the apikit admin commands.",
+    "loadConfig": "CLI core helper (spec 13) that loads endpoint URL, user ID, and API key from config file, environment variables, and command-line flags in precedence order.",
+    "newClient": "CLI core helper (spec 13) that constructs an `apikit.Client` from a loaded `Config`.",
+    "pass-through validation": "The policy of forwarding flag and argument values (including empty strings and non-UUID IDs) to the SDK and server without client-side format validation.",
+    "printJSON": "CLI core helper (spec 13) that serializes a value as indented JSON to stdout using `json.MarshalIndent` with two-space indentation.",
+    "test-scoped interface": "An unexported Go interface defined in a `_test.go` file used only for injecting mock SDK clients in unit tests, not part of the production API surface.",
+    "void response": "A command whose underlying SDK method returns only `error` (HTTP 204); the CLI prints `{}` to stdout on success.",
+    "warnf": "CLI core helper (spec 13) that writes a formatted warning message to stderr with a consistent prefix and newline convention defined in spec 13.",
+    "*cobra.Command": "The Cobra library's command type; each CLI subcommand is represented as a *cobra.Command.",
+    "Run": "The Cobra command field that holds the function executed when the command is invoked.",
+    "RunE": "The Cobra command field that holds the function executed when the command is invoked, returning an error.",
+    "cobra.NoArgs": "Cobra validation function that rejects any positional arguments.",
+    "context.Background()": "Go standard library call that returns a non-nil, empty context with no deadline or cancellation.",
+    "json.MarshalIndent": "Go standard library function that serializes a value as indented JSON.",
+    "net/http": "Go standard library package for HTTP client and server implementations.",
+    "*apikit.APIError": "Pointer to the Go SDK error type representing an API-returned HTTP error.",
+    "[]*apikit.User": "Go slice of pointers to User objects, returned by list and member endpoints.",
+    "[]*apikit.Organization": "Go slice of pointers to Organization objects, returned by list endpoints.",
+    "[]*apikit.APIKeyMeta": "Go slice of pointers to APIKeyMeta objects, returned by key listing endpoints.",
+    "[]*apikit.PAT": "Go slice of pointers to PAT objects, returned by token listing endpoints.",
+    "Response[User].Data": "The typed data field on the Response wrapper, containing the unwrapped User object.",
+    "nil": "Go's zero value for pointer types, slices, maps, interfaces, and channels.",
+    "false": "Go boolean literal representing the false value.",
+    "{}": "Empty JSON object printed to stdout for void-response commands (HTTP 204).",
+    "urlPtr": "A *string pointer variable holding the --url flag value, nil when the flag is not provided.",
+    "URL": "The optional URL field on Organization and related request structs.",
+    "FullName: \"\"": "An UpdateUserRequest with FullName set to empty string, which clears the user's full name.",
+    "internal/cli/admin*.go": "Glob pattern matching all admin command production source files in the internal/cli package.",
+    "users": "Cobra subcommand name for the admin users command group.",
+    "orgs": "Cobra subcommand name for the admin orgs command group.",
+    "keys": "Cobra subcommand name for the admin keys command group.",
+    "tokens": "Cobra subcommand name for the admin tokens command group.",
+    "members": "Cobra subcommand name for the admin orgs members command group.",
+    "list": "Cobra subcommand name for listing resources.",
+    "show": "Cobra subcommand name for showing a single resource.",
+    "create": "Cobra subcommand name for creating a resource.",
+    "update": "Cobra subcommand name for updating a resource.",
+    "delete": "Cobra subcommand name for deleting a resource.",
+    "promote": "Cobra subcommand name for granting the admin role to a user.",
+    "demote": "Cobra subcommand name for revoking the admin role from a user.",
+    "block": "Cobra subcommand name for blocking a resource.",
+    "unblock": "Cobra subcommand name for unblocking a resource.",
+    "add": "Cobra subcommand name for adding a member to an organization.",
+    "remove": "Cobra subcommand name for removing a member from an organization.",
+    "revoke": "Cobra subcommand name for revoking a credential.",
+    "\"admin\"": "The Cobra Use string for the admin parent command.",
+    "admin users": "The admin users command group parent.",
+    "admin keys": "The admin keys command group parent.",
+    "admin tokens": "The admin tokens command group parent.",
+    "<id>": "Positional argument placeholder for a resource UUID (user ID or org ID).",
+    "<user_id>": "Positional argument placeholder for a user UUID.",
+    "<org_id>": "Positional argument placeholder for an organization UUID.",
+    "<key_id>": "Positional argument placeholder for an API key identifier.",
+    "<token_id>": "Positional argument placeholder for a PAT identifier.",
+    "<arg_name>": "Placeholder for the descriptive name of a positional argument in error messages.",
+    "id": "Positional argument name representing a resource UUID in CLI commands.",
+    "user_id": "Positional argument name representing a user UUID in admin key and token commands.",
+    "key_id": "Positional argument name representing an API key identifier.",
+    "org_id": "Positional argument name representing an organization UUID.",
+    "token_id": "Positional argument name representing a PAT identifier.",
+    "--include-blocked": "Boolean flag that includes blocked resources in list command output.",
+    "--username": "Required string flag for specifying a username in user creation.",
+    "--email": "Required string flag for specifying an email in user creation.",
+    "--provider": "Required string flag for specifying an OAuth provider in user creation.",
+    "--provider-id": "Required string flag for specifying a provider-specific user ID in user creation.",
+    "--full-name": "Required string flag for specifying a user's full name in update commands.",
+    "--name": "String flag for specifying an organization name.",
+    "--slug": "Required string flag for specifying an organization slug.",
+    "--url": "Optional string flag for specifying an organization URL.",
+    "--username \"\"": "An explicitly empty --username flag value, passed through to the SDK without client-side validation.",
+    "--full-name \"\"": "An explicitly empty --full-name flag value, which is valid and clears the user's full name.",
+    "name": "The name field in agent interface command metadata entries.",
+    "description": "The description field in agent interface command metadata entries.",
+    "method": "The HTTP method field in agent interface command metadata entries.",
+    "path": "The API path field in agent interface command metadata entries.",
+    "args": "The positional arguments array in agent interface command metadata entries.",
+    "flags": "The flags array in agent interface command metadata entries.",
+    "code: 0": "Error envelope code value indicating a client-side error (not an HTTP status).",
+    "method: \"GET\"": "Agent interface metadata indicating the command maps to an HTTP GET request.",
+    "method: \"POST\"": "Agent interface metadata indicating the command maps to an HTTP POST request.",
+    "method: \"PATCH\"": "Agent interface metadata indicating the command maps to an HTTP PATCH request.",
+    "method: \"PUT\"": "Agent interface metadata indicating the command maps to an HTTP PUT request.",
+    "method: \"DELETE\"": "Agent interface metadata indicating the command maps to an HTTP DELETE request.",
+    "auth: \"admin\"": "Agent interface metadata indicating the command requires admin-level authentication.",
+    "path: \"/users\"": "Agent interface API path for user listing.",
+    "path: \"/users/:id\"": "Agent interface API path for single user operations.",
+    "path: \"/users/:id/promote\"": "Agent interface API path for user promotion.",
+    "path: \"/users/:id/demote\"": "Agent interface API path for user demotion.",
+    "path: \"/users/:id/block\"": "Agent interface API path for user blocking.",
+    "path: \"/users/:id/unblock\"": "Agent interface API path for user unblocking.",
+    "path: \"/users/:id/keys\"": "Agent interface API path for listing a user's API keys.",
+    "path: \"/users/:id/keys/:key_id\"": "Agent interface API path for revoking a user's API key.",
+    "path: \"/users/:id/tokens\"": "Agent interface API path for listing a user's PATs.",
+    "path: \"/users/:id/tokens/:token_id\"": "Agent interface API path for revoking a user's PAT.",
+    "path: \"/orgs\"": "Agent interface API path for organization listing.",
+    "path: \"/orgs/:id\"": "Agent interface API path for single organization operations.",
+    "path: \"/orgs/:id/block\"": "Agent interface API path for organization blocking.",
+    "path: \"/orgs/:id/unblock\"": "Agent interface API path for organization unblocking.",
+    "path: \"/orgs/:id/members\"": "Agent interface API path for listing organization members.",
+    "path: \"/orgs/:id/members/:user_id\"": "Agent interface API path for adding/removing organization members.",
+    "\"admin users list\"": "The agent interface name for the admin users list command.",
+    "cobra.ExactArgs(N)": "Cobra validation function call with N specifying the exact number of required positional arguments.",
+    "ListUsers(ctx, &apikit.ListUsersOptions{IncludeBlocked: false})": "SDK method call to list users with blocked users excluded (default).",
+    "ListUsers(ctx, &apikit.ListUsersOptions{IncludeBlocked: true})": "SDK method call to list users with blocked users included.",
+    "GetUserByID(ctx, id)": "SDK method call to retrieve a single user by ID.",
+    "CreateUser(ctx, &apikit.CreateUserRequest{Username: username, Email: email, Provider: provider, ProviderID: providerID})": "SDK method call to create a user with the provided fields.",
+    "UpdateUserByID(ctx, id, &apikit.UpdateUserRequest{FullName: fullName})": "SDK method call to update a user's full name by ID.",
+    "PromoteUser(ctx, id)": "SDK method call to grant the admin role to a user.",
+    "DemoteUser(ctx, id)": "SDK method call to revoke the admin role from a user.",
+    "BlockUser(ctx, id)": "SDK method call to block a user.",
+    "UnblockUser(ctx, id)": "SDK method call to unblock a user.",
+    "ListOrgs(ctx, &apikit.ListOrgsOptions{IncludeBlocked: false})": "SDK method call to list organizations with blocked orgs excluded.",
+    "ListOrgs(ctx, &apikit.ListOrgsOptions{IncludeBlocked: true})": "SDK method call to list organizations with blocked orgs included.",
+    "CreateOrg(ctx, &apikit.CreateOrgRequest{Name: name, Slug: slug, URL: urlPtr})": "SDK method call to create an organization with the provided fields.",
+    "UpdateOrg(ctx, id, &apikit.UpdateOrgRequest{Name: namePtr, URL: urlPtr})": "SDK method call to update an organization's fields.",
+    "DeleteOrg(ctx, id)": "SDK method call to delete an organization.",
+    "BlockOrg(ctx, id)": "SDK method call to block an organization.",
+    "UnblockOrg(ctx, id)": "SDK method call to unblock an organization.",
+    "ListOrgMembers(ctx, orgID)": "SDK method call to list members of an organization.",
+    "AddOrgMember(ctx, orgID, userID)": "SDK method call to add a user to an organization.",
+    "RemoveOrgMember(ctx, orgID, userID)": "SDK method call to remove a user from an organization.",
+    "ListUserKeys(ctx, userID)": "SDK method call to list a user's API key metadata.",
+    "RevokeUserKey(ctx, userID, keyID)": "SDK method call to revoke a user's API key.",
+    "ListUserTokens(ctx, userID)": "SDK method call to list a user's PAT metadata.",
+    "RevokeUserToken(ctx, userID, tokenID)": "SDK method call to revoke a user's PAT.",
+    "warnf(\"no fields specified for update\")": "CLI core warnf call emitting a warning when admin orgs update is invoked with no fields to update.",
+    "missing required argument: <arg_name>": "Error message template for missing positional arguments.",
+    "message: \"missing required argument: id\"": "Error envelope message when the id positional argument is absent.",
+    "message: \"missing required argument: user_id\"": "Error envelope message when the user_id positional argument is absent.",
+    "message: \"missing required flag: --<flag_name>\"": "Error message template for missing required flags.",
+    "message: \"missing required flag: --username\"": "Error envelope message when the --username flag is absent.",
+    "message: \"missing required flag: --email\"": "Error envelope message when the --email flag is absent.",
+    "message: \"missing required flag: --provider\"": "Error envelope message when the --provider flag is absent.",
+    "message: \"missing required flag: --provider-id\"": "Error envelope message when the --provider-id flag is absent.",
+    "message: \"missing required flag: --full-name\"": "Error envelope message when the --full-name flag is absent.",
+    "message: \"missing required flag: --name\"": "Error envelope message when the --name flag is absent.",
+    "message: \"missing required flag: --slug\"": "Error envelope message when the --slug flag is absent.",
+    "{\"error\": {\"code\": N, \"message\": \"...\"}}": "The generic JSON error envelope format used for all error output.",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required argument: <arg_name>\"}}": "Error envelope for missing positional arguments (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required argument: id\"}}": "Error envelope for missing id argument (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --<flag_name>\"}}": "Error envelope for missing required flags (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --email\"}}": "Error envelope for missing --email flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --full-name\"}}": "Error envelope for missing --full-name flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --name\"}}": "Error envelope for missing --name flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --provider\"}}": "Error envelope for missing --provider flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --provider-id\"}}": "Error envelope for missing --provider-id flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --slug\"}}": "Error envelope for missing --slug flag (exit code 2).",
+    "{\"error\": {\"code\": 0, \"message\": \"missing required flag: --username\"}}": "Error envelope for missing --username flag (exit code 2).",
+    "{\"error\": {\"code\": 403, \"message\": \"forbidden\"}}": "Error envelope for admin-only endpoint access denial.",
+    "{\"error\": {\"code\": 404, \"message\": \"<server_message>\"}}": "Error envelope for resource not found.",
+    "{\"error\": {\"code\": 409, \"message\": \"cannot demote the last admin\"}}": "Error envelope for the last-admin safeguard on demotion.",
+    "{\"error\": {\"code\": <http_status>, \"message\": \"<server_message>\"}}": "Error envelope template for API errors with the server's HTTP status and message.",
+    "akc admin keys revoke": "CLI command to revoke a user's API key (admin).",
+    "akc admin orgs delete": "CLI command to delete an organization (admin).",
+    "akc admin orgs members add": "CLI command to add a member to an organization (admin).",
+    "akc admin orgs members remove": "CLI command to remove a member from an organization (admin).",
+    "akc admin tokens revoke": "CLI command to revoke a user's PAT (admin).",
+    "\"auth\": \"admin\"": "Agent interface metadata field indicating the command requires admin-level authentication."
+  },
+  "requirements": [
+    {
+      "id": "14-REQ-1",
+      "title": "Admin command tree structure",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "invoke `akc admin` subcommands that are organized in a nested Cobra command tree",
+        "benefit": "navigate and discover all admin operations without needing documentation"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`NewAdminCmd`",
+          "action": "returns a `*cobra.Command` with Use set to `\"admin\"` that has no `Run` function and registers the `users`, `orgs`, `keys`, and `tokens` subcommand groups as children",
+          "return_contract": "the returned command tree satisfies `cmd.HasSubCommands() == true` and `cmd.RunE == nil`"
+        },
+        {
+          "id": "14-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "the `admin users` command group",
+          "action": "registers subcommands: `list`, `show`, `create`, `update`, `promote`, `demote`, `block`, `unblock` \u2014 each as a direct child of the `admin users` parent command",
+          "return_contract": "all eight subcommands are discoverable via `akc admin users --help`"
+        },
+        {
+          "id": "14-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "the `admin orgs` command group",
+          "action": "registers subcommands: `list`, `create`, `update`, `delete`, `block`, `unblock`, and a `members` sub-group with `list`, `add`, `remove` \u2014 all as children in the correct hierarchy",
+          "return_contract": "all org subcommands are discoverable via `akc admin orgs --help` and member subcommands via `akc admin orgs members --help`"
+        },
+        {
+          "id": "14-REQ-1.4",
+          "ears_pattern": "ubiquitous",
+          "system": "the `admin keys` command group",
+          "action": "registers subcommands: `list` and `revoke` as children of the `admin keys` parent command",
+          "return_contract": "both subcommands are discoverable via `akc admin keys --help`"
+        },
+        {
+          "id": "14-REQ-1.5",
+          "ears_pattern": "ubiquitous",
+          "system": "the `admin tokens` command group",
+          "action": "registers subcommands: `list` and `revoke` as children of the `admin tokens` parent command",
+          "return_contract": "both subcommands are discoverable via `akc admin tokens --help`"
+        },
+        {
+          "id": "14-REQ-1.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`NewAdminCmd`",
+          "action": "is registered on the Cobra root command exclusively by CLI core (spec 13); the admin package does not self-register on the root command",
+          "return_contract": "the `internal/cli` package exports only `NewAdminCmd` for registration; all other constructor functions are unexported"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "any parent command in the admin tree (`admin`, `admin users`, `admin orgs`, `admin orgs members`, `admin keys`, `admin tokens`)",
+          "action": "prints the help text for that command group to stdout and exits with code 0; no SDK call is made and no `loadConfig` is invoked",
+          "return_contract": "exit code 0; help text printed to stdout",
+          "error_condition": "invoked directly with no subcommand"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-2",
+      "title": "Common command execution pattern",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "have every admin command follow a consistent, predictable execution sequence",
+        "benefit": "rely on uniform behavior for configuration loading, SDK invocation, output formatting, and error handling across all admin commands"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin subcommand with a `Run` function",
+          "action": "executes in the following order: (1) calls `loadConfig` to obtain endpoint URL and API key, (2) calls `newClient` to construct an `apikit.Client`, (3) parses positional arguments and flags, (4) validates required arguments and flags, (5) calls the corresponding SDK method with `context.Background()`, (6) on success calls `printJSON` with the SDK response and exits 0",
+          "return_contract": "stdout contains valid JSON; exit code is 0 on success"
+        },
+        {
+          "id": "14-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "any admin command",
+          "action": "calls `handleError` with the error, prints the JSON error envelope `{\"error\": {\"code\": <http_status>, \"message\": \"<server_message>\"}}` to stdout, and exits with code 1",
+          "return_contract": "exit code 1; stdout contains `{\"error\": {\"code\": N, \"message\": \"...\"}}`",
+          "trigger": "the SDK method returns a value of type `*apikit.APIError`"
+        },
+        {
+          "id": "14-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "any admin command",
+          "action": "calls `handleError` with the error, prints a JSON error envelope with `code: 0` to stdout, and exits with code 2",
+          "return_contract": "exit code 2; stdout contains `{\"error\": {\"code\": 0, \"message\": \"...\"}}`",
+          "trigger": "the SDK method returns a non-`*apikit.APIError` error (e.g. network failure, context cancellation)"
+        },
+        {
+          "id": "14-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "any admin command",
+          "action": "prints a JSON error envelope with `code: 0` to stdout via `handleError` and exits with code 2; no SDK call is made",
+          "return_contract": "exit code 2; stdout contains `{\"error\": {\"code\": 0, \"message\": \"...\"}}`",
+          "trigger": "`loadConfig` returns an error (missing endpoint URL or API key)"
+        },
+        {
+          "id": "14-REQ-2.5",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "uses `context.Background()` as the context argument for all SDK method calls; no deadlines or timeouts are set on the context",
+          "return_contract": "SDK method receives a non-nil context with no deadline"
+        },
+        {
+          "id": "14-REQ-2.6",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "never makes direct HTTP calls; all API communication is delegated exclusively to `apikit.Client` methods",
+          "return_contract": "no `net/http` client is constructed or used directly in `internal/cli/admin*.go` production files"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "any admin command",
+          "action": "exits with code 2; the failure is treated as a client error",
+          "return_contract": "exit code 2",
+          "error_condition": "`printJSON` fails because stdout is closed or serialization fails"
+        },
+        {
+          "id": "14-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "any admin command",
+          "action": "Cobra terminates the process; no special cleanup is required because `context.Background()` has no cancellation and the CLI is a short-lived process; partial stdout output may be incomplete",
+          "return_contract": "process is terminated by the signal; exit code is signal-determined",
+          "error_condition": "an OS signal (SIGINT/SIGTERM) is received while an SDK call is in progress"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-3",
+      "title": "Argument and flag validation",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "receive a machine-parseable JSON error on stdout with exit code 2 when required arguments or flags are missing",
+        "benefit": "distinguish client-side input errors (exit 2) from server-side rejections (exit 1) without parsing error message text"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "any admin command that requires positional arguments",
+          "action": "prints `{\"error\": {\"code\": 0, \"message\": \"missing required argument: <arg_name>\"}}` to stdout and exits with code 2; no SDK call is made; `<arg_name>` is the descriptive name from the command signature (e.g. `id`, `user_id`, `key_id`, `org_id`, `token_id`)",
+          "return_contract": "exit code 2; stdout contains the JSON error envelope with code 0",
+          "trigger": "a required positional argument is absent"
+        },
+        {
+          "id": "14-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "any admin command that defines required flags",
+          "action": "prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --<flag_name>\"}}` to stdout and exits with code 2; no SDK call is made",
+          "return_contract": "exit code 2; stdout contains the JSON error envelope with code 0",
+          "trigger": "a required flag is absent from the command invocation"
+        },
+        {
+          "id": "14-REQ-3.3",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "uses `cobra.ExactArgs(N)` (or `cobra.NoArgs` where N=0) to enforce the correct number of positional arguments; Cobra rejects extra arguments before the command `RunE` is called",
+          "return_contract": "commands invoked with too many positional arguments exit with a Cobra usage error before any SDK call"
+        },
+        {
+          "id": "14-REQ-3.4",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "does not validate UUID format or any other format for positional ID arguments; any non-empty string is passed through to the SDK via `pass-through validation`",
+          "return_contract": "non-UUID string IDs are forwarded to the SDK; server-returned 4xx errors are converted to exit code 1"
+        },
+        {
+          "id": "14-REQ-3.5",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command with required string flags",
+          "action": "does not reject an empty string value for a required flag when the flag is explicitly provided (e.g. `--username \"\"`); the empty string is passed through to the SDK via `pass-through validation`",
+          "return_contract": "empty-string flag values reach the SDK; server-returned 4xx errors result in exit code 1"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-4",
+      "title": "Admin users list command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "list all users, optionally including blocked ones, via `akc admin users list`",
+        "benefit": "audit user accounts and their states without writing custom API clients"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users list`",
+          "action": "calls `ListUsers(ctx, &apikit.ListUsersOptions{IncludeBlocked: false})` and prints the returned `[]*apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON array of user objects",
+          "trigger": "invoked without `--include-blocked`"
+        },
+        {
+          "id": "14-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users list`",
+          "action": "calls `ListUsers(ctx, &apikit.ListUsersOptions{IncludeBlocked: true})` and prints the returned `[]*apikit.User` as JSON to stdout",
+          "return_contract": "exit code 0; stdout contains a JSON array including blocked user objects",
+          "trigger": "invoked with `--include-blocked`"
+        },
+        {
+          "id": "14-REQ-4.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users list`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/users\"`, `auth: \"admin\"`, no positional args, and one boolean flag `--include-blocked` with default `false`",
+          "return_contract": "`akc help --json` includes an entry for `admin users list` with the specified metadata"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-5",
+      "title": "Admin users show command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "retrieve a single user by ID via `akc admin users show <id>`",
+        "benefit": "inspect a specific user's attributes without listing all users"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users show`",
+          "action": "calls `GetUserByID(ctx, id)`, unwraps the `Response[User].Data` field, and prints the `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a non-empty positional `<id>` argument"
+        },
+        {
+          "id": "14-REQ-5.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users show`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/users/:id\"`, `auth: \"admin\"`, and one positional argument `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users show` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users show`",
+          "action": "exits with code 2 and prints the JSON error envelope `{\"error\": {\"code\": 0, \"message\": \"missing required argument: id\"}}` to stdout",
+          "return_contract": "exit code 2",
+          "error_condition": "the `<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-6",
+      "title": "Admin users create command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "create a new user via `akc admin users create` with all required identity fields",
+        "benefit": "provision user accounts programmatically without accessing the database directly"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users create`",
+          "action": "calls `CreateUser(ctx, &apikit.CreateUserRequest{Username: username, Email: email, Provider: provider, ProviderID: providerID})` and prints the returned `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object (server returns HTTP 201)",
+          "trigger": "invoked with all four required flags: `--username`, `--email`, `--provider`, `--provider-id`"
+        },
+        {
+          "id": "14-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users create`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/users\"`, `auth: \"admin\"`, no positional args, and four required string flags: `--username`, `--email`, `--provider`, `--provider-id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users create` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --username\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--username` flag is absent"
+        },
+        {
+          "id": "14-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --email\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--email` flag is absent"
+        },
+        {
+          "id": "14-REQ-6.E3",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --provider\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--provider` flag is absent"
+        },
+        {
+          "id": "14-REQ-6.E4",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --provider-id\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--provider-id` flag is absent"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-7",
+      "title": "Admin users update command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "update a user's full name via `akc admin users update <id> --full-name`",
+        "benefit": "correct user display names without recreating accounts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users update`",
+          "action": "calls `UpdateUserByID(ctx, id, &apikit.UpdateUserRequest{FullName: fullName})` and prints the returned `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a positional `<id>` and the required `--full-name` flag"
+        },
+        {
+          "id": "14-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users update`",
+          "action": "treats the empty string as a valid value, calls `UpdateUserByID` with `FullName: \"\"`, and prints the returned `apikit.User` as JSON to stdout",
+          "return_contract": "exit code 0; SDK is called with an empty-string `FullName`",
+          "trigger": "invoked with `--full-name \"\"` (empty string)"
+        },
+        {
+          "id": "14-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users update`",
+          "action": "registers in the `agent interface` with `method: \"PATCH\"`, `path: \"/users/:id\"`, `auth: \"admin\"`, one positional arg `id`, and one required string flag `--full-name`",
+          "return_contract": "`akc help --json` includes an entry for `admin users update` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users update`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        },
+        {
+          "id": "14-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users update`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --full-name\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--full-name` flag is absent entirely"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-8",
+      "title": "Admin users promote command",
+      "user_story": {
+        "role": "operator",
+        "goal": "grant admin role to a user via `akc admin users promote <id>`",
+        "benefit": "elevate trusted users to admin without database access"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users promote`",
+          "action": "calls `PromoteUser(ctx, id)` and prints the returned `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users promote`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/users/:id/promote\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users promote` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users promote`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-9",
+      "title": "Admin users demote command",
+      "user_story": {
+        "role": "operator",
+        "goal": "revoke admin role from a user via `akc admin users demote <id>`",
+        "benefit": "reduce privilege scope without deleting user accounts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users demote`",
+          "action": "calls `DemoteUser(ctx, id)` and prints the returned `apikit.User` as JSON to stdout via `printJSON`; the CLI does not duplicate the last-admin safeguard \u2014 that check is enforced exclusively by the server",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users demote`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/users/:id/demote\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users demote` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users demote`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        },
+        {
+          "id": "14-REQ-9.E2",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users demote`",
+          "action": "calls `handleError` with the `*apikit.APIError`, prints `{\"error\": {\"code\": 409, \"message\": \"cannot demote the last admin\"}}` to stdout, and exits with code 1",
+          "return_contract": "exit code 1; stdout contains `{\"error\": {\"code\": 409, \"message\": \"cannot demote the last admin\"}}`",
+          "error_condition": "the server returns a 409 conflict indicating the target is the last admin"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-10",
+      "title": "Admin users block command",
+      "user_story": {
+        "role": "operator",
+        "goal": "block a user via `akc admin users block <id>`",
+        "benefit": "immediately disable user access without deleting the account or its data"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users block`",
+          "action": "calls `BlockUser(ctx, id)` and prints the returned `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users block`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/users/:id/block\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users block` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users block`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-11",
+      "title": "Admin users unblock command",
+      "user_story": {
+        "role": "operator",
+        "goal": "unblock a previously blocked user via `akc admin users unblock <id>`",
+        "benefit": "restore user access after investigating an incident without recreating the account"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin users unblock`",
+          "action": "calls `UnblockUser(ctx, id)` and prints the returned `apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON user object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin users unblock`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/users/:id/unblock\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin users unblock` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-11.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin users unblock`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-12",
+      "title": "Admin orgs list command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "list all organizations via `akc admin orgs list`, optionally including blocked ones",
+        "benefit": "audit organization state across the deployment"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-12.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs list`",
+          "action": "calls `ListOrgs(ctx, &apikit.ListOrgsOptions{IncludeBlocked: false})` and prints the returned `[]*apikit.Organization` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON array of organization objects",
+          "trigger": "invoked without `--include-blocked`"
+        },
+        {
+          "id": "14-REQ-12.2",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs list`",
+          "action": "calls `ListOrgs(ctx, &apikit.ListOrgsOptions{IncludeBlocked: true})` and prints the returned `[]*apikit.Organization` as JSON to stdout",
+          "return_contract": "exit code 0; stdout contains a JSON array including blocked organization objects",
+          "trigger": "invoked with `--include-blocked`"
+        },
+        {
+          "id": "14-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs list`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/orgs\"`, `auth: \"admin\"`, no positional args, and one boolean flag `--include-blocked` with default `false`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs list` with the specified metadata"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-13",
+      "title": "Admin orgs create command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "create a new organization via `akc admin orgs create` with required name and slug",
+        "benefit": "provision organizations as part of infrastructure-as-code pipelines"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-13.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs create`",
+          "action": "calls `CreateOrg(ctx, &apikit.CreateOrgRequest{Name: name, Slug: slug, URL: urlPtr})` where `urlPtr` is a non-nil pointer to the URL string when `--url` is provided, and nil when `--url` is omitted; prints the returned `apikit.Organization` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON organization object (server returns HTTP 201)",
+          "trigger": "invoked with required `--name` and `--slug` flags (and optional `--url`)"
+        },
+        {
+          "id": "14-REQ-13.2",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs create`",
+          "action": "sets the `URL` field in `apikit.CreateOrgRequest` to `nil`",
+          "return_contract": "SDK receives a `CreateOrgRequest` with a nil `URL` field",
+          "trigger": "`--url` flag is omitted"
+        },
+        {
+          "id": "14-REQ-13.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs create`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/orgs\"`, `auth: \"admin\"`, no positional args, two required string flags `--name` and `--slug`, and one optional string flag `--url`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs create` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-13.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --name\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--name` flag is absent"
+        },
+        {
+          "id": "14-REQ-13.E2",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs create`",
+          "action": "exits with code 2 and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --slug\"}}` to stdout; no SDK call is made",
+          "return_contract": "exit code 2",
+          "error_condition": "`--slug` flag is absent"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-14",
+      "title": "Admin orgs update command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "update an organization's name and/or URL via `akc admin orgs update <id>`",
+        "benefit": "modify organization metadata without recreating the organization and losing membership state"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-14.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs update`",
+          "action": "calls `UpdateOrg(ctx, id, &apikit.UpdateOrgRequest{Name: namePtr, URL: urlPtr})` where provided flags set non-nil pointers and omitted flags set nil; prints the returned `apikit.Organization` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON organization object",
+          "trigger": "invoked with `<id>` and one or both optional flags `--name` and/or `--url`"
+        },
+        {
+          "id": "14-REQ-14.2",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs update`",
+          "action": "calls `warnf(\"no fields specified for update\")` to emit a warning to stderr, then proceeds to call `UpdateOrg` with an empty `apikit.UpdateOrgRequest` (both fields nil), prints whatever `apikit.Organization` the SDK returns to stdout, and exits 0; this is not treated as an error",
+          "return_contract": "exit code 0; stderr contains the `warnf` warning; stdout contains the JSON org object returned by the server",
+          "trigger": "invoked with neither `--name` nor `--url` (empty patch)"
+        },
+        {
+          "id": "14-REQ-14.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs update`",
+          "action": "registers in the `agent interface` with `method: \"PATCH\"`, `path: \"/orgs/:id\"`, `auth: \"admin\"`, one positional arg `id`, and two optional string flags `--name` and `--url`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs update` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-14.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs update`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-15",
+      "title": "Admin orgs delete command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "permanently delete an organization via `akc admin orgs delete <id>` without a confirmation prompt",
+        "benefit": "automate organization teardown in CI/CD pipelines without interactive interaction"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-15.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs delete`",
+          "action": "calls `DeleteOrg(ctx, id)` and on success (SDK returns nil error) prints the literal `{}` to stdout and exits 0; no confirmation prompt is shown",
+          "return_contract": "exit code 0; stdout contains `{}`",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-15.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs delete`",
+          "action": "registers in the `agent interface` with `method: \"DELETE\"`, `path: \"/orgs/:id\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs delete` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-15.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs delete`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-16",
+      "title": "Admin orgs block command",
+      "user_story": {
+        "role": "operator",
+        "goal": "block an organization via `akc admin orgs block <id>`",
+        "benefit": "suspend an organization's access without permanently deleting it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-16.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs block`",
+          "action": "calls `BlockOrg(ctx, id)` and prints the returned `apikit.Organization` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON organization object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-16.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs block`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/orgs/:id/block\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs block` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-16.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs block`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-17",
+      "title": "Admin orgs unblock command",
+      "user_story": {
+        "role": "operator",
+        "goal": "unblock a previously blocked organization via `akc admin orgs unblock <id>`",
+        "benefit": "restore an organization's access after resolving the issue that caused the block"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-17.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs unblock`",
+          "action": "calls `UnblockOrg(ctx, id)` and prints the returned `apikit.Organization` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON organization object",
+          "trigger": "invoked with a positional `<id>`"
+        },
+        {
+          "id": "14-REQ-17.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs unblock`",
+          "action": "registers in the `agent interface` with `method: \"POST\"`, `path: \"/orgs/:id/unblock\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs unblock` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-17.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs unblock`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-18",
+      "title": "Admin orgs members list command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "list all members of an organization via `akc admin orgs members list <id>`",
+        "benefit": "audit organization membership from the command line"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-18.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs members list`",
+          "action": "calls `ListOrgMembers(ctx, orgID)` and prints the returned `[]*apikit.User` as JSON to stdout via `printJSON`",
+          "return_contract": "exit code 0; stdout contains a JSON array of user objects",
+          "trigger": "invoked with a positional `<id>` (org ID)"
+        },
+        {
+          "id": "14-REQ-18.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs members list`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/orgs/:id/members\"`, `auth: \"admin\"`, and one positional arg `id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs members list` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-18.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs members list`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-19",
+      "title": "Admin orgs members add command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "add a user to an organization via `akc admin orgs members add <org_id> <user_id>`",
+        "benefit": "manage organization membership programmatically as part of user onboarding pipelines"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-19.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs members add`",
+          "action": "calls `AddOrgMember(ctx, orgID, userID)` and on success prints `{}` to stdout and exits 0",
+          "return_contract": "exit code 0; stdout contains `{}`",
+          "trigger": "invoked with positional `<org_id>` and `<user_id>`"
+        },
+        {
+          "id": "14-REQ-19.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs members add`",
+          "action": "registers in the `agent interface` with `method: \"PUT\"`, `path: \"/orgs/:id/members/:user_id\"`, `auth: \"admin\"`, and two positional args `org_id` and `user_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs members add` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-19.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs members add`",
+          "action": "exits with code 2 and prints the JSON error envelope with the appropriate `missing required argument: <arg_name>` message",
+          "return_contract": "exit code 2",
+          "error_condition": "one or both positional arguments (`org_id`, `user_id`) are missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-20",
+      "title": "Admin orgs members remove command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "remove a user from an organization via `akc admin orgs members remove <org_id> <user_id>`",
+        "benefit": "automate offboarding without direct database access"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-20.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin orgs members remove`",
+          "action": "calls `RemoveOrgMember(ctx, orgID, userID)` and on success prints `{}` to stdout and exits 0",
+          "return_contract": "exit code 0; stdout contains `{}`",
+          "trigger": "invoked with positional `<org_id>` and `<user_id>`"
+        },
+        {
+          "id": "14-REQ-20.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin orgs members remove`",
+          "action": "registers in the `agent interface` with `method: \"DELETE\"`, `path: \"/orgs/:id/members/:user_id\"`, `auth: \"admin\"`, and two positional args `org_id` and `user_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin orgs members remove` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-20.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin orgs members remove`",
+          "action": "exits with code 2 and prints the JSON error envelope with the appropriate `missing required argument: <arg_name>` message",
+          "return_contract": "exit code 2",
+          "error_condition": "one or both positional arguments (`org_id`, `user_id`) are missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-21",
+      "title": "Admin keys list command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "list a user's API key metadata via `akc admin keys list <user_id>`",
+        "benefit": "audit active credentials for a user without exposing secret key material"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-21.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin keys list`",
+          "action": "calls `ListUserKeys(ctx, userID)` and prints the returned `[]*apikit.APIKeyMeta` as JSON to stdout via `printJSON`; secret key material is never included in the output",
+          "return_contract": "exit code 0; stdout contains a JSON array of `apikit.APIKeyMeta` metadata objects without secret key values",
+          "trigger": "invoked with a positional `<user_id>`"
+        },
+        {
+          "id": "14-REQ-21.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin keys list`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/users/:id/keys\"`, `auth: \"admin\"`, and one positional arg `user_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin keys list` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-21.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin keys list`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: user_id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<user_id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-22",
+      "title": "Admin keys revoke command",
+      "user_story": {
+        "role": "operator",
+        "goal": "revoke a specific API key for a user via `akc admin keys revoke <user_id> <key_id>`",
+        "benefit": "invalidate compromised or stale credentials immediately without user involvement"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-22.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin keys revoke`",
+          "action": "calls `RevokeUserKey(ctx, userID, keyID)` and on success prints `{}` to stdout and exits 0; no confirmation prompt is shown",
+          "return_contract": "exit code 0; stdout contains `{}`",
+          "trigger": "invoked with positional `<user_id>` and `<key_id>`"
+        },
+        {
+          "id": "14-REQ-22.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin keys revoke`",
+          "action": "registers in the `agent interface` with `method: \"DELETE\"`, `path: \"/users/:id/keys/:key_id\"`, `auth: \"admin\"`, and two positional args `user_id` and `key_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin keys revoke` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-22.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin keys revoke`",
+          "action": "exits with code 2 and prints the JSON error envelope with the appropriate `missing required argument: <arg_name>` message",
+          "return_contract": "exit code 2",
+          "error_condition": "one or both positional arguments (`user_id`, `key_id`) are missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-23",
+      "title": "Admin tokens list command",
+      "user_story": {
+        "role": "operator or automation agent",
+        "goal": "list a user's personal access token metadata via `akc admin tokens list <user_id>`",
+        "benefit": "audit active PATs for a user without exposing secret token material"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-23.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin tokens list`",
+          "action": "calls `ListUserTokens(ctx, userID)` and prints the returned `[]*apikit.PAT` as JSON to stdout via `printJSON`; secret token material is never included in the output",
+          "return_contract": "exit code 0; stdout contains a JSON array of `apikit.PAT` metadata objects without secret token values",
+          "trigger": "invoked with a positional `<user_id>`"
+        },
+        {
+          "id": "14-REQ-23.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin tokens list`",
+          "action": "registers in the `agent interface` with `method: \"GET\"`, `path: \"/users/:id/tokens\"`, `auth: \"admin\"`, and one positional arg `user_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin tokens list` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-23.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin tokens list`",
+          "action": "exits with code 2 and prints the JSON error envelope with `message: \"missing required argument: user_id\"`",
+          "return_contract": "exit code 2",
+          "error_condition": "`<user_id>` positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-24",
+      "title": "Admin tokens revoke command",
+      "user_story": {
+        "role": "operator",
+        "goal": "revoke a specific personal access token for a user via `akc admin tokens revoke <user_id> <token_id>`",
+        "benefit": "immediately invalidate a leaked or expired PAT without user involvement"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-24.1",
+          "ears_pattern": "event_driven",
+          "system": "`akc admin tokens revoke`",
+          "action": "calls `RevokeUserToken(ctx, userID, tokenID)` and on success prints `{}` to stdout and exits 0; no confirmation prompt is shown",
+          "return_contract": "exit code 0; stdout contains `{}`",
+          "trigger": "invoked with positional `<user_id>` and `<token_id>`"
+        },
+        {
+          "id": "14-REQ-24.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc admin tokens revoke`",
+          "action": "registers in the `agent interface` with `method: \"DELETE\"`, `path: \"/users/:id/tokens/:token_id\"`, `auth: \"admin\"`, and two positional args `user_id` and `token_id`",
+          "return_contract": "`akc help --json` includes an entry for `admin tokens revoke` with the specified metadata"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "14-REQ-24.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc admin tokens revoke`",
+          "action": "exits with code 2 and prints the JSON error envelope with the appropriate `missing required argument: <arg_name>` message",
+          "return_contract": "exit code 2",
+          "error_condition": "one or both positional arguments (`user_id`, `token_id`) are missing"
+        }
+      ]
+    },
+    {
+      "id": "14-REQ-25",
+      "title": "JSON output formatting",
+      "user_story": {
+        "role": "automation agent or operator",
+        "goal": "receive all stdout output as valid, consistently formatted JSON",
+        "benefit": "parse command output reliably without special-casing different output formats"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-25.1",
+          "ears_pattern": "ubiquitous",
+          "system": "every successful admin command",
+          "action": "writes to stdout exactly the JSON produced by `printJSON`, which uses `json.MarshalIndent` with two-space indentation; stdout contains valid JSON in all cases (resource object, resource array, or `{}`)",
+          "return_contract": "stdout is always valid JSON; no non-JSON text is written to stdout by the admin commands"
+        },
+        {
+          "id": "14-REQ-25.2",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command that wraps a `void response` SDK method",
+          "action": "prints the literal empty JSON object `{}` to stdout on success via `printJSON`",
+          "return_contract": "stdout contains `{}` (with optional whitespace per `json.MarshalIndent`)"
+        },
+        {
+          "id": "14-REQ-25.3",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "writes human-readable warning and informational messages exclusively to stderr via `warnf`; no such messages appear on stdout",
+          "return_contract": "stdout contains only JSON; stderr may contain plain-text warnings"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-26",
+      "title": "Error output and exit codes",
+      "user_story": {
+        "role": "automation agent or operator",
+        "goal": "receive structured JSON error envelopes on stdout with a predictable exit code mapping",
+        "benefit": "differentiate API errors from client configuration or input errors in scripts without parsing message text"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-26.1",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "on success exits with code 0; on `*apikit.APIError` exits with code 1; on any client error (missing config, invalid args, network failure) exits with code 2",
+          "return_contract": "exit code is exactly 0, 1, or 2 as specified; no other exit codes are used"
+        },
+        {
+          "id": "14-REQ-26.2",
+          "ears_pattern": "ubiquitous",
+          "system": "every error output path",
+          "action": "produces a JSON error envelope on stdout in the form `{\"error\": {\"code\": N, \"message\": \"...\"}}` where N is the HTTP status for API errors and 0 for client errors",
+          "return_contract": "stdout contains a valid JSON error envelope; no non-JSON error text appears on stdout"
+        },
+        {
+          "id": "14-REQ-26.3",
+          "ears_pattern": "event_driven",
+          "system": "any admin command",
+          "action": "prints `{\"error\": {\"code\": 403, \"message\": \"forbidden\"}}` to stdout via `handleError` and exits with code 1",
+          "return_contract": "exit code 1",
+          "trigger": "the server returns HTTP 403"
+        },
+        {
+          "id": "14-REQ-26.4",
+          "ears_pattern": "event_driven",
+          "system": "any admin command",
+          "action": "prints `{\"error\": {\"code\": 404, \"message\": \"<server_message>\"}}` to stdout via `handleError` and exits with code 1",
+          "return_contract": "exit code 1",
+          "trigger": "the server returns HTTP 404"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-27",
+      "title": "Agent interface metadata registration",
+      "user_story": {
+        "role": "automation agent",
+        "goal": "query `akc help --json` to discover all admin commands with their HTTP method, path, auth level, args, and flags",
+        "benefit": "dynamically construct valid CLI invocations without hardcoding command signatures"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-27.1",
+          "ears_pattern": "ubiquitous",
+          "system": "every admin command",
+          "action": "registers `agent interface` metadata with `auth: \"admin\"` plus the correct `method`, `path`, `args`, and `flags` values as specified per-command in this spec; the registration mechanism is defined in spec 13",
+          "return_contract": "`akc help --json` output includes an entry for every admin command with `\"auth\": \"admin\"`"
+        },
+        {
+          "id": "14-REQ-27.2",
+          "ears_pattern": "ubiquitous",
+          "system": "the `agent interface` entry for every admin command",
+          "action": "includes the `name` field set to the full command path (e.g. `\"admin users list\"`), a one-line `description`, `method`, `path`, `args` array with positional argument descriptors, and `flags` array with name, type, required boolean, default value, and description for each flag",
+          "return_contract": "all specified fields are present and non-empty in the `akc help --json` output entry for each command"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "14-REQ-28",
+      "title": "Unit test coverage for admin commands",
+      "user_story": {
+        "role": "developer",
+        "goal": "have comprehensive unit tests for all admin commands using test-scoped mock SDK interfaces",
+        "benefit": "verify command behavior in isolation from the network and real server without integration test infrastructure"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "14-REQ-28.1",
+          "ears_pattern": "ubiquitous",
+          "system": "each admin command test file (`admin_users_test.go`, `admin_orgs_test.go`, `admin_keys_test.go`, `admin_tokens_test.go`)",
+          "action": "defines a `test-scoped interface` (unexported) covering only the SDK methods exercised by that file's commands, and injects a mock implementation into the command under test",
+          "return_contract": "tests compile and pass with `go test ./internal/cli/...`; the mock interface is not exported or referenced in production code"
+        },
+        {
+          "id": "14-REQ-28.2",
+          "ears_pattern": "ubiquitous",
+          "system": "each admin command test",
+          "action": "verifies: (1) the correct SDK method is called with the correct parameters, (2) the JSON output on stdout matches the expected structure, (3) the exit code matches the success/error scenario, and (4) flag and argument validation produces the correct error envelope and exit code 2",
+          "return_contract": "all named test cases in the Testing Strategy section of this spec pass under `go test ./internal/cli/...`"
+        },
+        {
+          "id": "14-REQ-28.3",
+          "ears_pattern": "ubiquitous",
+          "system": "integration tests against a live or stubbed HTTP server",
+          "action": "are explicitly out of scope for this component; unit tests with mocks are sufficient and are the only required test type",
+          "return_contract": "no integration test files are required in this spec's repository layout"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "14-PROP-1",
+      "title": "Stdout is always valid JSON",
+      "for_any": "admin command invocation (success or error)",
+      "invariant": "stdout contains exactly one valid JSON value \u2014 either a resource object, a resource array, an empty object `{}`, or a JSON error envelope; no non-JSON text is written to stdout",
+      "validates": [
+        "14-REQ-25.1",
+        "14-REQ-25.2",
+        "14-REQ-26.2"
+      ]
+    },
+    {
+      "id": "14-PROP-2",
+      "title": "Exit code is always 0, 1, or 2",
+      "for_any": "admin command invocation",
+      "invariant": "the process exits with code exactly 0 (success), 1 (`*apikit.APIError`), or 2 (client error); no other exit codes are produced",
+      "validates": [
+        "14-REQ-26.1",
+        "14-REQ-2.2",
+        "14-REQ-2.3"
+      ]
+    },
+    {
+      "id": "14-PROP-3",
+      "title": "No direct HTTP calls in admin commands",
+      "for_any": "file in `internal/cli/admin*.go`",
+      "invariant": "no `net/http` client is constructed or used directly; all API communication is delegated exclusively to `apikit.Client` methods",
+      "validates": [
+        "14-REQ-2.6"
+      ]
+    },
+    {
+      "id": "14-PROP-4",
+      "title": "SDK is never called when validation fails",
+      "for_any": "admin command invocation where a required positional argument or required flag is absent",
+      "invariant": "no SDK method is called; the command exits with code 2 and a JSON error envelope before reaching the SDK call site",
+      "validates": [
+        "14-REQ-3.1",
+        "14-REQ-3.2"
+      ]
+    },
+    {
+      "id": "14-PROP-5",
+      "title": "Void-response commands always print exactly `{}`",
+      "for_any": "invocation of `akc admin orgs delete`, `akc admin orgs members add`, `akc admin orgs members remove`, `akc admin keys revoke`, or `akc admin tokens revoke` that succeeds (SDK returns nil error)",
+      "invariant": "stdout contains `{}` and exit code is 0",
+      "validates": [
+        "14-REQ-25.2",
+        "14-REQ-15.1",
+        "14-REQ-19.1",
+        "14-REQ-20.1",
+        "14-REQ-22.1",
+        "14-REQ-24.1"
+      ]
+    },
+    {
+      "id": "14-PROP-6",
+      "title": "All admin commands registered with auth: admin in agent interface",
+      "for_any": "command registered under `akc admin`",
+      "invariant": "the `agent interface` entry for the command includes `\"auth\": \"admin\"` and the correct `method`, `path`, `args`, and `flags` metadata",
+      "validates": [
+        "14-REQ-27.1",
+        "14-REQ-27.2"
+      ]
+    },
+    {
+      "id": "14-PROP-7",
+      "title": "`context.Background()` used for all SDK calls",
+      "for_any": "SDK method invocation in any admin command",
+      "invariant": "the context argument is `context.Background()` \u2014 a non-nil context with no deadline or cancellation",
+      "validates": [
+        "14-REQ-2.5"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "14-PATH-1",
+      "title": "Successful admin users list (default, no blocked)",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "runs `akc admin users list` in a terminal with a valid config file containing endpoint URL and API key"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "reads endpoint URL and API key from config and returns a `Config` struct"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client` from the `Config`"
+        },
+        {
+          "actor": "`akc admin users list` RunE",
+          "action": "calls `ListUsers(context.Background(), &apikit.ListUsersOptions{IncludeBlocked: false})`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "makes the HTTP GET /users request and returns `[]*apikit.User`"
+        },
+        {
+          "actor": "`printJSON`",
+          "action": "serializes the `[]*apikit.User` slice as indented JSON and writes it to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 0"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-2",
+      "title": "API error from admin users show (404 not found)",
+      "steps": [
+        {
+          "actor": "Automation agent",
+          "action": "runs `akc admin users show abc-nonexistent-id`"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "successfully returns a `Config`"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client`"
+        },
+        {
+          "actor": "`akc admin users show` RunE",
+          "action": "calls `GetUserByID(context.Background(), \"abc-nonexistent-id\")`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "receives HTTP 404 from the server and returns an `*apikit.APIError` with code 404"
+        },
+        {
+          "actor": "`handleError`",
+          "action": "formats `{\"error\": {\"code\": 404, \"message\": \"user not found\"}}` and writes it to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 1"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-3",
+      "title": "Client error \u2014 missing required flag for admin users create",
+      "steps": [
+        {
+          "actor": "CI script",
+          "action": "runs `akc admin users create --username alice --email alice@example.com --provider local` (missing `--provider-id`)"
+        },
+        {
+          "actor": "`akc admin users create` RunE",
+          "action": "detects that `--provider-id` flag is absent and prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --provider-id\"}}` to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 2; no SDK call is made"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-4",
+      "title": "Void response \u2014 successful org delete",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "runs `akc admin orgs delete org-uuid-123`"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "returns a valid `Config`"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client`"
+        },
+        {
+          "actor": "`akc admin orgs delete` RunE",
+          "action": "calls `DeleteOrg(context.Background(), \"org-uuid-123\")`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "makes HTTP DELETE /orgs/org-uuid-123 and receives HTTP 204; returns nil error"
+        },
+        {
+          "actor": "`printJSON`",
+          "action": "writes `{}` to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 0"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-5",
+      "title": "Empty patch warning \u2014 admin orgs update with no flags",
+      "steps": [
+        {
+          "actor": "CI script",
+          "action": "runs `akc admin orgs update org-uuid-456` with neither `--name` nor `--url`"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "returns a valid `Config`"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client`"
+        },
+        {
+          "actor": "`akc admin orgs update` RunE",
+          "action": "detects neither flag is provided and calls `warnf(\"no fields specified for update\")` to write a warning to stderr"
+        },
+        {
+          "actor": "`akc admin orgs update` RunE",
+          "action": "proceeds to call `UpdateOrg(context.Background(), \"org-uuid-456\", &apikit.UpdateOrgRequest{Name: nil, URL: nil})`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "makes HTTP PATCH /orgs/org-uuid-456 and returns an `apikit.Organization` (HTTP 200)"
+        },
+        {
+          "actor": "`printJSON`",
+          "action": "writes the organization JSON to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 0"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-6",
+      "title": "Network failure during admin keys list",
+      "steps": [
+        {
+          "actor": "Automation agent",
+          "action": "runs `akc admin keys list user-uuid-789`"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "returns a valid `Config`"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client`"
+        },
+        {
+          "actor": "`akc admin keys list` RunE",
+          "action": "calls `ListUserKeys(context.Background(), \"user-uuid-789\")`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "encounters a TCP connection failure and returns a plain (non-`*apikit.APIError`) error"
+        },
+        {
+          "actor": "`handleError`",
+          "action": "formats `{\"error\": {\"code\": 0, \"message\": \"<network error description>\"}}` and writes it to stdout"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 2"
+        }
+      ]
+    },
+    {
+      "id": "14-PATH-7",
+      "title": "Full end-to-end flow \u2014 agent discovers command via help JSON then invokes admin users create",
+      "steps": [
+        {
+          "actor": "Automation agent",
+          "action": "runs `akc help --json` to discover available admin commands and their signatures"
+        },
+        {
+          "actor": "CLI core (spec 13) `agent interface`",
+          "action": "returns structured JSON listing all registered commands including `admin users create` with `method: POST`, `path: /users`, `auth: admin`, and all four required flags"
+        },
+        {
+          "actor": "Automation agent",
+          "action": "constructs and runs `akc admin users create --username bot --email bot@ci.example.com --provider local --provider-id bot-001`"
+        },
+        {
+          "actor": "`loadConfig`",
+          "action": "reads endpoint URL and API key from environment variables (per spec 13 precedence rules)"
+        },
+        {
+          "actor": "`newClient`",
+          "action": "constructs an `apikit.Client` pointing at the configured endpoint"
+        },
+        {
+          "actor": "`akc admin users create` RunE",
+          "action": "validates all four flags are present and calls `CreateUser(context.Background(), &apikit.CreateUserRequest{Username: \"bot\", Email: \"bot@ci.example.com\", Provider: \"local\", ProviderID: \"bot-001\"})`"
+        },
+        {
+          "actor": "`apikit.Client`",
+          "action": "makes HTTP POST /users, receives HTTP 201, and returns `*apikit.User`"
+        },
+        {
+          "actor": "`printJSON`",
+          "action": "serializes the `apikit.User` as indented JSON and writes it to stdout"
+        },
+        {
+          "actor": "Automation agent",
+          "action": "parses the JSON from stdout and extracts the new user's ID for downstream pipeline steps"
+        },
+        {
+          "actor": "OS",
+          "action": "exits with code 0"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "14-ERR-1",
+      "condition": "Required positional argument is absent from the command invocation",
+      "behavior": "Prints `{\"error\": {\"code\": 0, \"message\": \"missing required argument: <arg_name>\"}}` to stdout via `handleError` and exits with code 2; no SDK call is made",
+      "requirement_id": "14-REQ-3.1"
+    },
+    {
+      "id": "14-ERR-2",
+      "condition": "Required flag is absent from the command invocation",
+      "behavior": "Prints `{\"error\": {\"code\": 0, \"message\": \"missing required flag: --<flag_name>\"}}` to stdout and exits with code 2; no SDK call is made",
+      "requirement_id": "14-REQ-3.2"
+    },
+    {
+      "id": "14-ERR-3",
+      "condition": "`loadConfig` returns an error (missing endpoint URL, missing API key, or unreadable config file)",
+      "behavior": "Prints a JSON error envelope with `code: 0` to stdout via `handleError` and exits with code 2; no `newClient` or SDK call is made",
+      "requirement_id": "14-REQ-2.4"
+    },
+    {
+      "id": "14-ERR-4",
+      "condition": "SDK method returns `*apikit.APIError` (server returned a 4xx or 5xx HTTP status)",
+      "behavior": "Calls `handleError` with the `*apikit.APIError`; prints `{\"error\": {\"code\": <http_status>, \"message\": \"<server_message>\"}}` to stdout and exits with code 1",
+      "requirement_id": "14-REQ-2.2"
+    },
+    {
+      "id": "14-ERR-5",
+      "condition": "SDK method returns a non-`*apikit.APIError` error (e.g. network failure, DNS resolution failure, connection timeout)",
+      "behavior": "Calls `handleError` with the error; prints `{\"error\": {\"code\": 0, \"message\": \"<error_description>\"}}` to stdout and exits with code 2",
+      "requirement_id": "14-REQ-2.3"
+    },
+    {
+      "id": "14-ERR-6",
+      "condition": "Server returns HTTP 403 (caller lacks admin role or uses an invalid API key)",
+      "behavior": "SDK returns `*apikit.APIError` with code 403; CLI prints `{\"error\": {\"code\": 403, \"message\": \"forbidden\"}}` to stdout and exits with code 1",
+      "requirement_id": "14-REQ-26.3"
+    },
+    {
+      "id": "14-ERR-7",
+      "condition": "Server returns HTTP 404 (resource not found, including malformed/non-existent IDs due to pass-through validation)",
+      "behavior": "SDK returns `*apikit.APIError` with code 404; CLI prints `{\"error\": {\"code\": 404, \"message\": \"<server_message>\"}}` to stdout and exits with code 1",
+      "requirement_id": "14-REQ-26.4"
+    },
+    {
+      "id": "14-ERR-8",
+      "condition": "Server returns HTTP 409 conflict when demoting the last admin",
+      "behavior": "SDK returns `*apikit.APIError` with code 409 and message `\"cannot demote the last admin\"`; CLI prints the error envelope to stdout and exits with code 1",
+      "requirement_id": "14-REQ-9.E2"
+    },
+    {
+      "id": "14-ERR-9",
+      "condition": "`printJSON` fails (e.g. stdout is closed or the write syscall fails)",
+      "behavior": "Command exits with code 2; the failure is treated as a client error",
+      "requirement_id": "14-REQ-2.E1"
+    },
+    {
+      "id": "14-ERR-10",
+      "condition": "Too many positional arguments are provided to a command",
+      "behavior": "Cobra's `ExactArgs(N)` (or `NoArgs`) validator rejects the invocation before the `RunE` function is called; Cobra prints a usage error; no SDK call is made",
+      "requirement_id": "14-REQ-3.3"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/spf13/cobra",
+      "version": "v1.x",
+      "symbols": [
+        {
+          "name": "Command",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "type Command struct { Use string; Short string; Long string; Args PositionalArgs; RunE func(cmd *Command, args []string) error; ... }",
+          "notes": "Root struct for all CLI commands; used to build the nested admin command tree."
+        },
+        {
+          "name": "ExactArgs",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func ExactArgs(n int) PositionalArgs",
+          "notes": "Validates that the command receives exactly n positional arguments; used on all admin subcommands with positional args."
+        },
+        {
+          "name": "NoArgs",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func NoArgs(cmd *Command, args []string) error",
+          "notes": "Validates that the command receives no positional arguments; used on admin commands with no positional args (e.g. `admin users list`, `admin users create`)."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,235 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `cli_admin_commands` PRD is exceptionally well-written and complete. All four required sections (Intent, Goals, Non-Goals, Background/Source Reference) are present and thoroughly articulated. The spec covers the full command tree with precise detail: every command's positional arguments, flags, SDK method mappings, success output, agent interface metadata, error handling, exit codes, testing strategy, design decisions, and glossary. Dependencies on `cli_core` (spec 13) and `go_sdk` (spec 12) are clearly declared. No active spec overlaps are detected \u2014 `cli_user_commands` (spec 14) explicitly handles non-admin commands, and the boundary is cleanly drawn in this PRD's Non-Goals. This spec is ready for artifact generation.",
+      "gaps": [
+        "Minor: The 'Background' section is replaced by a 'Source Reference' section that cites the master PRD. While functionally adequate, a dedicated Background section explaining the motivation for admin CLI tooling (e.g., operator use cases, agent/automation context) would strengthen traceability \u2014 though this is not a blocker.",
+        "Minor: The error message format for missing required flags in the Functional Requirements section states code 0 with the error message printed to stdout, but this slightly diverges from conventional CLI behavior where validation errors often go to stderr. The spec explicitly chooses stdout for all JSON output, which is intentional and documented in Non-Goals and Design Decisions, but a note acknowledging the deliberate deviation from convention would aid future maintainers.",
+        "Minor: The 'admin orgs update' command notes that providing neither --name nor --url is 'technically allowed' with server-determined behavior. The spec does not define what the CLI should emit when the server responds to an empty PATCH (e.g., 200 with unchanged object vs. 400). This edge case is left implicit."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For `akc admin orgs update <id>` with neither `--name` nor `--url` provided, should the CLI warn the user (e.g., a stderr message like 'warning: no fields specified for update') before still executing the SDK call, or should it treat this as a client-side validation error (exit code 2) without calling the SDK?",
+          "context": "The spec currently says 'the command still executes' when no flags are provided, but this may surprise users or agents. Defining the behavior explicitly prevents ambiguity during implementation and testing.",
+          "options": [
+            "Warn on stderr and proceed with the SDK call (current implicit behavior)",
+            "Treat as a client-side validation error: exit code 2 with JSON error envelope",
+            "Add a test case documenting the current pass-through behavior with no change"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the `akc admin users update <id> --full-name` flag be truly required (exit code 2 if absent), or should it follow the same optional pattern as `admin orgs update` (where no flags is a valid no-op pass-through)?",
+          "context": "The spec states --full-name is 'required' and 'missing flag exits with code 2', but also notes 'an empty string is a valid value'. This is consistent within the spec but differs from the org update pattern. Confirming this asymmetry is intentional avoids surprises.",
+          "options": [
+            "Confirmed intentional: --full-name is always required for users update",
+            "Change to optional (consistent with orgs update pattern)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a well-structured and highly detailed PRD that covers the CLI Admin Commands component comprehensively. The command tree, SDK delegation pattern, error handling, testing strategy, and design decisions are all clearly articulated. However, several gaps remain that could lead to implementation ambiguity or inconsistency: the JSON schema for output objects is not defined inline, the mock/test-double interface contract is unspecified, the agent interface metadata format is not fully exemplified, the `loadConfig` precedence order references external spec 13 without a summary here, and a few edge cases (UUID format validation, empty-string slug/name in org create, concurrent invocation behavior) are unaddressed.",
+      "gaps": [
+        "Output JSON schemas for User, Org, API Key, and PAT metadata objects are not defined in this spec \u2014 only referenced implicitly via SDK types. Implementors must cross-reference spec 12 to understand the shape of stdout output.",
+        "The mock/test-double interface for the SDK client is not specified. There is no definition of a `AdminClient` interface (or similar) that the commands depend on, making it unclear how tests inject fakes without reading spec 12 or 13.",
+        "The agent interface metadata format (`akc help --json`) is referenced but never exemplified with a concrete JSON snippet. The required fields are listed in prose but no sample output is shown, leaving room for interpretation.",
+        "Config loading precedence (config file vs. environment variables vs. command-line flags) is cited as 'see spec 13' but not summarized here. If spec 13 changes, this spec becomes silently inconsistent.",
+        "UUID format validation: the spec says positional args are 'user UUID' or 'org UUID' but does not state whether the CLI validates UUID format before calling the SDK, or simply passes any string through.",
+        "Empty-string handling for required string flags in `admin orgs create`: the spec says `--name` and `--slug` are required, but does not state whether an empty string (`--name \"\"`) is a validation error (exit 2) or passes through to the SDK/server.",
+        "The `admin orgs update` empty-patch warning message is specified (`warning: no fields specified for update`) but the exact stderr format is not (e.g., does it include a newline, a prefix like `warning:`, or follow any shared stderr convention from spec 13?)",
+        "No specification of behavior when `printJSON` itself fails (e.g., stdout is closed or serialization of the SDK response fails). Should the process exit 2? Is this even possible given SDK types are always serializable?",
+        "The `NewAdminCmd` registration point on the root command is not shown \u2014 there is no snippet or description of where/how `NewAdminCmd()` is wired into the Cobra root in `main.go` or spec 13's root command setup.",
+        "Integration or end-to-end test expectations are absent. The testing strategy covers unit tests with mocks only; there is no mention of whether integration tests against a live or stubbed HTTP server are expected, deferred, or out of scope."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should the CLI validate that positional ID arguments conform to UUID format (e.g., reject `abc` as malformed) before calling the SDK, or pass any non-empty string through to the SDK/server?",
+          "context": "Several commands take `<id>`, `<user_id>`, `<org_id>`, etc. described as UUIDs. If the CLI validates format, it exits code 2 with a client error; if not, the server returns a 404 or 400 which exits code 1. This affects both behavior and test expectations.",
+          "options": [
+            "Validate UUID format client-side (exit 2 on malformed ID)",
+            "Pass any non-empty string through to the SDK \u2014 server handles bad IDs",
+            "Validate only that the argument is non-empty (not blank/whitespace), no format check"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "For `admin orgs create`, is an empty string for `--name` or `--slug` (e.g., `--name \"\"`) treated as a client-side validation error (exit 2), or is it passed through to the SDK and left for the server to reject?",
+          "context": "The spec requires `--name` and `--slug` but only checks for flag absence. An explicit empty string is technically 'provided'. This is analogous to the `--full-name \"\"` case for `admin users update`, where empty string is explicitly allowed (clears the field). Orgs may have different semantics.",
+          "options": [
+            "Empty string is a client-side error for --name and --slug (exit 2, same as missing)",
+            "Empty string passes through to the SDK \u2014 server validates and rejects with 4xx",
+            "Only --slug rejects empty string client-side; --name passes through"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Can you provide (or confirm) the JSON shape of the key output objects \u2014 User, Org, API Key metadata, and PAT metadata \u2014 as they appear on stdout? Or should this spec simply reference spec 12's type definitions as the authoritative source?",
+          "context": "The spec describes success output as 'JSON user object', 'JSON organization object', etc., but never defines the fields. Without inline schemas or an explicit cross-reference, implementors must infer output shape from the Go SDK types in spec 12, which may not be accessible to all readers of this spec.",
+          "options": [
+            "Add inline example JSON for each output type (User, Org, APIKey, PAT)",
+            "Add a cross-reference table pointing to spec 12's type definitions \u2014 no duplication",
+            "Add a link to a shared schema file in the repo (e.g., docs/schemas/)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should a mockable Go interface (e.g., `AdminClientInterface`) be defined in this spec to enable unit testing without importing the full SDK client, or is the test-double strategy left entirely to spec 12/13?",
+          "context": "The testing strategy mentions 'a mock or test double for the SDK client' but does not define the interface. If this spec defines the interface, it becomes self-contained for testing. If deferred to spec 12, the test files in this spec's repo layout depend on an interface defined elsewhere.",
+          "options": [
+            "Define an AdminClient interface in this spec (e.g., in admin.go or a test helper)",
+            "Defer entirely to spec 12 \u2014 the SDK Client struct is used directly with dependency injection",
+            "Define the interface in the test files only (unexported, test-scoped)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What is the exact stderr format for warnings and informational messages \u2014 specifically the empty-patch warning for `admin orgs update`? Does the CLI core (spec 13) define a shared `warnf` or `logf` helper, or does each command write to stderr ad hoc?",
+          "context": "The spec says the warning is `warning: no fields specified for update` on stderr, but does not specify whether there is a newline, a consistent prefix format, or a shared helper. Tests like `TestAdminOrgsUpdateNoFlags` need to assert exact stderr content.",
+          "options": [
+            "Use a shared warnf helper from CLI core (spec 13) \u2014 format is defined there",
+            "Each command writes to stderr ad hoc with fmt.Fprintf(os.Stderr, ...) \u2014 no shared helper",
+            "Define the exact warning format in this spec: `warning: <message>\\n` written to stderr"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Is integration testing (against a live or stubbed HTTP server) in scope for this spec, explicitly deferred to a future iteration, or permanently out of scope?",
+          "context": "The testing strategy only covers unit tests with mocks. For a CLI that is the primary operator interface for admin operations, integration tests provide confidence that the SDK wiring is correct end-to-end. Clarifying this prevents implementors from assuming integration tests are implied.",
+          "options": [
+            "In scope \u2014 add integration test expectations to this spec",
+            "Explicitly deferred to a future iteration (note it in the spec)",
+            "Out of scope \u2014 unit tests with mocks are sufficient for this component"
+          ],
+          "required": false
+        },
+        {
+          "id": "q7",
+          "text": "How is `NewAdminCmd()` registered on the Cobra root command \u2014 is this shown in spec 13 (CLI core), in `main.go`, or should a registration snippet be added to this spec?",
+          "context": "The spec defines `NewAdminCmd()` as exported and 'called by the CLI core to register the admin tree on the root command', but does not show where or how. Without a snippet or clear pointer, implementors may wire it incorrectly (e.g., in main.go vs. in the root command's init in spec 13).",
+          "options": [
+            "Add a snippet to this spec showing how NewAdminCmd() is added to the root command",
+            "Reference spec 13 explicitly \u2014 it shows all subcommand registrations on the root",
+            "Add it to main.go and document that in the Repository Layout section"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD that is ready for implementation. It is thorough, internally consistent, and demonstrates careful attention to edge cases, design rationale, and cross-spec dependencies. The document clearly defines every command's signature, SDK delegation, output shape, error handling, exit codes, and test cases. Design decisions are explained with explicit reasoning, including intentional asymmetries (e.g., `--full-name` required vs. `--name`/`--url` optional). A few minor gaps exist \u2014 primarily around the exact `warnf` output format, the SDK client injection mechanism, and whether certain ambiguous behaviors are fully specified \u2014 but none of these block implementation.",
+      "gaps": [
+        "The exact format of the `warnf` output (prefix string, newline convention) is deferred entirely to spec 13 and not reproduced here. If spec 13 is unavailable or ambiguous, test assertions against stderr content (e.g., `TestAdminOrgsUpdateNoFlags`) cannot be written correctly.",
+        "The production-code injection mechanism for the test-scoped SDK mock interface is explicitly left to the implementor ('constructor parameter, package-level variable, or functional option'). This ambiguity could lead to inconsistent patterns across the four test files.",
+        "The `akc admin users update` command only supports updating `--full-name`. If the `UpdateUserRequest` struct in spec 12 contains additional fields (e.g., email, username), it is unclear whether this command intentionally omits them or whether the PRD is incomplete.",
+        "The `admin orgs update` command has no validation for the case where `--name \"\"` or `--url \"\"` is explicitly provided. The PRD states empty strings pass through, but it does not clarify whether an empty `--url \"\"` means 'clear the URL field' or is treated as an invalid server-side input \u2014 this distinction matters because the field uses `*string`.",
+        "There is no specification for what happens when `akc admin orgs update <id>` is called with `--url \"\"` (empty string) \u2014 specifically, whether the CLI passes `&\"\"` (a pointer to an empty string, meaning 'clear the URL') or whether the server rejects this. The PRD's pass-through policy suggests the former, but this should be explicit.",
+        "The Agent Interface section describes the metadata structure at a high level but does not enumerate the full metadata payload for each command (e.g., exact `description` strings, `args` array entries). Implementors must infer these, which could lead to inconsistencies in `akc help --json` output.",
+        "There is no mention of whether the `admin` parent command or its group commands (`admin users`, `admin orgs`, etc.) produce any output when invoked without a subcommand (e.g., whether they print usage to stderr or stdout, and what exit code they return)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the exact format of `warnf` output as defined in spec 13? Specifically: Does it include a prefix (e.g., `warning:`, `WARN:`, or none)? Does it end with a newline? What is the full stderr string emitted by `warnf(\"no fields specified for update\")`?",
+          "context": "The `TestAdminOrgsUpdateNoFlags` test must assert a specific stderr string. Without the exact format, test authors must look up spec 13 separately, risking inconsistency.",
+          "options": [
+            "Format: `warning: no fields specified for update\\n`",
+            "Format: `WARN: no fields specified for update\\n`",
+            "Format: `no fields specified for update\\n` (no prefix)",
+            "Defined only in spec 13 \u2014 cross-reference is sufficient"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Which SDK client injection mechanism should be used consistently across all four admin command files for enabling test-scoped mock injection?",
+          "context": "The PRD leaves this to the implementor, but inconsistent patterns across files make the codebase harder to maintain and review.",
+          "options": [
+            "Constructor parameter (e.g., `newAdminUsersCmd(client adminUsersClient) *cobra.Command`)",
+            "Package-level variable overridden in tests",
+            "Functional option (e.g., `WithClient(client)`)",
+            "Leave to implementor \u2014 any consistent approach is acceptable"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Does `akc admin users update <id>` intentionally support *only* `--full-name`, or are there other `UpdateUserRequest` fields (e.g., email, username) that this command should also expose but are currently omitted?",
+          "context": "If spec 12's `UpdateUserRequest` has more fields, the command may be incomplete. If it truly only has `FullName`, this should be stated explicitly to prevent future implementors from questioning the omission.",
+          "options": [
+            "Only `FullName` is in `UpdateUserRequest` \u2014 the command is complete as specified",
+            "Other fields exist in `UpdateUserRequest` but are intentionally excluded from this CLI command (with documented rationale)",
+            "Other fields exist and should be added to this command"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "When `--url \"\"` (empty string) is passed to `akc admin orgs update`, should the CLI send a pointer to an empty string (`&\"\"`) to clear the URL field, or should it treat an empty `--url` flag as equivalent to the flag not being provided (i.e., `nil`)?",
+          "context": "The PRD's `*string` field design allows `nil` (not provided) vs. `\"\"` (explicitly cleared) to be distinguished. The behavior for `--url \"\"` determines whether operators can clear an org's URL via the CLI.",
+          "options": [
+            "Send `&\"\"` \u2014 empty string explicitly clears the URL field",
+            "Treat `--url \"\"` as equivalent to flag not provided \u2014 send `nil`",
+            "Reject `--url \"\"` client-side with exit code 2 and an error message"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What should `akc admin`, `akc admin users`, `akc admin orgs`, `akc admin keys`, and `akc admin tokens` do when invoked without a subcommand \u2014 print usage to stderr and exit with what code?",
+          "context": "The PRD states these parent commands have no `Run` function but does not specify the exit code or output behavior when invoked without a subcommand. Cobra's default is to print usage to stdout and exit 0, which may conflict with the 'all output is JSON' design principle.",
+          "options": [
+            "Print usage to stderr, exit 0 (Cobra default)",
+            "Print usage to stderr, exit 2",
+            "Print a JSON error envelope to stdout (`{\"error\": {\"code\": 0, \"message\": \"subcommand required\"}}`), exit 2",
+            "Leave as Cobra default \u2014 parent commands without Run are implicitly handled"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Warn on stderr and proceed with the SDK call (current implicit behavior)",
+        "q2": "Confirmed intentional: --full-name is always required for users update"
+      },
+      "timestamp": "2026-07-17T13:07:35.899428+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "Pass any non-empty string through to the SDK \u2014 server handles bad IDs",
+        "q2": "Empty string passes through to the SDK \u2014 server validates and rejects with 4xx",
+        "q3": "Add a cross-reference table pointing to spec 12's type definitions \u2014 no duplication",
+        "q4": "Define the interface in the test files only (unexported, test-scoped)",
+        "q5": "Use a shared warnf helper from CLI core (spec 13) \u2014 format is defined there",
+        "q6": "Out of scope \u2014 unit tests with mocks are sufficient for this component",
+        "q7": "Reference spec 13 explicitly \u2014 it shows all subcommand registrations on the root"
+      },
+      "timestamp": "2026-07-17T13:11:35.671241+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

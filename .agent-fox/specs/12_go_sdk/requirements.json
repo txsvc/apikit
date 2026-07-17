@@ -1,0 +1,1682 @@
+{
+  "$schema": null,
+  "spec_id": "12",
+  "spec_name": "go_sdk",
+  "schema_version": 1,
+  "introduction": "This spec defines the Go SDK client library for the apikit framework — a typed HTTP client that wraps every built-in API endpoint as a Go method on a `Client` struct, living in the root `apikit` package and serving as the exclusive API client layer for the CLI (specs 13-15).",
+  "glossary": {
+    "APIError": "A typed error struct matching the server's error envelope (code + message). Implements the error interface. Error() returns \"API error {Code}: {Message}\". Callers inspect it via errors.As.",
+    "APIKeyFull": "The full API key object returned on creation or refresh, including the secret key value (key, key_id, expires_at).",
+    "APIKeyMeta": "The metadata-only API key object returned in listings (key_id, created_at, expires_at, revoked_at). Does not include the secret key value.",
+    "AuthCallbackRequest": "The request body for POST /auth/callback containing provider, code, redirect_uri, and optional expires.",
+    "AuthCallbackResponse": "The response body from POST /auth/callback containing a User and an APIKeyFull.",
+    "Client": "The SDK's entry point — a struct that holds configuration (base URL, API key, HTTP client, mount point) and provides methods for each API endpoint. Safe for concurrent use after construction.",
+    "ClientOption": "A function type `func(*Client)` used in the functional options pattern to configure a Client at construction time.",
+    "ErrNotModified": "A sentinel error returned when a conditional GET receives HTTP 304 (Not Modified). Callers check with errors.Is. The accompanying *Response[T] is nil.",
+    "HealthResponse": "The response body from health probe endpoints (/healthz, /readyz), containing a status string.",
+    "ListOrgsOptions": "A struct that configures the ListOrgs request, including IncludeBlocked bool. Designed to grow with additional filter fields in future iterations.",
+    "ListUsersOptions": "A struct that configures the ListUsers request, including IncludeBlocked bool. Designed to grow with additional filter fields in future iterations.",
+    "NewClient": "The constructor function that creates a new Client given a baseURL and zero or more ClientOption values.",
+    "OAuthProvider": "A provider discovery object returned by GET /auth/providers, containing name and authorize_url.",
+    "OrgMember": "An informal alias for User used in the master PRD to describe users in the context of organization membership. Not a distinct Go type; member listing endpoints return []*User.",
+    "PAT": "Personal Access Token — the metadata-only token object returned in listings (token_id, name, permissions, created_at, expires_at, revoked_at).",
+    "PATFull": "The full personal access token object returned on creation, including the secret token value (token, token_id, name, permissions, expires_at).",
+    "RequestOption": "A function type `func(*http.Request)` used to configure per-request behavior such as conditional GET headers.",
+    "Response[T]": "A generic wrapper that pairs a typed API response with HTTP headers, enabling ETag access without losing type safety. Non-nil only on successful (2xx) responses; nil on 304.",
+    "RevokeKeyResponse": "The response body from DELETE /user/keys/:key_id, containing key_id and revoked_at.",
+    "VersionResponse": "The response body from GET /version, containing version, build_time, commit, and mount_point.",
+    "WithAPIKey": "A ClientOption that sets the Bearer token for the Authorization header on every request.",
+    "WithHTTPClient": "A ClientOption that overrides the default http.Client, enabling custom timeouts, TLS config, and transport.",
+    "WithIfNoneMatch": "A RequestOption that adds an If-None-Match header to a single request for conditional GET.",
+    "WithMountPoint": "A ClientOption that overrides the default mount point (/api/v1). The path is normalized at construction time.",
+    "WithRequestID": "A ClientOption that sets a static X-Request-ID header on every request.",
+    "apikit": "The root Go package containing both the server framework and the SDK client library.",
+    "bare JSON array": "A JSON response body that is a top-level array (e.g., [{...}]), as opposed to a wrapped object (e.g., {\"items\": [...]}). All list endpoints in this API return bare arrays.",
+    "baseURL": "The server's root URL (e.g., https://api.example.com). Passed to NewClient. All endpoint URLs are constructed relative to this. Trailing slash is stripped at construction time.",
+    "canonical shared types": "The domain object structs (User, Organization, etc.) defined in sdk_types.go. These are the single authoritative definitions used by both the SDK client and server-side handlers in the apikit package.",
+    "conditional GET": "An HTTP GET request with an If-None-Match header containing a previously received ETag. The server returns 304 if the resource is unchanged.",
+    "do": "The internal method on Client that handles request construction, header setting, execution, and response decoding for all endpoint methods.",
+    "functional options": "A Go pattern where configuration is applied via variadic function arguments (NewClient(url, opts...)), enabling extensibility without breaking changes.",
+    "mount point": "The URL path prefix for API endpoints (default /api/v1). Configurable via WithMountPoint. Normalized at construction time: leading slash added if missing, trailing slash stripped. Health probes are outside the mount point.",
+    "sdk_types.go": "The source file in the apikit package that contains all canonical shared domain object type definitions used by both the SDK client and server-side handlers.",
+    "url.Values": "The net/url standard library type used for query parameter construction, ensuring correct encoding and forward-compatible extension."
+  },
+  "requirements": [
+    {
+      "id": "12-REQ-1",
+      "title": "Client struct and constructor",
+      "user_story": {
+        "role": "consuming Go application developer",
+        "goal": "construct an API client with a single function call using the functional options pattern",
+        "benefit": "I can configure authentication, HTTP settings, and mount point without a complex config struct"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "NewClient",
+          "action": "returns a non-nil *Client with default httpClient set to http.DefaultClient, mountPoint set to \"/api/v1\", apiKey set to empty string, and requestID set to empty string",
+          "return_contract": "*Client (never nil, even for empty baseURL)"
+        },
+        {
+          "id": "12-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "NewClient",
+          "action": "strips a trailing slash from baseURL at construction time before storing it on the Client struct",
+          "return_contract": "Client.baseURL has no trailing slash"
+        },
+        {
+          "id": "12-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "is safe for concurrent use by multiple goroutines after construction — all fields are set once in NewClient and never modified thereafter; no synchronization is required by callers",
+          "return_contract": "no data races under concurrent method calls"
+        },
+        {
+          "id": "12-REQ-1.4",
+          "ears_pattern": "event_driven",
+          "system": "WithAPIKey",
+          "action": "sets the Client's apiKey field to the provided key string",
+          "return_contract": "Client.apiKey equals the provided key",
+          "trigger": "applied as a ClientOption"
+        },
+        {
+          "id": "12-REQ-1.5",
+          "ears_pattern": "event_driven",
+          "system": "WithHTTPClient",
+          "action": "sets the Client's httpClient field to the provided *http.Client, overriding http.DefaultClient",
+          "return_contract": "Client.httpClient equals the provided *http.Client",
+          "trigger": "applied as a ClientOption"
+        },
+        {
+          "id": "12-REQ-1.6",
+          "ears_pattern": "event_driven",
+          "system": "WithRequestID",
+          "action": "sets the Client's requestID field to the provided id string",
+          "return_contract": "Client.requestID equals the provided id",
+          "trigger": "applied as a ClientOption"
+        },
+        {
+          "id": "12-REQ-1.7",
+          "ears_pattern": "event_driven",
+          "system": "WithMountPoint",
+          "action": "prepends a leading slash to the path before storing it as the Client's mountPoint",
+          "return_contract": "Client.mountPoint starts with \"/\"",
+          "trigger": "applied as a ClientOption with a path that lacks a leading slash"
+        },
+        {
+          "id": "12-REQ-1.8",
+          "ears_pattern": "event_driven",
+          "system": "WithMountPoint",
+          "action": "strips the trailing slash from the path before storing it as the Client's mountPoint",
+          "return_contract": "Client.mountPoint has no trailing slash",
+          "trigger": "applied as a ClientOption with a path that has a trailing slash"
+        },
+        {
+          "id": "12-REQ-1.9",
+          "ears_pattern": "event_driven",
+          "system": "WithMountPoint",
+          "action": "normalizes the empty string to \"/\" and stores it as the Client's mountPoint",
+          "return_contract": "Client.mountPoint equals \"/\"",
+          "trigger": "applied as a ClientOption with an empty string"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "NewClient",
+          "action": "accepts the empty string without panicking or returning an error; the returned *Client is non-nil; requests will fail at the HTTP transport layer and return a plain error (not *APIError)",
+          "return_contract": "non-nil *Client; no panic",
+          "error_condition": "baseURL is an empty string"
+        },
+        {
+          "id": "12-REQ-1.E2",
+          "ears_pattern": "unwanted",
+          "system": "NewClient",
+          "action": "strips the trailing slash before storing baseURL so URL construction does not produce double slashes",
+          "return_contract": "Client.baseURL has no trailing slash",
+          "error_condition": "baseURL has a trailing slash"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-2",
+      "title": "Canonical shared types in sdk_types.go",
+      "user_story": {
+        "role": "apikit package developer",
+        "goal": "have a single authoritative definition of every domain object type in the apikit package",
+        "benefit": "server-side handlers and the SDK client share the same structs with no duplication or compile-time conflicts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "sdk_types.go",
+          "action": "defines all domain object structs — User, APIKeyMeta, APIKeyFull, PAT, PATFull, Organization, OAuthProvider, AuthCallbackRequest, AuthCallbackResponse, CreateUserRequest, UpdateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, HealthResponse, VersionResponse, RevokeKeyResponse, ListUsersOptions, ListOrgsOptions — as the single authoritative definitions in the apikit package; no parallel or internal-only equivalents are defined elsewhere in the package",
+          "return_contract": "each struct type appears exactly once in the apikit package"
+        },
+        {
+          "id": "12-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "sdk_types.go",
+          "action": "uses snake_case json struct tags matching the OpenAPI schema field names on every struct field",
+          "return_contract": "JSON marshaling produces field names matching the OpenAPI spec"
+        },
+        {
+          "id": "12-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "sdk_types.go",
+          "action": "uses *time.Time for nullable timestamp fields (expires_at, revoked_at) so that null JSON values deserialize as nil",
+          "return_contract": "null JSON timestamps deserialize to nil *time.Time; non-null timestamps deserialize to valid *time.Time in RFC 3339"
+        },
+        {
+          "id": "12-REQ-2.4",
+          "ears_pattern": "ubiquitous",
+          "system": "UpdateUserRequest",
+          "action": "defines FullName as a plain string (not *string) with json tag \"full_name\" and no omitempty, so every PATCH request body always includes the full_name field",
+          "return_contract": "JSON body always contains \"full_name\" key regardless of value"
+        },
+        {
+          "id": "12-REQ-2.5",
+          "ears_pattern": "ubiquitous",
+          "system": "sdk_types.go",
+          "action": "applies omitempty to optional request fields (AuthCallbackRequest.Expires *int, CreateTokenRequest.Expires *int, CreateOrgRequest.URL *string, UpdateOrgRequest.Name *string, UpdateOrgRequest.URL *string) so they are omitted from the JSON body when nil",
+          "return_contract": "nil optional fields are absent from serialized JSON"
+        },
+        {
+          "id": "12-REQ-2.6",
+          "ears_pattern": "ubiquitous",
+          "system": "ListOrgMembers",
+          "action": "returns []*User directly; OrgMember is not a distinct Go type in the apikit package",
+          "return_contract": "[]*User slice; no OrgMember type defined"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "12-REQ-3",
+      "title": "Request execution pipeline (do method)",
+      "user_story": {
+        "role": "SDK method implementor",
+        "goal": "have a single internal do method that handles all HTTP request construction, header setting, execution, and response dispatching",
+        "benefit": "endpoint methods stay thin and all cross-cutting concerns (auth, content type, error handling) are applied consistently"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "do",
+          "action": "sets Accept: application/json on every outgoing request",
+          "return_contract": "request header Accept equals \"application/json\""
+        },
+        {
+          "id": "12-REQ-3.2",
+          "ears_pattern": "state_driven",
+          "system": "do",
+          "action": "sets Content-Type: application/json on the request",
+          "return_contract": "request header Content-Type equals \"application/json\"",
+          "state": "the request has a non-nil body"
+        },
+        {
+          "id": "12-REQ-3.3",
+          "ears_pattern": "state_driven",
+          "system": "do",
+          "action": "sets Authorization: Bearer <apiKey> on the request",
+          "return_contract": "request header Authorization equals \"Bearer <apiKey>\"",
+          "state": "Client.apiKey is non-empty"
+        },
+        {
+          "id": "12-REQ-3.4",
+          "ears_pattern": "state_driven",
+          "system": "do",
+          "action": "sets X-Request-ID: <requestID> on the request",
+          "return_contract": "request header X-Request-ID equals the configured requestID",
+          "state": "Client.requestID is non-empty"
+        },
+        {
+          "id": "12-REQ-3.5",
+          "ears_pattern": "state_driven",
+          "system": "do",
+          "action": "does not set any Authorization header on the request",
+          "return_contract": "request has no Authorization header",
+          "state": "Client.apiKey is empty"
+        },
+        {
+          "id": "12-REQ-3.6",
+          "ears_pattern": "state_driven",
+          "system": "do",
+          "action": "does not set any X-Request-ID header on the request",
+          "return_contract": "request has no X-Request-ID header",
+          "state": "Client.requestID is empty"
+        },
+        {
+          "id": "12-REQ-3.7",
+          "ears_pattern": "ubiquitous",
+          "system": "do",
+          "action": "passes the caller-supplied context.Context to the request via req.WithContext(ctx) before executing it",
+          "return_contract": "request context matches caller-supplied ctx"
+        },
+        {
+          "id": "12-REQ-3.8",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "decodes the JSON response body into the typed response struct and returns it",
+          "return_contract": "typed struct populated from JSON; no error",
+          "trigger": "the server responds with HTTP 200 or 201"
+        },
+        {
+          "id": "12-REQ-3.9",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "returns a nil body with no error",
+          "return_contract": "nil body; nil error",
+          "trigger": "the server responds with HTTP 204"
+        },
+        {
+          "id": "12-REQ-3.10",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "returns nil for the *Response[T] value and the sentinel error ErrNotModified; response headers from the 304 are not accessible",
+          "return_contract": "nil *Response[T]; ErrNotModified error",
+          "trigger": "the server responds with HTTP 304"
+        },
+        {
+          "id": "12-REQ-3.11",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "decodes the nested {\"error\": {\"code\": N, \"message\": \"...\"}} envelope and returns an *APIError with Code and Message populated",
+          "return_contract": "*APIError with Code set to the HTTP status code value from envelope and Message from envelope; err.Error() returns \"API error {Code}: {Message}\"",
+          "trigger": "the server responds with a 4xx or 5xx status and a valid JSON error envelope"
+        },
+        {
+          "id": "12-REQ-3.12",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "returns an *APIError with Code set to the HTTP status code and Message set to the HTTP status text",
+          "return_contract": "*APIError with Code from HTTP status and Message from HTTP status text",
+          "trigger": "the server responds with a 4xx or 5xx status and a non-JSON or non-decodable body"
+        },
+        {
+          "id": "12-REQ-3.13",
+          "ears_pattern": "ubiquitous",
+          "system": "do",
+          "action": "applies any per-request RequestOption functions (e.g., WithIfNoneMatch) to the *http.Request before execution",
+          "return_contract": "request headers reflect applied RequestOption values"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns a plain error wrapping the JSON decode error; the original error is accessible via errors.Unwrap; does not return *APIError",
+          "return_contract": "non-nil plain error; errors.Unwrap returns non-nil underlying JSON error; errors.As(err, &apiErr) returns false",
+          "error_condition": "the server returns HTTP 200 or 201 with an empty, malformed, or non-JSON body (including plain text or HTML)"
+        },
+        {
+          "id": "12-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns a plain error wrapping the JSON marshal error before any HTTP request is made; the original error is accessible via errors.Unwrap",
+          "return_contract": "non-nil plain error; errors.Unwrap returns non-nil underlying marshal error",
+          "error_condition": "the request body JSON encoding fails (marshal error)"
+        },
+        {
+          "id": "12-REQ-3.E3",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns a plain error wrapping the underlying network error; does not return *APIError; errors.Unwrap works on the returned error",
+          "return_contract": "non-nil plain error; errors.As(err, &apiErr) returns false; errors.Unwrap returns non-nil",
+          "error_condition": "a network failure occurs during HTTP transport (connection refused, DNS resolution failure, etc.)"
+        },
+        {
+          "id": "12-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns a plain error wrapping context.Canceled or context.DeadlineExceeded; does not return *APIError; errors.Unwrap works on the returned error",
+          "return_contract": "non-nil plain error wrapping context.Canceled or context.DeadlineExceeded; errors.As(err, &apiErr) returns false",
+          "error_condition": "the caller-supplied context.Context is cancelled or its deadline is exceeded before or during the request"
+        },
+        {
+          "id": "12-REQ-3.E5",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "the HTTP transport layer fails and returns a plain error; the SDK does not panic; the error is not *APIError",
+          "return_contract": "non-nil plain error from HTTP transport; no panic; errors.As(err, &apiErr) returns false",
+          "error_condition": "Client was constructed with an empty baseURL and a request is issued"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-4",
+      "title": "URL construction and mount point routing",
+      "user_story": {
+        "role": "SDK consumer",
+        "goal": "have all API requests routed to the correct URL paths relative to the server's root and configured mount point",
+        "benefit": "I can deploy the server at any mount point and the SDK constructs correct URLs automatically"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "constructs API endpoint URLs as baseURL + mountPoint + path (e.g., https://api.example.com/api/v1/user)",
+          "return_contract": "request URL equals baseURL + mountPoint + path"
+        },
+        {
+          "id": "12-REQ-4.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "constructs health probe endpoint URLs as baseURL + path without the mountPoint (e.g., https://api.example.com/healthz, https://api.example.com/readyz, https://api.example.com/version)",
+          "return_contract": "Healthz, Readyz, and Version request URLs equal baseURL + \"/healthz\", \"/readyz\", \"/version\" respectively"
+        },
+        {
+          "id": "12-REQ-4.3",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "constructs auth endpoint URLs as baseURL + mountPoint + path (e.g., baseURL + /api/v1/auth/providers)",
+          "return_contract": "GetProviders and ExchangeOAuthCode request URLs include the mountPoint prefix"
+        },
+        {
+          "id": "12-REQ-4.4",
+          "ears_pattern": "event_driven",
+          "system": "Client",
+          "action": "uses the custom (normalized) mountPoint in all API and auth endpoint URL construction",
+          "return_contract": "all non-health-probe request URLs use the custom mountPoint",
+          "trigger": "WithMountPoint is used to set a custom mount point"
+        },
+        {
+          "id": "12-REQ-4.5",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "interpolates path parameters (keyID, userID, tokenID, orgID, id) into URL paths as-is without calling url.PathEscape; callers are responsible for providing URL-safe values",
+          "return_contract": "path parameters appear verbatim in constructed URLs"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "Client",
+          "action": "the trailing slash stripping in NewClient ensures double slashes cannot appear in constructed URLs",
+          "return_contract": "no double slashes in any constructed URL",
+          "error_condition": "baseURL has a trailing slash that was not stripped (defensive check)"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-5",
+      "title": "ETag and conditional GET support",
+      "user_story": {
+        "role": "SDK consumer",
+        "goal": "perform conditional GET requests using ETags and detect 304 Not Modified responses",
+        "benefit": "I can avoid redundant data transfer and processing when a resource has not changed since I last fetched it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "WithIfNoneMatch",
+          "action": "adds an If-None-Match header with the provided etag value to the request when applied as a RequestOption",
+          "return_contract": "request header If-None-Match equals the provided etag string"
+        },
+        {
+          "id": "12-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "GetUser",
+          "action": "returns nil for the *Response[User] and the sentinel error ErrNotModified",
+          "return_contract": "nil *Response[User]; ErrNotModified; errors.Is(err, ErrNotModified) returns true",
+          "trigger": "called with a WithIfNoneMatch RequestOption and the server returns HTTP 304"
+        },
+        {
+          "id": "12-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "GetUser",
+          "action": "returns a non-nil *Response[User] with Data populated, StatusCode set to 200, and Header containing the ETag header",
+          "return_contract": "*Response[User] non-nil; Response.ETag() returns the ETag header value; Response.StatusCode equals 200",
+          "trigger": "the server returns HTTP 200 with an ETag response header"
+        },
+        {
+          "id": "12-REQ-5.4",
+          "ears_pattern": "ubiquitous",
+          "system": "Response[T].ETag()",
+          "action": "returns the value of the ETag response header, or an empty string if the header is absent",
+          "return_contract": "string; empty string when ETag header is absent"
+        },
+        {
+          "id": "12-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "supports variadic ...RequestOption on GetUser, GetUserByID, GetToken, and GetOrg methods; all other methods do not accept RequestOption parameters",
+          "return_contract": "only the four listed methods accept ...RequestOption"
+        },
+        {
+          "id": "12-REQ-5.6",
+          "ears_pattern": "ubiquitous",
+          "system": "Response[T]",
+          "action": "sets StatusCode to the actual HTTP status code returned by the server on any 2xx response (e.g., 201 for creation endpoints when wrapped in Response[T])",
+          "return_contract": "Response.StatusCode reflects the exact HTTP status code from the server"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "Response[T]",
+          "action": "the *Response[T] is nil on 304; response headers from the 304 are not accessible via this API; callers must check errors.Is(err, ErrNotModified) before dereferencing",
+          "return_contract": "nil *Response[T]; ErrNotModified",
+          "error_condition": "the server returns HTTP 304 and the caller attempts to access Response[T]"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-6",
+      "title": "APIError type and error classification",
+      "user_story": {
+        "role": "SDK consumer",
+        "goal": "distinguish server-side API errors from infrastructure failures and inspect error details programmatically",
+        "benefit": "I can handle 404 Not Found differently from a network timeout in my application logic"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "APIError",
+          "action": "implements the error interface via an Error() method that returns the string \"API error {Code}: {Message}\" (e.g., \"API error 404: User not found\")",
+          "return_contract": "Error() returns string matching format \"API error %d: %s\""
+        },
+        {
+          "id": "12-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "APIError",
+          "action": "contains Code int and Message string fields matching the server's error envelope fields",
+          "return_contract": "APIError.Code and APIError.Message are accessible to callers"
+        },
+        {
+          "id": "12-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "decodes the inner error object and returns an *APIError; callers retrieve it via errors.As(err, &apiErr)",
+          "return_contract": "*APIError with Code and Message from the inner envelope object",
+          "trigger": "the server returns a 4xx or 5xx response with a valid JSON error envelope {\"error\": {\"code\": N, \"message\": \"...\"}}"
+        },
+        {
+          "id": "12-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "ErrNotModified",
+          "action": "is a package-level sentinel error value; errors.Is(err, ErrNotModified) returns true when the server returned HTTP 304",
+          "return_contract": "errors.Is(ErrNotModified, ErrNotModified) returns true"
+        },
+        {
+          "id": "12-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "do",
+          "action": "wraps all plain errors (network failures, context errors, JSON decode/encode errors) so that errors.Unwrap returns the underlying cause",
+          "return_contract": "errors.Unwrap(err) returns non-nil for all plain error categories"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns an *APIError with Code set to the HTTP status code integer and Message set to the HTTP status text string; does not attempt to parse the HTML",
+          "return_contract": "*APIError; Code from HTTP status; Message from HTTP status text (e.g., \"Bad Gateway\")",
+          "error_condition": "the server returns a 4xx or 5xx status with an HTML body (e.g., a proxy error page)"
+        },
+        {
+          "id": "12-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "returns an *APIError with Code set to the HTTP status code and Message set to the HTTP status text; the plain-text body is not used as the message",
+          "return_contract": "*APIError; Code from HTTP status; Message from HTTP status text",
+          "error_condition": "the server returns a 4xx or 5xx status with a plain-text body"
+        },
+        {
+          "id": "12-REQ-6.E3",
+          "ears_pattern": "unwanted",
+          "system": "APIError",
+          "action": "errors.As returns false; the APIError is not assignable to unrelated error types",
+          "return_contract": "errors.As returns false for incompatible target types",
+          "error_condition": "caller uses errors.As with a non-*APIError target type"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-7",
+      "title": "Authenticated user endpoint methods",
+      "user_story": {
+        "role": "authenticated API consumer",
+        "goal": "call typed Go methods for all authenticated user endpoints without constructing raw HTTP requests",
+        "benefit": "I get compile-time type safety and automatic error handling for all personal account operations"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "GetUser",
+          "action": "sends a GET request to mountPoint + \"/user\" and returns *Response[User] with the decoded user and HTTP headers on success",
+          "return_contract": "*Response[User] non-nil with Data set; nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "UpdateUser",
+          "action": "sends a PATCH request to mountPoint + \"/user\" with the JSON-encoded request body (always including full_name) and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context and *UpdateUserRequest"
+        },
+        {
+          "id": "12-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "ListKeys",
+          "action": "sends a GET request to mountPoint + \"/user/keys\" and decodes the bare JSON array response into []*APIKeyMeta",
+          "return_contract": "[]*APIKeyMeta (empty slice not nil when server returns []); nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-7.4",
+          "ears_pattern": "event_driven",
+          "system": "RefreshKey",
+          "action": "sends a POST request to mountPoint + \"/user/keys/{keyID}/refresh\" and returns *APIKeyFull on success",
+          "return_contract": "*APIKeyFull non-nil; nil error on 200",
+          "trigger": "called with a valid context and keyID string"
+        },
+        {
+          "id": "12-REQ-7.5",
+          "ears_pattern": "event_driven",
+          "system": "RevokeKey",
+          "action": "sends a DELETE request to mountPoint + \"/user/keys/{keyID}\" and returns *RevokeKeyResponse on success (HTTP 200)",
+          "return_contract": "*RevokeKeyResponse non-nil with KeyID and RevokedAt; nil error on 200",
+          "trigger": "called with a valid context and keyID string"
+        },
+        {
+          "id": "12-REQ-7.6",
+          "ears_pattern": "event_driven",
+          "system": "ListTokens",
+          "action": "sends a GET request to mountPoint + \"/user/tokens\" and decodes the bare JSON array response into []*PAT",
+          "return_contract": "[]*PAT (empty slice not nil when server returns []); nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-7.7",
+          "ears_pattern": "event_driven",
+          "system": "CreateToken",
+          "action": "sends a POST request to mountPoint + \"/user/tokens\" with the JSON-encoded request body and returns *PATFull on success (HTTP 201)",
+          "return_contract": "*PATFull non-nil; nil error on 201",
+          "trigger": "called with a valid context and *CreateTokenRequest"
+        },
+        {
+          "id": "12-REQ-7.8",
+          "ears_pattern": "event_driven",
+          "system": "GetToken",
+          "action": "sends a GET request to mountPoint + \"/user/tokens/{tokenID}\" and returns *Response[PAT] on success",
+          "return_contract": "*Response[PAT] non-nil with Data set; nil error on 200",
+          "trigger": "called with a valid context and tokenID string"
+        },
+        {
+          "id": "12-REQ-7.9",
+          "ears_pattern": "event_driven",
+          "system": "RevokeToken",
+          "action": "sends a DELETE request to mountPoint + \"/user/tokens/{tokenID}\" and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context and tokenID string"
+        },
+        {
+          "id": "12-REQ-7.10",
+          "ears_pattern": "event_driven",
+          "system": "ListUserOrgs",
+          "action": "sends a GET request to mountPoint + \"/user/orgs\" and decodes the bare JSON array response into []*Organization",
+          "return_contract": "[]*Organization (empty slice not nil when server returns []); nil error on 200",
+          "trigger": "called with a valid context"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "ListKeys",
+          "action": "returns an empty (non-nil) []*APIKeyMeta slice",
+          "return_contract": "empty []*APIKeyMeta; nil error",
+          "error_condition": "server returns an empty JSON array []"
+        },
+        {
+          "id": "12-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "RevokeToken",
+          "action": "returns an *APIError or plain error per the do method's error classification rules",
+          "return_contract": "non-nil error; nil for success only on 204",
+          "error_condition": "server returns a non-204 error status"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-8",
+      "title": "Admin user endpoint methods",
+      "user_story": {
+        "role": "admin API consumer",
+        "goal": "call typed Go methods for all administrative user management endpoints",
+        "benefit": "I can manage users, keys, and tokens on behalf of other users with full type safety"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "ListUsers",
+          "action": "sends a GET request to mountPoint + \"/users\" with query parameter include_blocked=true appended using url.Values",
+          "return_contract": "request URL contains \"include_blocked=true\"; []*User returned on 200",
+          "trigger": "called with a non-nil *ListUsersOptions where IncludeBlocked is true"
+        },
+        {
+          "id": "12-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "ListUsers",
+          "action": "sends a GET request to mountPoint + \"/users\" without any include_blocked query parameter",
+          "return_contract": "request URL contains no include_blocked parameter; []*User returned on 200",
+          "trigger": "called with a nil *ListUsersOptions or with IncludeBlocked false"
+        },
+        {
+          "id": "12-REQ-8.3",
+          "ears_pattern": "event_driven",
+          "system": "GetUserByID",
+          "action": "sends a GET request to mountPoint + \"/users/{id}\" and returns *Response[User] on success",
+          "return_contract": "*Response[User] non-nil with Data set; nil error on 200",
+          "trigger": "called with a valid context and user id string"
+        },
+        {
+          "id": "12-REQ-8.4",
+          "ears_pattern": "event_driven",
+          "system": "CreateUser",
+          "action": "sends a POST request to mountPoint + \"/users\" with the JSON-encoded request body and returns *User on success (HTTP 201)",
+          "return_contract": "*User non-nil; nil error on 201",
+          "trigger": "called with a valid context and *CreateUserRequest"
+        },
+        {
+          "id": "12-REQ-8.5",
+          "ears_pattern": "event_driven",
+          "system": "UpdateUserByID",
+          "action": "sends a PATCH request to mountPoint + \"/users/{id}\" with the JSON-encoded request body and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context, user id string, and *UpdateUserRequest"
+        },
+        {
+          "id": "12-REQ-8.6",
+          "ears_pattern": "event_driven",
+          "system": "PromoteUser",
+          "action": "sends a POST request to mountPoint + \"/users/{id}/promote\" with no body and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context and user id string"
+        },
+        {
+          "id": "12-REQ-8.7",
+          "ears_pattern": "event_driven",
+          "system": "DemoteUser",
+          "action": "sends a POST request to mountPoint + \"/users/{id}/demote\" with no body and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context and user id string"
+        },
+        {
+          "id": "12-REQ-8.8",
+          "ears_pattern": "event_driven",
+          "system": "BlockUser",
+          "action": "sends a POST request to mountPoint + \"/users/{id}/block\" with no body and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context and user id string"
+        },
+        {
+          "id": "12-REQ-8.9",
+          "ears_pattern": "event_driven",
+          "system": "UnblockUser",
+          "action": "sends a POST request to mountPoint + \"/users/{id}/unblock\" with no body and returns *User on success",
+          "return_contract": "*User non-nil; nil error on 200",
+          "trigger": "called with a valid context and user id string"
+        },
+        {
+          "id": "12-REQ-8.10",
+          "ears_pattern": "event_driven",
+          "system": "ListUserKeys",
+          "action": "sends a GET request to mountPoint + \"/users/{userID}/keys\" and decodes the bare JSON array response into []*APIKeyMeta",
+          "return_contract": "[]*APIKeyMeta; nil error on 200",
+          "trigger": "called with a valid context and userID string"
+        },
+        {
+          "id": "12-REQ-8.11",
+          "ears_pattern": "event_driven",
+          "system": "RevokeUserKey",
+          "action": "sends a DELETE request to mountPoint + \"/users/{userID}/keys/{keyID}\" and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context, userID string, and keyID string"
+        },
+        {
+          "id": "12-REQ-8.12",
+          "ears_pattern": "event_driven",
+          "system": "ListUserTokens",
+          "action": "sends a GET request to mountPoint + \"/users/{userID}/tokens\" and decodes the bare JSON array response into []*PAT",
+          "return_contract": "[]*PAT; nil error on 200",
+          "trigger": "called with a valid context and userID string"
+        },
+        {
+          "id": "12-REQ-8.13",
+          "ears_pattern": "event_driven",
+          "system": "RevokeUserToken",
+          "action": "sends a DELETE request to mountPoint + \"/users/{userID}/tokens/{tokenID}\" and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context, userID string, and tokenID string"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "ListUsers",
+          "action": "returns an empty (non-nil) []*User slice",
+          "return_contract": "empty []*User; nil error",
+          "error_condition": "server returns an empty JSON array []"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-9",
+      "title": "Admin organization endpoint methods",
+      "user_story": {
+        "role": "admin API consumer",
+        "goal": "call typed Go methods for all administrative organization management endpoints",
+        "benefit": "I can create, manage, and delete organizations and their members with full type safety"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "CreateOrg",
+          "action": "sends a POST request to mountPoint + \"/orgs\" with the JSON-encoded request body and returns *Organization on success (HTTP 201)",
+          "return_contract": "*Organization non-nil; nil error on 201",
+          "trigger": "called with a valid context and *CreateOrgRequest"
+        },
+        {
+          "id": "12-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "ListOrgs",
+          "action": "sends a GET request to mountPoint + \"/orgs\" with query parameter include_blocked=true appended using url.Values",
+          "return_contract": "request URL contains \"include_blocked=true\"; []*Organization returned on 200",
+          "trigger": "called with a non-nil *ListOrgsOptions where IncludeBlocked is true"
+        },
+        {
+          "id": "12-REQ-9.3",
+          "ears_pattern": "event_driven",
+          "system": "ListOrgs",
+          "action": "sends a GET request to mountPoint + \"/orgs\" without any include_blocked query parameter",
+          "return_contract": "request URL contains no include_blocked parameter; []*Organization returned on 200",
+          "trigger": "called with nil *ListOrgsOptions or IncludeBlocked false"
+        },
+        {
+          "id": "12-REQ-9.4",
+          "ears_pattern": "event_driven",
+          "system": "GetOrg",
+          "action": "sends a GET request to mountPoint + \"/orgs/{id}\" and returns *Response[Organization] on success",
+          "return_contract": "*Response[Organization] non-nil with Data set; nil error on 200",
+          "trigger": "called with a valid context and org id string"
+        },
+        {
+          "id": "12-REQ-9.5",
+          "ears_pattern": "event_driven",
+          "system": "UpdateOrg",
+          "action": "sends a PATCH request to mountPoint + \"/orgs/{id}\" with the JSON-encoded request body and returns *Organization on success",
+          "return_contract": "*Organization non-nil; nil error on 200",
+          "trigger": "called with a valid context, org id string, and *UpdateOrgRequest"
+        },
+        {
+          "id": "12-REQ-9.6",
+          "ears_pattern": "event_driven",
+          "system": "DeleteOrg",
+          "action": "sends a DELETE request to mountPoint + \"/orgs/{id}\" with no body and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context and org id string"
+        },
+        {
+          "id": "12-REQ-9.7",
+          "ears_pattern": "event_driven",
+          "system": "BlockOrg",
+          "action": "sends a POST request to mountPoint + \"/orgs/{id}/block\" with no body and returns *Organization on success",
+          "return_contract": "*Organization non-nil; nil error on 200",
+          "trigger": "called with a valid context and org id string"
+        },
+        {
+          "id": "12-REQ-9.8",
+          "ears_pattern": "event_driven",
+          "system": "UnblockOrg",
+          "action": "sends a POST request to mountPoint + \"/orgs/{id}/unblock\" with no body and returns *Organization on success",
+          "return_contract": "*Organization non-nil; nil error on 200",
+          "trigger": "called with a valid context and org id string"
+        },
+        {
+          "id": "12-REQ-9.9",
+          "ears_pattern": "event_driven",
+          "system": "ListOrgMembers",
+          "action": "sends a GET request to mountPoint + \"/orgs/{orgID}/members\" and decodes the bare JSON array response into []*User",
+          "return_contract": "[]*User; nil error on 200",
+          "trigger": "called with a valid context and orgID string"
+        },
+        {
+          "id": "12-REQ-9.10",
+          "ears_pattern": "event_driven",
+          "system": "AddOrgMember",
+          "action": "sends a PUT request to mountPoint + \"/orgs/{orgID}/members/{userID}\" with no request body and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context, orgID string, and userID string"
+        },
+        {
+          "id": "12-REQ-9.11",
+          "ears_pattern": "event_driven",
+          "system": "RemoveOrgMember",
+          "action": "sends a DELETE request to mountPoint + \"/orgs/{orgID}/members/{userID}\" with no body and returns nil error on success (HTTP 204)",
+          "return_contract": "nil error on 204",
+          "trigger": "called with a valid context, orgID string, and userID string"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "AddOrgMember",
+          "action": "the SDK does not escape the value; the resulting malformed URL causes a transport-layer error; the caller is responsible for providing URL-safe IDs",
+          "return_contract": "plain error from HTTP transport; no *APIError",
+          "error_condition": "userID path parameter is not URL-safe"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-10",
+      "title": "Auth endpoint methods",
+      "user_story": {
+        "role": "SDK consumer implementing an OAuth login flow",
+        "goal": "call typed Go methods for OAuth provider discovery and code exchange",
+        "benefit": "I can build the OAuth login flow in the CLI without constructing raw HTTP requests"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-10.1",
+          "ears_pattern": "event_driven",
+          "system": "GetProviders",
+          "action": "sends a GET request to mountPoint + \"/auth/providers\" and decodes the bare JSON array response into []*OAuthProvider",
+          "return_contract": "[]*OAuthProvider; nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-10.2",
+          "ears_pattern": "event_driven",
+          "system": "ExchangeOAuthCode",
+          "action": "sends a POST request to mountPoint + \"/auth/callback\" with the JSON-encoded request body and returns *AuthCallbackResponse on success",
+          "return_contract": "*AuthCallbackResponse non-nil with User and APIKey populated; nil error on 200",
+          "trigger": "called with a valid context and *AuthCallbackRequest"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "ExchangeOAuthCode",
+          "action": "returns an *APIError with Code and Message from the server error envelope",
+          "return_contract": "*APIError; nil *AuthCallbackResponse",
+          "error_condition": "server returns a 4xx error (e.g., invalid code or provider)"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-11",
+      "title": "Health and meta endpoint methods",
+      "user_story": {
+        "role": "SDK consumer monitoring a deployed server",
+        "goal": "call typed Go methods for health probe and version endpoints that bypass the mount point",
+        "benefit": "I can check server liveness, readiness, and version information without knowing the API mount point"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "Healthz",
+          "action": "sends a GET request to baseURL + \"/healthz\" (without mountPoint) and returns *HealthResponse on success",
+          "return_contract": "*HealthResponse non-nil with Status set; nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-11.2",
+          "ears_pattern": "event_driven",
+          "system": "Readyz",
+          "action": "sends a GET request to baseURL + \"/readyz\" (without mountPoint) and returns *HealthResponse on success",
+          "return_contract": "*HealthResponse non-nil with Status set; nil error on 200",
+          "trigger": "called with a valid context"
+        },
+        {
+          "id": "12-REQ-11.3",
+          "ears_pattern": "event_driven",
+          "system": "Version",
+          "action": "sends a GET request to baseURL + \"/version\" (without mountPoint) and returns *VersionResponse on success",
+          "return_contract": "*VersionResponse non-nil with Version, BuildTime, Commit, and MountPoint set; nil error on 200",
+          "trigger": "called with a valid context"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-11.E1",
+          "ears_pattern": "unwanted",
+          "system": "Healthz",
+          "action": "returns a plain error wrapping the network error; does not return *APIError",
+          "return_contract": "non-nil plain error; errors.As(err, &apiErr) returns false",
+          "error_condition": "server is unreachable at baseURL"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-12",
+      "title": "Query parameter construction with url.Values",
+      "user_story": {
+        "role": "SDK maintainer adding new filter fields in future iterations",
+        "goal": "have list endpoint query parameters constructed via url.Values so new fields can be added without restructuring",
+        "benefit": "ListUsersOptions and ListOrgsOptions can grow with pagination and search fields without breaking existing callers"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "ListUsers",
+          "action": "constructs query parameters using url.Values internally; when IncludeBlocked is true appends include_blocked=true; when false or options is nil appends nothing",
+          "return_contract": "request URL has include_blocked=true only when IncludeBlocked is true"
+        },
+        {
+          "id": "12-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "ListOrgs",
+          "action": "constructs query parameters using url.Values internally; when IncludeBlocked is true appends include_blocked=true; when false or options is nil appends nothing",
+          "return_contract": "request URL has include_blocked=true only when IncludeBlocked is true"
+        },
+        {
+          "id": "12-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "ListUsersOptions",
+          "action": "is defined as a struct with at minimum IncludeBlocked bool, designed to accommodate additional filter fields in future iterations without breaking changes",
+          "return_contract": "struct compiles and is accepted by ListUsers as a pointer parameter"
+        },
+        {
+          "id": "12-REQ-12.4",
+          "ears_pattern": "ubiquitous",
+          "system": "ListOrgsOptions",
+          "action": "is defined as a struct with at minimum IncludeBlocked bool, designed to accommodate additional filter fields in future iterations without breaking changes",
+          "return_contract": "struct compiles and is accepted by ListOrgs as a pointer parameter"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "12-REQ-13",
+      "title": "List endpoint bare JSON array decoding",
+      "user_story": {
+        "role": "SDK implementation developer",
+        "goal": "decode all list endpoint responses from bare JSON arrays rather than wrapped objects",
+        "benefit": "the SDK correctly matches the OpenAPI spec which defines list responses as top-level arrays"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "do",
+          "action": "decodes list endpoint responses directly into []T without an intermediate wrapper struct, matching the bare JSON array format defined in the OpenAPI spec",
+          "return_contract": "JSON array [{...},{...}] decoded into Go slice with all elements populated"
+        },
+        {
+          "id": "12-REQ-13.2",
+          "ears_pattern": "event_driven",
+          "system": "do",
+          "action": "decodes the response into an empty (non-nil) Go slice",
+          "return_contract": "non-nil empty slice; nil error",
+          "trigger": "the server returns an empty JSON array [] for a list endpoint"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "12-REQ-13.E1",
+          "ears_pattern": "unwanted",
+          "system": "do",
+          "action": "the JSON decode fails and returns a plain error wrapping the decode error; the SDK does not attempt to unwrap nested arrays",
+          "return_contract": "non-nil plain error; nil slice",
+          "error_condition": "the server returns a wrapped JSON object (e.g., {\"keys\": [...]}) instead of a bare array for a list endpoint"
+        }
+      ]
+    },
+    {
+      "id": "12-REQ-14",
+      "title": "HTTP redirect behavior",
+      "user_story": {
+        "role": "SDK consumer",
+        "goal": "have the SDK follow HTTP redirects automatically using Go's default policy",
+        "benefit": "requests succeed without extra client-side handling in the common case; callers needing custom redirect logic can inject their own *http.Client"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Client",
+          "action": "uses Go's default HTTP redirect policy, following up to 10 redirects automatically via the configured httpClient",
+          "return_contract": "requests are redirected up to 10 times before a redirect error is returned"
+        },
+        {
+          "id": "12-REQ-14.2",
+          "ears_pattern": "optional",
+          "system": "Client",
+          "action": "supports callers injecting a configured *http.Client with a custom CheckRedirect policy via WithHTTPClient",
+          "return_contract": "custom redirect policy honored; SDK does not override it",
+          "feature": "custom redirect handling"
+        }
+      ],
+      "edge_cases": []
+    },
+    {
+      "id": "12-REQ-15",
+      "title": "Repository layout and package placement",
+      "user_story": {
+        "role": "consuming project developer",
+        "goal": "import the SDK from the root apikit package without any sub-package import path",
+        "benefit": "I get both the server framework and the client library from a single import"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "12-REQ-15.1",
+          "ears_pattern": "ubiquitous",
+          "system": "apikit",
+          "action": "places all SDK source files (sdk.go, sdk_types.go, sdk_user.go, sdk_admin.go, sdk_auth.go, sdk_health.go, sdk_errors.go, sdk_test.go, sdk_integration_test.go) in the root apikit package (package apikit); no SDK code is placed under internal/",
+          "return_contract": "all SDK types and functions are importable by external consumers as package apikit"
+        },
+        {
+          "id": "12-REQ-15.2",
+          "ears_pattern": "ubiquitous",
+          "system": "apikit",
+          "action": "requires Go 1.18 or later as the minimum version (floor) due to generics support required by Response[T]; the go.mod go directive is set to the latest stable release at implementation time",
+          "return_contract": "package compiles with Go 1.18+"
+        }
+      ],
+      "edge_cases": []
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "12-PROP-1",
+      "title": "Client immutability guarantees concurrent safety",
+      "for_any": "Client c constructed by NewClient",
+      "invariant": "no field on c is modified after NewClient returns; all concurrent calls to any method on c observe the same field values set during construction",
+      "validates": [
+        "12-REQ-1.3"
+      ]
+    },
+    {
+      "id": "12-PROP-2",
+      "title": "APIError classification is exhaustive for non-2xx non-304 responses",
+      "for_any": "HTTP response with status code S where S >= 400",
+      "invariant": "do always returns a non-nil *APIError (never a plain error) for any response with status code >= 400; Code is always set to S",
+      "validates": [
+        "12-REQ-6.3",
+        "12-REQ-6.E1",
+        "12-REQ-6.E2"
+      ]
+    },
+    {
+      "id": "12-PROP-3",
+      "title": "Plain errors always wrap their underlying cause",
+      "for_any": "plain error returned by do (network, context, JSON decode, JSON encode)",
+      "invariant": "errors.Unwrap(err) is non-nil for every plain error returned by do; the original cause is always preserved",
+      "validates": [
+        "12-REQ-3.E1",
+        "12-REQ-3.E2",
+        "12-REQ-3.E3",
+        "12-REQ-3.E4",
+        "12-REQ-6.5"
+      ]
+    },
+    {
+      "id": "12-PROP-4",
+      "title": "Mount point normalization is idempotent",
+      "for_any": "any path string p passed to WithMountPoint",
+      "invariant": "the stored mountPoint always starts with exactly one \"/\" and has no trailing \"/\"; applying WithMountPoint twice with the same value produces the same result",
+      "validates": [
+        "12-REQ-1.7",
+        "12-REQ-1.8",
+        "12-REQ-1.9"
+      ]
+    },
+    {
+      "id": "12-PROP-5",
+      "title": "Health probes always bypass mount point",
+      "for_any": "any Client c regardless of its mountPoint configuration",
+      "invariant": "Healthz, Readyz, and Version always construct URLs as c.baseURL + \"/healthz\", \"/readyz\", \"/version\" respectively, never prefixing c.mountPoint",
+      "validates": [
+        "12-REQ-4.2",
+        "12-REQ-11.1",
+        "12-REQ-11.2",
+        "12-REQ-11.3"
+      ]
+    },
+    {
+      "id": "12-PROP-6",
+      "title": "List endpoints return non-nil empty slice for empty server response",
+      "for_any": "any list endpoint method when the server returns []",
+      "invariant": "the returned Go slice is non-nil and has length 0; it is never nil",
+      "validates": [
+        "12-REQ-13.2",
+        "12-REQ-7.E1",
+        "12-REQ-8.E1"
+      ]
+    },
+    {
+      "id": "12-PROP-7",
+      "title": "Authorization header is sent iff apiKey is non-empty",
+      "for_any": "any request made by any Client method",
+      "invariant": "the Authorization header is present with value \"Bearer <apiKey>\" if and only if Client.apiKey is non-empty; when apiKey is empty, no Authorization header is set",
+      "validates": [
+        "12-REQ-3.3",
+        "12-REQ-3.5"
+      ]
+    },
+    {
+      "id": "12-PROP-8",
+      "title": "ErrNotModified is returned iff the server responds with 304",
+      "for_any": "any conditional GET method (GetUser, GetUserByID, GetToken, GetOrg)",
+      "invariant": "ErrNotModified is returned if and only if the server response status code is 304; on 304 the accompanying *Response[T] is always nil",
+      "validates": [
+        "12-REQ-5.2",
+        "12-REQ-3.10",
+        "12-REQ-5.E1"
+      ]
+    },
+    {
+      "id": "12-PROP-9",
+      "title": "UpdateUserRequest always includes full_name in JSON body",
+      "for_any": "any call to UpdateUser or UpdateUserByID with any UpdateUserRequest value",
+      "invariant": "the JSON-encoded request body always contains the \"full_name\" key, even when FullName is an empty string, because the field has no omitempty tag",
+      "validates": [
+        "12-REQ-2.4",
+        "12-REQ-7.2"
+      ]
+    },
+    {
+      "id": "12-PROP-10",
+      "title": "Canonical types are defined exactly once in the apikit package",
+      "for_any": "any domain object type name listed in sdk_types.go (User, Organization, APIKeyMeta, etc.)",
+      "invariant": "each type name appears in exactly one Go file in the apikit package; no duplicate or shadow definitions exist",
+      "validates": [
+        "12-REQ-2.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "12-PATH-1",
+      "title": "Successful authenticated GET with ETag capture and conditional re-fetch",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "calls apikit.NewClient(baseURL, WithAPIKey(key)) to obtain a *Client"
+        },
+        {
+          "actor": "NewClient",
+          "action": "strips trailing slash from baseURL, sets default mountPoint /api/v1, stores apiKey, returns *Client"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.GetUser(ctx) to fetch the authenticated user"
+        },
+        {
+          "actor": "do",
+          "action": "constructs URL as baseURL + /api/v1 + /user, sets Accept: application/json and Authorization: Bearer <key> headers, executes GET via httpClient"
+        },
+        {
+          "actor": "Mock server",
+          "action": "returns HTTP 200 with JSON User body and ETag response header"
+        },
+        {
+          "actor": "do",
+          "action": "decodes JSON body into User struct, populates *Response[User] with Data, StatusCode=200, and Header containing ETag, returns to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "reads etag := resp.ETag() from the response; later calls client.GetUser(ctx, WithIfNoneMatch(etag))"
+        },
+        {
+          "actor": "do",
+          "action": "constructs the same URL, applies WithIfNoneMatch RequestOption setting If-None-Match header, executes GET"
+        },
+        {
+          "actor": "Mock server",
+          "action": "returns HTTP 304 Not Modified"
+        },
+        {
+          "actor": "do",
+          "action": "detects 304, returns nil *Response[User] and ErrNotModified to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "checks errors.Is(err, ErrNotModified) == true and uses cached User data"
+        }
+      ]
+    },
+    {
+      "id": "12-PATH-2",
+      "title": "API error handling on 4xx response",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "calls apikit.NewClient(baseURL, WithAPIKey(key)) to obtain a *Client"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.GetUserByID(ctx, \"nonexistent-id\") to fetch a user that does not exist"
+        },
+        {
+          "actor": "do",
+          "action": "constructs URL as baseURL + /api/v1 + /users/nonexistent-id, sets headers, executes GET"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 404 with JSON body {\"error\": {\"code\": 404, \"message\": \"User not found\"}}"
+        },
+        {
+          "actor": "do",
+          "action": "reads 404 status, decodes the nested error envelope, constructs *APIError{Code: 404, Message: \"User not found\"}, returns it as error"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls errors.As(err, &apiErr) which returns true; reads apiErr.Code == 404 and apiErr.Message == \"User not found\"; reads err.Error() == \"API error 404: User not found\""
+        }
+      ]
+    },
+    {
+      "id": "12-PATH-3",
+      "title": "List organizations with include_blocked filter and empty result",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "calls apikit.NewClient(baseURL, WithAPIKey(adminKey)) to obtain an admin *Client"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.ListOrgs(ctx, &ListOrgsOptions{IncludeBlocked: true})"
+        },
+        {
+          "actor": "do",
+          "action": "constructs URL as baseURL + /api/v1 + /orgs, appends include_blocked=true query parameter via url.Values, executes GET"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with bare JSON array [] (no organizations match)"
+        },
+        {
+          "actor": "do",
+          "action": "decodes bare JSON array [] into an empty (non-nil) []*Organization slice, returns to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "receives empty []*Organization with nil error; len(orgs) == 0"
+        }
+      ]
+    },
+    {
+      "id": "12-PATH-4",
+      "title": "Organization member management via admin methods",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "calls apikit.NewClient(baseURL, WithAPIKey(adminKey)) to obtain an admin *Client"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.CreateOrg(ctx, &CreateOrgRequest{Name: \"Acme\", Slug: \"acme\"}) to create an organization"
+        },
+        {
+          "actor": "do",
+          "action": "sends POST to baseURL + /api/v1/orgs with JSON body {\"name\":\"Acme\",\"slug\":\"acme\"}"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 201 with JSON Organization body"
+        },
+        {
+          "actor": "do",
+          "action": "decodes JSON body into *Organization, returns to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.AddOrgMember(ctx, org.ID, userID) to add a user to the organization"
+        },
+        {
+          "actor": "do",
+          "action": "sends PUT to baseURL + /api/v1/orgs/{org.ID}/members/{userID} with no request body"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 204 No Content"
+        },
+        {
+          "actor": "do",
+          "action": "detects 204, returns nil error to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.ListOrgMembers(ctx, org.ID) to verify the member was added"
+        },
+        {
+          "actor": "do",
+          "action": "sends GET to baseURL + /api/v1/orgs/{org.ID}/members, decodes bare JSON array into []*User"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with bare JSON array containing the added user"
+        },
+        {
+          "actor": "Caller",
+          "action": "receives []*User with the added member; confirms membership"
+        }
+      ]
+    },
+    {
+      "id": "12-PATH-5",
+      "title": "Custom mount point configuration end-to-end",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "calls apikit.NewClient(\"https://api.example.com\", WithAPIKey(key), WithMountPoint(\"api/v2\")) to obtain a *Client with custom mount point"
+        },
+        {
+          "actor": "WithMountPoint",
+          "action": "normalizes \"api/v2\" by prepending \"/\" to produce \"/api/v2\" and stores it as mountPoint"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.GetUser(ctx)"
+        },
+        {
+          "actor": "do",
+          "action": "constructs URL as https://api.example.com + /api/v2 + /user = \"https://api.example.com/api/v2/user\", executes GET"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with User JSON at the /api/v2 mount point"
+        },
+        {
+          "actor": "do",
+          "action": "decodes response and returns *Response[User] to caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "calls client.Healthz(ctx) — health probe should bypass mount point"
+        },
+        {
+          "actor": "do",
+          "action": "constructs URL as https://api.example.com + /healthz (no mount point), executes GET"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with HealthResponse JSON"
+        },
+        {
+          "actor": "Caller",
+          "action": "receives *HealthResponse confirming health probe bypasses custom mount point"
+        }
+      ]
+    },
+    {
+      "id": "12-PATH-6",
+      "title": "OAuth code exchange flow (CLI building block)",
+      "steps": [
+        {
+          "actor": "Caller (CLI)",
+          "action": "calls apikit.NewClient(baseURL) (no API key yet) to create an unauthenticated client"
+        },
+        {
+          "actor": "Caller (CLI)",
+          "action": "calls client.GetProviders(ctx) to discover available OAuth providers"
+        },
+        {
+          "actor": "do",
+          "action": "sends GET to baseURL + /api/v1/auth/providers, decodes bare JSON array into []*OAuthProvider"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with []*OAuthProvider JSON array"
+        },
+        {
+          "actor": "Caller (CLI)",
+          "action": "displays provider list to user; user selects a provider; CLI opens browser to provider.AuthorizeURL and receives OAuth code via redirect"
+        },
+        {
+          "actor": "Caller (CLI)",
+          "action": "calls client.ExchangeOAuthCode(ctx, &AuthCallbackRequest{Provider: \"github\", Code: code, RedirectURI: redirectURI})"
+        },
+        {
+          "actor": "do",
+          "action": "sends POST to baseURL + /api/v1/auth/callback with JSON body, decodes *AuthCallbackResponse"
+        },
+        {
+          "actor": "Server",
+          "action": "returns HTTP 200 with AuthCallbackResponse containing User and APIKeyFull"
+        },
+        {
+          "actor": "Caller (CLI)",
+          "action": "receives *AuthCallbackResponse; stores resp.APIKey.Key as the API key for future requests; creates authenticated client with WithAPIKey(resp.APIKey.Key)"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "12-ERR-1",
+      "condition": "Server returns 4xx or 5xx with a valid JSON error envelope {\"error\": {\"code\": N, \"message\": \"...\"}}",
+      "behavior": "do decodes the inner error object and returns *APIError with Code and Message populated; APIError.Error() returns \"API error {Code}: {Message}\"; callers use errors.As(err, &apiErr) to inspect",
+      "requirement_id": "12-REQ-6.3"
+    },
+    {
+      "id": "12-ERR-2",
+      "condition": "Server returns 4xx or 5xx with a non-JSON body (HTML proxy error, plain text, binary)",
+      "behavior": "do returns *APIError with Code set to HTTP status code integer and Message set to HTTP status text string; the body content is not used as the message",
+      "requirement_id": "12-REQ-6.E1"
+    },
+    {
+      "id": "12-ERR-3",
+      "condition": "Server returns HTTP 304 on a conditional GET",
+      "behavior": "do returns nil *Response[T] and the sentinel ErrNotModified; response headers from the 304 are not accessible; caller checks errors.Is(err, ErrNotModified)",
+      "requirement_id": "12-REQ-5.2"
+    },
+    {
+      "id": "12-ERR-4",
+      "condition": "Network failure during HTTP transport (connection refused, DNS failure, TLS error)",
+      "behavior": "do returns a plain error wrapping the underlying network error; errors.Unwrap returns the underlying cause; errors.As(err, &apiErr) returns false",
+      "requirement_id": "12-REQ-3.E3"
+    },
+    {
+      "id": "12-ERR-5",
+      "condition": "Caller-supplied context.Context is cancelled or deadline exceeded before or during request",
+      "behavior": "do returns a plain error wrapping context.Canceled or context.DeadlineExceeded; errors.Unwrap returns the cause; errors.As(err, &apiErr) returns false",
+      "requirement_id": "12-REQ-3.E4"
+    },
+    {
+      "id": "12-ERR-6",
+      "condition": "Server returns 2xx with an empty, malformed, or non-JSON response body",
+      "behavior": "do returns a plain error wrapping the JSON decode error; errors.Unwrap returns non-nil; does not return *APIError",
+      "requirement_id": "12-REQ-3.E1"
+    },
+    {
+      "id": "12-ERR-7",
+      "condition": "Request body JSON encoding fails (marshal error) before any HTTP request is made",
+      "behavior": "do returns a plain error wrapping the JSON marshal error; errors.Unwrap returns non-nil; no HTTP request is sent",
+      "requirement_id": "12-REQ-3.E2"
+    },
+    {
+      "id": "12-ERR-8",
+      "condition": "Client was constructed with an empty baseURL and a request is issued",
+      "behavior": "the HTTP transport layer fails and returns a plain error; the SDK does not panic; errors.As(err, &apiErr) returns false",
+      "requirement_id": "12-REQ-1.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "net/http",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "DefaultClient",
+          "import_path": "net/http",
+          "signature": "var DefaultClient = &Client{}",
+          "notes": "Used as the default httpClient when no WithHTTPClient option is provided"
+        },
+        {
+          "name": "NewRequest",
+          "import_path": "net/http",
+          "signature": "func NewRequest(method, url string, body io.Reader) (*Request, error)",
+          "notes": "Used internally by do to construct requests; prefer NewRequestWithContext for context propagation"
+        },
+        {
+          "name": "NewRequestWithContext",
+          "import_path": "net/http",
+          "signature": "func NewRequestWithContext(ctx context.Context, method, url string, body io.Reader) (*Request, error)",
+          "notes": "Preferred form for context-aware request construction; passes ctx directly"
+        },
+        {
+          "name": "Client.Do",
+          "import_path": "net/http",
+          "signature": "func (c *Client) Do(req *Request) (*Response, error)",
+          "notes": "Executes the HTTP request; used by the SDK's do method via the configured httpClient"
+        },
+        {
+          "name": "Response",
+          "import_path": "net/http",
+          "signature": "type Response struct { Status string; StatusCode int; Header Header; Body io.ReadCloser; ... }",
+          "notes": "HTTP response; Body must be closed after reading"
+        },
+        {
+          "name": "Header",
+          "import_path": "net/http",
+          "signature": "type Header map[string][]string",
+          "notes": "Used in Response[T].Header to expose response headers including ETag"
+        }
+      ]
+    },
+    {
+      "package": "net/http/httptest",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "NewServer",
+          "import_path": "net/http/httptest",
+          "signature": "func NewServer(handler http.Handler) *Server",
+          "notes": "Used in integration tests to create a mock HTTP server"
+        },
+        {
+          "name": "Server.URL",
+          "import_path": "net/http/httptest",
+          "signature": "URL string",
+          "notes": "The base URL of the test server, passed as baseURL to NewClient in integration tests"
+        },
+        {
+          "name": "Server.Close",
+          "import_path": "net/http/httptest",
+          "signature": "func (s *Server) Close()",
+          "notes": "Shuts down the test server; called via defer in integration tests"
+        }
+      ]
+    },
+    {
+      "package": "net/url",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Values",
+          "import_path": "net/url",
+          "signature": "type Values map[string][]string",
+          "notes": "Used for query parameter construction in ListUsers and ListOrgs"
+        },
+        {
+          "name": "Values.Set",
+          "import_path": "net/url",
+          "signature": "func (v Values) Set(key, value string)",
+          "notes": "Sets a query parameter key-value pair"
+        },
+        {
+          "name": "Values.Encode",
+          "import_path": "net/url",
+          "signature": "func (v Values) Encode() string",
+          "notes": "Encodes the values into URL query string format (key=value&...)"
+        }
+      ]
+    },
+    {
+      "package": "encoding/json",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Marshal",
+          "import_path": "encoding/json",
+          "signature": "func Marshal(v any) ([]byte, error)",
+          "notes": "Used to encode request bodies"
+        },
+        {
+          "name": "NewDecoder",
+          "import_path": "encoding/json",
+          "signature": "func NewDecoder(r io.Reader) *Decoder",
+          "notes": "Used to stream-decode response bodies"
+        },
+        {
+          "name": "Decoder.Decode",
+          "import_path": "encoding/json",
+          "signature": "func (dec *Decoder) Decode(v any) error",
+          "notes": "Decodes a JSON value from the reader into v"
+        }
+      ]
+    },
+    {
+      "package": "errors",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "New",
+          "import_path": "errors",
+          "signature": "func New(text string) error",
+          "notes": "Used to define the ErrNotModified sentinel"
+        },
+        {
+          "name": "As",
+          "import_path": "errors",
+          "signature": "func As(err error, target any) bool",
+          "notes": "Used by callers to extract *APIError from returned errors"
+        },
+        {
+          "name": "Is",
+          "import_path": "errors",
+          "signature": "func Is(err, target error) bool",
+          "notes": "Used by callers to check for ErrNotModified"
+        },
+        {
+          "name": "Unwrap",
+          "import_path": "errors",
+          "signature": "func Unwrap(err error) error",
+          "notes": "Used to verify that plain errors wrap their underlying cause"
+        }
+      ]
+    },
+    {
+      "package": "fmt",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Sprintf",
+          "import_path": "fmt",
+          "signature": "func Sprintf(format string, a ...any) string",
+          "notes": "Used in APIError.Error() to format the error string"
+        },
+        {
+          "name": "Errorf",
+          "import_path": "fmt",
+          "signature": "func Errorf(format string, a ...any) error",
+          "notes": "Used with %w verb to wrap underlying errors in plain error returns"
+        }
+      ]
+    }
+  ]
+}

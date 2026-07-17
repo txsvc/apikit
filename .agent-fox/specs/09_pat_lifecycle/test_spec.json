@@ -1,0 +1,1139 @@
+{
+  "$schema": null,
+  "spec_id": "09",
+  "spec_name": "pat_lifecycle",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-09-1",
+      "requirement_id": "09-REQ-1.1",
+      "kind": "unit",
+      "description": "NewPATHandler returns a non-nil *PATHandler when both database and registry parameters are non-nil.",
+      "preconditions": [
+        "A valid *db.DB instance is available (in-memory SQLite)",
+        "A valid *auth.PermissionRegistry instance is initialized with built-in permissions"
+      ],
+      "input": {
+        "database": "non-nil *db.DB",
+        "registry": "non-nil *auth.PermissionRegistry"
+      },
+      "expected": "NewPATHandler returns a non-nil *PATHandler; no panic occurs",
+      "assertion_pseudocode": "handler = NewPATHandler(db, registry); assert handler != nil"
+    },
+    {
+      "id": "TS-09-2",
+      "requirement_id": "09-REQ-1.2",
+      "kind": "unit",
+      "description": "RegisterRoutes registers all four PAT lifecycle routes on the provided Echo group.",
+      "preconditions": [
+        "A valid *PATHandler has been constructed",
+        "An Echo instance is initialized with an authenticated API group via server.APIGroup()"
+      ],
+      "input": {
+        "group": "*echo.Group representing the authenticated API group"
+      },
+      "expected": "Four routes are registered: POST /user/tokens, GET /user/tokens, GET /user/tokens/:token_id, DELETE /user/tokens/:token_id",
+      "assertion_pseudocode": "handler.RegisterRoutes(group); routes = echo.Routes(); assert routeExists(routes, 'POST', '/user/tokens'); assert routeExists(routes, 'GET', '/user/tokens'); assert routeExists(routes, 'GET', '/user/tokens/:token_id'); assert routeExists(routes, 'DELETE', '/user/tokens/:token_id')"
+    },
+    {
+      "id": "TS-09-3",
+      "requirement_id": "09-REQ-1.3",
+      "kind": "integration",
+      "description": "All four PAT endpoints return HTTP 401 for unauthenticated requests, handled by the auth middleware.",
+      "preconditions": [
+        "Echo server is running with auth middleware installed on the API group",
+        "No Authorization header is provided in the request"
+      ],
+      "input": {
+        "authorization_header": "absent",
+        "requests": [
+          "POST /user/tokens",
+          "GET /user/tokens",
+          "GET /user/tokens/abc12345",
+          "DELETE /user/tokens/abc12345"
+        ]
+      },
+      "expected": "All four endpoints return HTTP 401 before any handler code executes",
+      "assertion_pseudocode": "for each endpoint in [POST /user/tokens, GET /user/tokens, GET /user/tokens/abc12345, DELETE /user/tokens/abc12345]: resp = sendRequest(method, path, noAuthHeader); assert resp.statusCode == 401"
+    },
+    {
+      "id": "TS-09-4",
+      "requirement_id": "09-REQ-1.4",
+      "kind": "integration",
+      "description": "All four PAT endpoints set Cache-Control: no-store on every response including error responses.",
+      "preconditions": [
+        "Echo server is running with PAT routes registered",
+        "Auth middleware is installed and a valid credential is available",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "authorization_header": "valid API key",
+        "requests": [
+          "POST /user/tokens (valid body)",
+          "GET /user/tokens",
+          "GET /user/tokens/nonexistent",
+          "DELETE /user/tokens/nonexistent"
+        ]
+      },
+      "expected": "Each response contains the header Cache-Control: no-store regardless of the HTTP status code returned",
+      "assertion_pseudocode": "for each (method, path, body) in testCases: resp = sendRequest(method, path, body, validAPIKey); assert resp.headers['Cache-Control'] == 'no-store'"
+    },
+    {
+      "id": "TS-09-5",
+      "requirement_id": "09-REQ-2.1",
+      "kind": "unit",
+      "description": "generateTokenID returns exactly an 8-character string composed only of characters from [a-z0-9].",
+      "preconditions": [
+        "crypto/rand is available (standard Go environment)"
+      ],
+      "input": {},
+      "expected": "Returns a string of length 8 where every character is in the set [a-z0-9]; no error is returned",
+      "assertion_pseudocode": "id, err = generateTokenID(); assert err == nil; assert len(id) == 8; for each char in id: assert char in 'abcdefghijklmnopqrstuvwxyz0123456789'"
+    },
+    {
+      "id": "TS-09-6",
+      "requirement_id": "09-REQ-2.2",
+      "kind": "unit",
+      "description": "generateSecret returns exactly a 32-character string composed only of characters from [a-z0-9].",
+      "preconditions": [
+        "crypto/rand is available (standard Go environment)"
+      ],
+      "input": {},
+      "expected": "Returns a string of length 32 where every character is in the set [a-z0-9]; no error is returned",
+      "assertion_pseudocode": "secret, err = generateSecret(); assert err == nil; assert len(secret) == 32; for each char in secret: assert char in 'abcdefghijklmnopqrstuvwxyz0123456789'"
+    },
+    {
+      "id": "TS-09-7",
+      "requirement_id": "09-REQ-2.3",
+      "kind": "unit",
+      "description": "hashSecret is deterministic and returns a lowercase 64-character hex string for any given input.",
+      "preconditions": [],
+      "input": {
+        "secret": "hello"
+      },
+      "expected": "Returns the lowercase hex string '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'; calling twice with the same input returns the same result",
+      "assertion_pseudocode": "hash1 = hashSecret('hello'); hash2 = hashSecret('hello'); assert hash1 == hash2; assert hash1 == '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'; assert len(hash1) == 64; assert hash1 == toLower(hash1)"
+    },
+    {
+      "id": "TS-09-8",
+      "requirement_id": "09-REQ-2.4",
+      "kind": "unit",
+      "description": "The full PAT token is constructed in the format <TokenPrefix>_pat_<token_id>_<secret> matching the regex ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$.",
+      "preconditions": [
+        "apikit.TokenPrefix is set to 'ak' (default)"
+      ],
+      "input": {
+        "secret": "deadbeefdeadbeefdeadbeefdeadbeef",
+        "token_id": "a1b2c3d4"
+      },
+      "expected": "Token string equals 'ak_pat_a1b2c3d4_deadbeefdeadbeefdeadbeefdeadbeef' and matches regex ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$",
+      "assertion_pseudocode": "token = buildToken(apikit.TokenPrefix, tokenID, secret); assert token == 'ak_pat_a1b2c3d4_deadbeefdeadbeefdeadbeefdeadbeef'; assert matchesRegex(token, '^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$')"
+    },
+    {
+      "id": "TS-09-9",
+      "requirement_id": "09-REQ-3.1",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'name is required' when the name field is missing or empty.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)",
+        "PermissionRegistry is initialized with standard permissions"
+      ],
+      "input": {
+        "body": "{\"permissions\": [\"tokens:read\"], \"expires\": 30}",
+        "name": "absent/empty"
+      },
+      "expected": "HTTP 400 response with JSON body {\"error\":{\"code\":400,\"message\":\"name is required\"}}",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'name is required'"
+    },
+    {
+      "id": "TS-09-10",
+      "requirement_id": "09-REQ-3.2",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'name must be 255 characters or fewer' when name exceeds 255 characters.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)"
+      ],
+      "input": {
+        "body": "{\"name\": \"<256-char string>\", \"permissions\": [\"tokens:read\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 400 response with JSON body {\"error\":{\"code\":400,\"message\":\"name must be 255 characters or fewer\"}}",
+      "assertion_pseudocode": "longName = 'a' * 256; resp = POST('/user/tokens', body={name:longName, permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'name must be 255 characters or fewer'"
+    },
+    {
+      "id": "TS-09-11",
+      "requirement_id": "09-REQ-3.3",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'permissions are required' when permissions array is missing or empty.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)"
+      ],
+      "input": {
+        "body_empty": "{\"name\": \"ci-deploy\", \"permissions\": [], \"expires\": 30}",
+        "body_missing": "{\"name\": \"ci-deploy\", \"expires\": 30}"
+      },
+      "expected": "HTTP 400 for both missing and empty permissions array; message is 'permissions are required'",
+      "assertion_pseudocode": "resp1 = POST('/user/tokens', body={name:'ci-deploy', expires:30}, auth=apiKey); assert resp1.statusCode == 400; assert resp1.json().error.message == 'permissions are required'; resp2 = POST('/user/tokens', body={name:'ci-deploy', permissions:[], expires:30}, auth=apiKey); assert resp2.statusCode == 400; assert resp2.json().error.message == 'permissions are required'"
+    },
+    {
+      "id": "TS-09-12",
+      "requirement_id": "09-REQ-3.4",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'invalid permission format: <permission>' for a permission string with no colon.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)",
+        "PermissionRegistry is initialized"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"usersread\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 400 with message 'invalid permission format: usersread'",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['usersread'], expires:30}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'invalid permission format: usersread'"
+    },
+    {
+      "id": "TS-09-13",
+      "requirement_id": "09-REQ-3.5",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'unknown permission: <permission>' for a well-formed but unregistered permission.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)",
+        "PermissionRegistry is initialized with standard permissions only (does not include 'widgets:delete')"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"widgets:delete\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 400 with message 'unknown permission: widgets:delete'",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['widgets:delete'], expires:30}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'unknown permission: widgets:delete'"
+    },
+    {
+      "id": "TS-09-14",
+      "requirement_id": "09-REQ-3.6",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'expires must be 0, 30, 60, or 90' for an invalid expires value.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"tokens:read\"], \"expires\": 7}"
+      },
+      "expected": "HTTP 400 with message 'expires must be 0, 30, 60, or 90'",
+      "assertion_pseudocode": "for invalidExpires in [7, 365, 999, 1, -1]: resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['tokens:read'], expires:invalidExpires}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'expires must be 0, 30, 60, or 90'"
+    },
+    {
+      "id": "TS-09-15",
+      "requirement_id": "09-REQ-3.7",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 with message 'invalid request body' when the JSON body cannot be decoded.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)"
+      ],
+      "input": {
+        "body": "not valid json {"
+      },
+      "expected": "HTTP 400 with message 'invalid request body'",
+      "assertion_pseudocode": "resp = POST('/user/tokens', rawBody='not valid json {', contentType='application/json', auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'invalid request body'"
+    },
+    {
+      "id": "TS-09-16",
+      "requirement_id": "09-REQ-3.8",
+      "kind": "unit",
+      "description": "CreatePAT treats a missing expires field as a default of 90 days and sets expires_at to created_at + 90*24h.",
+      "preconditions": [
+        "Valid authenticated user context is injected (API key credential)",
+        "SQLite database is initialized with the pats table",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"tokens:read\"]}"
+      },
+      "expected": "HTTP 201 response where expires_at equals created_at + 2160 hours (90 days)",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['tokens:read']}, auth=apiKey); assert resp.statusCode == 201; createdAt = parseTime(resp.json().created_at); expiresAt = parseTime(resp.json().expires_at); assert expiresAt == createdAt + 90*24*hours"
+    },
+    {
+      "id": "TS-09-17",
+      "requirement_id": "09-REQ-4.1",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 403 with message 'cannot grant permission: <permission>' when a PAT credential requests a permission not in its own permissions list.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:manage', 'users:read']",
+        "PermissionRegistry includes 'keys:manage'",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"keys:manage\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 403 with message 'cannot grant permission: keys:manage'",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['keys:manage'], expires:30}, auth=patWithTokensManageAndUsersRead); assert resp.statusCode == 403; assert resp.json().error.message == 'cannot grant permission: keys:manage'"
+    },
+    {
+      "id": "TS-09-18",
+      "requirement_id": "09-REQ-4.2",
+      "kind": "unit",
+      "description": "CreatePAT skips privilege escalation check entirely when the authenticated credential is an API key.",
+      "preconditions": [
+        "Authenticated credential is an API key (admin or regular)",
+        "PermissionRegistry includes all standard permissions",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"users:read\", \"keys:manage\", \"tokens:manage\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 201; no privilege escalation error returned; PAT is created successfully",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['users:read','keys:manage','tokens:manage'], expires:30}, auth=apiKey); assert resp.statusCode == 201; assert resp.json().token_id != ''"
+    },
+    {
+      "id": "TS-09-19",
+      "requirement_id": "09-REQ-4.3",
+      "kind": "unit",
+      "description": "CreatePAT validates permissions against the registry before checking privilege escalation.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:manage']",
+        "PermissionRegistry does NOT include 'widgets:delete'",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"widgets:delete\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 400 with 'unknown permission: widgets:delete' (registry check fires before escalation check, so 400 not 403)",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['widgets:delete'], expires:30}, auth=patCredential); assert resp.statusCode == 400; assert resp.json().error.message == 'unknown permission: widgets:delete'"
+    },
+    {
+      "id": "TS-09-20",
+      "requirement_id": "09-REQ-5.1",
+      "kind": "integration",
+      "description": "CreatePAT generates token_id and secret, hashes secret, constructs token, inserts record, and returns HTTP 201 with CreatePATResponse.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user with user_id 'user-1' via API key",
+        "PermissionRegistry includes 'users:read' and 'orgs:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"ci-deploy\", \"permissions\": [\"users:read\", \"orgs:read\"], \"expires\": 90}"
+      },
+      "expected": "HTTP 201 with CreatePATResponse containing token_id (8 chars), name 'ci-deploy', token matching ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$, permissions ['users:read','orgs:read'], non-null expires_at, and created_at",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'ci-deploy', permissions:['users:read','orgs:read'], expires:90}, auth=apiKey); assert resp.statusCode == 201; body = resp.json(); assert len(body.token_id) == 8; assert body.name == 'ci-deploy'; assert matchesRegex(body.token, '^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$'); assert body.permissions == ['users:read','orgs:read']; assert body.expires_at != null; assert body.created_at != ''"
+    },
+    {
+      "id": "TS-09-21",
+      "requirement_id": "09-REQ-5.2",
+      "kind": "integration",
+      "description": "CreatePAT stores only the SHA-256 hash of the secret in the pats table, never the plaintext.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}"
+      },
+      "expected": "The pats table row has secret_hash = SHA-256(secret) and does not contain the plaintext secret string",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); body = resp.json(); parts = split(body.token, '_pat_'); secret = last part of token after last '_'; row = db.queryOne('SELECT secret_hash FROM pats WHERE token_id = ?', body.token_id); expectedHash = sha256Hex(secret); assert row.secret_hash == expectedHash; assert row.secret_hash != secret"
+    },
+    {
+      "id": "TS-09-22",
+      "requirement_id": "09-REQ-5.3",
+      "kind": "unit",
+      "description": "CreatePAT preserves the permissions array in insertion order in both the response and the database.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'orgs:read', 'users:read', 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"orgs:read\", \"tokens:read\", \"users:read\"], \"expires\": 30}"
+      },
+      "expected": "Response permissions array equals ['orgs:read', 'tokens:read', 'users:read'] in that exact order; pats table stores JSON array in same order",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['orgs:read','tokens:read','users:read'], expires:30}, auth=apiKey); assert resp.statusCode == 201; assert resp.json().permissions == ['orgs:read','tokens:read','users:read']; row = db.queryOne('SELECT permissions FROM pats WHERE token_id = ?', resp.json().token_id); assert jsonParse(row.permissions) == ['orgs:read','tokens:read','users:read']"
+    },
+    {
+      "id": "TS-09-23",
+      "requirement_id": "09-REQ-5.4",
+      "kind": "unit",
+      "description": "CreatePATResponse omits the revoked_at and expires_days fields from the HTTP 201 response.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 201 response JSON does not contain keys 'revoked_at' or 'expires_days'",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 201; respKeys = keys(resp.json()); assert 'revoked_at' not in respKeys; assert 'expires_days' not in respKeys"
+    },
+    {
+      "id": "TS-09-24",
+      "requirement_id": "09-REQ-5.5",
+      "kind": "unit",
+      "description": "CreatePAT wraps the pats table INSERT in a db.WithTx transaction so failures roll back automatically.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "A mock or stub db.WithTx is configured to simulate a transaction failure mid-INSERT",
+        "Authenticated user via API key"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}",
+        "db_behavior": "WithTx callback returns an error simulating DB failure"
+      },
+      "expected": "HTTP 500 is returned; pats table contains no new row; transaction was rolled back",
+      "assertion_pseudocode": "injectDBFailure(); resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'; rowCount = db.queryOne('SELECT COUNT(*) FROM pats'); assert rowCount == 0"
+    },
+    {
+      "id": "TS-09-25",
+      "requirement_id": "09-REQ-5.6",
+      "kind": "integration",
+      "description": "CreatePAT requires tokens:manage permission; a PAT credential lacking this permission receives HTTP 403.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:read'] only (no 'tokens:manage')",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 403; no PAT is created in the database",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=patWithOnlyTokensRead); assert resp.statusCode == 403; rowCount = db.queryOne('SELECT COUNT(*) FROM pats'); assert rowCount == 0"
+    },
+    {
+      "id": "TS-09-26",
+      "requirement_id": "09-REQ-5.7",
+      "kind": "integration",
+      "description": "CreatePAT allows duplicate PAT names for the same user; both PATs are persisted successfully.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "first_body": "{\"name\": \"ci-deploy\", \"permissions\": [\"tokens:read\"], \"expires\": 30}",
+        "second_body": "{\"name\": \"ci-deploy\", \"permissions\": [\"tokens:read\"], \"expires\": 60}"
+      },
+      "expected": "Both requests return HTTP 201 with distinct token_ids; two rows exist in the pats table both with name 'ci-deploy'",
+      "assertion_pseudocode": "resp1 = POST('/user/tokens', body={name:'ci-deploy', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp1.statusCode == 201; resp2 = POST('/user/tokens', body={name:'ci-deploy', permissions:['tokens:read'], expires:60}, auth=apiKey); assert resp2.statusCode == 201; assert resp1.json().token_id != resp2.json().token_id; rows = db.query('SELECT * FROM pats WHERE name = ?', 'ci-deploy'); assert len(rows) == 2"
+    },
+    {
+      "id": "TS-09-27",
+      "requirement_id": "09-REQ-6.1",
+      "kind": "integration",
+      "description": "ListPATs returns HTTP 200 with all PATs for the authenticated user ordered by created_at DESC.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User 'user-1' has three PATs created at different timestamps",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens"
+      },
+      "expected": "HTTP 200 with JSON array of 3 PATResponse objects ordered newest-first by created_at",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=apiKey); assert resp.statusCode == 200; pats = resp.json(); assert len(pats) == 3; assert pats[0].created_at >= pats[1].created_at >= pats[2].created_at"
+    },
+    {
+      "id": "TS-09-28",
+      "requirement_id": "09-REQ-6.2",
+      "kind": "integration",
+      "description": "ListPATs includes expired and revoked PATs in the response without filtering them out.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User has one active PAT, one expired PAT (expires_at in the past), and one revoked PAT (revoked_at set)",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens"
+      },
+      "expected": "HTTP 200 with array of 3 PATs; one has non-null revoked_at, one has expired expires_at, one is active",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=apiKey); assert resp.statusCode == 200; pats = resp.json(); assert len(pats) == 3; revokedPATs = filter(pats, p => p.revoked_at != null); expiredPATs = filter(pats, p => p.expires_at != null && parseTime(p.expires_at) < now()); assert len(revokedPATs) == 1; assert len(expiredPATs) >= 1"
+    },
+    {
+      "id": "TS-09-29",
+      "requirement_id": "09-REQ-6.3",
+      "kind": "unit",
+      "description": "ListPATs response does not include secret_hash, plaintext token, or expires_days fields in any array element.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User has at least one PAT in the pats table",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens"
+      },
+      "expected": "Response JSON array elements have no keys named 'secret_hash', 'token', or 'expires_days'",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=apiKey); assert resp.statusCode == 200; for each pat in resp.json(): assert 'secret_hash' not in keys(pat); assert 'token' not in keys(pat); assert 'expires_days' not in keys(pat)"
+    },
+    {
+      "id": "TS-09-30",
+      "requirement_id": "09-REQ-6.4",
+      "kind": "integration",
+      "description": "ListPATs returns only PATs belonging to the authenticated user; other users' PATs are excluded.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User 'user-1' has 2 PATs; User 'user-2' has 3 PATs",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens as user-1"
+      },
+      "expected": "HTTP 200 with only 2 PATs belonging to user-1; user-2's PATs are not present",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=user1APIKey); assert resp.statusCode == 200; pats = resp.json(); assert len(pats) == 2; for each pat in pats: assert db.queryOne('SELECT user_id FROM pats WHERE token_id = ?', pat.token_id).user_id == 'user-1'"
+    },
+    {
+      "id": "TS-09-31",
+      "requirement_id": "09-REQ-6.5",
+      "kind": "integration",
+      "description": "ListPATs requires tokens:read permission; PAT credential lacking it receives HTTP 403.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:manage'] only (no 'tokens:read')",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "request": "GET /user/tokens"
+      },
+      "expected": "HTTP 403",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=patWithOnlyTokensManage); assert resp.statusCode == 403"
+    },
+    {
+      "id": "TS-09-32",
+      "requirement_id": "09-REQ-7.1",
+      "kind": "integration",
+      "description": "GetPAT returns HTTP 200 with PATResponse metadata for a valid token_id belonging to the authenticated user.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User 'user-1' has a PAT with token_id 'abc12345'",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "path": "GET /user/tokens/abc12345"
+      },
+      "expected": "HTTP 200 with PATResponse containing token_id 'abc12345', correct name, permissions, created_at, expires_at, and revoked_at",
+      "assertion_pseudocode": "resp = GET('/user/tokens/abc12345', auth=user1APIKey); assert resp.statusCode == 200; body = resp.json(); assert body.token_id == 'abc12345'; assert 'token' not in keys(body); assert 'secret_hash' not in keys(body); assert body.created_at != ''"
+    },
+    {
+      "id": "TS-09-33",
+      "requirement_id": "09-REQ-7.2",
+      "kind": "unit",
+      "description": "GetPAT returns HTTP 404 with message 'token not found' when the token_id does not exist for the authenticated user.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table (empty or without 'nonexistent' token)",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "path": "GET /user/tokens/nonexistent"
+      },
+      "expected": "HTTP 404 with JSON body {\"error\":{\"code\":404,\"message\":\"token not found\"}}",
+      "assertion_pseudocode": "resp = GET('/user/tokens/nonexistent', auth=apiKey); assert resp.statusCode == 404; assert resp.json().error.message == 'token not found'"
+    },
+    {
+      "id": "TS-09-34",
+      "requirement_id": "09-REQ-7.3",
+      "kind": "integration",
+      "description": "GetPAT requires tokens:read permission; PAT credential lacking it receives HTTP 403.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:manage'] only",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "path": "GET /user/tokens/abc12345"
+      },
+      "expected": "HTTP 403",
+      "assertion_pseudocode": "resp = GET('/user/tokens/abc12345', auth=patWithOnlyTokensManage); assert resp.statusCode == 403"
+    },
+    {
+      "id": "TS-09-35",
+      "requirement_id": "09-REQ-8.1",
+      "kind": "integration",
+      "description": "RevokePAT issues a conditional UPDATE, sets revoked_at, and returns HTTP 200 with updated PATResponse.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User 'user-1' has an active (non-revoked) PAT with token_id 'abc12345'",
+        "Authenticated as user-1 via API key with tokens:manage"
+      ],
+      "input": {
+        "path": "DELETE /user/tokens/abc12345"
+      },
+      "expected": "HTTP 200 with PATResponse where revoked_at is a non-null timestamp; pats table row for abc12345 has revoked_at set",
+      "assertion_pseudocode": "resp = DELETE('/user/tokens/abc12345', auth=user1APIKey); assert resp.statusCode == 200; body = resp.json(); assert body.revoked_at != null; row = db.queryOne('SELECT revoked_at FROM pats WHERE token_id = ?', 'abc12345'); assert row.revoked_at != null"
+    },
+    {
+      "id": "TS-09-36",
+      "requirement_id": "09-REQ-8.2",
+      "kind": "unit",
+      "description": "RevokePAT returns HTTP 404 when no row matches token_id AND user_id, and HTTP 400 when row exists but is already revoked.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "A revoked PAT with token_id 'revoked01' exists for user-1",
+        "No PAT with token_id 'missing00' exists",
+        "Authenticated as user-1 via API key with tokens:manage"
+      ],
+      "input": {
+        "case_already_revoked": "DELETE /user/tokens/revoked01",
+        "case_not_found": "DELETE /user/tokens/missing00"
+      },
+      "expected": "HTTP 404 for missing token; HTTP 400 with 'token already revoked' for already-revoked token",
+      "assertion_pseudocode": "resp1 = DELETE('/user/tokens/missing00', auth=user1APIKey); assert resp1.statusCode == 404; assert resp1.json().error.message == 'token not found'; resp2 = DELETE('/user/tokens/revoked01', auth=user1APIKey); assert resp2.statusCode == 400; assert resp2.json().error.message == 'token already revoked'"
+    },
+    {
+      "id": "TS-09-37",
+      "requirement_id": "09-REQ-8.3",
+      "kind": "integration",
+      "description": "RevokePAT requires tokens:manage permission; PAT credential lacking it receives HTTP 403.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:read'] only",
+        "SQLite database has an active PAT with token_id 'abc12345' for this user"
+      ],
+      "input": {
+        "path": "DELETE /user/tokens/abc12345"
+      },
+      "expected": "HTTP 403; PAT is not revoked in the database",
+      "assertion_pseudocode": "resp = DELETE('/user/tokens/abc12345', auth=patWithOnlyTokensRead); assert resp.statusCode == 403; row = db.queryOne('SELECT revoked_at FROM pats WHERE token_id = ?', 'abc12345'); assert row.revoked_at == null"
+    },
+    {
+      "id": "TS-09-38",
+      "requirement_id": "09-REQ-8.4",
+      "kind": "integration",
+      "description": "RevokePAT does not delete the PAT row from the pats table; it only sets revoked_at.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "User 'user-1' has an active PAT with token_id 'abc12345'",
+        "Authenticated as user-1 via API key with tokens:manage"
+      ],
+      "input": {
+        "path": "DELETE /user/tokens/abc12345"
+      },
+      "expected": "HTTP 200; the pats table still contains the row for abc12345 with revoked_at set to a non-null timestamp",
+      "assertion_pseudocode": "resp = DELETE('/user/tokens/abc12345', auth=user1APIKey); assert resp.statusCode == 200; row = db.queryOne('SELECT * FROM pats WHERE token_id = ?', 'abc12345'); assert row != null; assert row.revoked_at != null"
+    },
+    {
+      "id": "TS-09-39",
+      "requirement_id": "09-REQ-9.1",
+      "kind": "integration",
+      "description": "ListPATs and GetPAT include expired PATs without filtering them out.",
+      "preconditions": [
+        "SQLite database has an expired PAT for user-1 (expires_at is in the past)",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "get_request": "GET /user/tokens/<expired_token_id>",
+        "list_request": "GET /user/tokens"
+      },
+      "expected": "Both endpoints return the expired PAT with its original expires_at value; HTTP 200 for both",
+      "assertion_pseudocode": "listResp = GET('/user/tokens', auth=user1APIKey); assert any(p.token_id == expiredTokenID for p in listResp.json()); getResp = GET('/user/tokens/' + expiredTokenID, auth=user1APIKey); assert getResp.statusCode == 200; assert parseTime(getResp.json().expires_at) < now()"
+    },
+    {
+      "id": "TS-09-40",
+      "requirement_id": "09-REQ-9.2",
+      "kind": "integration",
+      "description": "ListPATs and GetPAT include revoked PATs without filtering them out.",
+      "preconditions": [
+        "SQLite database has a revoked PAT for user-1 (revoked_at is set)",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "get_request": "GET /user/tokens/<revoked_token_id>",
+        "list_request": "GET /user/tokens"
+      },
+      "expected": "Both endpoints return the revoked PAT with non-null revoked_at; HTTP 200 for both",
+      "assertion_pseudocode": "listResp = GET('/user/tokens', auth=user1APIKey); assert any(p.revoked_at != null and p.token_id == revokedTokenID for p in listResp.json()); getResp = GET('/user/tokens/' + revokedTokenID, auth=user1APIKey); assert getResp.statusCode == 200; assert getResp.json().revoked_at != null"
+    },
+    {
+      "id": "TS-09-41",
+      "requirement_id": "09-REQ-9.3",
+      "kind": "unit",
+      "description": "PAT lifecycle handlers (list, get, revoke) do not perform token expiry or revocation authentication checks; that is solely the auth middleware's responsibility.",
+      "preconditions": [
+        "SQLite database has an expired PAT belonging to user-1",
+        "Auth middleware is stubbed to allow the request through as user-1",
+        "Authenticated as user-1 with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens/<expired_token_id>"
+      },
+      "expected": "GetPAT returns HTTP 200 with the expired PAT metadata; no handler-level expiry rejection occurs",
+      "assertion_pseudocode": "resp = GET('/user/tokens/' + expiredTokenID, auth=user1APIKey_stubMiddlewareAllowsThrough); assert resp.statusCode == 200; assert resp.json().token_id == expiredTokenID"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-09-P1",
+      "property_id": "09-PROP-1",
+      "validates": [
+        "09-REQ-5.1",
+        "09-REQ-5.2"
+      ],
+      "description": "For any PAT created via POST /user/tokens, the pats table never stores the plaintext secret; only the SHA-256 hex hash is stored.",
+      "for_any_strategy": "Generate arbitrary valid CreatePATRequest inputs (valid name up to 255 chars, non-empty registered permissions subset, expires in {0,30,60,90})",
+      "invariant_check": "After POST /user/tokens succeeds (HTTP 201): extract secret from the token field (last segment after '_pat_<token_id>_'); compute expectedHash = sha256Hex(secret); query pats table for the row; assert row.secret_hash == expectedHash; assert the plaintext secret does not appear anywhere in the row fields"
+    },
+    {
+      "id": "TS-09-P2",
+      "property_id": "09-PROP-2",
+      "validates": [
+        "09-REQ-7.1",
+        "09-REQ-7.2",
+        "09-REQ-7.E1",
+        "09-REQ-8.1",
+        "09-REQ-8.E2"
+      ],
+      "description": "For any PAT belonging to user A, GET and DELETE requests authenticated as user B (B != A) always return HTTP 404, never HTTP 200.",
+      "for_any_strategy": "Generate pairs of distinct user IDs (userA, userB) and create PATs for userA; for each PAT token_id, send GET and DELETE requests authenticated as userB",
+      "invariant_check": "For all (userA_tokenID, userB_auth) pairs: GET('/user/tokens/' + userA_tokenID, auth=userB) returns statusCode 404 with message 'token not found'; DELETE('/user/tokens/' + userA_tokenID, auth=userB) returns statusCode 404 with message 'token not found'"
+    },
+    {
+      "id": "TS-09-P3",
+      "property_id": "09-PROP-3",
+      "validates": [
+        "09-REQ-5.3",
+        "09-REQ-6.1",
+        "09-REQ-7.1",
+        "09-REQ-8.1"
+      ],
+      "description": "For any PAT creation request, the permissions array order is preserved in all subsequent responses (create, list, get, revoke).",
+      "for_any_strategy": "Generate arbitrary non-empty permutations of the registered permissions set (e.g., all orderings of ['users:read', 'orgs:read', 'tokens:read'])",
+      "invariant_check": "After POST /user/tokens with permissions in order P: createResp.permissions == P; listResp.find(t => t.token_id == id).permissions == P; getResp.permissions == P; revokeResp.permissions == P"
+    },
+    {
+      "id": "TS-09-P4",
+      "property_id": "09-PROP-4",
+      "validates": [
+        "09-REQ-4.1",
+        "09-REQ-4.2",
+        "09-REQ-4.E1"
+      ],
+      "description": "For any PAT credential with permissions set P, attempting to create a new PAT with permissions set Q: if Q is not a subset of P then HTTP 403 is returned; if Q is a subset of P then creation succeeds.",
+      "for_any_strategy": "Generate arbitrary permissions sets P (from the registered permissions set) as the creating PAT's permissions; generate arbitrary permissions sets Q; create PAT credentials with permissions P; attempt to create new PATs with permissions Q",
+      "invariant_check": "If Q is_subset_of P: response.statusCode == 201; if Q is_not_subset_of P: response.statusCode == 403 and response.json().error.message starts with 'cannot grant permission:'; if creating credential is API key: response.statusCode == 201 for any Q that is a subset of all registered permissions"
+    },
+    {
+      "id": "TS-09-P5",
+      "property_id": "09-PROP-5",
+      "validates": [
+        "09-REQ-8.1",
+        "09-REQ-8.2",
+        "09-REQ-8.E1"
+      ],
+      "description": "For any token_id, exactly one concurrent DELETE request receives HTTP 200; all others receive HTTP 400 'token already revoked'; revoked_at is set exactly once.",
+      "for_any_strategy": "Generate an active PAT; dispatch N concurrent DELETE /user/tokens/:token_id requests (N in range 2..10)",
+      "invariant_check": "Count of 200 responses == 1; count of 400 responses == N-1; all 400 responses have message 'token already revoked'; db.queryOne('SELECT COUNT(*) FROM pats WHERE token_id = ? AND revoked_at IS NOT NULL', tokenID) == 1; loop terminates in bounded time (no deadlock)"
+    },
+    {
+      "id": "TS-09-P6",
+      "property_id": "09-PROP-6",
+      "validates": [
+        "09-REQ-2.4",
+        "09-REQ-5.1"
+      ],
+      "description": "For any token returned in CreatePATResponse, the token field matches the regex ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$ and the prefix segment equals apikit.TokenPrefix.",
+      "for_any_strategy": "Generate N successful POST /user/tokens calls (N in range 1..100) with arbitrary valid inputs",
+      "invariant_check": "For each response: matchesRegex(response.json().token, '^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$') == true; split(response.json().token, '_pat_')[0] == apikit.TokenPrefix; len(split(response.json().token, '_pat_')[1].split('_')[0]) == 8; len(split(response.json().token, '_')[last]) == 32"
+    },
+    {
+      "id": "TS-09-P7",
+      "property_id": "09-PROP-7",
+      "validates": [
+        "09-REQ-1.4"
+      ],
+      "description": "For any HTTP response from any of the four PAT endpoints, the Cache-Control: no-store header is always present regardless of status code.",
+      "for_any_strategy": "Generate arbitrary valid and invalid requests to POST /user/tokens, GET /user/tokens, GET /user/tokens/:token_id, DELETE /user/tokens/:token_id (covering 200, 201, 400, 403, 404, 500 responses)",
+      "invariant_check": "For every response from any PAT endpoint: response.headers['Cache-Control'] == 'no-store'"
+    },
+    {
+      "id": "TS-09-P8",
+      "property_id": "09-PROP-8",
+      "validates": [
+        "09-REQ-2.1",
+        "09-REQ-2.2"
+      ],
+      "description": "generateTokenID and generateSecret terminate within a bounded number of iterations (no unbounded retry loops on crypto/rand failure).",
+      "for_any_strategy": "Instrument generateTokenID and generateSecret to count internal loop iterations; call each function N times (N in range 1..1000)",
+      "invariant_check": "Each call to generateTokenID completes in at most len(tokenID)=8 crypto/rand read operations; each call to generateSecret completes in at most len(secret)=32 crypto/rand read operations; no call blocks indefinitely; total iterations never exceed a fixed upper bound (e.g., 8*10 for tokenID, 32*10 for secret)"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-09-E1",
+      "requirement_id": "09-REQ-1.E1",
+      "kind": "unit",
+      "description": "NewPATHandler panics with a descriptive message when either database or registry parameter is nil.",
+      "preconditions": [],
+      "input": {
+        "case_nil_db": {
+          "database": null,
+          "registry": "valid *auth.PermissionRegistry"
+        },
+        "case_nil_registry": {
+          "database": "valid *db.DB",
+          "registry": null
+        }
+      },
+      "expected": "Each nil parameter causes NewPATHandler to panic with a descriptive message identifying which parameter is nil",
+      "assertion_pseudocode": "assertPanics(() => NewPATHandler(nil, validRegistry)); assertPanics(() => NewPATHandler(validDB, nil))"
+    },
+    {
+      "id": "TS-09-E2",
+      "requirement_id": "09-REQ-2.E1",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 500 when crypto/rand fails during token generation; no token material is stored or returned.",
+      "preconditions": [
+        "crypto/rand is mocked to return an error",
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}",
+        "rand_behavior": "crypto/rand.Read returns error"
+      },
+      "expected": "HTTP 500 with message 'internal server error'; pats table is empty; no partial token is returned",
+      "assertion_pseudocode": "mockRandToFail(); resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'; assert 'token' not in keys(resp.json()); rowCount = db.queryOne('SELECT COUNT(*) FROM pats'); assert rowCount == 0"
+    },
+    {
+      "id": "TS-09-E3",
+      "requirement_id": "09-REQ-3.E1",
+      "kind": "unit",
+      "description": "CreatePAT with expires=0 sets expires_at to null in the database and returns expires_at: null in the response.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"forever\", \"permissions\": [\"tokens:read\"], \"expires\": 0}"
+      },
+      "expected": "HTTP 201 with expires_at: null in the response JSON; pats table row has expires_at = NULL",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'forever', permissions:['tokens:read'], expires:0}, auth=apiKey); assert resp.statusCode == 201; assert resp.json().expires_at == null; row = db.queryOne('SELECT expires_at FROM pats WHERE token_id = ?', resp.json().token_id); assert row.expires_at == null"
+    },
+    {
+      "id": "TS-09-E4",
+      "requirement_id": "09-REQ-3.E2",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 400 for negative expires values and values not in {0, 30, 60, 90}.",
+      "preconditions": [
+        "Authenticated user via API key",
+        "PermissionRegistry initialized"
+      ],
+      "input": {
+        "invalid_expires_values": [
+          -1,
+          7,
+          29,
+          31,
+          59,
+          61,
+          89,
+          91,
+          365,
+          999
+        ]
+      },
+      "expected": "HTTP 400 with message 'expires must be 0, 30, 60, or 90' for every listed value",
+      "assertion_pseudocode": "for invalidExpires in [-1, 7, 29, 31, 59, 61, 89, 91, 365, 999]: resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:invalidExpires}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'expires must be 0, 30, 60, or 90'"
+    },
+    {
+      "id": "TS-09-E5",
+      "requirement_id": "09-REQ-3.E3",
+      "kind": "unit",
+      "description": "CreatePAT returns the first validation error for permissions and stops at the first invalid permission (fail-fast, no error accumulation).",
+      "preconditions": [
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read' but not 'widgets:delete' or 'gadgets:create'"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"widgets:delete\", \"gadgets:create\"], \"expires\": 30}"
+      },
+      "expected": "HTTP 400 with message for only the first offending permission ('unknown permission: widgets:delete'); second permission error not reported",
+      "assertion_pseudocode": "resp = POST('/user/tokens', body={name:'test', permissions:['widgets:delete','gadgets:create'], expires:30}, auth=apiKey); assert resp.statusCode == 400; assert resp.json().error.message == 'unknown permission: widgets:delete'"
+    },
+    {
+      "id": "TS-09-E6",
+      "requirement_id": "09-REQ-4.E1",
+      "kind": "unit",
+      "description": "A PAT with permissions [tokens:manage, users:read] can create a subset PAT but is rejected for permissions outside its own set.",
+      "preconditions": [
+        "Authenticated credential is a PAT with permissions ['tokens:manage', 'users:read']",
+        "PermissionRegistry includes 'tokens:manage', 'users:read', 'keys:manage'",
+        "SQLite database is initialized with the pats table"
+      ],
+      "input": {
+        "allowed_body": "{\"name\": \"subset\", \"permissions\": [\"users:read\"], \"expires\": 30}",
+        "denied_body": "{\"name\": \"escalated\", \"permissions\": [\"users:read\", \"keys:manage\"], \"expires\": 30}"
+      },
+      "expected": "First request returns HTTP 201; second request returns HTTP 403 with message 'cannot grant permission: keys:manage'",
+      "assertion_pseudocode": "resp1 = POST('/user/tokens', body={name:'subset', permissions:['users:read'], expires:30}, auth=patWith_tokensManage_usersRead); assert resp1.statusCode == 201; resp2 = POST('/user/tokens', body={name:'escalated', permissions:['users:read','keys:manage'], expires:30}, auth=patWith_tokensManage_usersRead); assert resp2.statusCode == 403; assert resp2.json().error.message == 'cannot grant permission: keys:manage'"
+    },
+    {
+      "id": "TS-09-E7",
+      "requirement_id": "09-REQ-5.E1",
+      "kind": "unit",
+      "description": "CreatePAT returns HTTP 500 and rolls back when the db.WithTx transaction or INSERT fails; no partial state is persisted.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "db.WithTx is mocked to simulate a failed transaction (error returned from callback)",
+        "Authenticated user via API key",
+        "PermissionRegistry includes 'tokens:read'"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}",
+        "db_behavior": "db.WithTx returns a non-nil error"
+      },
+      "expected": "HTTP 500 with message 'internal server error'; pats table has no new rows; no token material in response",
+      "assertion_pseudocode": "beforeCount = db.queryOne('SELECT COUNT(*) FROM pats'); injectWithTxFailure(); resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'; afterCount = db.queryOne('SELECT COUNT(*) FROM pats'); assert afterCount == beforeCount"
+    },
+    {
+      "id": "TS-09-E8",
+      "requirement_id": "09-REQ-5.E2",
+      "kind": "unit",
+      "description": "Token generation (token_id and secret) occurs before the db.WithTx transaction opens so a failed transaction discards the generated values cleanly.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table",
+        "db.WithTx is mocked to fail after receiving the generated token values",
+        "Authenticated user via API key"
+      ],
+      "input": {
+        "body": "{\"name\": \"test\", \"permissions\": [\"tokens:read\"], \"expires\": 30}"
+      },
+      "expected": "No token material (token_id, secret, hash) is persisted or returned in the error response; the generated token is discarded",
+      "assertion_pseudocode": "capturedTokenID = null; mockWithTxToCaptureThenFail(onCapture: (id) => capturedTokenID = id); resp = POST('/user/tokens', body={name:'test', permissions:['tokens:read'], expires:30}, auth=apiKey); assert resp.statusCode == 500; row = db.queryOne('SELECT * FROM pats WHERE token_id = ?', capturedTokenID); assert row == null"
+    },
+    {
+      "id": "TS-09-E9",
+      "requirement_id": "09-REQ-6.E1",
+      "kind": "unit",
+      "description": "ListPATs returns HTTP 200 with an empty JSON array when the authenticated user has no PATs.",
+      "preconditions": [
+        "SQLite database is initialized with the pats table (no rows for user-1)",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "request": "GET /user/tokens"
+      },
+      "expected": "HTTP 200 with response body '[]' (empty JSON array), not null or HTTP 404",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=user1APIKey); assert resp.statusCode == 200; assert resp.json() == []"
+    },
+    {
+      "id": "TS-09-E10",
+      "requirement_id": "09-REQ-6.E2",
+      "kind": "unit",
+      "description": "ListPATs returns HTTP 500 with message 'internal server error' when the database query fails.",
+      "preconditions": [
+        "Database query is mocked to return an error",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "db_behavior": "SELECT query on pats table returns an error",
+        "request": "GET /user/tokens"
+      },
+      "expected": "HTTP 500 with JSON body {\"error\":{\"code\":500,\"message\":\"internal server error\"}}",
+      "assertion_pseudocode": "mockDBQueryToFail(); resp = GET('/user/tokens', auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'"
+    },
+    {
+      "id": "TS-09-E11",
+      "requirement_id": "09-REQ-7.E1",
+      "kind": "unit",
+      "description": "GetPAT returns HTTP 404 (not 403) when the token_id exists but belongs to a different user, to avoid information leakage.",
+      "preconditions": [
+        "SQLite database has a PAT with token_id 'user2pat1' belonging to user-2",
+        "Authenticated as user-1 via API key with tokens:read"
+      ],
+      "input": {
+        "path": "GET /user/tokens/user2pat1"
+      },
+      "expected": "HTTP 404 with message 'token not found'; not HTTP 403",
+      "assertion_pseudocode": "resp = GET('/user/tokens/user2pat1', auth=user1APIKey); assert resp.statusCode == 404; assert resp.json().error.message == 'token not found'"
+    },
+    {
+      "id": "TS-09-E12",
+      "requirement_id": "09-REQ-7.E2",
+      "kind": "unit",
+      "description": "GetPAT returns HTTP 500 with message 'internal server error' when the database query fails with a non-ErrNotFound error.",
+      "preconditions": [
+        "Database query is mocked to return a generic error (not db.ErrNotFound)",
+        "Authenticated user via API key with tokens:read"
+      ],
+      "input": {
+        "db_behavior": "SELECT query returns a generic database error",
+        "path": "GET /user/tokens/abc12345"
+      },
+      "expected": "HTTP 500 with message 'internal server error'",
+      "assertion_pseudocode": "mockDBQueryToReturnGenericError(); resp = GET('/user/tokens/abc12345', auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'"
+    },
+    {
+      "id": "TS-09-E13",
+      "requirement_id": "09-REQ-8.E1",
+      "kind": "integration",
+      "description": "Two concurrent revocation requests for the same token: the first receives HTTP 200, the second receives HTTP 400 'token already revoked'.",
+      "preconditions": [
+        "SQLite database has an active PAT with token_id 'concurpat' for user-1",
+        "Authenticated as user-1 via API key with tokens:manage"
+      ],
+      "input": {
+        "concurrent_requests": "Two simultaneous DELETE /user/tokens/concurpat requests"
+      },
+      "expected": "Exactly one request returns HTTP 200 with revoked_at set; the other returns HTTP 400 with 'token already revoked'; revoked_at is set exactly once in the database",
+      "assertion_pseudocode": "results = concurrently([DELETE('/user/tokens/concurpat', auth=user1APIKey), DELETE('/user/tokens/concurpat', auth=user1APIKey)]); successCount = count(r for r in results if r.statusCode == 200); alreadyRevokedCount = count(r for r in results if r.statusCode == 400 and r.json().error.message == 'token already revoked'); assert successCount == 1; assert alreadyRevokedCount == 1; row = db.queryOne('SELECT COUNT(*) FROM pats WHERE token_id = ? AND revoked_at IS NOT NULL', 'concurpat'); assert row.count == 1"
+    },
+    {
+      "id": "TS-09-E14",
+      "requirement_id": "09-REQ-8.E2",
+      "kind": "unit",
+      "description": "RevokePAT returns HTTP 404 (not 403) when the token_id belongs to a different user, to avoid information leakage.",
+      "preconditions": [
+        "SQLite database has an active PAT with token_id 'user2pat1' belonging to user-2",
+        "Authenticated as user-1 via API key with tokens:manage"
+      ],
+      "input": {
+        "path": "DELETE /user/tokens/user2pat1"
+      },
+      "expected": "HTTP 404 with message 'token not found'; not HTTP 403",
+      "assertion_pseudocode": "resp = DELETE('/user/tokens/user2pat1', auth=user1APIKey); assert resp.statusCode == 404; assert resp.json().error.message == 'token not found'"
+    },
+    {
+      "id": "TS-09-E15",
+      "requirement_id": "09-REQ-8.E3",
+      "kind": "unit",
+      "description": "RevokePAT returns HTTP 500 with message 'internal server error' when the UPDATE or follow-up SELECT fails with a database error.",
+      "preconditions": [
+        "Database UPDATE is mocked to return a generic error",
+        "Authenticated user via API key with tokens:manage"
+      ],
+      "input": {
+        "db_behavior": "UPDATE statement returns a generic database error",
+        "path": "DELETE /user/tokens/abc12345"
+      },
+      "expected": "HTTP 500 with message 'internal server error'",
+      "assertion_pseudocode": "mockDBUpdateToReturnGenericError(); resp = DELETE('/user/tokens/abc12345', auth=apiKey); assert resp.statusCode == 500; assert resp.json().error.message == 'internal server error'"
+    },
+    {
+      "id": "TS-09-E16",
+      "requirement_id": "09-REQ-9.E1",
+      "kind": "integration",
+      "description": "PAT lifecycle handlers do not check blocked-user status; blocked-user enforcement is handled by auth middleware before handler code runs.",
+      "preconditions": [
+        "User 'blocked-user' is marked as blocked in the users table",
+        "Auth middleware is configured to reject requests from blocked users with HTTP 403",
+        "blocked-user has a valid API key credential"
+      ],
+      "input": {
+        "request": "GET /user/tokens authenticated as blocked-user"
+      },
+      "expected": "HTTP 403 returned by auth middleware before ListPATs handler executes; no handler-level blocked-user check",
+      "assertion_pseudocode": "resp = GET('/user/tokens', auth=blockedUserAPIKey); assert resp.statusCode == 403"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-09-SMOKE-1",
+      "execution_path_id": "09-PATH-1",
+      "description": "Happy path: create a new PAT using a valid API key credential and verify the full response including plaintext token.",
+      "trigger": "POST /user/tokens with valid JSON body {name: 'ci-deploy', permissions: ['users:read', 'orgs:read'], expires: 90} and valid API key in Authorization header",
+      "real_components": [
+        "PATHandler.CreatePAT",
+        "db.WithTx",
+        "generateTokenID",
+        "generateSecret",
+        "hashSecret",
+        "auth middleware (RequirePermission)"
+      ],
+      "mockable": [
+        "auth.GetAuthInfo (inject API key credential)",
+        "auth.GetUserID (return 'user-1')"
+      ],
+      "expected_effects": [
+        "HTTP 201 response is returned",
+        "Response body is CreatePATResponse with token_id (8 chars [a-z0-9]), name 'ci-deploy', token matching ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$, permissions ['users:read','orgs:read'], non-null expires_at, created_at",
+        "pats table contains exactly one new row with secret_hash = SHA-256(secret), permissions JSON ['users:read','orgs:read'], expires_at = created_at + 90*24h",
+        "Response header Cache-Control: no-store is present",
+        "No plaintext secret appears in the pats table row"
+      ]
+    },
+    {
+      "id": "TS-09-SMOKE-2",
+      "execution_path_id": "09-PATH-2",
+      "description": "Happy path: list all PATs for the authenticated user returning metadata only.",
+      "trigger": "GET /user/tokens with valid API key in Authorization header; user has 2 existing PATs (one active, one revoked)",
+      "real_components": [
+        "PATHandler.ListPATs",
+        "SQLite pats table query",
+        "auth middleware (RequirePermission)"
+      ],
+      "mockable": [
+        "auth.GetAuthInfo (inject API key credential)",
+        "auth.GetUserID (return 'user-1')"
+      ],
+      "expected_effects": [
+        "HTTP 200 response is returned",
+        "Response body is a JSON array of 2 PATResponse objects",
+        "Array is ordered by created_at DESC (newest first)",
+        "No secret_hash, token, or expires_days fields appear in any array element",
+        "Revoked PAT has non-null revoked_at; active PAT has null revoked_at",
+        "Response header Cache-Control: no-store is present"
+      ]
+    },
+    {
+      "id": "TS-09-SMOKE-3",
+      "execution_path_id": "09-PATH-3",
+      "description": "Happy path: get a single PAT by token_id and receive metadata only.",
+      "trigger": "GET /user/tokens/abc12345 with valid API key; user-1 owns PAT with token_id 'abc12345'",
+      "real_components": [
+        "PATHandler.GetPAT",
+        "SQLite pats table query",
+        "auth middleware (RequirePermission)"
+      ],
+      "mockable": [
+        "auth.GetAuthInfo (inject API key credential)",
+        "auth.GetUserID (return 'user-1')"
+      ],
+      "expected_effects": [
+        "HTTP 200 response is returned",
+        "Response body is PATResponse with token_id 'abc12345', correct name, permissions (insertion order), created_at, expires_at, revoked_at",
+        "No secret_hash or token fields in response",
+        "Response header Cache-Control: no-store is present"
+      ]
+    },
+    {
+      "id": "TS-09-SMOKE-4",
+      "execution_path_id": "09-PATH-4",
+      "description": "Happy path: revoke an active PAT and verify revoked_at is set in the response and database.",
+      "trigger": "DELETE /user/tokens/abc12345 with valid API key; user-1 owns active PAT with token_id 'abc12345'",
+      "real_components": [
+        "PATHandler.RevokePAT",
+        "SQLite conditional UPDATE on pats table",
+        "auth middleware (RequirePermission)"
+      ],
+      "mockable": [
+        "auth.GetAuthInfo (inject API key credential)",
+        "auth.GetUserID (return 'user-1')"
+      ],
+      "expected_effects": [
+        "HTTP 200 response is returned",
+        "Response body is PATResponse with revoked_at set to a non-null timestamp",
+        "pats table row for token_id 'abc12345' has revoked_at set (row not deleted)",
+        "Response header Cache-Control: no-store is present"
+      ]
+    },
+    {
+      "id": "TS-09-SMOKE-5",
+      "execution_path_id": "09-PATH-5",
+      "description": "End-to-end: create a PAT via API key, use the returned token as a PAT credential, then revoke it and verify audit trail.",
+      "trigger": "POST /user/tokens with API key to create PAT with permissions ['tokens:manage','tokens:read']; then DELETE /user/tokens/:token_id using the returned PAT token; then GET /user/tokens to verify the revoked PAT appears in the listing",
+      "real_components": [
+        "PATHandler.CreatePAT",
+        "PATHandler.RevokePAT",
+        "PATHandler.ListPATs",
+        "db.WithTx",
+        "auth middleware (full PAT validation on revoke request)",
+        "SQLite pats table"
+      ],
+      "mockable": [
+        "auth.GetUserID (consistent user-1 across all requests)"
+      ],
+      "expected_effects": [
+        "CreatePAT returns HTTP 201 with plaintext token",
+        "RevokePAT using PAT credential returns HTTP 200 with revoked_at set",
+        "ListPATs returns array containing the revoked PAT with non-null revoked_at",
+        "pats table row persists with revoked_at set (not deleted)",
+        "All three responses have Cache-Control: no-store header"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

@@ -1,0 +1,1417 @@
+{
+  "$schema": null,
+  "spec_id": "13",
+  "spec_name": "cli_core",
+  "schema_version": 1,
+  "introduction": "This spec defines the CLI Core for the `akc` binary \u2014 a thin Cobra-based Go CLI that wraps the Go SDK (spec 12) for all API calls, providing persistent configuration, credential resolution, structured JSON output, exit-code semantics, a machine-readable agent interface, and an embeddable command tree for consuming projects. Note: requirements referencing `apikit.Client`, `apikit.APIError`, and `apikit.VersionResponse` are based on the Go SDK spec 12 interface and should be cross-checked against the installed library before implementation.",
+  "glossary": {
+    "API_KEY": "Environment variable for the active API key, used in credential resolution.",
+    "Build": "Build-time variable injected via `-ldflags` holding the build timestamp or commit hash. Default: 'unknown'.",
+    "CLIConfig": "The Go struct representing the three-field TOML config file: `EndpointURL`, `UserID`, `APIKey`.",
+    "ENDPOINT_URL": "Environment variable for the server base URL, used in credential resolution.",
+    "Execute() wrapper": "The `Execute()` function in `internal/cli` that wraps `rootCmd.Execute()`, centrally calling `PrintError` on any non-nil error before returning.",
+    "ExitCode": "The `internal/cli` function that maps an error to an integer exit code: nil\u21920, `*apikit.APIError`\u21921, all others\u21922.",
+    "InitConfig": "The `internal/cli` function that creates the config directory and initial `config.toml` if they do not exist.",
+    "LoadConfig": "The `internal/cli` function that reads and parses `config.toml` into a `CLIConfig` struct.",
+    "PersistentPreRunE": "The Cobra hook on the root command that initializes config, resolves credentials, and constructs the `apikit.Client` before any non-auth-exempt command runs.",
+    "PrintError": "The `internal/cli` helper that writes a JSON error envelope to stdout, deriving `code` and `message` from the error type.",
+    "PrintJSON": "The `internal/cli` helper that marshals a value to indented JSON and writes it to stdout.",
+    "ResolveEndpointURL": "A package-level helper for auth-exempt commands that need to optionally resolve `endpoint_url` without going through `PersistentPreRunE`.",
+    "ResolveField": "The `internal/cli` function that resolves a single credential field using the four-level precedence chain, accepting a `required` bool parameter.",
+    "RootCommand": "The exported function in the root `apikit` package that returns the embeddable `*cobra.Command` CLI tree.",
+    "SaveConfig": "The `internal/cli` function that atomically writes an updated `CLIConfig` to `config.toml`.",
+    "SilenceErrors": "Cobra root command option that suppresses Cobra's own error printing; all error output is handled by `Execute()`.",
+    "SilenceUsage": "Cobra root command option that suppresses Cobra's usage text on errors.",
+    "TokenPrefix": "A build-time variable that determines the config directory name (`$HOME/.<prefix>/`) and is used in version display. Default: 'ak'. Must be coordinated with the server build. An empty value causes an immediate exit-2 error.",
+    "USER_ID": "Environment variable for the authenticated user's UUID, used in credential resolution.",
+    "Version": "Build-time variable injected via `-ldflags` holding the semantic version string. Default: 'dev'.",
+    "VersionOutput": "The Go struct defining the `akc version` JSON output, containing `cli_version`, `build`, `prefix`, and `server_version`.",
+    "agent interface": "The structured discoverability mechanism (`help --json`) that enables LLMs and autonomous agents to discover and use the CLI programmatically.",
+    "akc": "The CLI binary name. Short for 'apikit client.'",
+    "annotation filter": "The rule used by the `help --json` walker to distinguish apikit-owned commands from Cobra built-ins: a command must have at least one entry in its `Annotations` map to appear in the output.",
+    "api_key": "The active API key credential field, sourced from flag `--api-key`, env `API_KEY`, or config.",
+    "apikit.APIError": "The Go SDK error type from spec 12 representing a server-side HTTP error with a status code and message.",
+    "apikit.Client": "The Go SDK client type from spec 12 used by all CLI commands for API calls.",
+    "apikit.VersionResponse": "The Go SDK typed response struct for the `GET /version` endpoint, containing `version`, `build_time`, `commit`, and `mount_point` fields.",
+    "atomic write": "A write strategy that creates a temp file in the same directory as the target (with deferred `os.Remove` for cleanup on failure) and renames it into place, preventing partial writes.",
+    "auth annotation": "The `\"auth\"` key in a Cobra command's `Annotations` map. Valid values: `\"none\"`, `\"api_key\"`, `\"admin\"`. Commands with `\"auth\": \"none\"` skip `PersistentPreRunE` client creation entirely.",
+    "canonical error message format": "The format `\"<field> is not set: provide via <flag>, $<ENV_VAR>, or config file\"` used by `ResolveField` for missing-credential errors.",
+    "clientContextKey": "The unexported struct type used as a `context.WithValue` key to store the `apikit.Client` in the Cobra command context.",
+    "cmd/akc/main.go": "The entry point file for the standalone `akc` CLI binary.",
+    "command tree": "The hierarchy of Cobra commands that make up the CLI, embeddable into consuming projects via `RootCommand()`.",
+    "composite command": "A CLI command that involves multiple API calls or non-API operations (e.g., `login`, `version`). In `help --json`, composite commands have `method: null`, `path: null`, and `composite: true`.",
+    "config directory": "`$HOME/.<prefix>/` \u2014 the directory holding `config.toml`. Created with mode 0700.",
+    "config.toml": "The TOML configuration file inside the config directory, holding `endpoint_url`, `user_id`, and `api_key` fields.",
+    "consuming project": "A Go project that imports apikit as a library and optionally embeds the CLI command tree via `RootCommand()` and `AddCommand`.",
+    "context key safety": "The use of unexported struct types (`clientContextKey{}`, `userIDContextKey{}`) as `context.WithValue` keys to prevent collision with consuming project code.",
+    "credential resolution": "The four-level precedence chain (flag > env > config > error) used to determine the value of `endpoint_url`, `user_id`, and `api_key` for each CLI invocation.",
+    "endpoint_url": "The server base URL credential field, sourced from flag `--endpoint-url`, env `ENDPOINT_URL`, or config.",
+    "error code sentinel": "The value `code: 0` in an error envelope, indicating a client-side error with no associated HTTP status code.",
+    "error envelope": "The JSON structure `{\"error\":{\"code\":<int>,\"message\":\"<string>\"}}` written to stdout on failure. `code` is a non-zero HTTP status (\u2265 400) for server errors, or 0 (CLI sentinel) for client-side errors.",
+    "hard-coded config template": "The literal string used by `InitConfig` to write the initial `config.toml`, ensuring all three keys appear in the file regardless of TOML encoder behavior.",
+    "hook chaining constraint": "The rule that only the root command may define `PersistentPreRunE`. Commands in specs 14 and 15 use `PreRunE` only.",
+    "internal/cli": "The Go package containing all CLI implementation details, unexported to consumers.",
+    "leaf command": "A Cobra command that has a `RunE` (or `Run`) function set and at least one entry in its `Annotations` map. Only leaf commands are collected by the `help --json` walker.",
+    "userIDContextKey": "The unexported struct type used as a `context.WithValue` key to store the resolved `user_id` in the Cobra command context.",
+    "user_id": "The authenticated user's UUID credential field, sourced from flag `--user-id`, env `USER_ID`, or config. Optional at `PersistentPreRunE` level.",
+    "version_info.go": "The file in `internal/cli` declaring the three build-time variables: `Version`, `Build`, `TokenPrefix`.",
+    "os.Exit(cli.ExitCode(err))": "Pattern used in main.go: determines exit code from error type and exits the process.",
+    "cli.Execute()": "The Execute function in internal/cli called by main.go to run the root Cobra command.",
+    "PrintError(err)": "Call to PrintError that writes a JSON error envelope to stdout for any non-nil error.",
+    "rootCmd.Execute()": "Cobra root command execution method that runs the matched command and returns its error.",
+    "SilenceErrors: true": "Cobra root command setting that suppresses automatic error printing by Cobra.",
+    "SilenceUsage: true": "Cobra root command setting that suppresses automatic usage printing on errors.",
+    "Execute()": "The CLI Execute function that wraps rootCmd.Execute() with centralized error handling.",
+    "RunE": "Cobra command field: a function that runs when the command is invoked, returning an error.",
+    "--api-key": "Persistent CLI flag for providing the API key credential.",
+    "--json": "Persistent CLI flag that triggers JSON output in help contexts.",
+    "--endpoint-url": "Persistent CLI flag for providing the server endpoint URL.",
+    "--user-id": "Persistent CLI flag for providing the authenticated user UUID.",
+    "RootCommand() *cobra.Command": "Exported function in the apikit package that returns the embeddable CLI command tree.",
+    "internal/cli.RootCommand()": "Internal function that constructs and returns the root Cobra command.",
+    "-ldflags": "Go build flag for injecting values into package-level variables at compile time.",
+    "Version = \"dev\"": "Default value of the Version build-time variable when not overridden.",
+    "Build = \"unknown\"": "Default value of the Build build-time variable when not overridden.",
+    "TokenPrefix = \"ak\"": "Default value of the TokenPrefix build-time variable when not overridden.",
+    "$HOME": "Unix environment variable for the user home directory path.",
+    "$HOME/.<TokenPrefix>/": "The config directory path derived from the home directory and token prefix.",
+    "os.MkdirAll": "Go stdlib function to create a directory and all parent directories.",
+    "os.UserHomeDir()": "Go stdlib function to get the user home directory.",
+    "os.CreateTemp": "Go stdlib function to create a temporary file.",
+    "os.Rename": "Go stdlib function to atomically rename a file.",
+    "os.Remove": "Go stdlib function to remove a file.",
+    "defer os.Remove(tmpFile.Name())": "Cleanup pattern ensuring temp files are removed on write failure.",
+    "toml.Decode": "BurntSushi/toml function to decode TOML data into a Go struct.",
+    "toml.NewDecoder": "BurntSushi/toml decoder constructor.",
+    "toml.NewEncoder(w).Encode(cfg)": "BurntSushi/toml pattern for encoding a struct to TOML.",
+    "github.com/BurntSushi/toml": "Go TOML parsing library used for config file handling.",
+    "json.MarshalIndent": "Go stdlib function for producing formatted JSON output.",
+    "context.WithValue": "Go stdlib function for storing values in a context.",
+    "fmt.Fprintf(os.Stderr, ...)": "Go stdlib pattern for writing human-readable messages to stderr.",
+    "errors.As(err, &apiErr)": "Go stdlib function for type-asserting an error to a specific type.",
+    "apikit.NewClient": "Go SDK constructor that creates a new API client instance.",
+    "*apikit.Client": "Pointer to the Go SDK Client struct used for API calls.",
+    "*apikit.APIError": "Pointer to the Go SDK APIError type representing server errors.",
+    "*CLIConfig": "Pointer to the CLIConfig struct representing parsed config file data.",
+    "cmd.Annotations": "Cobra command annotations map used for metadata (method, path, auth).",
+    "cmd.Flags().Changed(flagName)": "Cobra method to check if a flag was explicitly set by the user.",
+    "cmd.Root().PersistentFlags()": "Cobra method to access persistent flags from the root command.",
+    "cmd": "The Cobra command argument passed to PersistentPreRunE (the leaf command).",
+    "AddCommand": "Cobra method for adding a subcommand to a parent command.",
+    "Annotations": "Cobra command metadata map storing method, path, auth, and composite values.",
+    "PreRunE": "Cobra command hook that runs before RunE. Child commands use this (not PersistentPreRunE).",
+    "ClientFromContext": "Helper function to retrieve the apikit.Client from a Cobra command context.",
+    "UserIDFromContext": "Helper function to retrieve the user_id string from a Cobra command context.",
+    "clientContextKey struct{}": "Unexported struct type used as the context key for the API client.",
+    "clientContextKey{}": "Instance of the context key type for storing the API client.",
+    "userIDContextKey struct{}": "Unexported struct type used as the context key for user_id.",
+    "userIDContextKey{}": "Instance of the context key type for storing user_id.",
+    "help --json": "CLI invocation pattern that outputs the full command tree as JSON.",
+    "akc help --json": "Full invocation of the help command with JSON output mode.",
+    "akc help --json user": "Help invocation with JSON mode and subcommand argument (JSON takes priority).",
+    "akc help user --json": "Help invocation with subcommand and JSON flag (treated same as akc help --json).",
+    "akc version": "CLI command that displays version information.",
+    "client.Version(ctx)": "Go SDK method call to fetch server version information.",
+    "server_version": "JSON field in version output containing the server version response.",
+    "VersionOutput.ServerVersion": "Go struct field holding the optional server version in version output.",
+    "code": "Integer field in the error envelope representing the HTTP status or sentinel value.",
+    "code: 0": "CLI sentinel error code meaning client-side error (no HTTP status).",
+    "message": "String field in the error envelope containing the error description.",
+    "method": "JSON field in help --json output indicating the HTTP method a command maps to.",
+    "path": "JSON field in help --json output indicating the API path a command maps to.",
+    "name": "JSON field in help --json output containing the full command path.",
+    "description": "JSON field in help --json output containing the command one-line description.",
+    "version": "JSON field in help --json output containing the CLI version string.",
+    "commands": "JSON array field in help --json output containing all leaf command entries.",
+    "args": "JSON field in help --json command entries listing positional arguments.",
+    "flags": "JSON field in help --json command entries listing flag descriptors.",
+    "auth": "JSON field in help --json command entries indicating required auth level.",
+    "composite: true": "JSON field marking a command as multi-step (method/path are null).",
+    "default": "JSON field in flag descriptors indicating the default value (omitted for zero values).",
+    "type": "JSON field in flag descriptors indicating the value type (string, int, bool).",
+    "required": "JSON field in flag descriptors indicating whether the flag is mandatory.",
+    "required: true": "Flag descriptor value indicating the flag must be provided.",
+    "required: false": "Flag descriptor value indicating the flag is optional.",
+    "--": "Prefix for CLI flag names in help --json output flag descriptors.",
+    "completion": "Cobra built-in completion command (not registered in this CLI).",
+    "omitempty": "Go JSON struct tag that omits the field from output when it has a zero value.",
+    "apiErr.Code": "The integer status code field on an apikit.APIError value.",
+    "apiErr.Message": "The string message field on an apikit.APIError value.",
+    "err": "The error return value from command execution.",
+    "err.Error()": "Go error interface method returning the error message string.",
+    "var": "Go keyword for declaring package-level variables (build-time vars).",
+    "endpoint_url = \"\"": "Config file line showing an empty endpoint_url value.",
+    "user_id = \"\"": "Config file line showing an empty user_id value.",
+    "api_key = \"\"": "Config file line showing an empty api_key value.",
+    "{\"error\":{\"code\":<int>,\"message\":\"<string>\"}}": "The JSON error envelope format used by the CLI on failure.",
+    "toml:\"endpoint_url\"": "Go struct tag mapping the EndpointURL field to TOML key endpoint_url.",
+    "toml:\"user_id\"": "Go struct tag mapping the UserID field to TOML key user_id.",
+    "toml:\"api_key\"": "Go struct tag mapping the APIKey field to TOML key api_key.",
+    "json:\"cli_version\"": "Go struct tag mapping the CLIVersion field to JSON key cli_version.",
+    "json:\"build\"": "Go struct tag mapping the Build field to JSON key build.",
+    "json:\"prefix\"": "Go struct tag mapping the Prefix field to JSON key prefix.",
+    "json:\"server_version,omitempty\"": "Go struct tag for ServerVersion field with omitempty.",
+    "CLIVersion string": "Go struct field type declaration for the CLI version.",
+    "Build string": "Go struct field type declaration for the build info.",
+    "Prefix string": "Go struct field type declaration for the token prefix.",
+    "ServerVersion *apikit.VersionResponse": "Go struct field type for optional server version.",
+    "(fieldName, flagName, flagValue string, flagChanged bool, envVarName, configValue string, required bool) (string, error)": "Full function signature of ResolveField with all parameters.",
+    "fieldName": "Parameter name identifying the credential field being resolved.",
+    "flagName": "Parameter name identifying the CLI flag for the field.",
+    "flagChanged": "Boolean parameter indicating whether the CLI flag was explicitly set.",
+    "envVarName": "Parameter name identifying the environment variable for the field.",
+    "(\"\", nil)": "Return value of ResolveField when required is false and all sources are unset.",
+    "\"admin\"": "Auth level annotation value indicating the command requires admin access.",
+    "\"ak\"": "Default token prefix value.",
+    "\"api_key\"": "Auth level annotation value indicating the command requires an API key.",
+    "\"auth\": \"none\"": "Annotation entry indicating a command does not require authentication.",
+    "\"composite\": \"true\"": "Annotation entry marking a command as composite (multi-step).",
+    "\"client\"": "Annotation value used in command metadata.",
+    "\"none\"": "Auth level annotation value indicating no authentication required.",
+    "\"dev\"": "Default value string for the Version build-time variable.",
+    "\"unknown\"": "Default value string for the Build build-time variable.",
+    "\"\"": "Empty string representing an unset config value.",
+    "\"TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value\"": "Error message produced when TokenPrefix is empty at startup.",
+    "\"cannot determine home directory: $HOME is not set or unresolvable\"": "Error message produced when the home directory cannot be resolved.",
+    "\"<fieldName> is not set: provide via <flagName>, $<envVarName>, or config file\"": "Canonical error message template for missing credential fields.",
+    "\"warning: could not reach server: <reason>\"": "Stderr warning when version command cannot reach the server.",
+    "\"config file is unparseable: <toml parse error>\"": "Error message for malformed config files.",
+    "<toml parse error>": "Placeholder for the actual TOML parse error message.",
+    "Makefile": "Build system file containing make targets for build, test, and lint.",
+    "apikit": "The root Go package name for the apikit module.",
+    "go build -ldflags \"-X github.com/txsvc/apikit/internal/cli.<Var>=<value>\"": "Build command pattern for injecting build-time variables.",
+    "rootCmd.AddCommand(apikit.RootCommand())": "Pattern consuming projects use to embed the apikit CLI command tree.",
+    "ResolveEndpointURL(cmd)": "Helper function for auth-exempt commands to resolve endpoint_url from the persistent flag.",
+    "\"auth\"": "Annotation key in the Cobra command Annotations map indicating the required auth level.",
+    "ExitCode(err)": "Function that determines the exit code from an error: nil->0, *APIError->1, other->2."
+  },
+  "requirements": [
+    {
+      "id": "13-REQ-1",
+      "title": "Binary entry point and Execute() wrapper",
+      "user_story": {
+        "role": "CLI user or consuming project",
+        "goal": "run the `akc` binary and have all output, error envelopes, and exit codes managed in one place",
+        "benefit": "so that agents and humans always receive valid JSON on stdout and a meaningful exit code"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`cmd/akc/main.go`",
+          "action": "calls `cli.Execute()` and passes the returned error to `os.Exit(cli.ExitCode(err))`, producing no output of any kind itself",
+          "return_contract": "process exits with code 0 on success, 1 on `*apikit.APIError`, 2 on all other errors"
+        },
+        {
+          "id": "13-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`Execute()` wrapper in `internal/cli`",
+          "action": "wraps `rootCmd.Execute()`, calls `PrintError(err)` on any non-nil error before returning that error, and never returns an error silently",
+          "return_contract": "error envelope is written to stdout before the function returns a non-nil error; no duplicate envelopes are produced"
+        },
+        {
+          "id": "13-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "root Cobra command",
+          "action": "is configured with `SilenceErrors: true` and `SilenceUsage: true` so Cobra never prints its own error or usage text",
+          "return_contract": "all printed output originates from `Execute()` or individual `RunE` functions, never from Cobra internals"
+        },
+        {
+          "id": "13-REQ-1.4",
+          "ears_pattern": "event_driven",
+          "system": "individual command `RunE` functions",
+          "action": "call `PrintJSON` on the result and return nil; they do not call `PrintError` directly",
+          "return_contract": "JSON result is written to stdout; no error envelope is produced",
+          "trigger": "a command completes successfully"
+        },
+        {
+          "id": "13-REQ-1.5",
+          "ears_pattern": "event_driven",
+          "system": "individual command `RunE` functions",
+          "action": "return the error to `Execute()` without printing it; `Execute()` calls `PrintError` centrally",
+          "return_contract": "exactly one error envelope is produced per error; no `RunE` function produces an envelope directly",
+          "trigger": "a command encounters an error"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "`Execute()` wrapper",
+          "action": "calls `PrintError` exactly once before returning; does not call `PrintError` if `rootCmd.Execute()` returns nil",
+          "return_contract": "stdout contains exactly one error envelope; no additional output appears",
+          "error_condition": "a `RunE` function returns an error"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-2",
+      "title": "Root command and persistent flags",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "pass `--endpoint-url`, `--user-id`, `--api-key`, and `--json` on any subcommand",
+        "benefit": "so that credentials and output format can be supplied at any level of the command tree"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "root Cobra command",
+          "action": "defines `--endpoint-url` (string), `--user-id` (string), `--api-key` (string), and `--json` (bool) as persistent flags available to all subcommands",
+          "return_contract": "flags are recognized by Cobra on any subcommand without error"
+        },
+        {
+          "id": "13-REQ-2.2",
+          "ears_pattern": "state_driven",
+          "system": "root command",
+          "action": "Cobra prints its default help text to stdout and exits 0 (no `RunE` is defined on the root command)",
+          "return_contract": "exit code 0; help text on stdout; nothing on stderr",
+          "state": "invoked with no subcommand and no flags"
+        },
+        {
+          "id": "13-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "non-help commands",
+          "action": "silently ignore the `--json` persistent flag with no warning or error; the flag is reserved for help contexts only",
+          "return_contract": "output is identical whether or not `--json` is passed to a non-help command"
+        },
+        {
+          "id": "13-REQ-2.4",
+          "ears_pattern": "ubiquitous",
+          "system": "root `apikit` package",
+          "action": "exports `RootCommand() *cobra.Command` as a shim delegating to `internal/cli.RootCommand()`, exposing the embeddable CLI tree with minimal public surface",
+          "return_contract": "consuming projects can call `rootCmd.AddCommand(apikit.RootCommand())` without importing internal packages"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "root command",
+          "action": "Cobra's error is intercepted by `Execute()`, which calls `PrintError` and returns the error; `SilenceErrors` and `SilenceUsage` suppress Cobra's own output",
+          "return_contract": "JSON error envelope on stdout with `code: 0`; exit code 2; nothing on stderr",
+          "error_condition": "an unrecognized flag is passed"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-3",
+      "title": "TokenPrefix validation at startup",
+      "user_story": {
+        "role": "operator",
+        "goal": "receive an immediate, clear error when the CLI binary was built without a valid `TokenPrefix`",
+        "benefit": "so that build misconfiguration is caught before any config access or credential resolution"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`version_info.go` in `internal/cli`",
+          "action": "declares `Version = \"dev\"`, `Build = \"unknown\"`, and `TokenPrefix = \"ak\"` as package-level variables injectable via `-ldflags`",
+          "return_contract": "a binary built without any `-ldflags` override has valid non-empty defaults"
+        },
+        {
+          "id": "13-REQ-3.2",
+          "ears_pattern": "state_driven",
+          "system": "`PersistentPreRunE`",
+          "action": "returns an exit-2 error with message `\"TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value\"` before any config initialization; this check runs after the `auth annotation` check but before the `$HOME` check",
+          "return_contract": "JSON error envelope `{\"error\":{\"code\":0,\"message\":\"TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value\"}}` on stdout; exit code 2",
+          "state": "`TokenPrefix` resolves to an empty string at runtime"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-3.E1",
+          "ears_pattern": "complex_event",
+          "system": "`PersistentPreRunE`",
+          "action": "skips the `TokenPrefix` validation entirely because the auth annotation check returns nil first",
+          "return_contract": "no error; the auth-exempt command proceeds normally",
+          "trigger": "`TokenPrefix` is empty",
+          "condition": "the invoked command has `\"auth\": \"none\"` annotation"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-4",
+      "title": "Persistent client configuration \u2014 directory and file initialization",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "have the config directory and file created automatically on first use",
+        "benefit": "so that no manual setup is required before using the CLI"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-4.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`InitConfig`",
+          "action": "creates the config directory `$HOME/.<TokenPrefix>/` with `os.MkdirAll` and mode 0700 if it does not exist",
+          "return_contract": "directory exists with mode 0700 after the call; no error if already present"
+        },
+        {
+          "id": "13-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "`InitConfig`",
+          "action": "creates `config.toml` from the hard-coded template string (three lines: `endpoint_url = \"\"`, `user_id = \"\"`, `api_key = \"\"`) with mode 0600",
+          "return_contract": "file exists with mode 0600 and exactly the three template lines; TOML encoder is not used for this initial write",
+          "trigger": "`config.toml` does not exist in the config directory"
+        },
+        {
+          "id": "13-REQ-4.3",
+          "ears_pattern": "state_driven",
+          "system": "`InitConfig`",
+          "action": "does not modify the existing file in any way",
+          "return_contract": "existing file content and permissions are unchanged after the call",
+          "state": "`config.toml` already exists"
+        },
+        {
+          "id": "13-REQ-4.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`CLIConfig` struct",
+          "action": "is defined with three string fields tagged `toml:\"endpoint_url\"`, `toml:\"user_id\"`, and `toml:\"api_key\"` for TOML parsing via `github.com/BurntSushi/toml`",
+          "return_contract": "TOML parsing populates all three fields correctly from `config.toml`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "`PersistentPreRunE`",
+          "action": "exits immediately with code 2 and writes error envelope with message `\"cannot determine home directory: $HOME is not set or unresolvable\"`; no config initialization is attempted",
+          "return_contract": "JSON error envelope `{\"error\":{\"code\":0,\"message\":\"cannot determine home directory: $HOME is not set or unresolvable\"}}` on stdout; exit code 2",
+          "error_condition": "`os.UserHomeDir()` returns an error or an empty string"
+        },
+        {
+          "id": "13-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "`InitConfig`",
+          "action": "returns an error; `PersistentPreRunE` propagates it as an exit-2 error with the appropriate message in the error envelope",
+          "return_contract": "JSON error envelope with `code: 0` on stdout; exit code 2; no partial directory or file state left",
+          "error_condition": "the config directory is unwritable and `os.MkdirAll` or file creation fails"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-5",
+      "title": "Config loading and rejection of malformed files",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "have config loading fail loudly on any parse error rather than silently accepting partial values",
+        "benefit": "so that config corruption is surfaced immediately rather than causing subtle authentication failures"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`LoadConfig`",
+          "action": "parses `config.toml` using `github.com/BurntSushi/toml` (`toml.Decode` or `toml.NewDecoder`) into a `CLIConfig` struct and returns the struct on success",
+          "return_contract": "`(*CLIConfig, nil)` on success with all three fields populated (empty string if absent in file)"
+        },
+        {
+          "id": "13-REQ-5.2",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig`",
+          "action": "rejects the entire file and returns an error with message `\"config file is unparseable: <toml parse error>\"` where `<toml parse error>` is the error from the TOML library; no partial `CLIConfig` is returned",
+          "return_contract": "`(nil, error)` \u2014 the caller receives no config struct on parse failure",
+          "error_condition": "`config.toml` exists but contains any TOML parse error"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`LoadConfig`",
+          "action": "rejects the entire file and returns an error; no partial results are accepted",
+          "return_contract": "`(nil, error)` with the TOML parse error message; exit code 2 when propagated by `PersistentPreRunE`",
+          "error_condition": "`config.toml` contains partially valid TOML (e.g., two valid fields and one syntactically invalid field)"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-6",
+      "title": "Credential resolution via ResolveField",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "supply credentials via flags, environment variables, or config file with a well-defined precedence order",
+        "benefit": "so that the most-specific source always wins and missing credentials are reported with actionable error messages"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`ResolveField`",
+          "action": "accepts signature `(fieldName, flagName, flagValue string, flagChanged bool, envVarName, configValue string, required bool) (string, error)` and resolves a single credential field using the four-level precedence: CLI flag (when `flagChanged` is true) > non-empty env var > non-empty config value > error (when `required` is true) or `(\"\", nil)` (when `required` is false)",
+          "return_contract": "returns the resolved value and nil on success; returns `(\"\", error)` with the canonical message when `required` is true and all sources are unset; returns `(\"\", nil)` when `required` is false and all sources are unset"
+        },
+        {
+          "id": "13-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`ResolveField`",
+          "action": "composes the canonical error message internally as `\"<fieldName> is not set: provide via <flagName>, $<envVarName>, or config file\"` from the `fieldName`, `flagName`, and `envVarName` parameters; the caller never constructs this string",
+          "return_contract": "error message matches the canonical format exactly for all three credential fields"
+        },
+        {
+          "id": "13-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`PersistentPreRunE`",
+          "action": "resolves `endpoint_url` and `api_key` with `required: true`, failing with exit-2 error if either is unresolvable; resolves `user_id` with `required: false`, storing an empty string in context if unresolvable without returning an error",
+          "return_contract": "client is constructed and stored in context when `endpoint_url` and `api_key` are resolved; empty `user_id` stored in context as empty string without error"
+        },
+        {
+          "id": "13-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`PersistentPreRunE`",
+          "action": "checks flag presence using `cmd.Flags().Changed(flagName)` where `cmd` is the Cobra leaf command (not the root), consistent with Cobra's behavior of passing the leaf command to `PersistentPreRunE`",
+          "return_contract": "flag-based overrides are correctly detected for the invoked leaf command"
+        },
+        {
+          "id": "13-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "`ResolveEndpointURL`",
+          "action": "reads the persistent `--endpoint-url` flag from `cmd.Root().PersistentFlags()`, loads `config.toml`, and calls `ResolveField` with `required: false`; returns an empty string (not an error) when no endpoint is configured from any source",
+          "return_contract": "non-empty string when any source provides a value; empty string when all sources are unset"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-6.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "`ResolveField`",
+          "action": "treats a config file value of empty string as unset, falling through to the error (or `(\"\", nil)` for optional) case",
+          "return_contract": "empty config string does not count as a valid resolved value"
+        },
+        {
+          "id": "13-REQ-6.E2",
+          "ears_pattern": "complex_event",
+          "system": "`PersistentPreRunE`",
+          "action": "skips all credential resolution and client construction by returning nil immediately",
+          "return_contract": "no config is loaded; no credentials are resolved; no client is created; the command proceeds",
+          "trigger": "the root `PersistentPreRunE` runs",
+          "condition": "the invoked leaf command has `\"auth\": \"none\"` in its `Annotations` map"
+        },
+        {
+          "id": "13-REQ-6.E3",
+          "ears_pattern": "ubiquitous",
+          "system": "`PersistentPreRunE`",
+          "action": "reads the `\"auth\"` annotation from `cmd.Annotations` where `cmd` is the Cobra leaf command argument, not the root command, to correctly detect auth-exempt leaf commands",
+          "return_contract": "annotation check reflects the leaf command's annotations, preventing the Cobra pitfall of reading the wrong command's annotations"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-7",
+      "title": "Context storage for client and user_id",
+      "user_story": {
+        "role": "CLI subcommand implementor",
+        "goal": "retrieve the initialized `apikit.Client` and resolved `user_id` from the Cobra command context",
+        "benefit": "so that subcommands can make API calls without knowing how credentials were resolved"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`internal/cli/context.go`",
+          "action": "defines unexported zero-size struct types `clientContextKey struct{}` and `userIDContextKey struct{}` as `context.WithValue` keys to guarantee collision safety with consuming project code",
+          "return_contract": "no external package can construct or shadow these key values"
+        },
+        {
+          "id": "13-REQ-7.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`ClientFromContext`",
+          "action": "retrieves the `*apikit.Client` stored under `clientContextKey{}` from the context; returns nil if not present (auth-exempt commands)",
+          "return_contract": "`*apikit.Client` on success; nil when called with a context that has no stored client"
+        },
+        {
+          "id": "13-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`UserIDFromContext`",
+          "action": "retrieves the resolved `user_id` string stored under `userIDContextKey{}` from the context; returns empty string if not present or if `user_id` was unresolvable",
+          "return_contract": "non-empty string when `user_id` was resolved; empty string when not stored or when `user_id` was not configured"
+        },
+        {
+          "id": "13-REQ-7.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`PersistentPreRunE`",
+          "action": "stores the constructed `*apikit.Client` under `clientContextKey{}` and the resolved `user_id` string under `userIDContextKey{}` via `context.WithValue`; `user_id` is not passed to `apikit.NewClient` (the SDK client uses only `endpoint_url` and `api_key`)",
+          "return_contract": "both values are retrievable from the context by subsequent `RunE` functions via the helper functions"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "`ClientFromContext`",
+          "action": "returns nil or the correct `*apikit.Client` without interference, because the unexported struct key type prevents any collision",
+          "return_contract": "context key safety is maintained; consuming project's value is inaccessible via `ClientFromContext`",
+          "error_condition": "a consuming project stores a value under a string key `\"client\"` in the same context"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-8",
+      "title": "Atomic config write (SaveConfig)",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "have config mutations written atomically to prevent partial writes from corrupting config.toml",
+        "benefit": "so that a CLI crash or error mid-write leaves the original config intact"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`SaveConfig`",
+          "action": "marshals the `*CLIConfig` to TOML using `toml.NewEncoder(w).Encode(cfg)`, writes to a temp file created in the config directory via `os.CreateTemp`, registers `defer os.Remove(tmpFile.Name())` immediately after creation, sets temp file permissions to 0600, closes the temp file, then renames it to `config.toml` via `os.Rename`",
+          "return_contract": "`config.toml` is updated atomically; on success the deferred remove targets the renamed-away (non-existent) path, which is safe"
+        },
+        {
+          "id": "13-REQ-8.2",
+          "ears_pattern": "unwanted",
+          "system": "`SaveConfig`",
+          "action": "returns the error immediately; no temp file exists; no deferred remove is registered; no cleanup is needed",
+          "return_contract": "error returned to caller; original `config.toml` is untouched; no stale files left",
+          "error_condition": "`os.CreateTemp` fails (e.g., directory unwritable)"
+        },
+        {
+          "id": "13-REQ-8.3",
+          "ears_pattern": "unwanted",
+          "system": "`SaveConfig`",
+          "action": "the deferred `os.Remove` removes the temp file; the original `config.toml` is untouched; the error from `os.Rename` is returned to the caller",
+          "return_contract": "error returned to caller with exit code 2; no stale temp file; original config preserved",
+          "error_condition": "`os.Rename` fails after the temp file has been written"
+        },
+        {
+          "id": "13-REQ-8.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`SaveConfig`",
+          "action": "creates the temp file in the same directory as `config.toml` to guarantee `os.Rename` is a same-filesystem operation and cannot fail with a cross-device link error",
+          "return_contract": "`os.Rename` is always an in-place rename on the same filesystem"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "`SaveConfig`",
+          "action": "the last `os.Rename` wins; no data corruption (partial writes) occurs; a lost update is accepted as a known limitation; no file-level locking is implemented",
+          "return_contract": "`config.toml` contains one of the two updates; never a partial/corrupt state",
+          "error_condition": "two CLI processes call `SaveConfig` concurrently"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-9",
+      "title": "Output formatting \u2014 PrintJSON, PrintError, and ExitCode",
+      "user_story": {
+        "role": "agent or CLI user",
+        "goal": "always receive valid JSON on stdout regardless of whether the command succeeded or failed",
+        "benefit": "so that agents can parse stdout reliably without needing to handle different output formats"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`PrintJSON`",
+          "action": "marshals the value using `json.MarshalIndent` with two-space indentation and writes it to stdout",
+          "return_contract": "valid indented JSON on stdout; returns error if marshaling fails"
+        },
+        {
+          "id": "13-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`PrintError`",
+          "action": "writes the JSON error envelope `{\"error\":{\"code\":<int>,\"message\":\"<string>\"}}` to stdout only; uses `errors.As(err, &apiErr)` to detect `*apikit.APIError` \u2014 if matched, uses `apiErr.Code` (always \u2265 400) for `code` and `apiErr.Message` for `message`; for all other errors uses `code: 0` (client sentinel) and `err.Error()` for `message`; writes nothing to stderr",
+          "return_contract": "error envelope appears on stdout; stderr is empty; `code` is always \u2265 400 for API errors and exactly 0 for client-side errors"
+        },
+        {
+          "id": "13-REQ-9.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`ExitCode`",
+          "action": "returns 0 for nil error, 1 when `errors.As(err, &apiErr)` succeeds (`*apikit.APIError`), and 2 for all other non-nil errors",
+          "return_contract": "integer 0, 1, or 2 matching the exit code table"
+        },
+        {
+          "id": "13-REQ-9.4",
+          "ears_pattern": "ubiquitous",
+          "system": "human-readable messages (warnings, progress, informational)",
+          "action": "are written to stderr using `fmt.Fprintf(os.Stderr, ...)` only; they never appear on stdout",
+          "return_contract": "stdout contains only JSON; stderr contains only human-readable messages"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "`PrintError`",
+          "action": "emits `code: 0` in the envelope; never emits `code: 0` when the error is an `*apikit.APIError`",
+          "return_contract": "`{\"error\":{\"code\":0,\"message\":\"<err.Error()>\"}}` on stdout; exit code 2 when propagated via `ExitCode`",
+          "error_condition": "a plain (non-`*apikit.APIError`) error is passed"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-10",
+      "title": "Version command",
+      "user_story": {
+        "role": "CLI user or agent",
+        "goal": "run `akc version` to see CLI version, build info, prefix, and optionally the server version",
+        "benefit": "so that version mismatches between CLI and server can be identified quickly"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`akc version` command",
+          "action": "is annotated with `\"auth\": \"none\"` and `\"composite\": \"true\"` so it skips `PersistentPreRunE` client creation entirely",
+          "return_contract": "command runs without requiring any configured credentials"
+        },
+        {
+          "id": "13-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`VersionOutput` struct",
+          "action": "is defined with fields `CLIVersion string` (`json:\"cli_version\"`), `Build string` (`json:\"build\"`), `Prefix string` (`json:\"prefix\"`), and `ServerVersion *apikit.VersionResponse` (`json:\"server_version,omitempty\"`); the SDK struct is embedded directly to stay in sync with spec 12",
+          "return_contract": "JSON output matches the documented example with `cli_version`, `build`, `prefix` always present; `server_version` omitted when nil"
+        },
+        {
+          "id": "13-REQ-10.3",
+          "ears_pattern": "event_driven",
+          "system": "`akc version` `RunE`",
+          "action": "constructs a minimal `apikit.Client` for that URL and calls `client.Version(ctx)`; if successful, populates `VersionOutput.ServerVersion` with the result",
+          "return_contract": "`server_version` sub-object included in JSON output with `version`, `build_time`, `commit`, `mount_point` fields from the SDK's `apikit.VersionResponse`",
+          "trigger": "`ResolveEndpointURL(cmd)` returns a non-empty URL"
+        },
+        {
+          "id": "13-REQ-10.4",
+          "ears_pattern": "state_driven",
+          "system": "`akc version` `RunE`",
+          "action": "omits `server_version` from the JSON output and prints no warning to stderr (no endpoint configured is a normal unconfigured state)",
+          "return_contract": "JSON output contains `cli_version`, `build`, `prefix` only; stderr is empty",
+          "state": "`ResolveEndpointURL(cmd)` returns an empty string (no endpoint configured)"
+        },
+        {
+          "id": "13-REQ-10.5",
+          "ears_pattern": "unwanted",
+          "system": "`akc version` `RunE`",
+          "action": "omits `server_version` from the JSON output (not null, omitted entirely via `omitempty`) and prints a warning to stderr: `\"warning: could not reach server: <reason>\"`",
+          "return_contract": "JSON output contains `cli_version`, `build`, `prefix` only; warning on stderr; exit code 0",
+          "error_condition": "endpoint URL is configured but the server is unreachable"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "`akc version` `RunE`",
+          "action": "the call must be bounded by a context deadline or timeout set by the `RunE` before calling `client.Version(ctx)`; when the deadline fires, `server_version` is omitted and a warning is printed to stderr",
+          "return_contract": "exit code 0; `server_version` omitted; warning on stderr within the configured deadline",
+          "error_condition": "`client.Version(ctx)` hangs indefinitely"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-11",
+      "title": "Agent interface \u2014 help --json command tree",
+      "user_story": {
+        "role": "LLM agent or autonomous tool",
+        "goal": "run `akc help --json` to receive a machine-readable description of all available CLI commands",
+        "benefit": "so that the agent can discover and invoke commands without prior knowledge of the CLI's structure"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "custom `help` subcommand",
+          "action": "replaces Cobra's default help command; when the persistent `--json` flag is set (in any position relative to positional arguments), outputs the full JSON command tree to stdout regardless of any positional arguments; when `--json` is not set, delegates to Cobra's default help behavior including named subcommand help",
+          "return_contract": "JSON tree on stdout when `--json` is set; standard Cobra help text when `--json` is not set"
+        },
+        {
+          "id": "13-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`help --json` JSON output",
+          "action": "contains a root object with `name` (CLI binary name), `version` (build-time `Version` variable), and `commands` array; each entry in `commands` represents one leaf command with fields: `name` (full space-separated path), `description` (one-line), `method` (HTTP method string or null), `path` (API path string or null), `args` (array), `flags` (array), `auth` (\"none\", \"api_key\", or \"admin\"), and optionally `composite: true`",
+          "return_contract": "valid JSON matching the documented structure; only leaf commands (those with `RunE` and at least one `Annotations` key) appear in the `commands` array"
+        },
+        {
+          "id": "13-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`help --json` walker",
+          "action": "traverses the entire Cobra command tree recursively, collecting only leaf commands (those with `RunE` set and at least one key in their `Annotations` map); group/parent commands without `RunE` are excluded; commands with both `RunE` and child subcommands are included as leaves",
+          "return_contract": "output contains only executable leaf commands with annotations; no bare group entries"
+        },
+        {
+          "id": "13-REQ-11.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`help --json` flag descriptors",
+          "action": "describes each flag with `name` (including `--` prefix), `type` (\"string\", \"int\", \"bool\", \"stringSlice\"), `required` (bool), optional `default` (omitted when value equals the type's zero value \u2014 empty string, 0, false, empty array), and `description`; this rule applies uniformly to all flag types including bool",
+          "return_contract": "flag descriptors omit `default` for zero-value defaults; include `default` only for non-zero defaults"
+        },
+        {
+          "id": "13-REQ-11.5",
+          "ears_pattern": "ubiquitous",
+          "system": "custom `SetHelpFunc` on the root command",
+          "action": "checks for the persistent `--json` flag; if set, outputs JSON for that single command's metadata to stdout; if not set, falls back to Cobra's default help text rendering",
+          "return_contract": "single command JSON entry on stdout for `akc <cmd> --help --json`; standard help text for `akc <cmd> --help`"
+        },
+        {
+          "id": "13-REQ-11.6",
+          "ears_pattern": "ubiquitous",
+          "system": "`help --json` walker",
+          "action": "excludes Cobra built-in commands (e.g., any that might be auto-registered) by filtering out commands that have no keys in their `Annotations` map; all apikit-owned commands carry at minimum the `\"auth\"` annotation key; the `completion` command is also excluded structurally because it is never registered",
+          "return_contract": "only apikit-annotated commands appear in output; Cobra internals are absent"
+        },
+        {
+          "id": "13-REQ-11.7",
+          "ears_pattern": "event_driven",
+          "system": "`help --json` walker",
+          "action": "automatically includes those commands in the `commands` array without any additional registration step",
+          "return_contract": "consuming project commands appear in `help --json` output alongside apikit commands",
+          "trigger": "a consuming project adds commands via `AddCommand` that carry at least the `\"auth\"` annotation key"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-11.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "`help --json` walker",
+          "action": "invocations `akc help --json`, `akc help --json user`, and `akc help user --json` all produce identical full JSON tree output because Cobra parses the persistent `--json` flag regardless of its position relative to positional arguments",
+          "return_contract": "all three invocations produce identical JSON output"
+        },
+        {
+          "id": "13-REQ-11.E2",
+          "ears_pattern": "unwanted",
+          "system": "`help --json` walker",
+          "action": "includes the command as a leaf entry in the output based solely on the presence of `RunE`; child subcommands do not exclude it",
+          "return_contract": "command appears in `commands` array as an executable leaf entry",
+          "error_condition": "a command has both `RunE` and child subcommands"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-12",
+      "title": "Command annotations and PersistentPreRunE hook chaining",
+      "user_story": {
+        "role": "spec 14/15 command implementor",
+        "goal": "annotate commands correctly and use `PreRunE` (not `PersistentPreRunE`) for command-specific setup",
+        "benefit": "so that the root `PersistentPreRunE` runs transparently before every non-auth-exempt command without manual chaining"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "apikit-owned commands",
+          "action": "set at minimum the `\"auth\"` key in their `Annotations` map with value `\"none\"`, `\"api_key\"`, or `\"admin\"`; commands without `\"auth\"` default to `\"api_key\"` behavior at both `PersistentPreRunE` and the annotation filter",
+          "return_contract": "all apikit commands carry at least one annotation key and appear in `help --json` output"
+        },
+        {
+          "id": "13-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "child commands from specs 14 and 15",
+          "action": "use `PreRunE` (not `PersistentPreRunE`) for any command-specific setup; the root's `PersistentPreRunE` runs automatically before any child's `PreRunE` via Cobra's hook chaining",
+          "return_contract": "client initialization runs exactly once per invocation; child commands do not shadow the root hook"
+        },
+        {
+          "id": "13-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`PersistentPreRunE`",
+          "action": "reads annotations from the `cmd` argument, which Cobra passes as the actually-invoked leaf command (not the root command), to correctly detect `\"auth\": \"none\"` on the leaf",
+          "return_contract": "auth annotation check reflects the leaf command's annotations; root command annotations are not consulted"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-12.E1",
+          "ears_pattern": "unwanted",
+          "system": "child command",
+          "action": "the child's `PersistentPreRunE` shadows the root's hook, breaking client initialization for all of its subcommands; this is a forbidden pattern documented as a constraint and enforced via code review",
+          "return_contract": "this pattern must not be present in any spec 13, 14, or 15 command implementation",
+          "error_condition": "a child command defines `PersistentPreRunE` instead of `PreRunE`"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-13",
+      "title": "Build-time variable injection and embeddable command tree",
+      "user_story": {
+        "role": "operator or consuming project",
+        "goal": "build the `akc` binary with custom `Version`, `Build`, and `TokenPrefix` values and embed the command tree in their own CLI",
+        "benefit": "so that the binary is correctly branded and the config directory uses the project-specific prefix"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`version_info.go` in `internal/cli`",
+          "action": "declares `Version`, `Build`, and `TokenPrefix` as package-level `var` declarations with default values `\"dev\"`, `\"unknown\"`, and `\"ak\"` respectively, injectable via `go build -ldflags \"-X github.com/txsvc/apikit/internal/cli.<Var>=<value>\"`",
+          "return_contract": "defaults produce a valid binary; `-ldflags` overrides take effect at link time"
+        },
+        {
+          "id": "13-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`TokenPrefix` build-time variable",
+          "action": "determines the config directory path `$HOME/.<TokenPrefix>/` and the prefix displayed in `akc version` output; must be coordinated with the server build to ensure token format alignment",
+          "return_contract": "config directory path is `$HOME/.<TokenPrefix>/`; `version` output shows the prefix value"
+        },
+        {
+          "id": "13-REQ-13.3",
+          "ears_pattern": "ubiquitous",
+          "system": "root `apikit` package shim",
+          "action": "exports `RootCommand() *cobra.Command` that delegates to `internal/cli.RootCommand()`; consuming projects use `rootCmd.AddCommand(apikit.RootCommand())` to embed the full command tree",
+          "return_contract": "consuming project's root command gains the full `akc` command subtree; no `internal/cli` import is required"
+        },
+        {
+          "id": "13-REQ-13.4",
+          "ears_pattern": "ubiquitous",
+          "system": "`internal/cli` package",
+          "action": "is declared as an internal package so that no external Go code can directly import individual CLI command implementations; only the shim in the root `apikit` package is the public surface",
+          "return_contract": "Go toolchain enforces internal package visibility; importing `internal/cli` from outside the module fails at compile time"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-13.E1",
+          "ears_pattern": "unwanted",
+          "system": "operator",
+          "action": "the CLI looks for credentials in the wrong directory; the operator is responsible for ensuring both binaries use the same value via a shared `Makefile` variable or CI environment variable; this is a build-time coordination concern, not a runtime check",
+          "return_contract": "no runtime error for mismatched prefix; the mismatch manifests as 'missing credential' errors because the CLI reads the wrong config directory",
+          "error_condition": "both server and CLI are compiled with different `TokenPrefix` values"
+        }
+      ]
+    },
+    {
+      "id": "13-REQ-14",
+      "title": "Exit codes and error envelope consistency",
+      "user_story": {
+        "role": "agent or shell script",
+        "goal": "rely on process exit codes and stdout JSON to determine command outcome without parsing stderr",
+        "benefit": "so that automated pipelines can react correctly to success, API errors, and client errors"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "13-REQ-14.1",
+          "ears_pattern": "ubiquitous",
+          "system": "CLI process",
+          "action": "exits with code 0 on success, 1 when `errors.As(err, &apiErr)` identifies a `*apikit.APIError`, and 2 for all other non-nil errors (missing config, invalid flags, network failure, unresolvable `$HOME`, empty `TokenPrefix`)",
+          "return_contract": "exit code matches the error type table; no other exit codes are used"
+        },
+        {
+          "id": "13-REQ-14.2",
+          "ears_pattern": "ubiquitous",
+          "system": "error envelopes",
+          "action": "are written exclusively to stdout; no human-readable error text accompanies them on stderr; the JSON envelope is the complete error representation for all error types",
+          "return_contract": "stdout contains the JSON envelope; stderr is empty for all error conditions"
+        },
+        {
+          "id": "13-REQ-14.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`main.go`",
+          "action": "produces no output of any kind; it only calls `os.Exit(cli.ExitCode(err))` after `cli.Execute()` returns",
+          "return_contract": "all output is produced before `main.go` calls `os.Exit`; the exit code correctly reflects the error type"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "13-REQ-14.E1",
+          "ears_pattern": "unwanted",
+          "system": "error envelope",
+          "action": "`PrintError` uses `apiErr.Code` (the HTTP status, always \u2265 400) and `apiErr.Message`; exit code is 1",
+          "return_contract": "`{\"error\":{\"code\":<HTTP status \u2265 400>,\"message\":\"<server message>\"}}` on stdout; exit code 1",
+          "error_condition": "server returns a 4xx or 5xx error, SDK wraps it as `*apikit.APIError`"
+        },
+        {
+          "id": "13-REQ-14.E2",
+          "ears_pattern": "unwanted",
+          "system": "error envelope",
+          "action": "`PrintError` uses `code: 0` (the client sentinel) and `err.Error()` for the message; exit code is 2",
+          "return_contract": "`{\"error\":{\"code\":0,\"message\":\"<description>\"}}` on stdout; exit code 2",
+          "error_condition": "any client-side error (config missing/malformed, invalid flags, network failure, unresolvable `$HOME`, empty `TokenPrefix`)"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "13-PROP-1",
+      "title": "Error envelope is always valid JSON on stdout",
+      "for_any": "error condition encountered by any command",
+      "invariant": "`PrintError` writes exactly one valid JSON error envelope to stdout before `Execute()` returns; no additional error output appears on stdout or stderr",
+      "validates": [
+        "13-REQ-9.2",
+        "13-REQ-14.2",
+        "13-REQ-1.2"
+      ]
+    },
+    {
+      "id": "13-PROP-2",
+      "title": "Exit code is consistent with error type",
+      "for_any": "error returned by any `RunE` or `PersistentPreRunE`",
+      "invariant": "`ExitCode(err)` returns 0 iff `err` is nil, 1 iff `errors.As(err, &apiErr)` succeeds (identifying a `*apikit.APIError`), and 2 for all other non-nil errors",
+      "validates": [
+        "13-REQ-9.3",
+        "13-REQ-14.1"
+      ]
+    },
+    {
+      "id": "13-PROP-3",
+      "title": "Credential resolution precedence is total and deterministic",
+      "for_any": "triple of (flag value + changed flag, env var value, config value) for any credential field",
+      "invariant": "`ResolveField` returns exactly one value determined by the precedence: flag (when changed) > non-empty env > non-empty config > error (required) or `\"\"` (optional); no two sources can tie",
+      "validates": [
+        "13-REQ-6.1",
+        "13-REQ-6.E1"
+      ]
+    },
+    {
+      "id": "13-PROP-4",
+      "title": "Atomic write never leaves config.toml partially written",
+      "for_any": "call to `SaveConfig` regardless of failure point",
+      "invariant": "after `SaveConfig` returns (success or error), `config.toml` is either the fully-written new content or the original untouched content; no temp files are left in the config directory",
+      "validates": [
+        "13-REQ-8.1",
+        "13-REQ-8.2",
+        "13-REQ-8.3"
+      ]
+    },
+    {
+      "id": "13-PROP-5",
+      "title": "Auth-exempt commands never trigger credential resolution",
+      "for_any": "command annotated with `\"auth\": \"none\"`",
+      "invariant": "`PersistentPreRunE` returns nil without loading config, resolving credentials, or constructing an `apikit.Client`; no credential-related error can be produced for auth-exempt commands",
+      "validates": [
+        "13-REQ-6.E2",
+        "13-REQ-10.1",
+        "13-REQ-12.1"
+      ]
+    },
+    {
+      "id": "13-PROP-6",
+      "title": "help --json output reflects the live Cobra command tree",
+      "for_any": "command registered via `AddCommand` with at least one `Annotations` key",
+      "invariant": "the command appears in `help --json` output without any additional registration step; the JSON matches the actual Cobra tree at the time of invocation",
+      "validates": [
+        "13-REQ-11.3",
+        "13-REQ-11.7"
+      ]
+    },
+    {
+      "id": "13-PROP-7",
+      "title": "Context key safety prevents consuming project collisions",
+      "for_any": "value stored in context by a consuming project under any key",
+      "invariant": "`ClientFromContext` and `UserIDFromContext` return only values stored by `PersistentPreRunE` under the unexported struct key types; no external key \u2014 including string keys \u2014 can collide with `clientContextKey{}` or `userIDContextKey{}`",
+      "validates": [
+        "13-REQ-7.1",
+        "13-REQ-7.E1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "13-PATH-1",
+      "title": "Successful authenticated command end-to-end",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "invokes `akc <command> [flags]` in a shell"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `cli.Execute()`"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "calls `rootCmd.Execute()`, which dispatches to the matched leaf command's `PersistentPreRunE` followed by its `RunE`"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "checks `cmd.Annotations[\"auth\"]`; not `\"none\"`, so proceeds with full initialization"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "validates `TokenPrefix` is non-empty; calls `os.UserHomeDir()` to resolve `$HOME`"
+        },
+        {
+          "actor": "`InitConfig`",
+          "action": "creates config directory (mode 0700) and `config.toml` from hard-coded template (mode 0600) if they do not exist"
+        },
+        {
+          "actor": "`LoadConfig`",
+          "action": "parses `config.toml` via `github.com/BurntSushi/toml` into a `CLIConfig` struct"
+        },
+        {
+          "actor": "`ResolveField`",
+          "action": "resolves `endpoint_url` and `api_key` using flag > env > config precedence (both required); resolves `user_id` with `required: false`"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "constructs `apikit.Client` with `endpoint_url` and `api_key`; stores client under `clientContextKey{}` and `user_id` under `userIDContextKey{}` in context"
+        },
+        {
+          "actor": "leaf command `RunE`",
+          "action": "retrieves client via `ClientFromContext`; calls the corresponding `apikit.Client` method"
+        },
+        {
+          "actor": "Go SDK (`apikit.Client`)",
+          "action": "executes the HTTP request and returns the typed response or `*apikit.APIError`"
+        },
+        {
+          "actor": "leaf command `RunE`",
+          "action": "calls `PrintJSON` with the typed response struct on success"
+        },
+        {
+          "actor": "`PrintJSON`",
+          "action": "writes indented JSON to stdout"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "returns nil to `main.go`"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `os.Exit(0)` \u2014 no output produced"
+        }
+      ]
+    },
+    {
+      "id": "13-PATH-2",
+      "title": "API error from server \u2014 exit code 1 with error envelope",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "invokes `akc <command>` with valid credentials"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "resolves credentials and constructs `apikit.Client` successfully"
+        },
+        {
+          "actor": "leaf command `RunE`",
+          "action": "calls the `apikit.Client` method; SDK returns `*apikit.APIError` (e.g., 401 Unauthorized)"
+        },
+        {
+          "actor": "leaf command `RunE`",
+          "action": "returns the `*apikit.APIError` to Cobra without printing anything"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "receives non-nil error from `rootCmd.Execute()`; calls `PrintError(err)`"
+        },
+        {
+          "actor": "`PrintError`",
+          "action": "detects `*apikit.APIError` via `errors.As`; writes `{\"error\":{\"code\":401,\"message\":\"<server message>\"}}` to stdout; writes nothing to stderr"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "returns the error to `main.go`"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `cli.ExitCode(err)` \u2192 1; calls `os.Exit(1)`"
+        }
+      ]
+    },
+    {
+      "id": "13-PATH-3",
+      "title": "Missing required credential \u2014 exit code 2 with error envelope",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "invokes `akc <command>` with no `endpoint_url` configured anywhere"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "checks auth annotation \u2014 not `\"none\"`, proceeds"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "validates `TokenPrefix`, resolves `$HOME`, initializes and loads config"
+        },
+        {
+          "actor": "`ResolveField`",
+          "action": "finds no value for `endpoint_url` from flag, env (`ENDPOINT_URL`), or config; `required: true`; returns canonical error `\"endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file\"`"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "returns the error to Cobra"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "receives non-nil error; calls `PrintError(err)`"
+        },
+        {
+          "actor": "`PrintError`",
+          "action": "no `*apikit.APIError`; writes `{\"error\":{\"code\":0,\"message\":\"endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file\"}}` to stdout; nothing to stderr"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `cli.ExitCode(err)` \u2192 2; calls `os.Exit(2)`"
+        }
+      ]
+    },
+    {
+      "id": "13-PATH-4",
+      "title": "akc version with reachable server",
+      "steps": [
+        {
+          "actor": "User",
+          "action": "invokes `akc version`"
+        },
+        {
+          "actor": "`PersistentPreRunE`",
+          "action": "reads `cmd.Annotations[\"auth\"]` as `\"none\"`; returns nil immediately \u2014 no config init, no credential resolution, no client creation"
+        },
+        {
+          "actor": "`version` command `RunE`",
+          "action": "calls `ResolveEndpointURL(cmd)` to optionally resolve `endpoint_url` using flag > env > config precedence with `required: false`"
+        },
+        {
+          "actor": "`ResolveEndpointURL`",
+          "action": "returns a non-empty endpoint URL from the resolved source"
+        },
+        {
+          "actor": "`version` command `RunE`",
+          "action": "constructs a minimal `apikit.Client` for the URL; calls `client.Version(ctx)` with a bounded context/timeout"
+        },
+        {
+          "actor": "Go SDK (`apikit.Client`)",
+          "action": "returns `*apikit.VersionResponse` with `version`, `build_time`, `commit`, `mount_point` fields"
+        },
+        {
+          "actor": "`version` command `RunE`",
+          "action": "builds `VersionOutput{CLIVersion: Version, Build: Build, Prefix: TokenPrefix, ServerVersion: &sdkResp}`; calls `PrintJSON`"
+        },
+        {
+          "actor": "`PrintJSON`",
+          "action": "writes full indented JSON including `server_version` sub-object to stdout"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "returns nil to `main.go`"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `os.Exit(0)`"
+        }
+      ]
+    },
+    {
+      "id": "13-PATH-5",
+      "title": "akc help --json \u2014 full command tree for agent discovery",
+      "steps": [
+        {
+          "actor": "User / Agent",
+          "action": "invokes `akc help --json`"
+        },
+        {
+          "actor": "custom `help` subcommand",
+          "action": "detects `--json` persistent flag is set"
+        },
+        {
+          "actor": "`help --json` walker",
+          "action": "traverses the full Cobra command tree recursively"
+        },
+        {
+          "actor": "`help --json` walker",
+          "action": "collects only leaf commands: those with `RunE` set and at least one key in `Annotations`; filters out group commands without `RunE` and Cobra built-ins without annotations"
+        },
+        {
+          "actor": "`help --json` walker",
+          "action": "for each leaf command, extracts name (full space-separated path), description, method, path, args, flags, and auth from `Annotations`"
+        },
+        {
+          "actor": "custom `help` subcommand",
+          "action": "builds the root JSON object with `name`, `version`, and `commands` array; calls `PrintJSON`"
+        },
+        {
+          "actor": "`PrintJSON`",
+          "action": "writes the full command tree JSON to stdout"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "returns nil to `main.go`"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `os.Exit(0)`"
+        }
+      ]
+    },
+    {
+      "id": "13-PATH-6",
+      "title": "Atomic config write by a login/key-refresh command",
+      "steps": [
+        {
+          "actor": "Spec 14/15 command `RunE`",
+          "action": "obtains new credentials from the API via the `apikit.Client`"
+        },
+        {
+          "actor": "Spec 14/15 command `RunE`",
+          "action": "updates the `CLIConfig` struct fields with the new values"
+        },
+        {
+          "actor": "`SaveConfig`",
+          "action": "marshals `CLIConfig` to TOML using `toml.NewEncoder(w).Encode(cfg)`"
+        },
+        {
+          "actor": "`SaveConfig`",
+          "action": "creates a temp file in the config directory via `os.CreateTemp`; immediately registers `defer os.Remove(tmpFile.Name())`"
+        },
+        {
+          "actor": "`SaveConfig`",
+          "action": "writes TOML bytes to temp file; sets permissions to 0600; closes the file"
+        },
+        {
+          "actor": "`SaveConfig`",
+          "action": "calls `os.Rename(tmpFile.Name(), configPath)` atomically"
+        },
+        {
+          "actor": "`SaveConfig`",
+          "action": "returns nil on success; deferred `os.Remove` targets the now-gone temp path (safe no-op)"
+        },
+        {
+          "actor": "Spec 14/15 command `RunE`",
+          "action": "calls `PrintJSON` with the success result"
+        },
+        {
+          "actor": "`Execute()` wrapper",
+          "action": "returns nil to `main.go`"
+        },
+        {
+          "actor": "`cmd/akc/main.go`",
+          "action": "calls `os.Exit(0)`"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "13-ERR-1",
+      "condition": "`os.UserHomeDir()` returns an error or empty string",
+      "behavior": "`PersistentPreRunE` returns exit-2 error with message `\"cannot determine home directory: $HOME is not set or unresolvable\"`; `PrintError` writes the error envelope `{\"error\":{\"code\":0,\"message\":\"cannot determine home directory: $HOME is not set or unresolvable\"}}` to stdout; exit code 2",
+      "requirement_id": "13-REQ-4.E1"
+    },
+    {
+      "id": "13-ERR-2",
+      "condition": "`TokenPrefix` is empty at runtime",
+      "behavior": "`PersistentPreRunE` returns exit-2 error with message `\"TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value\"`; `PrintError` writes the error envelope with `code: 0` to stdout; exit code 2; check occurs after auth annotation check but before `$HOME` check",
+      "requirement_id": "13-REQ-3.2"
+    },
+    {
+      "id": "13-ERR-3",
+      "condition": "config directory is unwritable (`os.MkdirAll` or file creation fails)",
+      "behavior": "`InitConfig` returns an error; `PersistentPreRunE` propagates it; `PrintError` writes error envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-4.E2"
+    },
+    {
+      "id": "13-ERR-4",
+      "condition": "`config.toml` exists but contains any TOML parse error",
+      "behavior": "`LoadConfig` returns `(nil, error)` with message `\"config file is unparseable: <toml parse error>\"`; no partial `CLIConfig` is used; `PersistentPreRunE` propagates error; `PrintError` writes envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-5.2"
+    },
+    {
+      "id": "13-ERR-5",
+      "condition": "`endpoint_url` is missing from all sources (flag, `ENDPOINT_URL` env, config) for a non-auth-exempt command",
+      "behavior": "`ResolveField` returns canonical error `\"endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file\"`; `PersistentPreRunE` propagates it; `PrintError` writes envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-6.1"
+    },
+    {
+      "id": "13-ERR-6",
+      "condition": "`api_key` is missing from all sources (flag, `API_KEY` env, config) for a non-auth-exempt command",
+      "behavior": "`ResolveField` returns canonical error `\"api_key is not set: provide via --api-key, $API_KEY, or config file\"`; `PersistentPreRunE` propagates it; `PrintError` writes envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-6.1"
+    },
+    {
+      "id": "13-ERR-7",
+      "condition": "server returns a 4xx or 5xx HTTP response; SDK wraps it as `*apikit.APIError`",
+      "behavior": "leaf command `RunE` returns the `*apikit.APIError`; `Execute()` calls `PrintError`; `PrintError` writes `{\"error\":{\"code\":<HTTP status \u2265 400>,\"message\":\"<server message>\"}}` to stdout; exit code 1; nothing on stderr",
+      "requirement_id": "13-REQ-14.E1"
+    },
+    {
+      "id": "13-ERR-8",
+      "condition": "`os.CreateTemp` fails during `SaveConfig` (e.g., directory unwritable)",
+      "behavior": "`SaveConfig` returns the error immediately; no temp file exists; no deferred remove registered; `PersistentPreRunE` or calling command propagates error; `PrintError` writes envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-8.2"
+    },
+    {
+      "id": "13-ERR-9",
+      "condition": "`os.Rename` fails after temp file is written in `SaveConfig`",
+      "behavior": "deferred `os.Remove` removes the temp file; original `config.toml` is untouched; `os.Rename` error is returned to caller; `PrintError` writes envelope with `code: 0` to stdout; exit code 2",
+      "requirement_id": "13-REQ-8.3"
+    },
+    {
+      "id": "13-ERR-10",
+      "condition": "server is configured but unreachable during `akc version`",
+      "behavior": "`server_version` is omitted from the JSON output; a warning `\"warning: could not reach server: <reason>\"` is printed to stderr; exit code 0",
+      "requirement_id": "13-REQ-10.5"
+    },
+    {
+      "id": "13-ERR-11",
+      "condition": "`client.Version(ctx)` hangs beyond the context deadline during `akc version`",
+      "behavior": "the context deadline fires; `server_version` is omitted from JSON output; a warning is printed to stderr; exit code 0; the call does not block indefinitely",
+      "requirement_id": "13-REQ-10.E1"
+    },
+    {
+      "id": "13-ERR-12",
+      "condition": "an unrecognized or invalid flag is passed to any command",
+      "behavior": "Cobra returns an error to `Execute()`; `SilenceErrors` and `SilenceUsage` suppress Cobra's own output; `PrintError` writes envelope with `code: 0` to stdout; exit code 2; nothing on stderr",
+      "requirement_id": "13-REQ-2.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/spf13/cobra",
+      "version": "latest (as per go.mod)",
+      "symbols": [
+        {
+          "name": "Command",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "type Command struct { Use string; Short string; Long string; RunE func(cmd *Command, args []string) error; PersistentPreRunE func(cmd *Command, args []string) error; PreRunE func(cmd *Command, args []string) error; Annotations map[string]string; SilenceErrors bool; SilenceUsage bool; ... }",
+          "notes": "Core Cobra command type. Annotations map is used for method/path/auth/composite metadata. PersistentPreRunE on root is called by Cobra with the leaf command as the cmd argument."
+        },
+        {
+          "name": "Command.AddCommand",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func (c *Command) AddCommand(cmds ...*Command)",
+          "notes": "Registers child commands. Used by consuming projects to embed the akc command tree."
+        },
+        {
+          "name": "Command.Execute",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func (c *Command) Execute() error",
+          "notes": "Dispatches to the matched subcommand. Called by Execute() wrapper in internal/cli."
+        },
+        {
+          "name": "Command.SetHelpFunc",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "func (c *Command) SetHelpFunc(f func(*Command, []string))",
+          "notes": "Overrides the default help function. Used to implement --json output for per-command help."
+        },
+        {
+          "name": "FlagSet.Changed",
+          "import_path": "github.com/spf13/pflag",
+          "signature": "func (f *FlagSet) Changed(name string) bool",
+          "notes": "Returns true if the flag was explicitly set by the user. Used in ResolveField to detect flag-level override."
+        }
+      ]
+    },
+    {
+      "package": "github.com/BurntSushi/toml",
+      "version": "latest (as per go.mod)",
+      "symbols": [
+        {
+          "name": "Decode",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func Decode(data string, v interface{}) (MetaData, error)",
+          "notes": "Decodes a TOML string into a Go value. Used by LoadConfig to parse config.toml content."
+        },
+        {
+          "name": "NewDecoder",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func NewDecoder(r io.Reader) *Decoder",
+          "notes": "Creates a TOML decoder from a reader. Alternative to Decode for streaming input."
+        },
+        {
+          "name": "NewEncoder",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func NewEncoder(w io.Writer) *Encoder",
+          "notes": "Creates a TOML encoder that writes to a writer. Used by SaveConfig via toml.NewEncoder(w).Encode(cfg). Note: there is no top-level toml.Marshal function in this package."
+        }
+      ]
+    }
+  ]
+}

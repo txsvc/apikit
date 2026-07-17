@@ -1,0 +1,2328 @@
+{
+  "$schema": null,
+  "spec_id": "12",
+  "spec_name": "go_sdk",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./... -count=1 -v -run 'TestClient|TestNewClient|TestWith|TestAPI|TestResponse|TestErr|TestList|TestGet|TestUpdate|TestCreate|TestRevoke|TestPromote|TestDemote|TestBlock|TestUnblock|TestAdd|TestRemove|TestHealth|TestVersion|TestOAuth|TestExchange|TestSmoke'",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "03",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Request/response schemas, endpoint paths, and expected HTTP success status codes derive from the OpenAPI spec. The SDK's typed structs match the schemas defined in components/schemas. Endpoint method signatures (HTTP method, path, request body, response shape, success status) are determined by the OpenAPI paths.",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Test Suite: Client Construction, Options, and Types",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for NewClient defaults and baseURL normalization",
+          "details": [
+            "In sdk_test.go, write TestNewClientDefaults verifying non-nil *Client, httpClient==http.DefaultClient, mountPoint=='/api/v1', apiKey=='', requestID==''",
+            "Write TestNewClientBaseURLNormalization verifying trailing slash is stripped from baseURL",
+            "Write TestNewClientEmptyBaseURL verifying non-nil *Client returned without panic, and subsequent Healthz call returns plain error (not *APIError)"
+          ],
+          "test_spec_refs": [
+            "TS-12-1",
+            "TS-12-2",
+            "TS-12-E1",
+            "TS-12-E2"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.1",
+            "12-REQ-1.2",
+            "12-REQ-1.E1",
+            "12-REQ-1.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for ClientOption functions",
+          "details": [
+            "Write TestWithAPIKey verifying client.apiKey is set to the provided key string",
+            "Write TestWithHTTPClient verifying client.httpClient pointer equals the provided *http.Client",
+            "Write TestWithRequestID verifying client.requestID is set to the provided id string"
+          ],
+          "test_spec_refs": [
+            "TS-12-4",
+            "TS-12-5",
+            "TS-12-6"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.4",
+            "12-REQ-1.5",
+            "12-REQ-1.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for WithMountPoint normalization",
+          "details": [
+            "Write TestWithMountPointLeadingSlash: 'api/v1' → '/api/v1'",
+            "Write TestWithMountPointTrailingSlash: '/api/v1/' → '/api/v1'",
+            "Write TestWithMountPointEmpty: '' → '/'",
+            "Also cover both-slash case '/api/v1/' and double-leading-slash as property test cases (TS-12-P4 reference)"
+          ],
+          "test_spec_refs": [
+            "TS-12-7",
+            "TS-12-8",
+            "TS-12-9"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.7",
+            "12-REQ-1.8",
+            "12-REQ-1.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write unit tests for canonical shared types in sdk_types.go",
+          "details": [
+            "Write TestTypeDefinitionsUnique: go build ./... succeeds; use static analysis approach in test comments",
+            "Write TestJSONTagsSnakeCase: marshal User and verify all expected snake_case keys are present",
+            "Write TestNullableTimestampDeserialization: unmarshal APIKeyMeta with null expires_at/revoked_at → nil *time.Time",
+            "Write TestUpdateUserRequestAlwaysIncludesFullName: marshal UpdateUserRequest{FullName:''} and assert 'full_name' key present",
+            "Write TestOmitemptyOptionalFields: verify AuthCallbackRequest without Expires omits 'expires'; CreateOrgRequest without URL omits 'url'; UpdateOrgRequest{} omits both",
+            "Write TestListOrgMembersReturnsUserSlice: integration test with httptest server returning User JSON array"
+          ],
+          "test_spec_refs": [
+            "TS-12-10",
+            "TS-12-11",
+            "TS-12-12",
+            "TS-12-13",
+            "TS-12-14",
+            "TS-12-15"
+          ],
+          "requirement_refs": [
+            "12-REQ-2.1",
+            "12-REQ-2.2",
+            "12-REQ-2.3",
+            "12-REQ-2.4",
+            "12-REQ-2.5",
+            "12-REQ-2.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write unit tests for APIError and ErrNotModified",
+          "details": [
+            "Write TestAPIErrorFormat: &APIError{Code:404,Message:'User not found'}.Error() == 'API error 404: User not found'",
+            "Write TestAPIErrorFields: Code and Message are accessible and correct",
+            "Write TestErrNotModifiedSentinel: errors.Is(ErrNotModified, ErrNotModified) == true; ErrNotModified != nil",
+            "Write TestErrorsAsIncompatibleType: errors.As with *os.PathError returns false; errors.As with *APIError returns true"
+          ],
+          "test_spec_refs": [
+            "TS-12-40",
+            "TS-12-41",
+            "TS-12-43",
+            "TS-12-E12"
+          ],
+          "requirement_refs": [
+            "12-REQ-6.1",
+            "12-REQ-6.2",
+            "12-REQ-6.4",
+            "12-REQ-6.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write unit tests for concurrent Client safety and options struct compilation",
+          "details": [
+            "Write TestClientConcurrentSafety: 50 goroutines calling client.Healthz concurrently via httptest server; run with -race flag",
+            "Write TestListUsersOptionsCompiles: instantiate &ListUsersOptions{IncludeBlocked: true} and assert field accessible",
+            "Write TestListOrgsOptionsCompiles: instantiate &ListOrgsOptions{IncludeBlocked: true} and assert field accessible",
+            "Write TestWithHTTPClientCustomRedirect: inject http.Client with CheckRedirect returning ErrUseLastResponse; assert client.httpClient == customHTTP",
+            "Write TestPackagePlacement: all sdk*.go files declare package apikit (compilation check)",
+            "Write TestGoVersionRequirement: verify Response[T] generic syntax compiles (Go 1.18+ check via go build)"
+          ],
+          "test_spec_refs": [
+            "TS-12-3",
+            "TS-12-86",
+            "TS-12-87",
+            "TS-12-91",
+            "TS-12-92",
+            "TS-12-93"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.3",
+            "12-REQ-12.3",
+            "12-REQ-12.4",
+            "12-REQ-14.2",
+            "12-REQ-15.1",
+            "12-REQ-15.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All tests in this group compile: go build ./...",
+          "All tests pass (may be skipped if implementation stubs not yet present): go test ./... -count=1 -run 'TestNewClient|TestWith|TestAPIError|TestErrNot|TestType|TestJSON|TestNullable|TestUpdate|TestOmit|TestListOrg|TestClient|TestList.*Options|TestPackage|TestGo'",
+          "No linter warnings: go vet ./...",
+          "Test file sdk_test.go exists in the root apikit package",
+          "12-REQ-1 acceptance criteria covered by TS-12-1 through TS-12-9 and TS-12-E1/E2",
+          "12-REQ-2 acceptance criteria covered by TS-12-10 through TS-12-15",
+          "12-REQ-6 acceptance criteria covered by TS-12-40/41/43 and TS-12-E12"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Test Suite: Request Execution Pipeline and Header Behavior",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for do method headers (Accept, Content-Type, Authorization)",
+          "details": [
+            "Write TestAcceptHeaderAlwaysSet: httptest server captures Accept header; call Healthz; assert Accept=='application/json'",
+            "Write TestContentTypeSetOnBodyRequests: httptest server captures Content-Type; call UpdateUser; assert Content-Type=='application/json'",
+            "Write TestAuthorizationHeaderWithAPIKey: httptest server captures Authorization; NewClient with WithAPIKey('my-token'); assert 'Bearer my-token'",
+            "Write TestAuthorizationHeaderAbsentWithoutAPIKey: no WithAPIKey; assert Authorization header is empty string"
+          ],
+          "test_spec_refs": [
+            "TS-12-16",
+            "TS-12-17",
+            "TS-12-18",
+            "TS-12-20"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.1",
+            "12-REQ-3.2",
+            "12-REQ-3.3",
+            "12-REQ-3.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write unit tests for do method headers (X-Request-ID) and context propagation",
+          "details": [
+            "Write TestRequestIDHeaderSet: WithRequestID('req-xyz'); httptest server captures X-Request-ID; assert 'req-xyz'",
+            "Write TestRequestIDHeaderAbsent: no WithRequestID; assert X-Request-ID header is empty string",
+            "Write TestContextCancellation: httptest server sleeps 100ms; cancel ctx immediately; assert errors.Is(err, context.Canceled)"
+          ],
+          "test_spec_refs": [
+            "TS-12-19",
+            "TS-12-21",
+            "TS-12-22"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.4",
+            "12-REQ-3.6",
+            "12-REQ-3.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write unit tests for do method response status handling (200, 204, 304)",
+          "details": [
+            "Write TestDoDecodes200Response: httptest server returns 200 with User JSON; GetUser returns non-nil *Response[User] with Data.ID populated",
+            "Write TestDoHandles204Response: httptest server returns 204; RevokeToken returns nil error",
+            "Write TestDoHandles304Response: httptest server returns 304; GetUser with WithIfNoneMatch returns nil resp and ErrNotModified",
+            "Write TestPerRequestOptionApplied: GetUser with WithIfNoneMatch('\"v1\"'); captured request has If-None-Match == '\"v1\"'"
+          ],
+          "test_spec_refs": [
+            "TS-12-23",
+            "TS-12-24",
+            "TS-12-25",
+            "TS-12-28"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.8",
+            "12-REQ-3.9",
+            "12-REQ-3.10",
+            "12-REQ-3.13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write unit tests for do method error handling (4xx/5xx JSON and non-JSON bodies)",
+          "details": [
+            "Write TestDoDecodes4xxJSONEnvelope: server returns 404 with {\"error\":{\"code\":404,\"message\":\"User not found\"}}; errors.As extracts *APIError; Code==404, Message=='User not found'; err.Error()=='API error 404: User not found'",
+            "Write TestDoHandlesNonJSONErrorBody: server returns 502 with HTML body; *APIError with Code==502, Message from status text",
+            "Write TestDoHandles5xxJSONEnvelope: server returns 500 with JSON error envelope; verify *APIError returned"
+          ],
+          "test_spec_refs": [
+            "TS-12-26",
+            "TS-12-27",
+            "TS-12-42"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.11",
+            "12-REQ-3.12",
+            "12-REQ-6.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write unit tests for do method plain error scenarios (network, marshal, JSON decode)",
+          "details": [
+            "Write TestDoReturnsPlainErrorOnNetworkFailure: close httptest server before request; err != nil; errors.As == false; errors.Unwrap != nil",
+            "Write TestDoReturnsPlainErrorOnEmpty200Body: server returns 200 with empty body; err != nil; errors.Unwrap != nil; not *APIError",
+            "Write TestDoReturnsPlainErrorOnNonJSON200Body: server returns 200 with 'ok' plain text; err != nil; not *APIError",
+            "Write TestContextCancelledWrapsUnderlyingError: cancelled ctx; errors.Is(err, context.Canceled); errors.Unwrap != nil; not *APIError",
+            "Write TestEmptyBaseURLReturnsPlainError: NewClient(''); ListOrgs returns err != nil; not *APIError; no panic"
+          ],
+          "test_spec_refs": [
+            "TS-12-44",
+            "TS-12-E3",
+            "TS-12-E4",
+            "TS-12-E5",
+            "TS-12-E6"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.E1",
+            "12-REQ-3.E3",
+            "12-REQ-3.E4",
+            "12-REQ-6.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.6",
+          "title": "Write unit tests for URL construction and mount point routing",
+          "details": [
+            "Write TestAPIEndpointURLConstruction: GetUser captures path == '/api/v1/user'",
+            "Write TestHealthProbeURLBypassesMountPoint: Healthz/Readyz/Version capture paths '/healthz', '/readyz', '/version'",
+            "Write TestAuthEndpointUseMountPoint: GetProviders captures path == '/api/v1/auth/providers'",
+            "Write TestCustomMountPointUsed: WithMountPoint('/v2'); GetUser path == '/v2/user'",
+            "Write TestPathParameterVerbatim: RefreshKey('key-uuid-123') captures path == '/api/v1/user/keys/key-uuid-123/refresh'",
+            "Write TestNoDoubleSlashesInURL: NewClient(server.URL+'/'); GetUser path does not contain '//' before 'api'"
+          ],
+          "test_spec_refs": [
+            "TS-12-29",
+            "TS-12-30",
+            "TS-12-31",
+            "TS-12-32",
+            "TS-12-33",
+            "TS-12-E8"
+          ],
+          "requirement_refs": [
+            "12-REQ-4.1",
+            "12-REQ-4.2",
+            "12-REQ-4.3",
+            "12-REQ-4.4",
+            "12-REQ-4.5",
+            "12-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All tests in this group compile: go build ./...",
+          "Tests pass (stubs acceptable): go test ./... -count=1 -run 'TestAccept|TestContentType|TestAuthorization|TestRequestID|TestContext|TestDo|TestPerRequest|TestAPIEndpoint|TestHealth|TestAuth|TestCustomMount|TestPath|TestNoDouble|TestEmptyBase'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-3 acceptance criteria covered by TS-12-16 through TS-12-28",
+          "12-REQ-4 acceptance criteria covered by TS-12-29 through TS-12-33",
+          "12-REQ-6.5 plain error wrapping covered by TS-12-44 and TS-12-E3 through TS-12-E6"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Test Suite: ETag/Conditional GET and Query Parameters",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write unit tests for WithIfNoneMatch and ETag response capture",
+          "details": [
+            "Write TestWithIfNoneMatchAddsHeader: GetUser with WithIfNoneMatch('\"abc123\"'); captured If-None-Match == '\"abc123\"'",
+            "Write TestGetUserReturnsETagOn200: server returns 200 with ETag: '\"v42\"'; resp.ETag() == '\"v42\"'; StatusCode == 200",
+            "Write TestResponseETagAbsent: server returns 200 without ETag header; resp.ETag() == ''",
+            "Write TestResponseStatusCodeReflectsActual: server returns 201; GetUserByID resp.StatusCode == 201"
+          ],
+          "test_spec_refs": [
+            "TS-12-34",
+            "TS-12-36",
+            "TS-12-37",
+            "TS-12-39"
+          ],
+          "requirement_refs": [
+            "12-REQ-5.1",
+            "12-REQ-5.3",
+            "12-REQ-5.4",
+            "12-REQ-5.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write unit tests for 304 handling and ETag-capable method signatures",
+          "details": [
+            "Write TestGetUserReturns304ErrNotModified: server returns 304; resp == nil; errors.Is(err, ErrNotModified)",
+            "Write TestETagMethodSignatures: compile-time check that GetUser/GetUserByID/GetToken/GetOrg accept ...RequestOption; note in test comment that other methods do not (verified by go build)",
+            "Write TestResponseNilOn304: GetOrg with WithIfNoneMatch and server returning 304; resp == nil; ErrNotModified"
+          ],
+          "test_spec_refs": [
+            "TS-12-35",
+            "TS-12-38",
+            "TS-12-E9"
+          ],
+          "requirement_refs": [
+            "12-REQ-5.2",
+            "12-REQ-5.5",
+            "12-REQ-5.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write unit tests for ListUsers query parameter construction",
+          "details": [
+            "Write TestListUsersWithIncludeBlocked: ListUsers with IncludeBlocked:true; captured RawQuery == 'include_blocked=true'",
+            "Write TestListUsersNilOptions: ListUsers with nil; captured RawQuery does not contain 'include_blocked'",
+            "Write TestListUsersFalseOptions: ListUsers with IncludeBlocked:false; captured RawQuery does not contain 'include_blocked'"
+          ],
+          "test_spec_refs": [
+            "TS-12-55",
+            "TS-12-56",
+            "TS-12-84"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.1",
+            "12-REQ-8.2",
+            "12-REQ-12.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write unit tests for ListOrgs query parameter construction",
+          "details": [
+            "Write TestListOrgsWithIncludeBlocked: ListOrgs with IncludeBlocked:true; captured RawQuery == 'include_blocked=true'",
+            "Write TestListOrgsNilOptions: ListOrgs with nil; captured RawQuery does not contain 'include_blocked'",
+            "Write TestListOrgsFalseOptions: ListOrgs with IncludeBlocked:false; captured RawQuery does not contain 'include_blocked'"
+          ],
+          "test_spec_refs": [
+            "TS-12-69",
+            "TS-12-70",
+            "TS-12-85"
+          ],
+          "requirement_refs": [
+            "12-REQ-9.2",
+            "12-REQ-9.3",
+            "12-REQ-12.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write unit tests for list endpoint bare JSON array decoding",
+          "details": [
+            "Write TestBareArrayDecoding: server returns [{key_id:k1,...},{key_id:k2,...}]; ListKeys returns 2-element slice",
+            "Write TestEmptyArrayReturnsNonNilSlice: server returns []; ListKeys returns non-nil empty slice, len==0",
+            "Write TestEmptyArrayListUsers: server returns []; ListUsers returns non-nil empty slice",
+            "Write TestWrappedObjectFails: server returns {\"keys\":[...]}: ListKeys returns plain error, not *APIError"
+          ],
+          "test_spec_refs": [
+            "TS-12-88",
+            "TS-12-89",
+            "TS-12-E13",
+            "TS-12-E15",
+            "TS-12-E19"
+          ],
+          "requirement_refs": [
+            "12-REQ-13.1",
+            "12-REQ-13.2",
+            "12-REQ-7.E1",
+            "12-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All tests compile: go build ./...",
+          "Tests pass: go test ./... -count=1 -run 'TestWith.*Match|TestGetUser.*ETag|TestGetUser.*304|TestResponse.*ETag|TestResponse.*Status|TestETag|TestListUsers.*Blocked|TestListOrgs.*Blocked|TestBareArray|TestEmptyArray|TestWrapped'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-5 acceptance criteria covered by TS-12-34 through TS-12-39 and TS-12-E9",
+          "12-REQ-12 acceptance criteria covered by TS-12-84/85",
+          "12-REQ-13 acceptance criteria covered by TS-12-88/89 and TS-12-E13/E15/E19"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Test Suite: Authenticated User and Admin User Endpoint Methods",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write integration tests for authenticated user endpoints (GetUser, UpdateUser, ListKeys, RefreshKey, RevokeKey)",
+          "details": [
+            "Write TestGetUserHappyPath: httptest server at GET /api/v1/user returns User JSON; verify *Response[User].Data populated",
+            "Write TestUpdateUser: PATCH /api/v1/user; capture body; assert full_name present; returns *User",
+            "Write TestListKeys: GET /api/v1/user/keys returns JSON array; returns []*APIKeyMeta",
+            "Write TestRefreshKey: POST /api/v1/user/keys/key-1/refresh; returns *APIKeyFull with Key and KeyID",
+            "Write TestRevokeKey: DELETE /api/v1/user/keys/key-1; returns *RevokeKeyResponse with KeyID and RevokedAt"
+          ],
+          "test_spec_refs": [
+            "TS-12-45",
+            "TS-12-46",
+            "TS-12-47",
+            "TS-12-48",
+            "TS-12-49"
+          ],
+          "requirement_refs": [
+            "12-REQ-7.1",
+            "12-REQ-7.2",
+            "12-REQ-7.3",
+            "12-REQ-7.4",
+            "12-REQ-7.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write integration tests for authenticated user endpoints (ListTokens, CreateToken, GetToken, RevokeToken, ListUserOrgs)",
+          "details": [
+            "Write TestListTokens: GET /api/v1/user/tokens returns []*PAT",
+            "Write TestCreateToken: POST /api/v1/user/tokens returns 201 *PATFull with Token and TokenID",
+            "Write TestGetToken: GET /api/v1/user/tokens/t1 returns *Response[PAT] with Data.TokenID=='t1'",
+            "Write TestRevokeToken204: DELETE /api/v1/user/tokens/t1 returns 204; nil error",
+            "Write TestListUserOrgs: GET /api/v1/user/orgs returns []*Organization",
+            "Write TestRevokeTokenErrorStatus: server returns 403; err != nil; errors.As(*APIError) true; Code==403"
+          ],
+          "test_spec_refs": [
+            "TS-12-50",
+            "TS-12-51",
+            "TS-12-52",
+            "TS-12-53",
+            "TS-12-54",
+            "TS-12-E14"
+          ],
+          "requirement_refs": [
+            "12-REQ-7.6",
+            "12-REQ-7.7",
+            "12-REQ-7.8",
+            "12-REQ-7.9",
+            "12-REQ-7.10",
+            "12-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write integration tests for admin user list and single-user endpoints",
+          "details": [
+            "Write TestGetUserByID: GET /api/v1/users/user-1 returns *Response[User] with Data.ID=='user-1'",
+            "Write TestCreateUser: POST /api/v1/users returns 201 *User with Username=='bob'",
+            "Write TestUpdateUserByID: PATCH /api/v1/users/user-1 with full_name body returns *User",
+            "Write TestListUsersEmptyArray: server returns []; non-nil empty []*User slice"
+          ],
+          "test_spec_refs": [
+            "TS-12-57",
+            "TS-12-58",
+            "TS-12-59",
+            "TS-12-E15"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.3",
+            "12-REQ-8.4",
+            "12-REQ-8.5",
+            "12-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write integration tests for admin user action endpoints (promote, demote, block, unblock)",
+          "details": [
+            "Write TestPromoteUser: POST /api/v1/users/user-1/promote; no body; returns *User",
+            "Write TestDemoteUser: POST /api/v1/users/user-1/demote; returns *User",
+            "Write TestBlockUser: POST /api/v1/users/user-1/block; returns *User with Status=='blocked'",
+            "Write TestUnblockUser: POST /api/v1/users/user-1/unblock; returns *User with Status=='active'"
+          ],
+          "test_spec_refs": [
+            "TS-12-60",
+            "TS-12-61",
+            "TS-12-62",
+            "TS-12-63"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.6",
+            "12-REQ-8.7",
+            "12-REQ-8.8",
+            "12-REQ-8.9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Write integration tests for admin user key and token management endpoints",
+          "details": [
+            "Write TestListUserKeys: GET /api/v1/users/user-1/keys returns []*APIKeyMeta",
+            "Write TestRevokeUserKey: DELETE /api/v1/users/user-1/keys/key-1 returns 204; nil error",
+            "Write TestListUserTokens: GET /api/v1/users/user-1/tokens returns []*PAT",
+            "Write TestRevokeUserToken: DELETE /api/v1/users/user-1/tokens/t1 returns 204; nil error"
+          ],
+          "test_spec_refs": [
+            "TS-12-64",
+            "TS-12-65",
+            "TS-12-66",
+            "TS-12-67"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.10",
+            "12-REQ-8.11",
+            "12-REQ-8.12",
+            "12-REQ-8.13"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All tests compile: go build ./...",
+          "Integration tests pass: go test ./... -count=1 -run 'TestGetUser|TestUpdateUser|TestListKeys|TestRefreshKey|TestRevokeKey|TestListTokens|TestCreateToken|TestGetToken|TestRevokeToken|TestListUserOrgs|TestGetUserByID|TestCreateUser|TestUpdateUserByID|TestListUsersEmpty|TestPromoteUser|TestDemoteUser|TestBlockUser|TestUnblockUser|TestListUserKeys|TestRevokeUserKey|TestListUserTokens|TestRevokeUserToken'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-7 acceptance criteria fully covered by TS-12-45 through TS-12-54 and TS-12-E14",
+          "12-REQ-8 acceptance criteria fully covered by TS-12-55 through TS-12-67 and TS-12-E15"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Test Suite: Admin Org, Auth, Health, and Error Edge Case Tests",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write integration tests for admin organization CRUD and action endpoints",
+          "details": [
+            "Write TestCreateOrg: POST /api/v1/orgs returns 201 *Organization with ID and Slug",
+            "Write TestGetOrg: GET /api/v1/orgs/org-1 returns *Response[Organization] with Data.ID=='org-1'",
+            "Write TestUpdateOrg: PATCH /api/v1/orgs/org-1 with name; returns *Organization with updated Name",
+            "Write TestDeleteOrg: DELETE /api/v1/orgs/org-1 returns 204; nil error",
+            "Write TestBlockOrg: POST /api/v1/orgs/org-1/block; returns *Organization with Status=='blocked'",
+            "Write TestUnblockOrg: POST /api/v1/orgs/org-1/unblock; returns *Organization with Status=='active'"
+          ],
+          "test_spec_refs": [
+            "TS-12-68",
+            "TS-12-71",
+            "TS-12-72",
+            "TS-12-73",
+            "TS-12-74",
+            "TS-12-75"
+          ],
+          "requirement_refs": [
+            "12-REQ-9.1",
+            "12-REQ-9.4",
+            "12-REQ-9.5",
+            "12-REQ-9.6",
+            "12-REQ-9.7",
+            "12-REQ-9.8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write integration tests for admin organization member management endpoints",
+          "details": [
+            "Write TestListOrgMembers: GET /api/v1/orgs/org-1/members returns []*User with member.ID=='u1'",
+            "Write TestAddOrgMember: PUT /api/v1/orgs/org-1/members/user-1; no body; captured method=='PUT'; nil error on 204",
+            "Write TestRemoveOrgMember: DELETE /api/v1/orgs/org-1/members/user-1; nil error on 204",
+            "Write TestAddOrgMemberNonURLSafeID: document non-URL-safe path behavior; assert plain error or transport error; not *APIError"
+          ],
+          "test_spec_refs": [
+            "TS-12-76",
+            "TS-12-77",
+            "TS-12-78",
+            "TS-12-E16"
+          ],
+          "requirement_refs": [
+            "12-REQ-9.9",
+            "12-REQ-9.10",
+            "12-REQ-9.11",
+            "12-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write integration tests for auth and health/meta endpoints",
+          "details": [
+            "Write TestGetProviders: GET /api/v1/auth/providers returns []*OAuthProvider with Name=='github'",
+            "Write TestExchangeOAuthCode: POST /api/v1/auth/callback returns *AuthCallbackResponse with User.ID and APIKey.Key",
+            "Write TestHealthz: GET /healthz returns *HealthResponse with Status=='ok'; path does not include mount point",
+            "Write TestReadyz: GET /readyz returns *HealthResponse with Status=='ok'",
+            "Write TestVersion: GET /version returns *VersionResponse with Version=='1.0.0'",
+            "Write TestExchangeOAuthCode4xxError: server returns 400; errors.As(*APIError) true; Code==400"
+          ],
+          "test_spec_refs": [
+            "TS-12-79",
+            "TS-12-80",
+            "TS-12-81",
+            "TS-12-82",
+            "TS-12-83",
+            "TS-12-E17"
+          ],
+          "requirement_refs": [
+            "12-REQ-10.1",
+            "12-REQ-10.2",
+            "12-REQ-11.1",
+            "12-REQ-11.2",
+            "12-REQ-11.3",
+            "12-REQ-10.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.4",
+          "title": "Write integration tests for non-JSON error bodies and network error edge cases",
+          "details": [
+            "Write TestHTMLErrorBody502: server returns 502 with HTML; *APIError Code==502, Message contains 'Bad Gateway'",
+            "Write TestPlainTextErrorBody413: server returns 413 with plain text; *APIError Code==413",
+            "Write TestHealthzUnreachableServer: Healthz against closed server; err != nil; not *APIError; errors.Unwrap != nil"
+          ],
+          "test_spec_refs": [
+            "TS-12-E10",
+            "TS-12-E11",
+            "TS-12-E18"
+          ],
+          "requirement_refs": [
+            "12-REQ-6.E1",
+            "12-REQ-6.E2",
+            "12-REQ-11.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.5",
+          "title": "Write property-based and smoke test stubs for property coverage",
+          "details": [
+            "Write TestPropClientConcurrency (TS-12-P1): 50 goroutines, -race flag",
+            "Write TestPropAPIErrorExhaustive (TS-12-P2): loop over status codes 400-599 with JSON and non-JSON bodies; assert *APIError always returned",
+            "Write TestPropPlainErrorsWrapCause (TS-12-P3): all plain error scenarios satisfy errors.Unwrap != nil",
+            "Write TestPropMountPointNormalizationIdempotent (TS-12-P4): table of mount point strings; assert starts with '/' no trailing '/'",
+            "Write TestPropHealthProbesBypassMountPoint (TS-12-P5): multiple mountPoint configs; Healthz always hits /healthz",
+            "Write TestPropListEndpointsNonNilEmptySlice (TS-12-P6): all list methods with server returning []; result != nil, len==0",
+            "Write TestPropAuthHeaderIffAPIKey (TS-12-P7): empty and non-empty apiKey variants",
+            "Write TestPropErrNotModifiedIff304 (TS-12-P8): 200 and 304 response variants for conditional GET methods",
+            "Write TestPropUpdateUserAlwaysFullName (TS-12-P9): table of FullName values including empty string",
+            "Write TestPropCanonicalTypesUniqueDefinition (TS-12-P10): static analysis / compilation check comment"
+          ],
+          "test_spec_refs": [
+            "TS-12-P1",
+            "TS-12-P2",
+            "TS-12-P3",
+            "TS-12-P4",
+            "TS-12-P5",
+            "TS-12-P6",
+            "TS-12-P7",
+            "TS-12-P8",
+            "TS-12-P9",
+            "TS-12-P10"
+          ],
+          "requirement_refs": [
+            "12-PROP-1",
+            "12-PROP-2",
+            "12-PROP-3",
+            "12-PROP-4",
+            "12-PROP-5",
+            "12-PROP-6",
+            "12-PROP-7",
+            "12-PROP-8",
+            "12-PROP-9",
+            "12-PROP-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All tests compile: go build ./...",
+          "Integration tests pass: go test ./... -count=1 -run 'TestCreateOrg|TestGetOrg|TestUpdateOrg|TestDeleteOrg|TestBlockOrg|TestUnblockOrg|TestListOrgMembers|TestAddOrgMember|TestRemoveOrgMember|TestGetProviders|TestExchangeOAuth|TestHealthz|TestReadyz|TestVersion|TestHTML|TestPlainText|TestProp'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-9 through 12-REQ-11 acceptance criteria covered by TS-12-68 through TS-12-83",
+          "All 10 property invariants covered by TS-12-P1 through TS-12-P10",
+          "Error edge cases covered by TS-12-E10/E11/E16/E17/E18"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement sdk_errors.go: APIError, ErrNotModified, and Response[T]",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Create sdk_errors.go with APIError struct and Error() method",
+          "details": [
+            "Create sdk_errors.go in package apikit",
+            "Define APIError struct with Code int and Message string fields and json tags matching the inner error envelope",
+            "Implement Error() string method returning fmt.Sprintf(\"API error %d: %s\", e.Code, e.Message)",
+            "Implement internal errorEnvelope struct for JSON decoding: type errorEnvelope struct { Error *APIError `json:\"error\"` }"
+          ],
+          "test_spec_refs": [
+            "TS-12-40",
+            "TS-12-41"
+          ],
+          "requirement_refs": [
+            "12-REQ-6.1",
+            "12-REQ-6.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Add ErrNotModified sentinel and Response[T] generic wrapper",
+          "details": [
+            "Define ErrNotModified = errors.New(\"not modified\") as package-level var in sdk_errors.go",
+            "Define Response[T any] struct with Data *T, StatusCode int, and Header http.Header fields",
+            "Implement ETag() string method on *Response[T]: return r.Header.Get(\"ETag\")"
+          ],
+          "test_spec_refs": [
+            "TS-12-43",
+            "TS-12-37",
+            "TS-12-39"
+          ],
+          "requirement_refs": [
+            "12-REQ-6.4",
+            "12-REQ-5.4",
+            "12-REQ-5.6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "sdk_errors.go compiles as package apikit: go build ./...",
+          "APIError.Error() tests pass: go test ./... -count=1 -run 'TestAPIError|TestErrNot|TestResponse.*ETag|TestResponse.*Status'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-6.1 met: Error() format is 'API error {Code}: {Message}'",
+          "12-REQ-6.4 met: ErrNotModified sentinel defined and testable with errors.Is",
+          "12-REQ-5.4/5.6 met: Response[T].ETag() and StatusCode accessible"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement sdk_types.go: All Canonical Shared Typed Structs",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Define domain entity structs: User, Organization, OAuthProvider",
+          "details": [
+            "Create sdk_types.go in package apikit",
+            "Define User struct with json tags: id, username, email, full_name (*string), status, role, provider, provider_id, created_at (time.Time), updated_at (time.Time)",
+            "Define Organization struct: id, name, slug, url (*string), status, created_at, updated_at",
+            "Define OAuthProvider struct: name, authorize_url"
+          ],
+          "test_spec_refs": [
+            "TS-12-10",
+            "TS-12-11",
+            "TS-12-12"
+          ],
+          "requirement_refs": [
+            "12-REQ-2.1",
+            "12-REQ-2.2",
+            "12-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Define API key and PAT structs: APIKeyMeta, APIKeyFull, PAT, PATFull, RevokeKeyResponse",
+          "details": [
+            "Define APIKeyMeta struct: key_id, created_at (time.Time), expires_at (*time.Time), revoked_at (*time.Time)",
+            "Define APIKeyFull struct: key, key_id, expires_at (*time.Time)",
+            "Define PAT struct: token_id, name, permissions ([]string), created_at, expires_at (*time.Time), revoked_at (*time.Time)",
+            "Define PATFull struct: token, token_id, name, permissions ([]string), expires_at (*time.Time)",
+            "Define RevokeKeyResponse struct: key_id, revoked_at (time.Time, non-nullable)"
+          ],
+          "test_spec_refs": [
+            "TS-12-12",
+            "TS-12-49"
+          ],
+          "requirement_refs": [
+            "12-REQ-2.1",
+            "12-REQ-2.2",
+            "12-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Define request body structs with correct json tags and omitempty",
+          "details": [
+            "Define AuthCallbackRequest: provider, code, redirect_uri, expires (*int, omitempty)",
+            "Define AuthCallbackResponse: user (User), api_key (APIKeyFull)",
+            "Define CreateUserRequest: username, email, provider, provider_id",
+            "Define UpdateUserRequest: full_name (plain string, NO omitempty)",
+            "Define CreateTokenRequest: name, permissions ([]string), expires (*int, omitempty)",
+            "Define CreateOrgRequest: name, slug, url (*string, omitempty)",
+            "Define UpdateOrgRequest: name (*string, omitempty), url (*string, omitempty)"
+          ],
+          "test_spec_refs": [
+            "TS-12-13",
+            "TS-12-14"
+          ],
+          "requirement_refs": [
+            "12-REQ-2.4",
+            "12-REQ-2.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Define health/meta response structs and options structs",
+          "details": [
+            "Define HealthResponse struct: status (string)",
+            "Define VersionResponse struct: version, build_time, commit, mount_point",
+            "Define ListUsersOptions struct: IncludeBlocked bool (with doc comment about future growth)",
+            "Define ListOrgsOptions struct: IncludeBlocked bool (with doc comment about future growth)",
+            "Verify all types compile without duplicate definitions: go build ./..."
+          ],
+          "test_spec_refs": [
+            "TS-12-83",
+            "TS-12-86",
+            "TS-12-87"
+          ],
+          "requirement_refs": [
+            "12-REQ-2.1",
+            "12-REQ-12.3",
+            "12-REQ-12.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "sdk_types.go compiles as package apikit: go build ./...",
+          "JSON serialization tests pass: go test ./... -count=1 -run 'TestJSONTags|TestNullable|TestUpdateUserRequest|TestOmit|TestListOrg.*Returns|TestListUsers.*Options|TestListOrgs.*Options'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-2 all acceptance criteria met: single definitions, snake_case tags, nullable *time.Time, FullName plain string, omitempty on optional fields",
+          "UpdateUserRequest.FullName has no omitempty tag (manually verify struct tag in file)"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement sdk.go: Client Struct, NewClient, ClientOption, RequestOption, and do Method",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Define Client struct and NewClient constructor with all ClientOption functions",
+          "details": [
+            "Create sdk.go in package apikit",
+            "Define Client struct with unexported fields: baseURL, apiKey, httpClient, requestID, mountPoint",
+            "Implement NewClient(baseURL string, opts ...ClientOption) *Client: strip trailing slash from baseURL, set defaults (http.DefaultClient, '/api/v1'), apply opts",
+            "Implement WithAPIKey, WithHTTPClient, WithRequestID ClientOption functions",
+            "Implement WithMountPoint: prepend '/' if missing, strip trailing '/', normalize empty to '/'"
+          ],
+          "test_spec_refs": [
+            "TS-12-1",
+            "TS-12-2",
+            "TS-12-4",
+            "TS-12-5",
+            "TS-12-6",
+            "TS-12-7",
+            "TS-12-8",
+            "TS-12-9",
+            "TS-12-E1"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.1",
+            "12-REQ-1.2",
+            "12-REQ-1.4",
+            "12-REQ-1.5",
+            "12-REQ-1.6",
+            "12-REQ-1.7",
+            "12-REQ-1.8",
+            "12-REQ-1.9",
+            "12-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Define RequestOption type and WithIfNoneMatch",
+          "details": [
+            "Define type RequestOption func(*http.Request) in sdk.go",
+            "Implement WithIfNoneMatch(etag string) RequestOption: sets req.Header.Set(\"If-None-Match\", etag)"
+          ],
+          "test_spec_refs": [
+            "TS-12-34"
+          ],
+          "requirement_refs": [
+            "12-REQ-5.1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement the internal do method for request execution and response dispatching",
+          "details": [
+            "Implement do method signature: func (c *Client) do(ctx context.Context, method, url string, body any, opts []RequestOption) (*http.Response, error)",
+            "Set Accept: application/json on all requests; Content-Type: application/json when body is non-nil",
+            "Set Authorization: Bearer <apiKey> when non-empty; set X-Request-ID when non-empty",
+            "Apply per-request RequestOption functions to *http.Request",
+            "Use req.WithContext(ctx); execute via c.httpClient.Do(req)",
+            "Branch on status: 200/201 → decode JSON; 204 → nil body; 304 → return nil, ErrNotModified; 4xx/5xx with JSON → decode errorEnvelope return *APIError; non-JSON error body → *APIError with status code and status text",
+            "Wrap all plain errors with fmt.Errorf('%w', err) to preserve errors.Unwrap chain"
+          ],
+          "test_spec_refs": [
+            "TS-12-16",
+            "TS-12-17",
+            "TS-12-18",
+            "TS-12-19",
+            "TS-12-20",
+            "TS-12-21",
+            "TS-12-22",
+            "TS-12-23",
+            "TS-12-24",
+            "TS-12-25",
+            "TS-12-26",
+            "TS-12-27",
+            "TS-12-28"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.1",
+            "12-REQ-3.2",
+            "12-REQ-3.3",
+            "12-REQ-3.4",
+            "12-REQ-3.5",
+            "12-REQ-3.6",
+            "12-REQ-3.7",
+            "12-REQ-3.8",
+            "12-REQ-3.9",
+            "12-REQ-3.10",
+            "12-REQ-3.11",
+            "12-REQ-3.12",
+            "12-REQ-3.13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Implement URL construction helpers for API, health probe, and auth paths",
+          "details": [
+            "Implement apiURL(path string) string helper: returns c.baseURL + c.mountPoint + path for API and auth endpoints",
+            "Implement probeURL(path string) string helper: returns c.baseURL + path for health probes (no mountPoint)",
+            "Document in code comments that path parameters are interpolated as-is (no url.PathEscape)",
+            "Verify trailing slash stripping in NewClient prevents double slashes"
+          ],
+          "test_spec_refs": [
+            "TS-12-29",
+            "TS-12-30",
+            "TS-12-31",
+            "TS-12-32",
+            "TS-12-33",
+            "TS-12-E8"
+          ],
+          "requirement_refs": [
+            "12-REQ-4.1",
+            "12-REQ-4.2",
+            "12-REQ-4.3",
+            "12-REQ-4.4",
+            "12-REQ-4.5",
+            "12-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.5",
+          "title": "Implement do method generic wrappers: doJSON and doList for typed decoding",
+          "details": [
+            "Implement doJSON[T any](ctx, method, url, body, opts) (*Response[T], error) for single-resource endpoints: decodes JSON into T, wraps in Response[T] with StatusCode and Header",
+            "Implement doList[T any](ctx, method, url, opts) ([]*T, error) for list endpoints: decodes bare JSON array directly into []*T; returns non-nil empty slice when server returns []",
+            "Implement doEmpty(ctx, method, url, body, opts) error for 204 endpoints"
+          ],
+          "test_spec_refs": [
+            "TS-12-23",
+            "TS-12-88",
+            "TS-12-89"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.8",
+            "12-REQ-13.1",
+            "12-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "sdk.go compiles as package apikit: go build ./...",
+          "Client construction, option, and header tests pass: go test ./... -count=1 -run 'TestNewClient|TestWith|TestAccept|TestContentType|TestAuthorization|TestRequestID|TestContext|TestDo|TestAPIEndpoint|TestHealth|TestAuth|TestCustomMount|TestPath|TestNoDouble|TestBare|TestEmptyArray|TestWrapped'",
+          "No linter warnings: go vet ./...",
+          "Race detector shows no races: go test -race ./... -run 'TestClientConcurrent'",
+          "12-REQ-1, 12-REQ-3, 12-REQ-4, 12-REQ-13 acceptance criteria all met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "checkpoint",
+      "title": "Checkpoint: Core Infrastructure Verified",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Verify full test suite passes for groups 1-5 after core implementation",
+          "details": [
+            "Run go test -race ./... -count=1 and verify all written tests pass",
+            "Run go vet ./... and resolve any warnings",
+            "Confirm no panic('not implemented') stubs remain in sdk.go, sdk_errors.go, sdk_types.go",
+            "Confirm Response[T] generic type compiles on Go 1.18+"
+          ],
+          "test_spec_refs": [
+            "TS-12-3",
+            "TS-12-P1",
+            "TS-12-P4",
+            "TS-12-P6"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.3",
+            "12-REQ-6.1",
+            "12-REQ-6.4",
+            "12-REQ-13.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Verify mount point normalization idempotency across all edge cases",
+          "details": [
+            "Run TestPropMountPointNormalizationIdempotent with the full table of inputs",
+            "Manually verify: 'api/v1' → '/api/v1'; '/api/v1/' → '/api/v1'; '' → '/'",
+            "Run go test -count=1 -run TestPropMountPoint"
+          ],
+          "test_spec_refs": [
+            "TS-12-P4"
+          ],
+          "requirement_refs": [
+            "12-PROP-4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All unit and integration tests written in groups 1-5 compile and pass: go test ./... -count=1",
+          "Race detector clean: go test -race ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "sdk.go, sdk_errors.go, and sdk_types.go all exist in root apikit package with 'package apikit' declaration",
+          "No panic('not implemented') in core files"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement sdk_user.go: Authenticated User Endpoint Methods",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement GetUser, UpdateUser, and ListKeys methods",
+          "details": [
+            "Create sdk_user.go in package apikit",
+            "Implement GetUser(ctx, ...RequestOption) (*Response[User], error): GET to apiURL('/user'); uses doJSON[User]",
+            "Implement UpdateUser(ctx, *UpdateUserRequest) (*User, error): PATCH to apiURL('/user'); encode body as JSON; uses doJSON[User]; return resp.Data",
+            "Implement ListKeys(ctx) ([]*APIKeyMeta, error): GET to apiURL('/user/keys'); uses doList[APIKeyMeta]"
+          ],
+          "test_spec_refs": [
+            "TS-12-45",
+            "TS-12-46",
+            "TS-12-47"
+          ],
+          "requirement_refs": [
+            "12-REQ-7.1",
+            "12-REQ-7.2",
+            "12-REQ-7.3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement RefreshKey, RevokeKey, ListTokens, CreateToken, GetToken, RevokeToken, ListUserOrgs methods",
+          "details": [
+            "Implement RefreshKey(ctx, keyID string) (*APIKeyFull, error): POST apiURL('/user/keys/'+keyID+'/refresh'); no body",
+            "Implement RevokeKey(ctx, keyID string) (*RevokeKeyResponse, error): DELETE apiURL('/user/keys/'+keyID); HTTP 200 with body",
+            "Implement ListTokens(ctx) ([]*PAT, error): GET apiURL('/user/tokens'); doList[PAT]",
+            "Implement CreateToken(ctx, *CreateTokenRequest) (*PATFull, error): POST apiURL('/user/tokens'); 201 response",
+            "Implement GetToken(ctx, tokenID string, ...RequestOption) (*Response[PAT], error): GET apiURL('/user/tokens/'+tokenID)",
+            "Implement RevokeToken(ctx, tokenID string) error: DELETE apiURL('/user/tokens/'+tokenID); 204",
+            "Implement ListUserOrgs(ctx) ([]*Organization, error): GET apiURL('/user/orgs'); doList[Organization]"
+          ],
+          "test_spec_refs": [
+            "TS-12-48",
+            "TS-12-49",
+            "TS-12-50",
+            "TS-12-51",
+            "TS-12-52",
+            "TS-12-53",
+            "TS-12-54"
+          ],
+          "requirement_refs": [
+            "12-REQ-7.4",
+            "12-REQ-7.5",
+            "12-REQ-7.6",
+            "12-REQ-7.7",
+            "12-REQ-7.8",
+            "12-REQ-7.9",
+            "12-REQ-7.10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "sdk_user.go compiles as package apikit: go build ./...",
+          "Authenticated user endpoint tests pass: go test ./... -count=1 -run 'TestGetUser|TestUpdateUser|TestListKeys|TestRefreshKey|TestRevokeKey|TestListTokens|TestCreateToken|TestGetToken|TestRevokeToken|TestListUserOrgs'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-7 all 10 acceptance criteria met",
+          "GetToken and GetUser accept ...RequestOption; confirmed by compilation and test"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "standard",
+      "title": "Implement sdk_admin.go: Admin User and Organization Endpoint Methods",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Implement admin user list, get, create, and update methods",
+          "details": [
+            "Create sdk_admin.go in package apikit",
+            "Implement ListUsers(ctx, *ListUsersOptions) ([]*User, error): GET apiURL('/users'); build url.Values for include_blocked query param when IncludeBlocked==true; append '?'+v.Encode() to URL when non-empty; doList[User]",
+            "Implement GetUserByID(ctx, id string, ...RequestOption) (*Response[User], error): GET apiURL('/users/'+id)",
+            "Implement CreateUser(ctx, *CreateUserRequest) (*User, error): POST apiURL('/users'); 201",
+            "Implement UpdateUserByID(ctx, id string, *UpdateUserRequest) (*User, error): PATCH apiURL('/users/'+id)"
+          ],
+          "test_spec_refs": [
+            "TS-12-55",
+            "TS-12-56",
+            "TS-12-57",
+            "TS-12-58",
+            "TS-12-59"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.1",
+            "12-REQ-8.2",
+            "12-REQ-8.3",
+            "12-REQ-8.4",
+            "12-REQ-8.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Implement admin user action methods (promote, demote, block, unblock) and admin user key/token methods",
+          "details": [
+            "Implement PromoteUser(ctx, id string) (*User, error): POST apiURL('/users/'+id+'/promote'); no body",
+            "Implement DemoteUser, BlockUser, UnblockUser analogously to PromoteUser",
+            "Implement ListUserKeys(ctx, userID string) ([]*APIKeyMeta, error): GET apiURL('/users/'+userID+'/keys'); doList[APIKeyMeta]",
+            "Implement RevokeUserKey(ctx, userID, keyID string) error: DELETE apiURL('/users/'+userID+'/keys/'+keyID); 204",
+            "Implement ListUserTokens(ctx, userID string) ([]*PAT, error): GET apiURL('/users/'+userID+'/tokens'); doList[PAT]",
+            "Implement RevokeUserToken(ctx, userID, tokenID string) error: DELETE apiURL('/users/'+userID+'/tokens/'+tokenID); 204"
+          ],
+          "test_spec_refs": [
+            "TS-12-60",
+            "TS-12-61",
+            "TS-12-62",
+            "TS-12-63",
+            "TS-12-64",
+            "TS-12-65",
+            "TS-12-66",
+            "TS-12-67"
+          ],
+          "requirement_refs": [
+            "12-REQ-8.6",
+            "12-REQ-8.7",
+            "12-REQ-8.8",
+            "12-REQ-8.9",
+            "12-REQ-8.10",
+            "12-REQ-8.11",
+            "12-REQ-8.12",
+            "12-REQ-8.13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Implement admin organization CRUD and action methods",
+          "details": [
+            "Implement CreateOrg(ctx, *CreateOrgRequest) (*Organization, error): POST apiURL('/orgs'); 201",
+            "Implement ListOrgs(ctx, *ListOrgsOptions) ([]*Organization, error): GET apiURL('/orgs'); build url.Values for include_blocked; doList[Organization]",
+            "Implement GetOrg(ctx, id string, ...RequestOption) (*Response[Organization], error): GET apiURL('/orgs/'+id)",
+            "Implement UpdateOrg(ctx, id string, *UpdateOrgRequest) (*Organization, error): PATCH apiURL('/orgs/'+id)",
+            "Implement DeleteOrg(ctx, id string) error: DELETE apiURL('/orgs/'+id); 204"
+          ],
+          "test_spec_refs": [
+            "TS-12-68",
+            "TS-12-69",
+            "TS-12-70",
+            "TS-12-71",
+            "TS-12-72",
+            "TS-12-73"
+          ],
+          "requirement_refs": [
+            "12-REQ-9.1",
+            "12-REQ-9.2",
+            "12-REQ-9.3",
+            "12-REQ-9.4",
+            "12-REQ-9.5",
+            "12-REQ-9.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.4",
+          "title": "Implement admin organization action and member management methods",
+          "details": [
+            "Implement BlockOrg(ctx, id string) (*Organization, error): POST apiURL('/orgs/'+id+'/block'); no body",
+            "Implement UnblockOrg(ctx, id string) (*Organization, error): POST apiURL('/orgs/'+id+'/unblock'); no body",
+            "Implement ListOrgMembers(ctx, orgID string) ([]*User, error): GET apiURL('/orgs/'+orgID+'/members'); doList[User]",
+            "Implement AddOrgMember(ctx, orgID, userID string) error: PUT apiURL('/orgs/'+orgID+'/members/'+userID); no body; 204",
+            "Implement RemoveOrgMember(ctx, orgID, userID string) error: DELETE apiURL('/orgs/'+orgID+'/members/'+userID); 204"
+          ],
+          "test_spec_refs": [
+            "TS-12-74",
+            "TS-12-75",
+            "TS-12-76",
+            "TS-12-77",
+            "TS-12-78"
+          ],
+          "requirement_refs": [
+            "12-REQ-9.7",
+            "12-REQ-9.8",
+            "12-REQ-9.9",
+            "12-REQ-9.10",
+            "12-REQ-9.11"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "sdk_admin.go compiles as package apikit: go build ./...",
+          "Admin user and org endpoint tests pass: go test ./... -count=1 -run 'TestListUsers|TestGetUserByID|TestCreateUser|TestUpdateUserByID|TestPromoteUser|TestDemoteUser|TestBlockUser|TestUnblockUser|TestListUserKeys|TestRevokeUserKey|TestListUserTokens|TestRevokeUserToken|TestCreateOrg|TestListOrgs|TestGetOrg|TestUpdateOrg|TestDeleteOrg|TestBlockOrg|TestUnblockOrg|TestListOrgMembers|TestAddOrgMember|TestRemoveOrgMember'",
+          "No linter warnings: go vet ./...",
+          "12-REQ-8 and 12-REQ-9 all acceptance criteria met",
+          "GetOrg and GetUserByID accept ...RequestOption; confirmed by compilation"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "standard",
+      "title": "Implement sdk_auth.go and sdk_health.go: Auth and Health/Meta Methods",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Implement GetProviders and ExchangeOAuthCode in sdk_auth.go",
+          "details": [
+            "Create sdk_auth.go in package apikit",
+            "Implement GetProviders(ctx context.Context) ([]*OAuthProvider, error): GET apiURL('/auth/providers'); doList[OAuthProvider]",
+            "Implement ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest) (*AuthCallbackResponse, error): POST apiURL('/auth/callback'); encode body; doJSON[AuthCallbackResponse]; return resp.Data"
+          ],
+          "test_spec_refs": [
+            "TS-12-79",
+            "TS-12-80"
+          ],
+          "requirement_refs": [
+            "12-REQ-10.1",
+            "12-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Implement Healthz, Readyz, and Version in sdk_health.go",
+          "details": [
+            "Create sdk_health.go in package apikit",
+            "Implement Healthz(ctx context.Context) (*HealthResponse, error): GET probeURL('/healthz'); doJSON[HealthResponse]; return resp.Data",
+            "Implement Readyz(ctx context.Context) (*HealthResponse, error): GET probeURL('/readyz'); doJSON[HealthResponse]; return resp.Data",
+            "Implement Version(ctx context.Context) (*VersionResponse, error): GET probeURL('/version'); doJSON[VersionResponse]; return resp.Data",
+            "Ensure all three use probeURL (no mountPoint) not apiURL"
+          ],
+          "test_spec_refs": [
+            "TS-12-81",
+            "TS-12-82",
+            "TS-12-83"
+          ],
+          "requirement_refs": [
+            "12-REQ-11.1",
+            "12-REQ-11.2",
+            "12-REQ-11.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "sdk_auth.go and sdk_health.go compile as package apikit: go build ./...",
+          "Auth and health tests pass: go test ./... -count=1 -run 'TestGetProviders|TestExchangeOAuth|TestHealthz|TestReadyz|TestVersion'",
+          "No linter warnings: go vet ./...",
+          "Health probes use probeURL (bypass mountPoint): confirmed by TS-12-30/TS-12-81/TS-12-82/TS-12-83",
+          "12-REQ-10 and 12-REQ-11 acceptance criteria met",
+          "12-PROP-5 satisfied: health probes always bypass mountPoint"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "checkpoint",
+      "title": "Checkpoint: All Endpoint Methods Implemented and Tested",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Run full test suite and resolve all failures",
+          "details": [
+            "Run go test -race ./... -count=1 -v; all tests must pass",
+            "Run go vet ./...; no warnings",
+            "Verify all 38+ endpoint methods are implemented in sdk_user.go, sdk_admin.go, sdk_auth.go, sdk_health.go",
+            "Confirm no stub/dead-code markers: grep -r 'panic(\"not implemented\")' *.go should return empty"
+          ],
+          "test_spec_refs": [
+            "TS-12-P1",
+            "TS-12-P2",
+            "TS-12-P3",
+            "TS-12-P6",
+            "TS-12-P7",
+            "TS-12-P8"
+          ],
+          "requirement_refs": [
+            "12-PROP-1",
+            "12-PROP-2",
+            "12-PROP-3",
+            "12-PROP-6",
+            "12-PROP-7",
+            "12-PROP-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.2",
+          "title": "Verify property invariants hold across all implemented methods",
+          "details": [
+            "Run TestPropMountPointNormalizationIdempotent with all table cases",
+            "Run TestPropHealthProbesBypassMountPoint for default and custom mountPoint values",
+            "Run TestPropUpdateUserAlwaysFullName with empty string and non-empty FullName",
+            "Run TestPropCanonicalTypesUniqueDefinition: go build succeeds, no redeclaration errors"
+          ],
+          "test_spec_refs": [
+            "TS-12-P4",
+            "TS-12-P5",
+            "TS-12-P9",
+            "TS-12-P10"
+          ],
+          "requirement_refs": [
+            "12-PROP-4",
+            "12-PROP-5",
+            "12-PROP-9",
+            "12-PROP-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "All tests pass: go test ./... -count=1",
+          "Race detector clean: go test -race ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "All 6 source files exist: sdk.go, sdk_types.go, sdk_user.go, sdk_admin.go, sdk_auth.go, sdk_health.go, sdk_errors.go",
+          "All declared in package apikit: grep '^package apikit' sdk*.go shows 7 lines",
+          "No stub markers: grep -r 'panic(\"not implemented\")' *.go returns empty"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "wiring_verification",
+      "title": "Wiring Verification: End-to-End Integration and Stub Audit",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Trace all execution paths and verify no stubs remain",
+          "details": [
+            "Trace PATH-1 (ETag capture and conditional re-fetch): NewClient → GetUser → do → httpClient.Do → Response[User]; verify each step calls the next without stub",
+            "Trace PATH-2 (API error on 4xx): GetUserByID → do → errorEnvelope decode → *APIError; verify errors.As works",
+            "Search for stub markers: grep -rn 'panic(\"not implemented\")' *.go; grep -rn '// TODO' sdk*.go; all must return empty or non-critical comments",
+            "Verify bare 'return nil' in non-trivial paths (e.g., doJSON) is intentional and documented"
+          ],
+          "test_spec_refs": [
+            "TS-12-SMOKE-1",
+            "TS-12-SMOKE-2"
+          ],
+          "requirement_refs": [
+            "12-REQ-3.7",
+            "12-REQ-3.8",
+            "12-REQ-3.9",
+            "12-REQ-3.10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Verify return value propagation across all endpoint method chains",
+          "details": [
+            "Trace PATH-3 (ListOrgs with include_blocked): ListOrgs → do → url.Values → HTTP GET → doList → []*Organization; verify query param is constructed and sent",
+            "Trace PATH-4 (org member management): CreateOrg(201) → AddOrgMember(204) → ListOrgMembers(200 []*User); verify return values flow from do to caller",
+            "Confirm Response[T].Data is populated from JSON decode and Header from http.Response.Header on all ETag-capable endpoints"
+          ],
+          "test_spec_refs": [
+            "TS-12-SMOKE-3",
+            "TS-12-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "12-REQ-5.3",
+            "12-REQ-5.4",
+            "12-REQ-7.5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.3",
+          "title": "Run all 6 smoke tests end-to-end with real SDK components",
+          "details": [
+            "Run TestSmokeETagCaptureAndConditionalRefetch (SMOKE-1): real Client + httptest server; ETag round-trip works",
+            "Run TestSmokeAPIErrorOn4xx (SMOKE-2): real Client + httptest server; errors.As extracts *APIError",
+            "Run TestSmokeListOrgsIncludeBlocked (SMOKE-3): query param present; empty slice non-nil",
+            "Run TestSmokeOrgMemberManagement (SMOKE-4): CreateOrg → AddOrgMember → ListOrgMembers chain",
+            "Run TestSmokeCustomMountPoint (SMOKE-5): /api/v2/user path; /healthz bypasses mount point",
+            "Run TestSmokeOAuthCodeExchange (SMOKE-6): GetProviders + ExchangeOAuthCode; unauthenticated client"
+          ],
+          "test_spec_refs": [
+            "TS-12-SMOKE-1",
+            "TS-12-SMOKE-2",
+            "TS-12-SMOKE-3",
+            "TS-12-SMOKE-4",
+            "TS-12-SMOKE-5",
+            "TS-12-SMOKE-6"
+          ],
+          "requirement_refs": [
+            "12-REQ-1.3",
+            "12-REQ-4.2",
+            "12-REQ-6.3",
+            "12-REQ-9.10",
+            "12-REQ-10.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.4",
+          "title": "Verify custom mount point path (PATH-5) and URL normalization across all components",
+          "details": [
+            "Trace PATH-5 (custom mount point): WithMountPoint('api/v2') → normalization to '/api/v2' → GetUser uses '/api/v2/user'; Healthz uses '/healthz'",
+            "Verify TestPropMountPointNormalizationIdempotent covers all edge cases in the table",
+            "Verify no double slashes: run TestNoDoubleSlashesInURL; assert captured path has no '//' before 'api'"
+          ],
+          "test_spec_refs": [
+            "TS-12-SMOKE-5",
+            "TS-12-P4",
+            "TS-12-P5"
+          ],
+          "requirement_refs": [
+            "12-REQ-4.4",
+            "12-PROP-4",
+            "12-PROP-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.5",
+          "title": "Confirm SDK package placement, Go version compatibility, and cross-spec interface readiness",
+          "details": [
+            "Confirm all SDK files declare package apikit (not internal/apikit or any sub-package): grep '^package' sdk*.go",
+            "Confirm go.mod go directive >= 1.18: grep '^go ' go.mod",
+            "Confirm Response[T] generic type compiles: go build ./...",
+            "Confirm SDK is the exclusive API client layer: no other HTTP client implementations exist outside sdk*.go",
+            "Note for CLI specs (13-15): NewClient, all method signatures, APIError, ErrNotModified, and Response[T] are ready for import from package apikit"
+          ],
+          "test_spec_refs": [
+            "TS-12-92",
+            "TS-12-93",
+            "TS-12-90"
+          ],
+          "requirement_refs": [
+            "12-REQ-15.1",
+            "12-REQ-15.2",
+            "12-REQ-14.1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "All smoke tests pass: go test ./... -count=1 -run 'TestSmoke'",
+          "Full test suite passes including race detector: go test -race ./... -count=1",
+          "No linter warnings: go vet ./...",
+          "No stub markers: grep -rn 'panic(\\\"not implemented\\\")' sdk*.go returns empty",
+          "All 6 SDK source files exist with package apikit declaration: grep '^package apikit' sdk*.go | wc -l == 7 (including sdk_errors.go)",
+          "All 38 endpoint methods are implemented and callable (compilation proof via go build ./...)",
+          "go.mod go directive is 1.18 or later: grep '^go ' go.mod",
+          "Cross-spec dependency 03 (OpenAPI): HTTP method, path, and status code mapping verified against HTTP Method Mapping table in PRD",
+          "CLI specs (13-15) dependency: NewClient and all public types are importable from package apikit"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "12-REQ-1.1",
+      "test_spec_id": "TS-12-1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.2",
+      "test_spec_id": "TS-12-2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.4",
+      "test_spec_id": "TS-12-4",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.5",
+      "test_spec_id": "TS-12-5",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.6",
+      "test_spec_id": "TS-12-6",
+      "task_id": "1.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.7",
+      "test_spec_id": "TS-12-7",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.8",
+      "test_spec_id": "TS-12-8",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.9",
+      "test_spec_id": "TS-12-9",
+      "task_id": "1.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.1",
+      "test_spec_id": "TS-12-10",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.2",
+      "test_spec_id": "TS-12-11",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.3",
+      "test_spec_id": "TS-12-12",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.4",
+      "test_spec_id": "TS-12-13",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.5",
+      "test_spec_id": "TS-12-14",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-2.6",
+      "test_spec_id": "TS-12-15",
+      "task_id": "1.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.1",
+      "test_spec_id": "TS-12-40",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.2",
+      "test_spec_id": "TS-12-41",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.4",
+      "test_spec_id": "TS-12-43",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.E3",
+      "test_spec_id": "TS-12-E12",
+      "task_id": "1.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.3",
+      "test_spec_id": "TS-12-3",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-12.3",
+      "test_spec_id": "TS-12-86",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-12.4",
+      "test_spec_id": "TS-12-87",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-14.2",
+      "test_spec_id": "TS-12-91",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-15.1",
+      "test_spec_id": "TS-12-92",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-15.2",
+      "test_spec_id": "TS-12-93",
+      "task_id": "1.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.1",
+      "test_spec_id": "TS-12-16",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.2",
+      "test_spec_id": "TS-12-17",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.3",
+      "test_spec_id": "TS-12-18",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.5",
+      "test_spec_id": "TS-12-20",
+      "task_id": "2.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.4",
+      "test_spec_id": "TS-12-19",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.6",
+      "test_spec_id": "TS-12-21",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.7",
+      "test_spec_id": "TS-12-22",
+      "task_id": "2.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.8",
+      "test_spec_id": "TS-12-23",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.9",
+      "test_spec_id": "TS-12-24",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.10",
+      "test_spec_id": "TS-12-25",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.13",
+      "test_spec_id": "TS-12-28",
+      "task_id": "2.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.11",
+      "test_spec_id": "TS-12-26",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.12",
+      "test_spec_id": "TS-12-27",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.3",
+      "test_spec_id": "TS-12-42",
+      "task_id": "2.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.E1",
+      "test_spec_id": "TS-12-E3",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.E3",
+      "test_spec_id": "TS-12-E5",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.E4",
+      "test_spec_id": "TS-12-E6",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.5",
+      "test_spec_id": "TS-12-44",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.1",
+      "test_spec_id": "TS-12-29",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.2",
+      "test_spec_id": "TS-12-30",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.3",
+      "test_spec_id": "TS-12-31",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.4",
+      "test_spec_id": "TS-12-32",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.5",
+      "test_spec_id": "TS-12-33",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-4.E1",
+      "test_spec_id": "TS-12-E8",
+      "task_id": "2.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.1",
+      "test_spec_id": "TS-12-34",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.3",
+      "test_spec_id": "TS-12-36",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.4",
+      "test_spec_id": "TS-12-37",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.6",
+      "test_spec_id": "TS-12-39",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.2",
+      "test_spec_id": "TS-12-35",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.5",
+      "test_spec_id": "TS-12-38",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-5.E1",
+      "test_spec_id": "TS-12-E9",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.1",
+      "test_spec_id": "TS-12-55",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.2",
+      "test_spec_id": "TS-12-56",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-12.1",
+      "test_spec_id": "TS-12-84",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.2",
+      "test_spec_id": "TS-12-69",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.3",
+      "test_spec_id": "TS-12-70",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-12.2",
+      "test_spec_id": "TS-12-85",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-13.1",
+      "test_spec_id": "TS-12-88",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-13.2",
+      "test_spec_id": "TS-12-89",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.E1",
+      "test_spec_id": "TS-12-E13",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.E1",
+      "test_spec_id": "TS-12-E15",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.1",
+      "test_spec_id": "TS-12-45",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.2",
+      "test_spec_id": "TS-12-46",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.3",
+      "test_spec_id": "TS-12-47",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.4",
+      "test_spec_id": "TS-12-48",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.5",
+      "test_spec_id": "TS-12-49",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.6",
+      "test_spec_id": "TS-12-50",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.7",
+      "test_spec_id": "TS-12-51",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.8",
+      "test_spec_id": "TS-12-52",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.9",
+      "test_spec_id": "TS-12-53",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.10",
+      "test_spec_id": "TS-12-54",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-7.E2",
+      "test_spec_id": "TS-12-E14",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.3",
+      "test_spec_id": "TS-12-57",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.4",
+      "test_spec_id": "TS-12-58",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.5",
+      "test_spec_id": "TS-12-59",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.6",
+      "test_spec_id": "TS-12-60",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.7",
+      "test_spec_id": "TS-12-61",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.8",
+      "test_spec_id": "TS-12-62",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.9",
+      "test_spec_id": "TS-12-63",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.10",
+      "test_spec_id": "TS-12-64",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.11",
+      "test_spec_id": "TS-12-65",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.12",
+      "test_spec_id": "TS-12-66",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-8.13",
+      "test_spec_id": "TS-12-67",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.1",
+      "test_spec_id": "TS-12-68",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.4",
+      "test_spec_id": "TS-12-71",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.5",
+      "test_spec_id": "TS-12-72",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.6",
+      "test_spec_id": "TS-12-73",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.7",
+      "test_spec_id": "TS-12-74",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.8",
+      "test_spec_id": "TS-12-75",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.9",
+      "test_spec_id": "TS-12-76",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.10",
+      "test_spec_id": "TS-12-77",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.11",
+      "test_spec_id": "TS-12-78",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-9.E1",
+      "test_spec_id": "TS-12-E16",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-10.1",
+      "test_spec_id": "TS-12-79",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-10.2",
+      "test_spec_id": "TS-12-80",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-11.1",
+      "test_spec_id": "TS-12-81",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-11.2",
+      "test_spec_id": "TS-12-82",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-11.3",
+      "test_spec_id": "TS-12-83",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-10.E1",
+      "test_spec_id": "TS-12-E17",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.E1",
+      "test_spec_id": "TS-12-E10",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-6.E2",
+      "test_spec_id": "TS-12-E11",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-11.E1",
+      "test_spec_id": "TS-12-E18",
+      "task_id": "5.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-14.1",
+      "test_spec_id": "TS-12-90",
+      "task_id": "5.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-13.E1",
+      "test_spec_id": "TS-12-E19",
+      "task_id": "3.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.E1",
+      "test_spec_id": "TS-12-E1",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-1.E2",
+      "test_spec_id": "TS-12-E2",
+      "task_id": "1.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.E2",
+      "test_spec_id": "TS-12-E4",
+      "task_id": "2.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "12-REQ-3.E5",
+      "test_spec_id": "TS-12-E7",
+      "task_id": "2.5",
+      "test_path": null
+    }
+  ]
+}

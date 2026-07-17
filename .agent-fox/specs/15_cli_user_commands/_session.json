@@ -1,0 +1,261 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `cli_user_commands` PRD (spec 15) is exceptionally well-written and comprehensive. All four required sections \u2014 Intent, Goals, Non-Goals, and Background (via Source Reference) \u2014 are present and of high quality. The spec covers all 14 commands in detail, including precise flag definitions, SDK method mappings, error codes, config mutation rules, OAuth flow orchestration, key ID parsing logic, testing strategy, and design rationale. Dependencies on `cli_core` (spec 13) and `go_sdk` (spec 12) are explicitly declared and correctly described. One minor cross-spec numbering inconsistency is noted (the spec header says \"spec 14 of 15\" while the Non-Goals reference `cli_admin_commands` as \"spec 15\" and the landscape shows `cli_admin_commands` is an active spec distinct from this one), but this does not block readiness. No overlaps with active specs are found beyond the intended, explicitly declared dependencies.",
+      "gaps": [
+        "Minor spec numbering inconsistency: the Source Reference section labels this as 'spec 14 of 15', while the Non-Goals section refers to cli_admin_commands as 'spec 15' \u2014 but the existing spec landscape shows cli_admin_commands is a separate active spec (spec 14 in the landscape) and this spec is numbered 15 in its YAML header. This creates a cross-reference ambiguity between the two CLI command specs (cli_user_commands vs cli_admin_commands).",
+        "The 'owner' field in the YAML front matter is empty (owner: ''), though the body footer lists 'Michael Kuehl' as owner. These should be consistent.",
+        "The Background section is covered implicitly via 'Source Reference' rather than a dedicated '## Background' section heading. While the content is sufficient, a formal Background section would better conform to the expected spec schema.",
+        "The login timeout (120 seconds) is documented as a constant but there is no mention of whether this constant is defined in a shared location (e.g., a config constant) or hardcoded inline \u2014 a minor implementation clarity gap.",
+        "No mention of how the CLI handles the case where the OAuth callback server receives a request to a path other than /callback (e.g., a stray browser request like /favicon.ico). The spec only specifies handling of GET /callback."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The Source Reference labels this spec as 'spec 14 of 15', but the YAML header assigns it spec_id '15', and the Non-Goals reference cli_admin_commands as 'spec 15'. Which numbering is authoritative \u2014 is this spec 14 or 15? And is cli_admin_commands spec 14 or 15?",
+          "context": "Cross-spec references between cli_user_commands and cli_admin_commands use conflicting spec numbers. This could cause confusion when engineers look up dependencies or related specs during implementation.",
+          "options": [
+            "This spec (cli_user_commands) is spec 15; cli_admin_commands is spec 14 \u2014 the YAML header is correct, update the Source Reference and Non-Goals prose.",
+            "This spec (cli_user_commands) is spec 14; cli_admin_commands is spec 15 \u2014 update the YAML header spec_id to 14.",
+            "The numbering is an editorial artifact and does not affect implementation \u2014 leave as-is."
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the OAuth callback server silently ignore (e.g., return HTTP 404) requests to paths other than /callback, or should it return an error page and potentially shut down?",
+          "context": "Browsers commonly make secondary requests (e.g., /favicon.ico) after the initial redirect. If the callback server shuts down after the first request regardless of path, it may terminate before the actual /callback arrives. Clarifying this prevents a subtle race condition.",
+          "options": [
+            "Return HTTP 404 for any path other than /callback and keep the server running.",
+            "Return HTTP 404 for any path other than /callback; only shut down after a successful /callback with valid state.",
+            "The server should only bind a handler for /callback and let the default mux return 404 for others \u2014 no special handling needed."
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "The owner field in the YAML front matter is empty ('owner: \"\"') while the body lists Michael Kuehl. Should the YAML owner field be populated to match?",
+          "context": "Consistent ownership metadata ensures tooling that reads the YAML front matter (e.g., spec dashboards or automated routing) correctly identifies the responsible party.",
+          "options": [
+            "Yes \u2014 set owner: 'michael.kuehl' (or equivalent identifier) in the YAML header.",
+            "No \u2014 the body footer is sufficient; the YAML field can remain empty."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This PRD is exceptionally well-written and thorough \u2014 it clearly defines command signatures, OAuth flow steps, error handling, config mutation behavior, testing strategy, and design decisions. The vast majority of implementable details are present. A small number of gaps remain around test infrastructure specifics, edge cases in the OAuth flow, and a few behavioral ambiguities that could cause inconsistent implementations.",
+      "gaps": [
+        "The integration test strategy references 'the Go SDK's httptest mock server pattern (from spec 12)' but this spec does not define or document what that pattern looks like \u2014 implementers must infer it from spec 12, creating a cross-spec dependency that could block implementation if spec 12 is unavailable.",
+        "The login flow's state mismatch handling is ambiguous: step 9 says the server 'does not shut down on a state mismatch \u2014 the command exits with code 2, which triggers server cleanup via context cancellation,' but it is unclear whether the server actively responds with HTTP 400 + error page and then waits for context cancellation, or immediately cancels the context itself. The channel-based signaling between callback handler and main goroutine is not specified.",
+        "The OAuth callback URL construction note in Goals is contradictory: it says 'the authorize_url from the server already includes client_id; the CLI appends redirect_uri, state, and response_type=code' \u2014 but the Functional Requirements section (step 6) only says 'Append query parameters: redirect_uri, state, response_type=code', making it unclear whether client_id should ever be appended and whether existing query parameters on authorize_url should be preserved or could be clobbered.",
+        "Config file path is not defined in this spec. The Glossary mentions '$HOME/.<prefix>/config.toml' with an undefined '<prefix>' placeholder. The actual path is presumably defined in CLI Core (spec 13), but this creates ambiguity when reading this spec in isolation.",
+        "The `user update` command lists `--full-name` as required but provides no guidance on what happens when the server rejects an empty string or a name that fails server-side validation \u2014 unlike other error conditions, this is not covered in the error handling table.",
+        "The `NewAuthenticatedClient` construction pattern is referenced but not specified \u2014 it is unclear whether commands that require authentication fail immediately (exit code 2) before making any SDK call if `api_key` is absent from config/env/flags, or whether the SDK call is attempted first and the 401 response is used to signal the missing credential.",
+        "The command registration pattern (which parent commands are registered to the root in CLI Core vs. registered here) is described only at a high level. It is unclear whether `NewLoginCmd()`, `NewUserCmd()`, etc. are called and registered in `cmd/akc/main.go` or inside `internal/cli/` init functions, which affects how consuming projects embed the command tree.",
+        "Windows support is explicitly out of scope, but there is no guidance on what happens at runtime if the CLI binary is executed on Windows (panic, graceful error, compile-time exclusion via build tags). This matters for CI environments that may run on Windows."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How does the OAuth callback handler signal state mismatch back to the main login goroutine? Specifically: (a) does the handler send an error on a channel and return, leaving the server running until context cancellation? Or (b) does the handler cancel the context directly? And does the server accept any further requests after a state mismatch?",
+          "context": "Step 9 says the server 'does not shut down on a state mismatch \u2014 the command exits with code 2, which triggers server cleanup via context cancellation,' but the signaling mechanism between the HTTP handler goroutine and the main command goroutine is unspecified. This directly affects the implementation of the callback handler and the select loop in the login command.",
+          "options": [
+            "Handler sends error on a dedicated error channel; main goroutine selects on code channel, error channel, and context done; on error, main goroutine cancels context and exits with code 2. Server does not accept further requests after mismatch (context is cancelled).",
+            "Handler directly cancels the context; main goroutine detects context cancellation and exits with code 2. Server stops immediately.",
+            "Handler sends error on channel but server continues listening; main goroutine exits with code 2 and context cancellation shuts down server as a side effect. A second valid callback after a mismatch would be ignored because the main goroutine has already exited."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "When constructing the authorization URL, should the CLI preserve any existing query parameters already present on the provider's `authorize_url` (e.g., `client_id`), and should it avoid appending `client_id` separately? The Goals section implies `client_id` is already included in the URL from the server; the Functional Requirements step 6 does not mention `client_id` at all. Please clarify the exact URL construction rule.",
+          "context": "If authorize_url already contains client_id as a query parameter, naively using url.Parse + url.Values.Set to append parameters could either preserve or overwrite it depending on implementation. The spec should be explicit to avoid inconsistent behavior across implementations.",
+          "options": [
+            "Parse authorize_url as a URL, then add redirect_uri, state, and response_type=code to the existing query parameters (preserving client_id and any other existing params). Do NOT append client_id separately.",
+            "Treat authorize_url as an opaque string and append ?redirect_uri=...&state=...&response_type=code (or &... if a ? is already present). Do NOT append client_id separately.",
+            "The CLI must append client_id explicitly from the provider object in addition to redirect_uri, state, and response_type=code, regardless of what authorize_url already contains."
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Where and how are the Cobra command groups (`NewLoginCmd`, `NewUserCmd`, `NewKeysCmd`, etc.) registered with the root command? Is this done in `cmd/akc/main.go` (CLI binary entry point), inside CLI Core's root command setup, or via `init()` functions in `internal/cli/`?",
+          "context": "The spec says 'Each file registers its Cobra commands with the parent command group established by CLI Core' but the registration call site is not specified. This matters for: (1) preventing import cycles, (2) enabling consuming projects to embed the command tree selectively, (3) testability of individual command groups in isolation.",
+          "options": [
+            "Registration is done in cmd/akc/main.go explicitly by calling AddCommand for each group command on the root command returned by CLI Core.",
+            "CLI Core's root command setup calls RegisterUserCommands(), RegisterKeysCommands(), etc. \u2014 functions exported from internal/cli/ \u2014 as part of its initialization.",
+            "Each internal/cli/*.go file uses an init() function to register its commands with the root command via a registration hook provided by CLI Core."
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "For commands requiring authentication (`user show`, `user update`, `keys *`, `tokens *`, `orgs *`): if `api_key` is absent from config, env vars, and flags, does the command fail immediately with exit code 2 before making any SDK call, or does it attempt the SDK call and rely on the server's 401 response to surface the error?",
+          "context": "The spec lists 'No API key configured' as an exit code 2 client error, and 'API error from server (4xx/5xx)' including 401 as exit code 1. These must not conflict \u2014 if the CLI relies on the server 401, the exit code would be 1 (API error), not 2. If the CLI pre-validates, it must know that api_key is missing before the SDK call. The error table implies pre-validation for the 'no API key configured' case, but this needs to be explicit.",
+          "options": [
+            "Pre-validate: NewAuthenticatedClient (or equivalent) checks that api_key is non-empty before constructing the client and returns an exit-code-2 error immediately if it is absent.",
+            "Lazy validation: the SDK call is made, and a 401 from the server produces an exit-code-1 API error. 'No API key configured' only applies to keys refresh and keys revoke where key_id parsing is needed.",
+            "Both: NewAuthenticatedClient pre-validates api_key presence (exit code 2), and separately keys refresh/revoke validate key_id parsability (exit code 2 for invalid format)."
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "What is the actual config file path used by the CLI? The Glossary references `$HOME/.<prefix>/config.toml` with `<prefix>` undefined. What is the concrete value of `<prefix>` (e.g., `akc`, `apikit`, the project name)?",
+          "context": "Although the config file path is presumably specified in CLI Core (spec 13), this spec references the path in the Glossary and in the description of config-mutating commands. Readers of this spec in isolation need to know the actual path. It also affects test setup (creating temp config files in tests).",
+          "options": [
+            "~/.akc/config.toml",
+            "~/.apikit/config.toml",
+            "Defined entirely by CLI Core (spec 13) \u2014 this spec should simply reference spec 13 rather than defining a path."
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should Windows be handled with a compile-time build tag exclusion (so the binary simply won't compile for Windows), a runtime check with a graceful error (e.g., 'Windows is not supported'), or is this left entirely unspecified?",
+          "context": "The Non-Goals section says 'The CLI targets Unix-like systems per the master PRD' and explicitly excludes Windows support. However, the browser-open code (which uses 'open' or 'xdg-open') and the callback server have no Windows fallback. Without a build tag or runtime guard, a Windows build would compile but produce incorrect behavior at runtime.",
+          "options": [
+            "Add a //go:build !windows build tag to login.go (or a separate file) so the package does not compile on Windows.",
+            "Add a runtime check in NewLoginCmd() that returns an error with exit code 2 and message 'Windows is not supported' if runtime.GOOS == \"windows\".",
+            "Leave it unspecified \u2014 Windows behavior is undefined and not tested. The master PRD's Unix-only constraint is sufficient."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, comprehensive PRD for the CLI User Commands spec (spec 15 of 15). It is well-structured, precise, and internally consistent. The document covers functional requirements, command signatures, error handling, testing strategy, design decisions, dependencies, and a glossary in thorough detail. The intent is clear, non-goals are explicitly scoped, and implementation guidance is specific enough to serve as a direct input to a developer. Minor gaps exist around a few edge cases and ambiguities but none are blockers to implementation.",
+      "gaps": [
+        "The `user update` command requires `--full-name` as a required flag, but there is no mention of what constitutes a valid value client-side (e.g., minimum/maximum length, empty string behavior). The PRD states server-side validation failures surface as exit code 1, but it's unclear whether the CLI should pre-validate an empty string for `--full-name` or always delegate to the server.",
+        "The callback server section does not specify what HTML content is returned on a state mismatch (HTTP 400). The success HTML is specified verbatim, but the error HTML page is described only as 'an error HTML page' without a defined template or content \u2014 this could lead to inconsistent implementations.",
+        "The `tokens create` command's `--permissions` flag is described as comma-separated `resource_type:action` pairs, but there is no validation specified for the format of individual permission strings (e.g., whether the CLI should validate the `resource_type:action` format or delegate entirely to the server).",
+        "The PRD does not specify behavior when `tokens create` receives an empty `--permissions` string (e.g., `--permissions ''`). Should the CLI reject this as a client error (exit code 2) or pass an empty array to the SDK and let the server reject it?",
+        "The `login` command flow mentions using `http.Server.Shutdown(ctx)` for graceful shutdown, but the context passed to `Shutdown` may already be cancelled at that point (e.g., after a timeout or state mismatch). The PRD does not clarify which context to use for shutdown \u2014 whether to use a fresh background context or the existing one.",
+        "The testing strategy mentions overriding `loginTimeoutSeconds` for timeout tests but does not specify the mechanism \u2014 the constant is package-level in `login.go`. There is no guidance on whether tests override it via a variable, a function parameter, or a test build tag.",
+        "There is no specification for what happens if the config file write fails mid-login after the OAuth code has already been exchanged (i.e., credentials are obtained from the server but cannot be persisted). The error handling table lists exit code 2 for config write failure, but does not address whether the credentials are printed to stdout or lost entirely."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What HTML content should the callback server return on a state mismatch (HTTP 400 error page)? Should it mirror the success page format, or is there a specific error template?",
+          "context": "The success HTML is specified verbatim, but the error HTML page for state mismatch is only described as 'an error HTML page.' Implementors need a concrete template to avoid divergence.",
+          "options": [
+            "Use a simple inline template: `<html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>`",
+            "Mirror the success page format with appropriate error messaging (implementor's discretion)",
+            "Define a shared HTML template file in the repository"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the CLI validate individual `--permissions` entries (e.g., enforce `resource_type:action` format) client-side, or always delegate format validation to the server?",
+          "context": "The PRD specifies parsing (split on comma, trim whitespace) but not validation of individual entries. Client-side validation would give faster feedback but duplicates server logic.",
+          "options": [
+            "Delegate entirely to the server \u2014 no client-side format validation",
+            "Validate that each entry contains exactly one colon and both parts are non-empty; exit code 2 if invalid",
+            "Validate only that the permissions list is non-empty; exit code 2 for empty list"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "What should happen when `--permissions ''` (empty string) is passed to `tokens create`? Should the CLI reject it with exit code 2, or pass an empty array to the SDK and let the server respond?",
+          "context": "An empty permissions string after splitting and trimming yields an empty slice. It's ambiguous whether this should be a client-side validation error or delegated to the server.",
+          "options": [
+            "Reject empty permissions with exit code 2: `{\"error\":{\"code\":2,\"message\":\"--permissions must not be empty\"}}`",
+            "Pass empty slice to SDK and let server return a 4xx error (exit code 1)",
+            "Cobra's `MarkFlagRequired` already ensures the flag is provided, but not that it's non-empty \u2014 add explicit non-empty check (exit code 2)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Which context should be used for `http.Server.Shutdown()` in the login flow \u2014 a fresh `context.Background()` with a short deadline, or the existing login context (which may already be cancelled)?",
+          "context": "Using a cancelled context for Shutdown may cause it to return immediately without completing graceful shutdown. A fresh context ensures the server has time to finish, but requires defining an additional timeout.",
+          "options": [
+            "Use a fresh `context.Background()` with a short deadline (e.g., 5 seconds) for shutdown",
+            "Use the existing login context \u2014 if already cancelled, shutdown returns immediately which is acceptable",
+            "Use `context.Background()` with no deadline for shutdown"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "How should `loginTimeoutSeconds` be overridable in tests? The PRD specifies it as a package-level constant but timeout tests require a shorter value.",
+          "context": "Package-level constants cannot be changed at runtime. Tests need a mechanism to reduce the timeout without modifying the production constant.",
+          "options": [
+            "Change `loginTimeoutSeconds` from a `const` to a `var` so tests can override it directly",
+            "Accept a timeout duration as a parameter in an internal login helper function, with the Cobra command passing the constant",
+            "Use a build tag or test-only config struct injected via dependency injection"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "If the config file write fails after a successful OAuth code exchange in `login`, should the obtained credentials (api_key, user_id) be printed to stdout before exiting with code 2, or should the command exit silently with only the error envelope?",
+          "context": "The user has successfully authenticated but the credentials cannot be persisted. Printing them to stdout allows recovery but breaks the error-only-on-failure output contract.",
+          "options": [
+            "Print only the error envelope to stdout (exit code 2); credentials are lost and the user must re-run login",
+            "Print the user JSON to stdout first, then print the config write error to stderr and exit with code 2",
+            "Print the error envelope to stdout and also print the raw api_key to stderr as a recovery hint"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now comprehensive, precise, and fully implementation-ready. All six gaps identified in the previous assessment have been resolved by the user's answers and incorporated throughout the document: the state-mismatch HTML page is specified verbatim; permissions validation correctly rejects empty slices client-side while delegating individual entry format to the server; the shutdown context strategy (fresh 5-second background context) is clearly defined; the `runLogin` helper with a `timeout` parameter enables test overriding without mutating the constant; config write failure discards credentials and only emits the error envelope; and the `--full-name` flag correctly delegates all content validation to the server. The document is internally consistent, non-goals are complete, all design decisions are documented, the glossary covers new terms (`runLogin`, `helpers.go`), and the testing strategy addresses all new behaviors.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "This spec (cli_user_commands) is spec 15; cli_admin_commands is spec 14 \u2014 the YAML header is correct, update the Source Reference and Non-Goals prose.",
+        "q2": "Return HTTP 404 for any path other than /callback; only shut down after a successful /callback with valid state.",
+        "q3": "Yes \u2014 set owner: 'michael.kuehl' in the YAML header."
+      },
+      "timestamp": "2026-07-17T13:10:11.749974+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "Handler sends error on a dedicated error channel; main goroutine selects on code channel, error channel, and context done; on error, main goroutine cancels context and exits with code 2. Server does not accept further requests after mismatch (context is cancelled).",
+        "q2": "Parse authorize_url as a URL, then add redirect_uri, state, and response_type=code to the existing query parameters (preserving client_id and any other existing params). Do NOT append client_id separately.",
+        "q3": "Registration is done in cmd/akc/main.go explicitly by calling AddCommand for each group command on the root command returned by CLI Core.",
+        "q4": "Both: NewAuthenticatedClient pre-validates api_key presence (exit code 2), and separately keys refresh/revoke validate key_id parsability (exit code 2 for invalid format).",
+        "q5": "Defined entirely by CLI Core (spec 13) \u2014 this spec should simply reference spec 13 rather than defining a path.",
+        "q6": "Leave it unspecified \u2014 Windows behavior is undefined and not tested. The master PRD's Unix-only constraint is sufficient."
+      },
+      "timestamp": "2026-07-17T13:14:16.866697+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Use a simple inline template: <html><body><h1>Login failed</h1><p>OAuth state mismatch. Please try again.</p></body></html>",
+        "q2": "Delegate entirely to the server \u2014 no client-side format validation",
+        "q3": "Reject empty permissions with exit code 2",
+        "q4": "Use a fresh context.Background() with a short deadline (e.g., 5 seconds) for shutdown",
+        "q5": "Accept a timeout duration as a parameter in an internal login helper function, with the Cobra command passing the constant",
+        "q6": "Print only the error envelope to stdout (exit code 2); credentials are lost and the user must re-run login"
+      },
+      "timestamp": "2026-07-17T13:24:04.293946+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

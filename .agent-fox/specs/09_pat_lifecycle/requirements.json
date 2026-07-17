@@ -1,0 +1,1047 @@
+{
+  "$schema": null,
+  "spec_id": "09",
+  "spec_name": "pat_lifecycle",
+  "schema_version": 1,
+  "introduction": "This spec defines the Personal Access Token (PAT) lifecycle handlers for apikit, covering the four CRUD endpoints (`POST /user/tokens`, `GET /user/tokens`, `GET /user/tokens/:token_id`, `DELETE /user/tokens/:token_id`) that allow users to create, list, retrieve, and revoke their own fine-grained scoped credentials. Note: requirements referencing `auth.PermissionRegistry`, `auth.GetAuthInfo()`, `auth.GetUserID()`, `auth.RequirePermission()`, `db.WithTx`, `db.WrapError`, `db.ErrNotFound`, `db.ErrConflict`, `db.FormatTime`, `db.ParseTime`, and `APIError()` are based on upstream spec interfaces and should be cross-checked against the installed packages before implementation.",
+  "glossary": {
+    "APIError": "The standard error response helper from Server Core (spec 01) that produces a consistent JSON error envelope with code and message fields.",
+    "APIGroup": "The Echo route group returned by `server.APIGroup()` to which authenticated route handlers are registered.",
+    "Cache-Control: no-store": "HTTP response header directive that prevents clients and intermediaries from caching the response.",
+    "CreatePATRequest": "The Go struct representing the JSON request body for `POST /user/tokens`, containing name, permissions, and optional expires fields.",
+    "CreatePATResponse": "The Go struct representing the HTTP 201 response for PAT creation, including the one-time plaintext token.",
+    "PAT": "Personal Access Token \u2014 a user-created, fine-grained credential in the format `<prefix>_pat_<token_id>_<secret>`. Multiple per user, each with specific permissions.",
+    "PATHandler": "The Go struct holding the database connection and PermissionRegistry dependencies for PAT lifecycle operations.",
+    "PATResponse": "The Go struct representing the HTTP 200 response for list, get, and revoke operations \u2014 metadata only, never includes the plaintext secret.",
+    "PermissionRegistry": "The thread-safe registry of valid `resource_type:action` pairs defined in the auth middleware spec. Used to validate permissions during PAT creation.",
+    "TokenPrefix": "The build-time configurable variable `apikit.TokenPrefix` (default `\"ak\"`) used as the leading segment of the PAT token format.",
+    "auth.GetAuthInfo": "Function from spec 05 auth middleware that retrieves the full authentication info (including credential type and permissions) from the Echo context.",
+    "auth.GetUserID": "Function from spec 05 auth middleware that retrieves the authenticated user's ID from the Echo context.",
+    "auth.RequirePermission": "Function from spec 05 auth middleware that enforces a specific `resource_type:action` permission on the authenticated credential.",
+    "db.ErrConflict": "Sentinel error returned by the database layer (spec 02) when a uniqueness or constraint violation occurs.",
+    "db.ErrNotFound": "Sentinel error returned by the database layer (spec 02) when a queried row does not exist.",
+    "db.FormatTime": "The database helper from spec 02 that serializes a Go `time.Time` value to the string format expected by SQLite.",
+    "db.ParseTime": "The database helper from spec 02 that parses a SQLite timestamp string into a Go `time.Time` value.",
+    "db.WithTx": "The database helper from spec 02 that wraps operations in a SQLite transaction and automatically rolls back on failure.",
+    "db.WrapError": "The database helper from spec 02 that translates raw SQLite errors into sentinel error types such as `db.ErrNotFound` and `db.ErrConflict`.",
+    "expires_days": "The original expiry duration stored in the `pats` table (0, 30, 60, or 90 days). Used for internal/audit purposes only; not included in any API response.",
+    "generateSecret": "Internal function that generates a cryptographically random 32-character string from `tokenAlphabet`.",
+    "generateTokenID": "Internal function that generates a cryptographically random 8-character string from `tokenAlphabet`.",
+    "hashSecret": "Internal function that computes the SHA-256 hash of a string and returns it as a lowercase hex-encoded string.",
+    "insertion order": "The order in which the client submitted permissions in the create request. This order is preserved in DB storage and all API responses.",
+    "pats": "The database table storing all PAT records including token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, created_at, and revoked_at.",
+    "privilege escalation": "An attempt by a PAT to create a new PAT with permissions beyond those the creating PAT itself holds. Prevented by validation during PAT creation.",
+    "resource_type:action": "The permission format used by PATs. Each permission is a colon-separated pair of a resource type and an action (e.g. `users:read`, `keys:manage`).",
+    "revoked_at": "The timestamp when a PAT was permanently revoked. NULL while the PAT is active. Once set via a conditional UPDATE, the PAT can no longer authenticate.",
+    "secret": "The random 32-character alphanumeric string embedded in the PAT format. Characters drawn from `[a-z0-9]`. Stored only as a SHA-256 hash; never persisted in plaintext.",
+    "secret_hash": "The SHA-256 hash (hex-encoded) of the PAT secret. Stored in the `pats` table. Used by the auth middleware for credential validation.",
+    "tokenAlphabet": "The constant `\"abcdefghijklmnopqrstuvwxyz0123456789\"` \u2014 the 36-character set from which both `token_id` and `secret` characters are drawn.",
+    "token_id": "The random 8-character alphanumeric identifier embedded in the PAT format. Characters drawn from `[a-z0-9]`. Used for database lookup and API path parameters. Stored in plaintext.",
+    "tokens:manage": "The permission string required to create or revoke PATs. Part of the registered permissions in the `PermissionRegistry`.",
+    "tokens:read": "The permission string required to list or get PAT metadata. Part of the registered permissions in the `PermissionRegistry`.",
+    "user_id": "The identifier of the authenticated user, injected into the Echo context by the auth middleware and used as a filter column in all PAT queries.",
+    "\"cannot grant permission: <permission>\"": "Error message returned (HTTP 403) when a PAT attempts to create a new PAT with a permission that the creating PAT does not itself hold.",
+    "\"cannot grant permission: keys:manage\"": "Example error message returned (HTTP 403) when a PAT without `keys:manage` attempts to grant that permission to a new PAT.",
+    "\"expires must be 0, 30, 60, or 90\"": "Error message returned (HTTP 400) when the `expires` field in a CreatePAT request is not one of the allowed values.",
+    "\"expires_at\": null": "JSON representation of a null `expires_at` field in a PAT response, indicating the PAT has no expiry (expires_days = 0).",
+    "\"internal server error\"": "Generic error message returned (HTTP 500) when an unrecoverable server-side error occurs, such as a database transaction failure.",
+    "\"invalid permission format: <permission>\"": "Error message returned (HTTP 400) when a permission string does not contain exactly one colon separator.",
+    "\"invalid request body\"": "Error message returned (HTTP 400) when the JSON request body cannot be decoded.",
+    "\"name is required\"": "Error message returned (HTTP 400) when the `name` field is missing or empty in a CreatePAT request.",
+    "\"name must be 255 characters or fewer\"": "Error message returned (HTTP 400) when the `name` field exceeds 255 characters in a CreatePAT request.",
+    "\"permissions are required\"": "Error message returned (HTTP 400) when the `permissions` array is missing or empty in a CreatePAT request.",
+    "\"token already revoked\"": "Error message returned (HTTP 400) when attempting to revoke a PAT whose `revoked_at` field is already set.",
+    "\"token not found\"": "Error message returned (HTTP 404) when the requested `token_id` does not exist or does not belong to the authenticated user.",
+    "\"unknown permission: <permission>\"": "Error message returned (HTTP 400) when a permission string is well-formed but not registered in the PermissionRegistry.",
+    "*echo.Group": "Pointer to an Echo v4 route group. The `RegisterRoutes` method receives this type for route registration.",
+    "<TokenPrefix>_pat_<token_id>_<secret>": "The full PAT token format string template showing how `apikit.TokenPrefix`, `token_id`, and `secret` are concatenated.",
+    "<permission>": "Placeholder representing a specific `resource_type:action` permission string in error messages.",
+    "APIError()": "The standard error response helper from Server Core (spec 01) that produces a consistent JSON error envelope with code and message fields.",
+    "DELETE /user/tokens/:token_id": "HTTP endpoint for revoking a specific PAT by its token_id.",
+    "GET /user/tokens": "HTTP endpoint for listing all of the authenticated user's PATs.",
+    "GET /user/tokens/:token_id": "HTTP endpoint for retrieving a specific PAT's metadata by its token_id.",
+    "NewPATHandler(database *db.DB, registry *auth.PermissionRegistry) *PATHandler": "The constructor function signature for creating a PATHandler with its required dependencies.",
+    "POST /user/tokens": "HTTP endpoint for creating a new PAT.",
+    "SET revoked_at = <now> WHERE token_id = ? AND user_id = ? AND revoked_at IS NULL": "The conditional SQL UPDATE statement used for PAT revocation, ensuring only non-revoked tokens owned by the authenticated user are updated.",
+    "[]": "An empty JSON array, returned by the ListPATs endpoint when the user has no PATs.",
+    "[a-z0-9]": "Regular expression character class representing the 36-character token alphabet (lowercase letters and digits).",
+    "^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$": "Regular expression pattern matching a valid PAT token string.",
+    "apikit.TokenPrefix": "The build-time configurable variable (default `\"ak\"`) used as the leading segment of all credential token formats.",
+    "auth.GetAuthInfo()": "Function from spec 05 auth middleware that retrieves the full AuthInfo struct from the Echo context, including credential type and permissions.",
+    "auth.GetUserID()": "Function from spec 05 auth middleware that retrieves the authenticated user's UUID from the Echo context.",
+    "auth.RequirePermission(c, \"tokens\", \"manage\")": "Invocation of the auth middleware permission check requiring `tokens:manage` permission on the authenticated credential.",
+    "auth.RequirePermission(c, \"tokens\", \"read\")": "Invocation of the auth middleware permission check requiring `tokens:read` permission on the authenticated credential.",
+    "created_at + expires_days * 24h": "The formula for calculating `expires_at` from the creation timestamp and the expiry duration in days.",
+    "created_at DESC": "SQL ORDER BY clause used to sort PATs in reverse chronological order (most recently created first).",
+    "crypto/rand": "Go standard library package providing cryptographically secure random number generation, used for generating token_id and secret values.",
+    "crypto/sha256": "Go standard library package providing SHA-256 hash computation, used for hashing PAT secrets before storage.",
+    "database": "The `*db.DB` parameter in the `NewPATHandler` constructor, providing database access for PAT operations.",
+    "encoding/hex": "Go standard library package for hexadecimal encoding, used to encode SHA-256 hash output as a lowercase hex string.",
+    "expires": "The optional integer field in CreatePATRequest specifying the PAT expiry duration in days (0, 30, 60, or 90).",
+    "expires_at": "The nullable timestamp field indicating when a PAT expires. NULL when `expires_days` is 0 (no expiry).",
+    "generateSecret()": "Internal function call that generates a cryptographically random 32-character secret from `tokenAlphabet`.",
+    "generateTokenID()": "Internal function call that generates a cryptographically random 8-character token_id from `tokenAlphabet`.",
+    "hashSecret(secret)": "Internal function call that computes the SHA-256 hash of the given secret string.",
+    "keys:manage": "A built-in permission string registered in the PermissionRegistry, granting the ability to manage API keys.",
+    "name": "The human-readable label field in a CreatePATRequest, used to identify the PAT. Non-unique, max 255 characters.",
+    "permissions": "The array of `resource_type:action` strings in a CreatePATRequest or PAT response, defining the PAT's granted permissions.",
+    "registry": "The `*auth.PermissionRegistry` parameter in the `NewPATHandler` constructor, used for validating permissions during PAT creation.",
+    "revoked_at IS NULL": "SQL WHERE clause condition ensuring only non-revoked PATs are matched in conditional UPDATE operations.",
+    "token": "The full plaintext PAT string (format: `<prefix>_pat_<token_id>_<secret>`) returned only in the CreatePATResponse.",
+    "token_id AND user_id": "The dual-column filter used in PAT queries to ensure a user can only access their own PATs.",
+    "token_id AND user_id AND revoked_at IS NULL": "The three-column filter used in the conditional UPDATE for PAT revocation.",
+    "users:read": "A built-in permission string registered in the PermissionRegistry, granting read access to user profiles."
+  },
+  "requirements": [
+    {
+      "id": "09-REQ-1",
+      "title": "Handler constructor and route registration",
+      "user_story": {
+        "role": "API server initializer",
+        "goal": "construct a PATHandler with required dependencies and register its routes on the authenticated Echo group",
+        "benefit": "PAT lifecycle endpoints are available and protected by the auth middleware"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-1.1",
+          "ears_pattern": "ubiquitous",
+          "system": "PATHandler",
+          "action": "is constructed via `NewPATHandler(database *db.DB, registry *auth.PermissionRegistry) *PATHandler`; if either parameter is nil the constructor panics with a descriptive message rather than returning a nil handler",
+          "return_contract": "non-nil `*PATHandler` when both parameters are non-nil"
+        },
+        {
+          "id": "09-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "PATHandler.RegisterRoutes",
+          "action": "registers `POST /user/tokens` \u2192 CreatePAT, `GET /user/tokens` \u2192 ListPATs, `GET /user/tokens/:token_id` \u2192 GetPAT, and `DELETE /user/tokens/:token_id` \u2192 RevokePAT on the provided `*echo.Group`",
+          "return_contract": null
+        },
+        {
+          "id": "09-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "All four PAT endpoints",
+          "action": "run the auth middleware before reaching handler logic, so unauthenticated requests are rejected by the middleware before any handler code executes",
+          "return_contract": "401 for unauthenticated requests, handled by auth middleware"
+        },
+        {
+          "id": "09-REQ-1.4",
+          "ears_pattern": "ubiquitous",
+          "system": "All four PAT endpoints",
+          "action": "set the `Cache-Control: no-store` response header on every response, including error responses",
+          "return_contract": "HTTP response always contains header `Cache-Control: no-store`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "NewPATHandler",
+          "action": "panics with a descriptive message identifying which parameter is nil, preventing silent misconfiguration at startup",
+          "return_contract": "panic (not a returned error) \u2014 library code signals misconfiguration via panic at construction time, never silently accepts nil dependencies",
+          "error_condition": "either `database` or `registry` parameter is nil"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-2",
+      "title": "Token generation and secret hashing",
+      "user_story": {
+        "role": "PAT creation handler",
+        "goal": "generate cryptographically secure token IDs and secrets, and hash secrets before storage",
+        "benefit": "PATs are unguessable and plaintext secrets are never persisted"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "generateTokenID",
+          "action": "generates an 8-character string drawn exclusively from `tokenAlphabet` (`[a-z0-9]`) using `crypto/rand`",
+          "return_contract": "`(string, error)` \u2014 string of exactly 8 characters on success; non-nil error if `crypto/rand` fails"
+        },
+        {
+          "id": "09-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "generateSecret",
+          "action": "generates a 32-character string drawn exclusively from `tokenAlphabet` (`[a-z0-9]`) using `crypto/rand`",
+          "return_contract": "`(string, error)` \u2014 string of exactly 32 characters on success; non-nil error if `crypto/rand` fails"
+        },
+        {
+          "id": "09-REQ-2.3",
+          "ears_pattern": "ubiquitous",
+          "system": "hashSecret",
+          "action": "computes the SHA-256 hash of the input string and returns it as a lowercase hex-encoded string using `crypto/sha256` and `encoding/hex`",
+          "return_contract": "deterministic 64-character hex string; same input always produces the same output"
+        },
+        {
+          "id": "09-REQ-2.4",
+          "ears_pattern": "ubiquitous",
+          "system": "PAT token format",
+          "action": "constructs the full PAT token string as `<TokenPrefix>_pat_<token_id>_<secret>` where `TokenPrefix` is `apikit.TokenPrefix`, `token_id` is 8 chars from `tokenAlphabet`, and `secret` is 32 chars from `tokenAlphabet`",
+          "return_contract": "token string matching pattern `[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "generateTokenID or generateSecret",
+          "action": "returns the error to the caller (CreatePAT handler); the handler aborts PAT creation and returns HTTP 500 with message `\"internal server error\"` via `APIError()`; no partial token material is stored or returned",
+          "return_contract": "non-nil error propagated to caller; HTTP 500 at handler boundary",
+          "error_condition": "`crypto/rand` returns an error during random byte generation"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-3",
+      "title": "Create PAT \u2014 request validation",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "receive clear validation errors when the PAT creation request body is malformed or contains invalid data",
+        "benefit": "clients can correct their requests without ambiguity"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"name is required\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope `{\"error\":{\"code\":400,\"message\":\"name is required\"}}`",
+          "trigger": "receives a request body with a missing or empty `name` field"
+        },
+        {
+          "id": "09-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"name must be 255 characters or fewer\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"name must be 255 characters or fewer\"`",
+          "trigger": "receives a `name` field exceeding 255 characters"
+        },
+        {
+          "id": "09-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"permissions are required\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"permissions are required\"`",
+          "trigger": "receives a request body with a missing or empty `permissions` array"
+        },
+        {
+          "id": "09-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"invalid permission format: <permission>\"` via `APIError()`, where `<permission>` is the offending string",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"invalid permission format: <permission>\"`",
+          "trigger": "receives a permission string that does not contain exactly one colon (malformed `resource_type:action`)"
+        },
+        {
+          "id": "09-REQ-3.5",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"unknown permission: <permission>\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"unknown permission: <permission>\"`",
+          "trigger": "receives a permission string that is well-formed but not registered in the `PermissionRegistry`"
+        },
+        {
+          "id": "09-REQ-3.6",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"expires must be 0, 30, 60, or 90\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"expires must be 0, 30, 60, or 90\"`",
+          "trigger": "receives an `expires` value that is not one of {0, 30, 60, 90}"
+        },
+        {
+          "id": "09-REQ-3.7",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"invalid request body\"` via `APIError()`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"invalid request body\"`",
+          "trigger": "receives a malformed JSON request body that cannot be decoded"
+        },
+        {
+          "id": "09-REQ-3.8",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "treats a missing `expires` field (omitempty) as a default of 90 days",
+          "return_contract": "`expires_at` in response equals `created_at` + 90 \u00d7 24 hours"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-3.E1",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "sets `expires_at` to NULL in the `pats` table and returns `\"expires_at\": null` in the `CreatePATResponse`",
+          "return_contract": "HTTP 201 with `\"expires_at\": null` in the response JSON",
+          "trigger": "receives `expires` = 0 in the request body"
+        },
+        {
+          "id": "09-REQ-3.E2",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 400 with message `\"expires must be 0, 30, 60, or 90\"`",
+          "return_contract": "HTTP 400, JSON error envelope with message `\"expires must be 0, 30, 60, or 90\"`",
+          "trigger": "receives `expires` as a negative integer or a value such as 7, 365, or 999"
+        },
+        {
+          "id": "09-REQ-3.E3",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "validates all `permissions` entries and returns the first validation error encountered (format check before registry check); stops at the first invalid permission rather than accumulating all errors",
+          "return_contract": "HTTP 400 with the first encountered validation error message"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-4",
+      "title": "Create PAT \u2014 privilege escalation prevention",
+      "user_story": {
+        "role": "authenticated user whose credential is a PAT",
+        "goal": "be prevented from creating a new PAT with permissions beyond those my own PAT holds",
+        "benefit": "PATs cannot be used to silently expand their own scope"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-4.1",
+          "ears_pattern": "state_driven",
+          "system": "CreatePAT handler",
+          "action": "checks that every requested permission is present in the creating PAT's own permissions list; if any requested permission is absent, returns HTTP 403 with message `\"cannot grant permission: <permission>\"` via `APIError()`",
+          "return_contract": "HTTP 403, JSON error envelope with message `\"cannot grant permission: <permission>\"` for the first offending permission",
+          "state": "the authenticated credential (from `auth.GetAuthInfo()`) is a PAT"
+        },
+        {
+          "id": "09-REQ-4.2",
+          "ears_pattern": "state_driven",
+          "system": "CreatePAT handler",
+          "action": "skips the privilege escalation check entirely; any permission registered in the `PermissionRegistry` may be granted without restriction",
+          "return_contract": "no HTTP 403 from privilege escalation; proceeds to creation if all other validations pass",
+          "state": "the authenticated credential is an API key (admin or regular, from `auth.GetAuthInfo()`)"
+        },
+        {
+          "id": "09-REQ-4.3",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "performs privilege escalation checks only after validating that all requested permissions are registered in the `PermissionRegistry` (registry validation precedes escalation check)",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-4.E1",
+          "ears_pattern": "state_driven",
+          "system": "CreatePAT handler",
+          "action": "allows creating a new PAT requesting a subset such as [`users:read`] and rejects a request for [`users:read`, `keys:manage`] with HTTP 403 on `\"cannot grant permission: keys:manage\"`",
+          "return_contract": "HTTP 201 for subset; HTTP 403 with message `\"cannot grant permission: keys:manage\"` for superset",
+          "state": "the authenticated credential is a PAT with permissions [`tokens:manage`, `users:read`]"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-5",
+      "title": "Create PAT \u2014 token generation, storage, and response",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "create a new PAT and receive the full plaintext token in the response",
+        "benefit": "I can use the token immediately, knowing I cannot retrieve the secret again later"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "CreatePAT handler",
+          "action": "generates `token_id` via `generateTokenID()`, generates `secret` via `generateSecret()`, computes `secret_hash` via `hashSecret(secret)`, constructs the full token as `<TokenPrefix>_pat_<token_id>_<secret>`, calculates `expires_at` as `created_at + expires_days * 24h` (NULL when `expires_days` = 0), inserts the PAT record into the `pats` table using `db.WithTx`, and returns HTTP 201 with `CreatePATResponse`",
+          "return_contract": "HTTP 201, `CreatePATResponse` JSON with `token_id`, `name`, `token` (plaintext), `permissions` (insertion order), `expires_at` (nullable), `created_at`",
+          "trigger": "receives a valid `POST /user/tokens` request after all validations pass"
+        },
+        {
+          "id": "09-REQ-5.2",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "stores only `secret_hash` (SHA-256 hex) in the `pats` table; the plaintext `secret` is never written to the database, logs, or any persistent storage",
+          "return_contract": null
+        },
+        {
+          "id": "09-REQ-5.3",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "preserves the `permissions` array in insertion order in both the `pats` table (as a JSON array) and in the `CreatePATResponse`; the order matches the order the client submitted",
+          "return_contract": "response `permissions` array order equals request `permissions` array order"
+        },
+        {
+          "id": "09-REQ-5.4",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePATResponse",
+          "action": "omits `revoked_at` and `expires_days` fields; a newly created PAT is never revoked, and `expires_days` is an internal field not exposed in any API response",
+          "return_contract": "response JSON has no `revoked_at` or `expires_days` key"
+        },
+        {
+          "id": "09-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "wraps the `pats` table INSERT in a `db.WithTx` transaction so that any failure causes automatic rollback with no partial state persisted",
+          "return_contract": null
+        },
+        {
+          "id": "09-REQ-5.6",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "requires the `tokens:manage` permission by calling `auth.RequirePermission(c, \"tokens\", \"manage\")` before processing the request; API keys bypass this check as enforced by the auth middleware",
+          "return_contract": "HTTP 403 if the PAT credential lacks `tokens:manage`"
+        },
+        {
+          "id": "09-REQ-5.7",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "allows duplicate PAT names for the same user without error; no uniqueness constraint is enforced at the handler or database level for the `name` field",
+          "return_contract": "HTTP 201 for each creation even if `name` matches an existing PAT"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "CreatePAT handler",
+          "action": "returns HTTP 500 with message `\"internal server error\"` via `APIError()`; the transaction is rolled back automatically by `db.WithTx`; no token material (token_id, secret, hash) is returned or persisted; the generated token is discarded",
+          "return_contract": "HTTP 500, JSON error envelope with message `\"internal server error\"`",
+          "error_condition": "the `db.WithTx` transaction or `pats` table INSERT fails for any reason (e.g., SQLite error, constraint violation)"
+        },
+        {
+          "id": "09-REQ-5.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "CreatePAT handler",
+          "action": "generates `token_id` and `secret` before opening the `db.WithTx` transaction so that a transaction failure discards the generated values cleanly without any intermediate state being partially visible",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-6",
+      "title": "List PATs",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "list all my PATs including their metadata and status",
+        "benefit": "I can see my full token history and audit which PATs are active, expired, or revoked"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "ListPATs handler",
+          "action": "queries the `pats` table for all rows matching the authenticated `user_id` (from `auth.GetUserID()`), ordered by `created_at DESC`, and returns the full list as a JSON array of `PATResponse` objects",
+          "return_contract": "HTTP 200, JSON array of `PATResponse`; empty array `[]` if the user has no PATs",
+          "trigger": "receives a valid `GET /user/tokens` request"
+        },
+        {
+          "id": "09-REQ-6.2",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs handler",
+          "action": "includes all PATs regardless of status (active, expired, revoked) in the response; status is apparent from `expires_at` and `revoked_at` fields",
+          "return_contract": "response array includes expired and revoked PATs"
+        },
+        {
+          "id": "09-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs handler",
+          "action": "never includes `secret_hash`, plaintext secret, `token`, or `expires_days` in any element of the response array; only metadata fields are returned",
+          "return_contract": "response JSON has no `secret_hash`, `token`, or `expires_days` keys in any array element"
+        },
+        {
+          "id": "09-REQ-6.4",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs handler",
+          "action": "returns only PATs belonging to the authenticated user; PATs belonging to other users are excluded from the result by the `user_id` filter in the query",
+          "return_contract": "no PATs from other users appear in the response"
+        },
+        {
+          "id": "09-REQ-6.5",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs handler",
+          "action": "requires the `tokens:read` permission by calling `auth.RequirePermission(c, \"tokens\", \"read\")` before processing the request",
+          "return_contract": "HTTP 403 if the PAT credential lacks `tokens:read`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-6.E1",
+          "ears_pattern": "state_driven",
+          "system": "ListPATs handler",
+          "action": "returns HTTP 200 with an empty JSON array `[]` rather than HTTP 404 or null",
+          "return_contract": "HTTP 200, body `[]`",
+          "state": "the authenticated user has no PATs in the `pats` table"
+        },
+        {
+          "id": "09-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "ListPATs handler",
+          "action": "returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+          "return_contract": "HTTP 500, JSON error envelope with message `\"internal server error\"`",
+          "error_condition": "database query fails"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-7",
+      "title": "Get single PAT by token_id",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "retrieve the metadata of a specific PAT by its token_id",
+        "benefit": "I can inspect a particular token's permissions, status, and timestamps"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "GetPAT handler",
+          "action": "queries the `pats` table by both `token_id` (from path parameter) and `user_id` (from `auth.GetUserID()`), and returns the PAT metadata as a `PATResponse`",
+          "return_contract": "HTTP 200, `PATResponse` JSON with `token_id`, `name`, `permissions`, `created_at`, `expires_at`, `revoked_at`",
+          "trigger": "receives a valid `GET /user/tokens/:token_id` request where the `token_id` path parameter matches a PAT belonging to the authenticated user"
+        },
+        {
+          "id": "09-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "GetPAT handler",
+          "action": "returns HTTP 404 with message `\"token not found\"` via `APIError()`; this applies whether the `token_id` does not exist at all or belongs to another user",
+          "return_contract": "HTTP 404, JSON error envelope with message `\"token not found\"`",
+          "trigger": "the `token_id` does not exist in the `pats` table for the authenticated `user_id`"
+        },
+        {
+          "id": "09-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "GetPAT handler",
+          "action": "requires the `tokens:read` permission by calling `auth.RequirePermission(c, \"tokens\", \"read\")` before processing the request",
+          "return_contract": "HTTP 403 if the PAT credential lacks `tokens:read`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-7.E1",
+          "ears_pattern": "event_driven",
+          "system": "GetPAT handler",
+          "action": "returns HTTP 404 with message `\"token not found\"` \u2014 not HTTP 403 \u2014 to avoid leaking the existence of the token to unauthorized callers",
+          "return_contract": "HTTP 404, JSON error envelope with message `\"token not found\"`",
+          "trigger": "a `token_id` that exists in the `pats` table belongs to a different `user_id` than the authenticated user"
+        },
+        {
+          "id": "09-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "GetPAT handler",
+          "action": "returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+          "return_contract": "HTTP 500, JSON error envelope with message `\"internal server error\"`",
+          "error_condition": "database query fails with an error other than `db.ErrNotFound`"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-8",
+      "title": "Revoke PAT",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "permanently revoke one of my PATs by its token_id",
+        "benefit": "I can invalidate a compromised or no-longer-needed token while preserving the audit trail"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "RevokePAT handler",
+          "action": "issues a conditional UPDATE: `SET revoked_at = <now> WHERE token_id = ? AND user_id = ? AND revoked_at IS NULL`; if the UPDATE affects one row, returns HTTP 200 with the updated `PATResponse` including the newly set `revoked_at`",
+          "return_contract": "HTTP 200, `PATResponse` JSON with `revoked_at` set to the revocation timestamp",
+          "trigger": "receives a valid `DELETE /user/tokens/:token_id` request for a PAT that exists, belongs to the authenticated user, and has not yet been revoked"
+        },
+        {
+          "id": "09-REQ-8.2",
+          "ears_pattern": "complex_event",
+          "system": "RevokePAT handler",
+          "action": "queries the `pats` table to distinguish two sub-cases: (a) if no row matches `token_id AND user_id`, returns HTTP 404 with message `\"token not found\"`; (b) if a row matches but has `revoked_at` already set, returns HTTP 400 with message `\"token already revoked\"`",
+          "return_contract": "HTTP 404 for case (a); HTTP 400 with message `\"token already revoked\"` for case (b)",
+          "trigger": "no row matches `token_id AND user_id AND revoked_at IS NULL`",
+          "condition": "the conditional UPDATE affects zero rows"
+        },
+        {
+          "id": "09-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "RevokePAT handler",
+          "action": "requires the `tokens:manage` permission by calling `auth.RequirePermission(c, \"tokens\", \"manage\")` before processing the request",
+          "return_contract": "HTTP 403 if the PAT credential lacks `tokens:manage`"
+        },
+        {
+          "id": "09-REQ-8.4",
+          "ears_pattern": "ubiquitous",
+          "system": "RevokePAT handler",
+          "action": "does not delete the PAT row from the `pats` table; revocation only sets `revoked_at`, preserving the record for audit purposes and listing visibility",
+          "return_contract": "PAT row persists in `pats` table after revocation; `revoked_at` is non-null"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-8.E1",
+          "ears_pattern": "event_driven",
+          "system": "RevokePAT handler",
+          "action": "the first UPDATE (which finds `revoked_at IS NULL`) succeeds and sets `revoked_at`; the second UPDATE finds zero matching rows and enters the disambiguation query, detecting that `revoked_at` is now set and returning HTTP 400 with message `\"token already revoked\"`; SQLite's single-connection pool makes this safe",
+          "return_contract": "first request: HTTP 200 with `revoked_at` set; second request: HTTP 400 with message `\"token already revoked\"`",
+          "trigger": "two concurrent `DELETE /user/tokens/:token_id` requests arrive for the same token"
+        },
+        {
+          "id": "09-REQ-8.E2",
+          "ears_pattern": "event_driven",
+          "system": "RevokePAT handler",
+          "action": "returns HTTP 404 with message `\"token not found\"` \u2014 not HTTP 403 \u2014 because the `user_id` filter is part of the WHERE clause and the token appears non-existent to the caller",
+          "return_contract": "HTTP 404, JSON error envelope with message `\"token not found\"`",
+          "trigger": "the `token_id` path parameter refers to a PAT belonging to a different `user_id`"
+        },
+        {
+          "id": "09-REQ-8.E3",
+          "ears_pattern": "unwanted",
+          "system": "RevokePAT handler",
+          "action": "returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+          "return_contract": "HTTP 500, JSON error envelope with message `\"internal server error\"`",
+          "error_condition": "the UPDATE or follow-up SELECT query fails with a database error"
+        }
+      ]
+    },
+    {
+      "id": "09-REQ-9",
+      "title": "PAT visibility and authentication rules",
+      "user_story": {
+        "role": "authenticated user or auth middleware",
+        "goal": "ensure expired and revoked PATs remain visible in listings but cannot authenticate",
+        "benefit": "users retain audit visibility while the system enforces access control correctly"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "09-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs and GetPAT handlers",
+          "action": "include expired PATs (where `expires_at` is in the past) in all list and get responses without filtering them out",
+          "return_contract": "expired PATs appear in responses with their original `expires_at` value"
+        },
+        {
+          "id": "09-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "ListPATs and GetPAT handlers",
+          "action": "include revoked PATs (where `revoked_at` is non-null) in all list and get responses without filtering them out",
+          "return_contract": "revoked PATs appear in responses with non-null `revoked_at`"
+        },
+        {
+          "id": "09-REQ-9.3",
+          "ears_pattern": "ubiquitous",
+          "system": "PAT lifecycle handlers",
+          "action": "do not enforce authentication or expiry validation on PAT tokens; that responsibility belongs exclusively to the auth middleware (spec 05)",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "09-REQ-9.E1",
+          "ears_pattern": "state_driven",
+          "system": "PAT lifecycle handlers",
+          "action": "the PAT lifecycle handlers themselves do not check for blocked status; blocked-user enforcement is handled by the auth middleware before the handler is invoked, so blocked users' requests are rejected before any handler logic runs",
+          "return_contract": "blocked user requests rejected by auth middleware before handler code executes",
+          "state": "the authenticated user is blocked"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "09-PROP-1",
+      "title": "Secret never persisted in plaintext",
+      "for_any": "PAT created via `POST /user/tokens`",
+      "invariant": "the `pats` table row for that PAT contains `secret_hash` (SHA-256 hex of the secret) and never contains the plaintext secret; the plaintext secret appears only in the `CreatePATResponse` at creation time and in no other storage, log, or response",
+      "validates": [
+        "09-REQ-5.1",
+        "09-REQ-5.2"
+      ]
+    },
+    {
+      "id": "09-PROP-2",
+      "title": "User isolation: users cannot access each other's PATs",
+      "for_any": "PAT row in the `pats` table belonging to `user_id` A",
+      "invariant": "no `GET /user/tokens/:token_id` or `DELETE /user/tokens/:token_id` request authenticated as `user_id` B (B \u2260 A) returns HTTP 200 for that token; both return HTTP 404",
+      "validates": [
+        "09-REQ-7.1",
+        "09-REQ-7.2",
+        "09-REQ-7.E1",
+        "09-REQ-8.1",
+        "09-REQ-8.E2"
+      ]
+    },
+    {
+      "id": "09-PROP-3",
+      "title": "Permissions insertion order preserved",
+      "for_any": "PAT creation request with a `permissions` array in some order",
+      "invariant": "the `permissions` field in all responses (`CreatePATResponse`, `PATResponse` from list, get, and revoke) for that PAT contains the same permissions in the same order as the creation request",
+      "validates": [
+        "09-REQ-5.3",
+        "09-REQ-6.1",
+        "09-REQ-7.1",
+        "09-REQ-8.1"
+      ]
+    },
+    {
+      "id": "09-PROP-4",
+      "title": "No privilege escalation via PAT-created PATs",
+      "for_any": "PAT credential with permissions set P attempting to create a new PAT requesting permissions set Q",
+      "invariant": "if Q is not a subset of P the request is rejected with HTTP 403; if the creating credential is an API key (not a PAT), no such restriction applies",
+      "validates": [
+        "09-REQ-4.1",
+        "09-REQ-4.2",
+        "09-REQ-4.E1"
+      ]
+    },
+    {
+      "id": "09-PROP-5",
+      "title": "Revocation is idempotent-safe (conditional update wins)",
+      "for_any": "any `token_id` in the `pats` table",
+      "invariant": "exactly one of any set of concurrent `DELETE /user/tokens/:token_id` requests for that token receives HTTP 200; all subsequent requests receive HTTP 400 with message `\"token already revoked\"`; the `revoked_at` timestamp is set exactly once",
+      "validates": [
+        "09-REQ-8.1",
+        "09-REQ-8.2",
+        "09-REQ-8.E1"
+      ]
+    },
+    {
+      "id": "09-PROP-6",
+      "title": "Token format invariant",
+      "for_any": "any token returned in `CreatePATResponse`",
+      "invariant": "the `token` field matches the regular expression `^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$` where the leading segment equals `apikit.TokenPrefix`",
+      "validates": [
+        "09-REQ-2.4",
+        "09-REQ-5.1"
+      ]
+    },
+    {
+      "id": "09-PROP-7",
+      "title": "Cache-Control header on all responses",
+      "for_any": "any HTTP response from `POST /user/tokens`, `GET /user/tokens`, `GET /user/tokens/:token_id`, or `DELETE /user/tokens/:token_id`",
+      "invariant": "the response includes the header `Cache-Control: no-store` regardless of HTTP status code (2xx or 4xx or 5xx)",
+      "validates": [
+        "09-REQ-1.4"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "09-PATH-1",
+      "title": "Happy path: create a new PAT",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends `POST /user/tokens` with JSON body containing `name`, `permissions`, and optional `expires`; request includes a valid API key or PAT credential in the Authorization header"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the credential, injects authenticated `user_id` and credential info into the Echo context, and calls `auth.RequirePermission(c, \"tokens\", \"manage\")` \u2014 passes for API key or PAT with `tokens:manage`"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "decodes and validates the JSON request body: checks `name` non-empty and \u2264255 chars, `permissions` non-empty, each permission is well-formed and registered in `PermissionRegistry`, and `expires` is in {0, 30, 60, 90}"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "checks privilege escalation: if credential is a PAT, verifies every requested permission is in the creating PAT's permissions list; returns HTTP 403 with `\"cannot grant permission: <permission>\"` on violation"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "calls `generateTokenID()` for an 8-char `[a-z0-9]` token ID and `generateSecret()` for a 32-char `[a-z0-9]` secret using `crypto/rand`"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "calls `hashSecret(secret)` to compute SHA-256 hex of the secret; constructs the full token string as `<TokenPrefix>_pat_<token_id>_<secret>`; calculates `expires_at` as `created_at + expires_days * 24h` (NULL if expires=0)"
+        },
+        {
+          "actor": "Database layer (spec 02)",
+          "action": "executes the INSERT into the `pats` table within a `db.WithTx` transaction, storing `token_id`, `user_id`, `name`, `secret_hash`, `permissions` (JSON array), `expires_days`, `expires_at`, `created_at`; rolls back automatically on any failure"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "returns HTTP 201 with `CreatePATResponse` containing `token_id`, `name`, the one-time plaintext `token`, `permissions` (insertion order), `expires_at`, and `created_at`; sets `Cache-Control: no-store` header"
+        }
+      ]
+    },
+    {
+      "id": "09-PATH-2",
+      "title": "Happy path: list PATs",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends `GET /user/tokens` with a valid credential in the Authorization header"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the credential and calls `auth.RequirePermission(c, \"tokens\", \"read\")`; injects `user_id` into context"
+        },
+        {
+          "actor": "ListPATs handler",
+          "action": "retrieves `user_id` via `auth.GetUserID(c)` and queries the `pats` table for all rows matching `user_id`, ordered by `created_at DESC`"
+        },
+        {
+          "actor": "ListPATs handler",
+          "action": "returns HTTP 200 with a JSON array of `PATResponse` objects (metadata only, no secrets, no `expires_days`); returns `[]` if no PATs exist; sets `Cache-Control: no-store` header"
+        }
+      ]
+    },
+    {
+      "id": "09-PATH-3",
+      "title": "Happy path: get a single PAT",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends `GET /user/tokens/:token_id` with a valid credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the credential, calls `auth.RequirePermission(c, \"tokens\", \"read\")`, and injects `user_id` into context"
+        },
+        {
+          "actor": "GetPAT handler",
+          "action": "extracts `token_id` from the URL path parameter and queries the `pats` table for the row matching both `token_id` AND `user_id`"
+        },
+        {
+          "actor": "GetPAT handler",
+          "action": "if found, returns HTTP 200 with `PATResponse`; if not found (or belongs to another user), returns HTTP 404 with `\"token not found\"`; sets `Cache-Control: no-store` header"
+        }
+      ]
+    },
+    {
+      "id": "09-PATH-4",
+      "title": "Happy path: revoke a PAT",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "sends `DELETE /user/tokens/:token_id` with a valid credential"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the credential, calls `auth.RequirePermission(c, \"tokens\", \"manage\")`, and injects `user_id` into context"
+        },
+        {
+          "actor": "RevokePAT handler",
+          "action": "extracts `token_id` from the URL path and issues a conditional UPDATE: `SET revoked_at = <now> WHERE token_id = ? AND user_id = ? AND revoked_at IS NULL`"
+        },
+        {
+          "actor": "Database layer (spec 02)",
+          "action": "executes the UPDATE and returns the number of rows affected"
+        },
+        {
+          "actor": "RevokePAT handler",
+          "action": "if 1 row affected: returns HTTP 200 with updated `PATResponse` including `revoked_at`; if 0 rows affected: queries `pats` to distinguish not-found (HTTP 404) from already-revoked (HTTP 400); sets `Cache-Control: no-store` header"
+        }
+      ]
+    },
+    {
+      "id": "09-PATH-5",
+      "title": "End-to-end: PAT-authenticated create and revoke flow",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "authenticates using an API key and calls `POST /user/tokens` to create a PAT with permissions [`tokens:manage`, `tokens:read`]"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the API key credential and injects `user_id` and credential info into the Echo context"
+        },
+        {
+          "actor": "CreatePAT handler",
+          "action": "validates request, skips privilege escalation (API key credential), generates `token_id` and `secret`, computes `secret_hash`, inserts into `pats` via `db.WithTx`, returns HTTP 201 with `CreatePATResponse` including the plaintext `token`"
+        },
+        {
+          "actor": "Client",
+          "action": "stores the returned `token` value and uses it as the Authorization credential for subsequent requests"
+        },
+        {
+          "actor": "Client",
+          "action": "calls `DELETE /user/tokens/:token_id` using the PAT credential to revoke that same PAT"
+        },
+        {
+          "actor": "Auth middleware (spec 05)",
+          "action": "validates the PAT credential (parses token format, looks up `secret_hash` in `pats`, verifies hash matches, checks `tokens:manage` permission, verifies token is not expired or revoked), injects `user_id` into context"
+        },
+        {
+          "actor": "RevokePAT handler",
+          "action": "issues the conditional UPDATE setting `revoked_at`; returns HTTP 200 with `PATResponse` showing `revoked_at` set"
+        },
+        {
+          "actor": "Client",
+          "action": "observes that the revoked PAT now shows `revoked_at` in `GET /user/tokens` listing, confirming audit trail is preserved"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "09-ERR-1",
+      "condition": "Request body for `POST /user/tokens` has a missing or empty `name` field",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"name is required\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.1"
+    },
+    {
+      "id": "09-ERR-2",
+      "condition": "`name` field exceeds 255 characters",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"name must be 255 characters or fewer\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.2"
+    },
+    {
+      "id": "09-ERR-3",
+      "condition": "Request body for `POST /user/tokens` has a missing or empty `permissions` array",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"permissions are required\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.3"
+    },
+    {
+      "id": "09-ERR-4",
+      "condition": "A permission string in the request does not contain exactly one colon (malformed `resource_type:action`)",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"invalid permission format: <permission>\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.4"
+    },
+    {
+      "id": "09-ERR-5",
+      "condition": "A permission string is well-formed but not registered in the `PermissionRegistry`",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"unknown permission: <permission>\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.5"
+    },
+    {
+      "id": "09-ERR-6",
+      "condition": "`expires` value is not one of {0, 30, 60, 90}",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"expires must be 0, 30, 60, or 90\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.6"
+    },
+    {
+      "id": "09-ERR-7",
+      "condition": "JSON request body for `POST /user/tokens` cannot be decoded",
+      "behavior": "CreatePAT handler returns HTTP 400 with message `\"invalid request body\"` via `APIError()`",
+      "requirement_id": "09-REQ-3.7"
+    },
+    {
+      "id": "09-ERR-8",
+      "condition": "Authenticated credential is a PAT and requests a permission not present in its own permissions list",
+      "behavior": "CreatePAT handler returns HTTP 403 with message `\"cannot grant permission: <permission>\"` via `APIError()`",
+      "requirement_id": "09-REQ-4.1"
+    },
+    {
+      "id": "09-ERR-9",
+      "condition": "`db.WithTx` transaction or `pats` INSERT fails during PAT creation",
+      "behavior": "CreatePAT handler returns HTTP 500 with message `\"internal server error\"` via `APIError()`; transaction is rolled back automatically; no partial state persisted",
+      "requirement_id": "09-REQ-5.E1"
+    },
+    {
+      "id": "09-ERR-10",
+      "condition": "`crypto/rand` fails during `generateTokenID()` or `generateSecret()`",
+      "behavior": "CreatePAT handler returns HTTP 500 with message `\"internal server error\"` via `APIError()`; no token material is returned or stored",
+      "requirement_id": "09-REQ-2.E1"
+    },
+    {
+      "id": "09-ERR-11",
+      "condition": "Database query fails during `GET /user/tokens` (ListPATs)",
+      "behavior": "ListPATs handler returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+      "requirement_id": "09-REQ-6.E2"
+    },
+    {
+      "id": "09-ERR-12",
+      "condition": "`token_id` path parameter in `GET /user/tokens/:token_id` does not match any PAT for the authenticated user (either nonexistent or belongs to another user)",
+      "behavior": "GetPAT handler returns HTTP 404 with message `\"token not found\"` via `APIError()`",
+      "requirement_id": "09-REQ-7.2"
+    },
+    {
+      "id": "09-ERR-13",
+      "condition": "Database query fails with an error other than `db.ErrNotFound` during `GET /user/tokens/:token_id`",
+      "behavior": "GetPAT handler returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+      "requirement_id": "09-REQ-7.E2"
+    },
+    {
+      "id": "09-ERR-14",
+      "condition": "Conditional UPDATE for `DELETE /user/tokens/:token_id` affects zero rows and the follow-up SELECT finds no matching row for `token_id AND user_id`",
+      "behavior": "RevokePAT handler returns HTTP 404 with message `\"token not found\"` via `APIError()`",
+      "requirement_id": "09-REQ-8.2"
+    },
+    {
+      "id": "09-ERR-15",
+      "condition": "Conditional UPDATE for `DELETE /user/tokens/:token_id` affects zero rows and the follow-up SELECT finds a row with `revoked_at` already set",
+      "behavior": "RevokePAT handler returns HTTP 400 with message `\"token already revoked\"` via `APIError()`",
+      "requirement_id": "09-REQ-8.2"
+    },
+    {
+      "id": "09-ERR-16",
+      "condition": "Database UPDATE or follow-up SELECT fails with an error during `DELETE /user/tokens/:token_id`",
+      "behavior": "RevokePAT handler returns HTTP 500 with message `\"internal server error\"` via `APIError()`",
+      "requirement_id": "09-REQ-8.E3"
+    },
+    {
+      "id": "09-ERR-17",
+      "condition": "`NewPATHandler` is called with a nil `database` or nil `registry` parameter",
+      "behavior": "Constructor panics with a descriptive message identifying the nil parameter; prevents silent misconfiguration at server startup",
+      "requirement_id": "09-REQ-1.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4.x",
+      "symbols": [
+        {
+          "name": "Group",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Group struct",
+          "notes": "Echo route group; PAT routes are registered on *echo.Group via g.POST(), g.GET(), g.DELETE()"
+        },
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface",
+          "notes": "Echo request context passed to all handler functions; used to extract path params, decode body, and write responses"
+        }
+      ]
+    },
+    {
+      "package": "crypto/sha256",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Sum256",
+          "import_path": "crypto/sha256",
+          "signature": "func Sum256(data []byte) [32]byte",
+          "notes": "Used in hashSecret() to compute SHA-256 digest of the PAT secret"
+        }
+      ]
+    },
+    {
+      "package": "crypto/rand",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Read",
+          "import_path": "crypto/rand",
+          "signature": "func Read(b []byte) (n int, err error)",
+          "notes": "Used in generateTokenID() and generateSecret() to fill byte slices with cryptographically secure random bytes"
+        }
+      ]
+    },
+    {
+      "package": "encoding/hex",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "EncodeToString",
+          "import_path": "encoding/hex",
+          "signature": "func EncodeToString(src []byte) string",
+          "notes": "Used in hashSecret() to convert the SHA-256 byte array to a lowercase hex string"
+        }
+      ]
+    },
+    {
+      "package": "encoding/json",
+      "version": "stdlib",
+      "symbols": [
+        {
+          "name": "Marshal",
+          "import_path": "encoding/json",
+          "signature": "func Marshal(v any) ([]byte, error)",
+          "notes": "Used to serialize the permissions []string array to JSON for storage in the pats table"
+        },
+        {
+          "name": "Unmarshal",
+          "import_path": "encoding/json",
+          "signature": "func Unmarshal(data []byte, v any) error",
+          "notes": "Used to deserialize the permissions JSON array from the pats table back to []string"
+        }
+      ]
+    }
+  ]
+}

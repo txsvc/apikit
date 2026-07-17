@@ -1,0 +1,1256 @@
+{
+  "$schema": null,
+  "spec_id": "10",
+  "spec_name": "api_key_lifecycle",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-10-1",
+      "requirement_id": "10-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify that every API key returned by GenerateAPIKey matches the canonical format <prefix>_<key_id>_<secret> with an 8-char key_id and 32-char secret.",
+      "preconditions": [
+        "internal/keys package is compiled",
+        "TokenPrefix is set to 'ak' (default)",
+        "A valid SQLite in-memory database is available with the api_keys table created per spec 02 schema",
+        "expiresDays is set to 90"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-001"
+      },
+      "expected": "FullKey matches regex ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$; KeyID is exactly 8 characters; FullKey split on '_' produces exactly 3 segments where segment[0] == 'ak', len(segment[1]) == 8, len(segment[2]) == 32",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-001', 90, logger)\nassert err == nil\nparts = split(result.FullKey, '_')\nassert len(parts) == 3\nassert parts[0] == 'ak'\nassert len(parts[1]) == 8\nassert len(parts[2]) == 32\nassert matches(result.FullKey, '^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$')"
+    },
+    {
+      "id": "TS-10-2",
+      "requirement_id": "10-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify that key_id and secret contain only alphanumeric characters from [0-9A-Za-z] and are generated using crypto/rand.",
+      "preconditions": [
+        "internal/keys package is compiled",
+        "A valid SQLite in-memory database is available with the api_keys table",
+        "expiresDays is set to 30"
+      ],
+      "input": {
+        "expiresDays": 30,
+        "userID": "user-002"
+      },
+      "expected": "KeyID (8 chars) and secret portion (32 chars) of FullKey contain only characters matching [0-9A-Za-z]; no characters outside the 62-char alphanumeric set are present",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-002', 30, logger)\nassert err == nil\nkeyID = result.KeyID\nsecret = split(result.FullKey, '_')[2]\nassert matches(keyID, '^[0-9A-Za-z]{8}$')\nassert matches(secret, '^[0-9A-Za-z]{32}$')"
+    },
+    {
+      "id": "TS-10-3",
+      "requirement_id": "10-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that a crypto/rand.Read() failure causes GenerateAPIKey to return a non-nil error immediately with no retries and no database writes.",
+      "preconditions": [
+        "internal/keys package is compiled with a mockable rand reader",
+        "A valid SQLite in-memory database is available with the api_keys table",
+        "crypto/rand.Read is injected/mocked to always return an error on first call"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-003"
+      },
+      "expected": "GenerateAPIKey returns a non-nil error; no rows are inserted into api_keys; no retries are attempted (mock called exactly once)",
+      "assertion_pseudocode": "mockRand.alwaysFail = true\nresult, err = GenerateAPIKey(db, 'user-003', 90, logger)\nassert err != nil\nassert result == nil\nrowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-003')\nassert rowCount == 0\nassert mockRand.callCount == 1"
+    },
+    {
+      "id": "TS-10-4",
+      "requirement_id": "10-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify that GenerateAPIKey accepts the correct parameter types and returns *APIKeyResult with all fields populated on success.",
+      "preconditions": [
+        "internal/keys package is compiled",
+        "A valid SQLite in-memory database is available with the api_keys table",
+        "expiresDays is 90"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "logger": "echo.Logger",
+        "tx": "*sql.DB",
+        "userID": "user-004"
+      },
+      "expected": "Returns (*APIKeyResult, nil); FullKey, KeyID, SecretHash, ExpiresAt are all non-zero/non-nil",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-004', 90, logger)\nassert err == nil\nassert result != nil\nassert result.FullKey != ''\nassert result.KeyID != ''\nassert result.SecretHash != ''\nassert result.ExpiresAt != nil"
+    },
+    {
+      "id": "TS-10-5",
+      "requirement_id": "10-REQ-2.2",
+      "kind": "unit",
+      "description": "Verify that GenerateAPIKey returns a non-nil error immediately when expiresDays is not in {0, 30, 60, 90}, without touching the database.",
+      "preconditions": [
+        "internal/keys package is compiled",
+        "A valid SQLite in-memory database is available with the api_keys table"
+      ],
+      "input": {
+        "expiresDays": 45,
+        "userID": "user-005"
+      },
+      "expected": "Returns (nil, non-nil error); no rows inserted into api_keys; error is a Go error (not an HTTP response)",
+      "assertion_pseudocode": "for invalidDays in [1, 15, 45, 100, -1, 365]:\n    result, err = GenerateAPIKey(db, 'user-005', invalidDays, logger)\n    assert err != nil\n    assert result == nil\n    rowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-005')\n    assert rowCount == 0"
+    },
+    {
+      "id": "TS-10-6",
+      "requirement_id": "10-REQ-2.3",
+      "kind": "integration",
+      "description": "Verify that when called with *sql.DB, GenerateAPIKey begins an internal transaction and rolls back atomically if the INSERT fails, leaving existing keys unmodified.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "An existing active key for user-006 is present in api_keys with revoked_at IS NULL",
+        "A mechanism to force INSERT failure exists (e.g., pre-inserted row with the generated key_id to trigger unique constraint violation with retries exhausted)"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "tx": "*sql.DB (direct)",
+        "userID": "user-006"
+      },
+      "expected": "GenerateAPIKey returns a non-nil error; the pre-existing key's revoked_at remains NULL (transaction was rolled back); no new key row is present in api_keys for user-006 beyond the original",
+      "assertion_pseudocode": "originalKey = db.queryRow('SELECT key_id, revoked_at FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-006')\nforceInsertFailure(db, 3)\nresult, err = GenerateAPIKey(db, 'user-006', 90, logger)\nassert err != nil\nrestoredKey = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', originalKey.key_id)\nassert restoredKey.revoked_at == NULL\ntotalRows = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-006')\nassert totalRows == 1"
+    },
+    {
+      "id": "TS-10-7",
+      "requirement_id": "10-REQ-2.4",
+      "kind": "integration",
+      "description": "Verify that when called with *sql.Tx, GenerateAPIKey executes within the caller's transaction without beginning a nested transaction, and that rollback undoes the writes.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "No existing keys for user-007"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "tx": "*sql.Tx (from db.WithTx)",
+        "userID": "user-007"
+      },
+      "expected": "After commit: key row is present in api_keys. After rollback: no key row is present in api_keys. In both cases GenerateAPIKey itself does not call Commit or Rollback.",
+      "assertion_pseudocode": "// commit scenario\ntx1 = db.Begin()\nresult, err = GenerateAPIKey(tx1, 'user-007', 90, logger)\nassert err == nil\ntx1.Commit()\nrowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-007')\nassert rowCount == 1\n\n// rollback scenario\ntx2 = db.Begin()\nresult2, err2 = GenerateAPIKey(tx2, 'user-007b', 90, logger)\nassert err2 == nil\ntx2.Rollback()\nrowCount2 = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-007b')\nassert rowCount2 == 0"
+    },
+    {
+      "id": "TS-10-8",
+      "requirement_id": "10-REQ-2.5",
+      "kind": "integration",
+      "description": "Verify that GenerateAPIKey executes the bulk revocation UPDATE before INSERT, and that zero rows affected (first-time user) is treated as a silent no-op success.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-008 has no existing keys (first-time user)"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-008"
+      },
+      "expected": "GenerateAPIKey returns (*APIKeyResult, nil); one new key is inserted; no error is raised from zero-rows-affected revocation UPDATE",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-008', 90, logger)\nassert err == nil\nassert result != nil\nrowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-008')\nassert rowCount == 1"
+    },
+    {
+      "id": "TS-10-9",
+      "requirement_id": "10-REQ-2.6",
+      "kind": "unit",
+      "description": "Verify that GenerateAPIKey generates correct key_id, secret, secret_hash, and inserts all fields into api_keys.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "No existing keys for user-009"
+      ],
+      "input": {
+        "expiresDays": 30,
+        "userID": "user-009"
+      },
+      "expected": "result.FullKey == 'ak_' + result.KeyID + '_' + secret; result.SecretHash == lowercase hex SHA-256 of secret; api_keys row has matching key_id, user_id, secret_hash, expires_days=30",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-009', 30, logger)\nassert err == nil\nparts = split(result.FullKey, '_')\nsecret = parts[2]\nexpectedHash = hex(sha256(secret))\nassert result.SecretHash == expectedHash\nassert len(result.SecretHash) == 64\nassert all chars in result.SecretHash are in [0-9a-f]\nrow = db.queryRow('SELECT key_id, user_id, secret_hash, expires_days FROM api_keys WHERE key_id = ?', result.KeyID)\nassert row.key_id == result.KeyID\nassert row.user_id == 'user-009'\nassert row.secret_hash == result.SecretHash\nassert row.expires_days == 30"
+    },
+    {
+      "id": "TS-10-10",
+      "requirement_id": "10-REQ-2.7",
+      "kind": "integration",
+      "description": "Verify that GenerateAPIKey retries key_id generation up to 3 total attempts on unique constraint violation and succeeds if a non-colliding key_id is available within the retry budget.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "No existing active key for user-010",
+        "A test harness can inject a collision on the first key_id generation attempt (e.g., pre-inserting a row with the expected first key_id, using a seeded random generator for the first call)"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-010"
+      },
+      "expected": "GenerateAPIKey succeeds (returns non-nil result, nil error) on the second attempt; exactly one new active key exists for user-010; the revocation UPDATE is not re-executed on retry",
+      "assertion_pseudocode": "// Pre-insert a row with the first expected key_id to force collision\npreInsertedKeyID = getFirstGeneratedKeyID()\ndb.exec('INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at) VALUES (?, ?, ?, ?, ?)', preInsertedKeyID, 'other-user', 'hash', 90, now())\nresult, err = GenerateAPIKey(db, 'user-010', 90, logger)\nassert err == nil\nassert result != nil\nassert result.KeyID != preInsertedKeyID\nactiveRows = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-010')\nassert activeRows == 1"
+    },
+    {
+      "id": "TS-10-11",
+      "requirement_id": "10-REQ-2.8",
+      "kind": "unit",
+      "description": "Verify that ExpiresAt is nil when expiresDays=0, and is exactly N*24h from creation for expiresDays in {30,60,90}.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "No existing keys for any test user"
+      ],
+      "input": {
+        "expiresDays": [
+          0,
+          30,
+          60,
+          90
+        ]
+      },
+      "expected": "expiresDays=0 → ExpiresAt==nil and expires_at IS NULL in DB; expiresDays=30 → ExpiresAt is approx now+720h (within 2s); expiresDays=60 → approx now+1440h; expiresDays=90 → approx now+2160h",
+      "assertion_pseudocode": "before = now()\nresult0, _ = GenerateAPIKey(db, 'user-exp-0', 0, logger)\nassert result0.ExpiresAt == nil\nrow0 = db.queryRow('SELECT expires_at FROM api_keys WHERE key_id = ?', result0.KeyID)\nassert row0.expires_at == NULL\n\nfor (days, hours) in [(30, 720), (60, 1440), (90, 2160)]:\n    result, _ = GenerateAPIKey(db, 'user-exp-'+days, days, logger)\n    assert result.ExpiresAt != nil\n    diff = result.ExpiresAt - before\n    assert diff >= hours*3600 - 2\n    assert diff <= hours*3600 + 2"
+    },
+    {
+      "id": "TS-10-12",
+      "requirement_id": "10-REQ-2.9",
+      "kind": "integration",
+      "description": "Verify that GenerateAPIKey emits a structured INFO log entry with user_id and key_id fields after a successful INSERT, and does not emit a log entry on failure.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "A test logger is injected that captures log entries",
+        "No existing keys for user-011"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-011"
+      },
+      "expected": "On success: exactly one INFO log entry is captured containing user_id='user-011' and key_id matching the returned KeyID. On forced failure (crypto/rand error): zero INFO log entries are captured.",
+      "assertion_pseudocode": "testLogger = newCapturingLogger()\nresult, err = GenerateAPIKey(db, 'user-011', 90, testLogger)\nassert err == nil\nentries = testLogger.getEntries(level=INFO)\nassert len(entries) == 1\nassert entries[0].fields['user_id'] == 'user-011'\nassert entries[0].fields['key_id'] == result.KeyID\n\n// failure case\ntestLogger2 = newCapturingLogger()\nmockRand.alwaysFail = true\n_, err2 = GenerateAPIKey(db, 'user-011b', 90, testLogger2)\nassert err2 != nil\nassert len(testLogger2.getEntries(level=INFO)) == 0"
+    },
+    {
+      "id": "TS-10-13",
+      "requirement_id": "10-REQ-3.1",
+      "kind": "unit",
+      "description": "Verify that the root apikit package re-exports GenerateAPIKey as a wrapper delegating to keys.GenerateAPIKey and APIKeyResult as a type alias.",
+      "preconditions": [
+        "apikit root package is compiled",
+        "internal/keys package is compiled",
+        "SQLite database initialised with api_keys table"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-012"
+      },
+      "expected": "apikit.GenerateAPIKey returns identical results to keys.GenerateAPIKey for the same inputs; apikit.APIKeyResult is assignable from keys.APIKeyResult without type conversion",
+      "assertion_pseudocode": "result1, err1 = apikit.GenerateAPIKey(db, 'user-012', 90, logger)\nassert err1 == nil\nassert result1 != nil\n// Verify type alias: assign without cast\nvar r apikit.APIKeyResult = *result1\nassert r.FullKey == result1.FullKey\nassert r.KeyID == result1.KeyID"
+    },
+    {
+      "id": "TS-10-14",
+      "requirement_id": "10-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify that the apikit root package does not expose any symbols from internal/keys other than APIKeyResult and GenerateAPIKey.",
+      "preconditions": [
+        "apikit root package is compiled"
+      ],
+      "input": {},
+      "expected": "No custom error types (e.g., ErrKeyRevoked, ErrKeyExpired), internal constants, or helper functions from internal/keys are accessible via the apikit package namespace",
+      "assertion_pseudocode": "// Static analysis / compilation check\n// Attempt to reference apikit.ErrKeyRevoked, apikit.ErrKeyExpired, etc.\n// Each must produce a compile error: 'undefined: apikit.ErrKeyRevoked'\nexportedSymbols = getExportedSymbols('apikit')\nassert 'APIKeyResult' in exportedSymbols\nassert 'GenerateAPIKey' in exportedSymbols\nassert 'ErrKeyRevoked' not in exportedSymbols\nassert 'ErrKeyExpired' not in exportedSymbols"
+    },
+    {
+      "id": "TS-10-15",
+      "requirement_id": "10-REQ-4.1",
+      "kind": "integration",
+      "description": "Verify that RegisterKeyHandlers registers exactly GET /user/keys, POST /user/keys/:key_id/refresh, and DELETE /user/keys/:key_id on the provided Echo group.",
+      "preconditions": [
+        "Echo instance created with an /api/v1 group",
+        "SQLite database initialised with api_keys table",
+        "RegisterKeyHandlers called with the group and database"
+      ],
+      "input": {
+        "database": "*sql.DB",
+        "group": "*echo.Group mounted at /api/v1"
+      },
+      "expected": "Three routes are registered: GET /api/v1/user/keys, POST /api/v1/user/keys/:key_id/refresh, DELETE /api/v1/user/keys/:key_id; requests to each route are dispatched to the correct handler",
+      "assertion_pseudocode": "e = echo.New()\ngroup = e.Group('/api/v1')\nRegisterKeyHandlers(group, db)\nroutes = e.Routes()\nassert any(r.Method=='GET' && r.Path=='/api/v1/user/keys' for r in routes)\nassert any(r.Method=='POST' && r.Path=='/api/v1/user/keys/:key_id/refresh' for r in routes)\nassert any(r.Method=='DELETE' && r.Path=='/api/v1/user/keys/:key_id' for r in routes)"
+    },
+    {
+      "id": "TS-10-16",
+      "requirement_id": "10-REQ-4.2",
+      "kind": "integration",
+      "description": "Verify that all three endpoints respond with Cache-Control: no-store, inherited from the parent Echo group's CacheMiddleware(CacheNoStore).",
+      "preconditions": [
+        "Echo instance created with /api/v1 group that has CacheMiddleware(CacheNoStore) applied",
+        "SQLite database initialised with api_keys table",
+        "RegisterKeyHandlers called",
+        "Auth middleware is applied to the group (user authenticated)"
+      ],
+      "input": {
+        "requests": [
+          "GET /api/v1/user/keys",
+          "POST /api/v1/user/keys/anykey/refresh",
+          "DELETE /api/v1/user/keys/anykey"
+        ]
+      },
+      "expected": "All three responses include header Cache-Control: no-store",
+      "assertion_pseudocode": "for path, method in [('/api/v1/user/keys','GET'), ('/api/v1/user/keys/testkey/refresh','POST'), ('/api/v1/user/keys/testkey','DELETE')]:\n    resp = makeRequest(method, path, headers={'Authorization': 'Bearer ak_testkey_testsecret'})\n    assert resp.headers['Cache-Control'] == 'no-store'"
+    },
+    {
+      "id": "TS-10-17",
+      "requirement_id": "10-REQ-5.1",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys returns HTTP 200 with a JSON array of key metadata objects ordered by created_at DESC, never including secret or expires_days.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-013 has one active key (key_id='aB3xK9mQ') created at '2026-07-17T14:30:00Z' with expires_at='2026-10-15T14:30:00Z' and revoked_at IS NULL",
+        "Auth middleware injects user_id='user-013'"
+      ],
+      "input": {
+        "auth": "API key for user-013",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200; JSON array with exactly one object containing key_id, created_at (RFC3339 UTC), expires_at (string or null), revoked_at (null); fields secret_hash, secret, expires_days are absent",
+      "assertion_pseudocode": "resp = GET('/api/v1/user/keys', auth=user013APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert type(body) == array\nassert len(body) == 1\nobj = body[0]\nassert obj.key_id == 'aB3xK9mQ'\nassert obj.created_at != ''\nassert 'expires_at' in obj\nassert 'revoked_at' in obj\nassert 'secret' not in obj\nassert 'secret_hash' not in obj\nassert 'expires_days' not in obj"
+    },
+    {
+      "id": "TS-10-18",
+      "requirement_id": "10-REQ-5.2",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys returns HTTP 200 with an empty JSON array [] and no ETag header when the user has no keys.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-014 has no rows in api_keys",
+        "Auth middleware injects user_id='user-014'"
+      ],
+      "input": {
+        "auth": "API key for user-014",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200; response body is exactly '[]'; no ETag header is present in the response",
+      "assertion_pseudocode": "resp = GET('/api/v1/user/keys', auth=user014APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert body == []\nassert 'ETag' not in resp.headers"
+    },
+    {
+      "id": "TS-10-19",
+      "requirement_id": "10-REQ-5.3",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys returns all historical keys (active, expired, revoked) with no row limit, ordered by created_at DESC.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-015 has three keys: key1 (active, created most recently), key2 (revoked), key3 (expired, oldest)",
+        "Auth middleware injects user_id='user-015'"
+      ],
+      "input": {
+        "auth": "API key for user-015",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200; JSON array contains all 3 keys; first element is key1 (newest created_at); last element is key3 (oldest created_at); created_at values are non-increasing across the array",
+      "assertion_pseudocode": "resp = GET('/api/v1/user/keys', auth=user015APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert len(body) == 3\nassert body[0].key_id == key1.key_id\nassert body[2].key_id == key3.key_id\nfor i in range(len(body)-1):\n    assert parseTime(body[i].created_at) >= parseTime(body[i+1].created_at)"
+    },
+    {
+      "id": "TS-10-20",
+      "requirement_id": "10-REQ-5.4",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys sets an ETag header and returns HTTP 304 on a subsequent request with matching If-None-Match when no changes have occurred.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-016 has one active key",
+        "Auth middleware injects user_id='user-016'"
+      ],
+      "input": {
+        "auth": "API key for user-016",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "First request: HTTP 200 with ETag header set. Second request with If-None-Match matching the ETag: HTTP 304 with empty body.",
+      "assertion_pseudocode": "resp1 = GET('/api/v1/user/keys', auth=user016APIKey)\nassert resp1.status == 200\nassert 'ETag' in resp1.headers\netag = resp1.headers['ETag']\n\nresp2 = GET('/api/v1/user/keys', auth=user016APIKey, headers={'If-None-Match': etag})\nassert resp2.status == 304\nassert resp2.body == ''"
+    },
+    {
+      "id": "TS-10-21",
+      "requirement_id": "10-REQ-5.5",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys accepts authentication via API key or PAT with keys:read permission.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-017 has one active key",
+        "Auth middleware is configured and active",
+        "A valid PAT with keys:read permission exists for user-017"
+      ],
+      "input": {
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200 returned for both API key authentication and PAT with keys:read; auth middleware handles failures for unauthenticated requests",
+      "assertion_pseudocode": "// API key auth\nresp1 = GET('/api/v1/user/keys', auth=user017APIKey)\nassert resp1.status == 200\n\n// PAT with keys:read\nresp2 = GET('/api/v1/user/keys', auth=user017PATWithKeysRead)\nassert resp2.status == 200"
+    },
+    {
+      "id": "TS-10-22",
+      "requirement_id": "10-REQ-6.1",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh for an active, non-revoked, non-expired key returns HTTP 200 with the new full key, updated secret_hash, recalculated expires_at, and updated created_at in the database.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-018 has one active key with key_id='testkey1', expires_days=90, expires_at in the future, revoked_at IS NULL",
+        "Auth middleware injects user_id='user-018' with credential type=API key"
+      ],
+      "input": {
+        "auth": "API key for user-018",
+        "method": "POST",
+        "path": "/api/v1/user/keys/testkey1/refresh"
+      },
+      "expected": "HTTP 200; response body contains key (FullKey string), key_id='testkey1', expires_at (recalculated); secret portion of new key is 32 alphanumeric chars; DB row has updated secret_hash, created_at, expires_at; old secret no longer validates against new secret_hash",
+      "assertion_pseudocode": "oldHash = db.queryRow('SELECT secret_hash FROM api_keys WHERE key_id = ?', 'testkey1').secret_hash\nbefore = now()\nresp = POST('/api/v1/user/keys/testkey1/refresh', auth=user018APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert body.key_id == 'testkey1'\nassert matches(body.key, '^ak_testkey1_[a-zA-Z0-9]{32}$')\nnewSecret = split(body.key, '_')[2]\nnewHash = hex(sha256(newSecret))\nrow = db.queryRow('SELECT secret_hash, created_at, expires_at FROM api_keys WHERE key_id = ?', 'testkey1')\nassert row.secret_hash == newHash\nassert row.secret_hash != oldHash\nassert parseTime(row.created_at) >= before\nassert row.expires_at != NULL"
+    },
+    {
+      "id": "TS-10-23",
+      "requirement_id": "10-REQ-6.2",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh returns HTTP 401 with 'API key authentication required' when authenticated via PAT.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-019 has one active key with key_id='testkey2'",
+        "Auth middleware injects user_id='user-019' with credential type=PAT",
+        "PAT has keys:manage permission"
+      ],
+      "input": {
+        "auth": "PAT for user-019",
+        "method": "POST",
+        "path": "/api/v1/user/keys/testkey2/refresh"
+      },
+      "expected": "HTTP 401; response body contains error 'API key authentication required'; no database operations performed",
+      "assertion_pseudocode": "resp = POST('/api/v1/user/keys/testkey2/refresh', auth=user019PAT)\nassert resp.status == 401\nbody = parseJSON(resp.body)\nassert body.error == 'API key authentication required'\nrow = db.queryRow('SELECT secret_hash FROM api_keys WHERE key_id = ?', 'testkey2')\nassert row.secret_hash == originalHash  // unchanged"
+    },
+    {
+      "id": "TS-10-24",
+      "requirement_id": "10-REQ-6.3",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh returns HTTP 404 'key not found' when the key_id does not exist, without any format validation.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-020 is authenticated with API key",
+        "No key with key_id='nonexistent' exists in api_keys"
+      ],
+      "input": {
+        "auth": "API key for user-020",
+        "method": "POST",
+        "path": "/api/v1/user/keys/nonexistent/refresh"
+      },
+      "expected": "HTTP 404; response body contains error 'key not found'",
+      "assertion_pseudocode": "resp = POST('/api/v1/user/keys/nonexistent/refresh', auth=user020APIKey)\nassert resp.status == 404\nbody = parseJSON(resp.body)\nassert body.error == 'key not found'"
+    },
+    {
+      "id": "TS-10-25",
+      "requirement_id": "10-REQ-6.4",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh returns HTTP 404 (not 403) when the key belongs to a different user.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-A has an active key with key_id='keyA'",
+        "User user-B is authenticated via API key",
+        "Auth middleware injects user_id='user-B'"
+      ],
+      "input": {
+        "auth": "API key for user-B",
+        "method": "POST",
+        "path": "/api/v1/user/keys/keyA/refresh"
+      },
+      "expected": "HTTP 404; response body contains error 'key not found'; not HTTP 403",
+      "assertion_pseudocode": "resp = POST('/api/v1/user/keys/keyA/refresh', auth=userBAPIKey)\nassert resp.status == 404\nbody = parseJSON(resp.body)\nassert body.error == 'key not found'"
+    },
+    {
+      "id": "TS-10-26",
+      "requirement_id": "10-REQ-6.5",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh returns HTTP 400 'cannot refresh a revoked key' when the key has revoked_at set.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-021 has a key with key_id='revokedkey' and revoked_at IS NOT NULL",
+        "Auth middleware injects user_id='user-021' with credential type=API key"
+      ],
+      "input": {
+        "auth": "API key for user-021",
+        "method": "POST",
+        "path": "/api/v1/user/keys/revokedkey/refresh"
+      },
+      "expected": "HTTP 400; response body contains error 'cannot refresh a revoked key'",
+      "assertion_pseudocode": "resp = POST('/api/v1/user/keys/revokedkey/refresh', auth=user021APIKey)\nassert resp.status == 400\nbody = parseJSON(resp.body)\nassert body.error == 'cannot refresh a revoked key'"
+    },
+    {
+      "id": "TS-10-27",
+      "requirement_id": "10-REQ-6.6",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh returns HTTP 400 'cannot refresh an expired key' when expires_at is in the past.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-022 has a key with key_id='expiredkey', revoked_at IS NULL, expires_at directly set to '2020-01-01T00:00:00Z' (past)",
+        "Auth middleware injects user_id='user-022' with credential type=API key"
+      ],
+      "input": {
+        "auth": "API key for user-022",
+        "method": "POST",
+        "path": "/api/v1/user/keys/expiredkey/refresh"
+      },
+      "expected": "HTTP 400; response body contains error 'cannot refresh an expired key'",
+      "assertion_pseudocode": "db.exec('UPDATE api_keys SET expires_at = ? WHERE key_id = ?', '2020-01-01T00:00:00Z', 'expiredkey')\nresp = POST('/api/v1/user/keys/expiredkey/refresh', auth=user022APIKey)\nassert resp.status == 400\nbody = parseJSON(resp.body)\nassert body.error == 'cannot refresh an expired key'"
+    },
+    {
+      "id": "TS-10-28",
+      "requirement_id": "10-REQ-6.7",
+      "kind": "integration",
+      "description": "Verify that a successful refresh emits a structured INFO log entry with user_id and key_id fields via c.Logger().",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-023 has an active key with key_id='logkey'",
+        "Auth middleware injects user_id='user-023' with credential type=API key",
+        "Test logger captures log output from Echo context"
+      ],
+      "input": {
+        "auth": "API key for user-023",
+        "method": "POST",
+        "path": "/api/v1/user/keys/logkey/refresh"
+      },
+      "expected": "HTTP 200 returned; exactly one INFO log entry captured containing user_id='user-023' and key_id='logkey'",
+      "assertion_pseudocode": "testLogger = newCapturingEchoLogger()\nresp = POST('/api/v1/user/keys/logkey/refresh', auth=user023APIKey, echoLogger=testLogger)\nassert resp.status == 200\nentries = testLogger.getEntries(level=INFO)\nassert len(entries) >= 1\nassert any(e.fields['user_id'] == 'user-023' && e.fields['key_id'] == 'logkey' for e in entries)"
+    },
+    {
+      "id": "TS-10-29",
+      "requirement_id": "10-REQ-6.8",
+      "kind": "integration",
+      "description": "Verify that POST /api/v1/user/keys/:key_id/refresh accepts only API key authentication, rejecting any PAT regardless of its permission scopes.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-024 has an active key",
+        "Auth middleware is configured",
+        "PATs with keys:read and keys:manage scopes exist for user-024"
+      ],
+      "input": {
+        "auth": "PAT (any scope)",
+        "method": "POST",
+        "path": "/api/v1/user/keys/:key_id/refresh"
+      },
+      "expected": "HTTP 401 with 'API key authentication required' for all PAT-authenticated requests; HTTP 200 only for API key authentication",
+      "assertion_pseudocode": "for pat in [patWithKeysRead, patWithKeysManage]:\n    resp = POST('/api/v1/user/keys/'+keyID+'/refresh', auth=pat)\n    assert resp.status == 401\n    assert parseJSON(resp.body).error == 'API key authentication required'\n\nresp2 = POST('/api/v1/user/keys/'+keyID+'/refresh', auth=user024APIKey)\nassert resp2.status == 200"
+    },
+    {
+      "id": "TS-10-30",
+      "requirement_id": "10-REQ-7.1",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id sets revoked_at in the database and returns HTTP 200 with key_id and revoked_at.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-025 has an active key with key_id='delkey1', revoked_at IS NULL",
+        "Auth middleware injects user_id='user-025'"
+      ],
+      "input": {
+        "auth": "API key for user-025",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/delkey1"
+      },
+      "expected": "HTTP 200; response body is {key_id: 'delkey1', revoked_at: <RFC3339 UTC timestamp>}; api_keys row for 'delkey1' now has revoked_at set to approximately now()",
+      "assertion_pseudocode": "before = now()\nresp = DELETE('/api/v1/user/keys/delkey1', auth=user025APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert body.key_id == 'delkey1'\nassert body.revoked_at != null\nassert parseTime(body.revoked_at) >= before\nrow = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', 'delkey1')\nassert row.revoked_at != NULL"
+    },
+    {
+      "id": "TS-10-31",
+      "requirement_id": "10-REQ-7.2",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id returns HTTP 404 'key not found' when the key_id does not match any row, without format validation.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-026 is authenticated",
+        "No key with key_id='doesnotexist' in api_keys"
+      ],
+      "input": {
+        "auth": "API key for user-026",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/doesnotexist"
+      },
+      "expected": "HTTP 404; response body contains error 'key not found'",
+      "assertion_pseudocode": "resp = DELETE('/api/v1/user/keys/doesnotexist', auth=user026APIKey)\nassert resp.status == 404\nbody = parseJSON(resp.body)\nassert body.error == 'key not found'"
+    },
+    {
+      "id": "TS-10-32",
+      "requirement_id": "10-REQ-7.3",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id returns HTTP 404 (not 403) when the key belongs to a different user.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-C has an active key with key_id='keyC'",
+        "User user-D is authenticated",
+        "Auth middleware injects user_id='user-D'"
+      ],
+      "input": {
+        "auth": "API key for user-D",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/keyC"
+      },
+      "expected": "HTTP 404; response body contains error 'key not found'; not HTTP 403",
+      "assertion_pseudocode": "resp = DELETE('/api/v1/user/keys/keyC', auth=userDAPIKey)\nassert resp.status == 404\nbody = parseJSON(resp.body)\nassert body.error == 'key not found'"
+    },
+    {
+      "id": "TS-10-33",
+      "requirement_id": "10-REQ-7.4",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id returns HTTP 400 'key is already revoked' when the key's revoked_at is already set.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-027 has a key with key_id='alreadyrevoked' and revoked_at IS NOT NULL",
+        "Auth middleware injects user_id='user-027'"
+      ],
+      "input": {
+        "auth": "API key for user-027",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/alreadyrevoked"
+      },
+      "expected": "HTTP 400; response body contains error 'key is already revoked'",
+      "assertion_pseudocode": "resp = DELETE('/api/v1/user/keys/alreadyrevoked', auth=user027APIKey)\nassert resp.status == 400\nbody = parseJSON(resp.body)\nassert body.error == 'key is already revoked'"
+    },
+    {
+      "id": "TS-10-34",
+      "requirement_id": "10-REQ-7.5",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id permits revoking an expired-but-not-explicitly-revoked key, setting revoked_at explicitly.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-028 has a key with key_id='expirednotrevoked', expires_at set to '2020-01-01T00:00:00Z' (past), revoked_at IS NULL",
+        "Auth middleware injects user_id='user-028'"
+      ],
+      "input": {
+        "auth": "API key for user-028",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/expirednotrevoked"
+      },
+      "expected": "HTTP 200; response body contains key_id='expirednotrevoked' and a non-null revoked_at; DB row has revoked_at set",
+      "assertion_pseudocode": "db.exec('UPDATE api_keys SET expires_at = ? WHERE key_id = ?', '2020-01-01T00:00:00Z', 'expirednotrevoked')\nresp = DELETE('/api/v1/user/keys/expirednotrevoked', auth=user028APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert body.key_id == 'expirednotrevoked'\nassert body.revoked_at != null\nrow = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', 'expirednotrevoked')\nassert row.revoked_at != NULL"
+    },
+    {
+      "id": "TS-10-35",
+      "requirement_id": "10-REQ-7.6",
+      "kind": "integration",
+      "description": "Verify that a successful DELETE emits a structured INFO log entry with user_id and key_id fields via c.Logger().",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-029 has an active key with key_id='logdelkey'",
+        "Auth middleware injects user_id='user-029'",
+        "Test logger captures log output from Echo context"
+      ],
+      "input": {
+        "auth": "API key for user-029",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/logdelkey"
+      },
+      "expected": "HTTP 200 returned; at least one INFO log entry captured containing user_id='user-029' and key_id='logdelkey'",
+      "assertion_pseudocode": "testLogger = newCapturingEchoLogger()\nresp = DELETE('/api/v1/user/keys/logdelkey', auth=user029APIKey, echoLogger=testLogger)\nassert resp.status == 200\nentries = testLogger.getEntries(level=INFO)\nassert any(e.fields['user_id'] == 'user-029' && e.fields['key_id'] == 'logdelkey' for e in entries)"
+    },
+    {
+      "id": "TS-10-36",
+      "requirement_id": "10-REQ-7.7",
+      "kind": "integration",
+      "description": "Verify self-revocation: a user can DELETE the key they are currently authenticating with, completing with HTTP 200, and subsequent requests with that key are rejected.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-030 has an active key with key_id='selfrevoke'",
+        "Auth middleware validates credentials at request start and does not re-validate mid-flight"
+      ],
+      "input": {
+        "auth": "API key for user-030 (the key being revoked)",
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/selfrevoke"
+      },
+      "expected": "First request: HTTP 200 with revoked_at set; second request with same key: HTTP 401 (rejected by auth middleware)",
+      "assertion_pseudocode": "resp1 = DELETE('/api/v1/user/keys/selfrevoke', auth=user030ActiveAPIKey)\nassert resp1.status == 200\nassert parseJSON(resp1.body).revoked_at != null\n\nresp2 = GET('/api/v1/user/keys', auth=user030ActiveAPIKey)\nassert resp2.status == 401"
+    },
+    {
+      "id": "TS-10-37",
+      "requirement_id": "10-REQ-7.8",
+      "kind": "integration",
+      "description": "Verify that DELETE /api/v1/user/keys/:key_id accepts authentication via API key or PAT with keys:manage permission.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-031 has two active keys: 'delkeyA' and 'delkeyB'",
+        "Auth middleware is configured",
+        "A valid PAT with keys:manage permission exists for user-031"
+      ],
+      "input": {
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/:key_id"
+      },
+      "expected": "HTTP 200 for API key auth; HTTP 200 for PAT with keys:manage; authentication failures handled by auth middleware",
+      "assertion_pseudocode": "resp1 = DELETE('/api/v1/user/keys/delkeyA', auth=user031APIKey)\nassert resp1.status == 200\n\nresp2 = DELETE('/api/v1/user/keys/delkeyB', auth=user031PATWithKeysManage)\nassert resp2.status == 200"
+    },
+    {
+      "id": "TS-10-38",
+      "requirement_id": "10-REQ-8.1",
+      "kind": "integration",
+      "description": "Verify that after a successful GenerateAPIKey call, exactly one key with revoked_at IS NULL exists for the user.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-032 already has one active key"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-032"
+      },
+      "expected": "After GenerateAPIKey completes: exactly one row in api_keys for user-032 has revoked_at IS NULL; the prior key has revoked_at set",
+      "assertion_pseudocode": "oldKeyID = db.queryRow('SELECT key_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-032').key_id\nresult, err = GenerateAPIKey(db, 'user-032', 90, logger)\nassert err == nil\nactiveCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-032')\nassert activeCount == 1\nnewActive = db.queryRow('SELECT key_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-032')\nassert newActive.key_id == result.KeyID\noldRow = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', oldKeyID)\nassert oldRow.revoked_at != NULL"
+    },
+    {
+      "id": "TS-10-39",
+      "requirement_id": "10-REQ-8.2",
+      "kind": "integration",
+      "description": "Verify that refresh updates the key in-place (same key_id, same row count) rather than inserting a new row.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-033 has exactly one active key with key_id='inplacekey'",
+        "Auth middleware injects user_id='user-033' with credential type=API key"
+      ],
+      "input": {
+        "method": "POST",
+        "path": "/api/v1/user/keys/inplacekey/refresh"
+      },
+      "expected": "Row count in api_keys for user-033 unchanged after refresh; same key_id='inplacekey'; secret_hash, created_at, expires_at updated in-place",
+      "assertion_pseudocode": "countBefore = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-033')\nresp = POST('/api/v1/user/keys/inplacekey/refresh', auth=user033APIKey)\nassert resp.status == 200\ncountAfter = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-033')\nassert countBefore == countAfter\nrow = db.queryRow('SELECT key_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-033')\nassert row.key_id == 'inplacekey'"
+    },
+    {
+      "id": "TS-10-40",
+      "requirement_id": "10-REQ-8.3",
+      "kind": "unit",
+      "description": "Verify that the one-active-key invariant is maintained under concurrent GenerateAPIKey calls via SQLite serialized writes (design-level verification).",
+      "preconditions": [
+        "SQLite database initialised with api_keys table in WAL or serialized mode",
+        "User user-034 has no existing keys"
+      ],
+      "input": {
+        "concurrentCalls": 5,
+        "userID": "user-034"
+      },
+      "expected": "After all 5 concurrent GenerateAPIKey calls complete: exactly one row with revoked_at IS NULL exists for user-034",
+      "assertion_pseudocode": "goroutines = []\nfor i in range(5):\n    goroutines.append(spawn(GenerateAPIKey, db, 'user-034', 90, logger))\nresults = waitAll(goroutines)\nassert all(r.err == nil for r in results)\nactiveCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-034')\nassert activeCount == 1"
+    },
+    {
+      "id": "TS-10-41",
+      "requirement_id": "10-REQ-9.1",
+      "kind": "unit",
+      "description": "Verify that internal/keys package uses no package-level logger singleton; loggers are request-scoped via c.Logger() and explicit parameter injection.",
+      "preconditions": [
+        "internal/keys package source code is available",
+        "Static analysis tooling (go vet, grep) available"
+      ],
+      "input": {},
+      "expected": "No package-level var of logger type exists in internal/keys; GenerateAPIKey signature includes an explicit logger echo.Logger parameter; handlers use c.Logger()",
+      "assertion_pseudocode": "// Static check: no package-level logger variable\nsourceFiles = readDir('internal/keys/')\nfor file in sourceFiles:\n    assert not containsPattern(file, 'var\\s+\\w*[Ll]og\\w*\\s+echo\\.Logger')\n    assert not containsPattern(file, 'var\\s+\\w*[Ll]og\\w*\\s+=\\s+log\\.New')\n// Signature check\nassert functionSignatureContains('GenerateAPIKey', 'logger echo.Logger')"
+    },
+    {
+      "id": "TS-10-42",
+      "requirement_id": "10-REQ-9.2",
+      "kind": "integration",
+      "description": "Verify that INFO log entries are emitted after successful database writes for key generation, refresh, and revocation, but not on failure paths.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "Test loggers that capture entries are injected for each operation",
+        "Users with appropriate key state set up for each scenario"
+      ],
+      "input": {
+        "events": [
+          "generation",
+          "refresh",
+          "revocation"
+        ]
+      },
+      "expected": "Each successful lifecycle event produces at least one INFO log entry with user_id and key_id; failed operations produce zero INFO entries",
+      "assertion_pseudocode": "// Generation\ntl1 = newCapturingLogger()\nresult, err = GenerateAPIKey(db, 'user-log-gen', 90, tl1)\nassert err == nil\nassert len(tl1.getEntries(INFO)) >= 1\nassert tl1.getEntries(INFO)[0].fields includes {user_id, key_id}\n\n// Refresh\ntl2 = newCapturingEchoLogger()\nresp = POST('/api/v1/user/keys/'+result.KeyID+'/refresh', echoLogger=tl2, auth=apiKey)\nassert resp.status == 200\nassert len(tl2.getEntries(INFO)) >= 1\n\n// Revocation\ntl3 = newCapturingEchoLogger()\nresp2 = DELETE('/api/v1/user/keys/'+result.KeyID, echoLogger=tl3, auth=apiKey)\nassert resp2.status == 200\nassert len(tl3.getEntries(INFO)) >= 1"
+    },
+    {
+      "id": "TS-10-43",
+      "requirement_id": "10-REQ-10.1",
+      "kind": "unit",
+      "description": "Verify that only the SHA-256 hash (lowercase 64-char hex) is stored in api_keys.secret_hash, and the plaintext secret is never written to any column.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-035 has no existing keys"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-035"
+      },
+      "expected": "api_keys row for user-035 has secret_hash == hex(sha256(secret)); no column in api_keys contains the plaintext secret; secret_hash length is 64 characters, all lowercase hex",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-035', 90, logger)\nassert err == nil\nsecret = split(result.FullKey, '_')[2]\nexpectedHash = hex(sha256(secret))\nrow = db.queryRow('SELECT key_id, user_id, secret_hash, expires_days, expires_at, created_at, revoked_at FROM api_keys WHERE key_id = ?', result.KeyID)\nassert row.secret_hash == expectedHash\nassert len(row.secret_hash) == 64\nassert matches(row.secret_hash, '^[0-9a-f]{64}$')\n// Verify no column contains plaintext secret\nfor col in [row.key_id, row.user_id, row.expires_days, row.created_at]:\n    assert secret not in str(col)"
+    },
+    {
+      "id": "TS-10-44",
+      "requirement_id": "10-REQ-10.2",
+      "kind": "integration",
+      "description": "Verify that GET /api/v1/user/keys never includes secret_hash, plaintext secret, key, or expires_days in any response object.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-036 has one active key",
+        "Auth middleware injects user_id='user-036'"
+      ],
+      "input": {
+        "auth": "API key for user-036",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200; each object in the JSON array contains ONLY key_id, created_at, expires_at, revoked_at; no secret, secret_hash, key, or expires_days field is present",
+      "assertion_pseudocode": "resp = GET('/api/v1/user/keys', auth=user036APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nfor obj in body:\n    allowedKeys = {'key_id', 'created_at', 'expires_at', 'revoked_at'}\n    assert set(obj.keys()) == allowedKeys\n    assert 'secret' not in obj\n    assert 'secret_hash' not in obj\n    assert 'key' not in obj\n    assert 'expires_days' not in obj"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-10-P1",
+      "property_id": "10-PROP-1",
+      "validates": [
+        "10-REQ-8.1",
+        "10-REQ-8.2",
+        "10-REQ-8.3"
+      ],
+      "description": "For any sequence of GenerateAPIKey calls for the same user, at most one active (non-revoked, non-expired) key exists at any point.",
+      "for_any_strategy": "Generate between 1 and 10 sequential GenerateAPIKey calls for the same userID with random valid expiresDays values from {0, 30, 60, 90}",
+      "invariant_check": "After each call, query 'SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())'; assert count == 1"
+    },
+    {
+      "id": "TS-10-P2",
+      "property_id": "10-PROP-2",
+      "validates": [
+        "10-REQ-10.1",
+        "10-REQ-2.6"
+      ],
+      "description": "For any row in api_keys, the secret_hash column equals hex(sha256(secret)) and no column contains the plaintext secret.",
+      "for_any_strategy": "Generate N keys (N between 1 and 20) with random valid userIDs and expiresDays values; collect all inserted rows from api_keys",
+      "invariant_check": "For each row: compute hex(sha256(secret)) from the returned FullKey; assert row.secret_hash == computed_hash; assert secret not in any string column of the row (key_id, user_id, secret_hash, expires_days, created_at, revoked_at)"
+    },
+    {
+      "id": "TS-10-P3",
+      "property_id": "10-PROP-3",
+      "validates": [
+        "10-REQ-1.1",
+        "10-REQ-1.2",
+        "10-REQ-2.6"
+      ],
+      "description": "For any FullKey returned by GenerateAPIKey or the refresh endpoint, the key matches the canonical format and its constituent segments have correct lengths.",
+      "for_any_strategy": "Generate N FullKey values (N between 1 and 50) via GenerateAPIKey with random valid userIDs and expiresDays; also generate via the refresh endpoint",
+      "invariant_check": "For each FullKey: assert matches(FullKey, '^[a-zA-Z0-9]+_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$'); split on '_', assert parts[0] == TokenPrefix, len(parts[1]) == 8, len(parts[2]) == 32; assert parts[1] == returned KeyID"
+    },
+    {
+      "id": "TS-10-P4",
+      "property_id": "10-PROP-4",
+      "validates": [
+        "10-REQ-2.8",
+        "10-REQ-6.3"
+      ],
+      "description": "For any valid expiresDays value, ExpiresAt is nil iff expiresDays==0, and equals created_at + N*24h within tolerance for non-zero values.",
+      "for_any_strategy": "For each of {0, 30, 60, 90}: call GenerateAPIKey with that expiresDays and a unique userID; record before/after timestamps",
+      "invariant_check": "expiresDays==0 → result.ExpiresAt==nil AND db.expires_at IS NULL; expiresDays in {30,60,90} → result.ExpiresAt != nil AND abs(result.ExpiresAt - (before + expiresDays*24h)) < 2 seconds; db.expires_at matches result.ExpiresAt within 1 second"
+    },
+    {
+      "id": "TS-10-P5",
+      "property_id": "10-PROP-5",
+      "validates": [
+        "10-REQ-5.1",
+        "10-REQ-10.2"
+      ],
+      "description": "For any response from GET /api/v1/user/keys, no element in the JSON array contains secret, secret_hash, key, or expires_days fields.",
+      "for_any_strategy": "For any user with between 0 and 10 keys (mix of active, expired, revoked), call GET /api/v1/user/keys",
+      "invariant_check": "Parse JSON array; for each object: assert set(obj.keys()) is a subset of {key_id, created_at, expires_at, revoked_at}; assert 'secret' not in obj; assert 'secret_hash' not in obj; assert 'key' not in obj; assert 'expires_days' not in obj"
+    },
+    {
+      "id": "TS-10-P6",
+      "property_id": "10-PROP-6",
+      "validates": [
+        "10-REQ-2.3",
+        "10-REQ-2.E1"
+      ],
+      "description": "For any GenerateAPIKey call with *sql.DB that fails after the revocation UPDATE, the prior key's revoked_at remains NULL (atomic rollback invariant).",
+      "for_any_strategy": "For any user with 0 or 1 existing keys: force all INSERT attempts to fail (via pre-inserted colliding key_ids or mock errors); call GenerateAPIKey with *sql.DB",
+      "invariant_check": "If user had a prior key (revoked_at IS NULL before call): after GenerateAPIKey returns error, query db and assert prior key still has revoked_at IS NULL; assert total row count for user is unchanged"
+    },
+    {
+      "id": "TS-10-P7",
+      "property_id": "10-PROP-7",
+      "validates": [
+        "10-REQ-5.1",
+        "10-REQ-5.3"
+      ],
+      "description": "For any GET /api/v1/user/keys response with at least two keys, the created_at values are non-increasing (ORDER BY created_at DESC contract).",
+      "for_any_strategy": "For any user with between 2 and 10 keys (any mix of active/expired/revoked), call GET /api/v1/user/keys",
+      "invariant_check": "Parse JSON array; assert len(body) >= 2; for each adjacent pair (body[i], body[i+1]): assert parseTime(body[i].created_at) >= parseTime(body[i+1].created_at)"
+    },
+    {
+      "id": "TS-10-P8",
+      "property_id": "10-PROP-1",
+      "validates": [
+        "10-REQ-2.7",
+        "10-REQ-2.E5"
+      ],
+      "description": "GenerateAPIKey retry loop is bounded: the retry count for key_id collision never exceeds 3, ensuring termination under worst-case conditions.",
+      "for_any_strategy": "Force exactly K unique constraint violations on INSERT (K in {1, 2, 3, 4}) and call GenerateAPIKey; count the total number of INSERT attempts",
+      "invariant_check": "For K <= 2: GenerateAPIKey succeeds on attempt K+1; total INSERT calls == K+1; assert total INSERT calls <= 3. For K >= 3: GenerateAPIKey returns non-nil error; assert total INSERT calls == 3 (loop terminates after exactly 3 attempts, never more)"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-10-E1",
+      "requirement_id": "10-REQ-1.E1",
+      "kind": "unit",
+      "description": "Verify that a crypto/rand.Read() failure during a retry attempt (key_id collision scenario) is immediately fatal with no further retries.",
+      "preconditions": [
+        "internal/keys package compiled with injectable rand reader",
+        "SQLite database initialised with api_keys table",
+        "Mock rand: returns valid bytes on first call (triggers collision via pre-inserted key_id), then fails on second call"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-E1"
+      },
+      "expected": "GenerateAPIKey returns non-nil error after the second rand call fails; no further retry attempts; no rows inserted for user-E1",
+      "assertion_pseudocode": "mockRand.failOnCall = 2  // succeed on call 1 (collide), fail on call 2\npreInsertCollisionKey(db)\nresult, err = GenerateAPIKey(db, 'user-E1', 90, logger)\nassert err != nil\nassert result == nil\nassert mockRand.callCount == 2  // stopped immediately, no more attempts\nrowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-E1')\nassert rowCount == 0"
+    },
+    {
+      "id": "TS-10-E2",
+      "requirement_id": "10-REQ-2.E1",
+      "kind": "integration",
+      "description": "Verify that when called with *sql.DB and the INSERT fails after the revocation UPDATE, the internal transaction is rolled back and the prior key's revoked_at remains NULL.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E2 has one active key with key_id='priorkey', revoked_at IS NULL",
+        "A mechanism to exhaust all 3 INSERT retry attempts (pre-insert 3 rows that would collide with generated key_ids)"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "tx": "*sql.DB",
+        "userID": "user-E2"
+      },
+      "expected": "GenerateAPIKey returns non-nil error; 'priorkey' row still has revoked_at IS NULL (transaction was rolled back); no new key row exists for user-E2 beyond 'priorkey'",
+      "assertion_pseudocode": "forceAllInsertFailures(db, 3)\nresult, err = GenerateAPIKey(db, 'user-E2', 90, logger)\nassert err != nil\npriorRow = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', 'priorkey')\nassert priorRow.revoked_at == NULL\ntotalRows = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ?', 'user-E2')\nassert totalRows == 1"
+    },
+    {
+      "id": "TS-10-E3",
+      "requirement_id": "10-REQ-2.E2",
+      "kind": "integration",
+      "description": "Verify that GenerateAPIKey called for a first-time user (no prior keys) silently handles zero-rows-affected revocation UPDATE and successfully inserts the new key.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E3 has no existing rows in api_keys"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-E3"
+      },
+      "expected": "GenerateAPIKey returns (*APIKeyResult, nil); one new key row inserted for user-E3 with revoked_at IS NULL; no error from zero-rows-affected UPDATE",
+      "assertion_pseudocode": "result, err = GenerateAPIKey(db, 'user-E3', 90, logger)\nassert err == nil\nassert result != nil\nassert result.KeyID != ''\nrowCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-E3')\nassert rowCount == 1"
+    },
+    {
+      "id": "TS-10-E4",
+      "requirement_id": "10-REQ-2.E3",
+      "kind": "unit",
+      "description": "Verify that a non-constraint-violation database error during INSERT causes GenerateAPIKey to return a non-nil error immediately without any retry.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "A mock db.Executor is injected that returns a generic (non-unique-constraint) database error on ExecContext for INSERT"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-E4"
+      },
+      "expected": "GenerateAPIKey returns non-nil error immediately; no retry attempted (INSERT called exactly once); surfaces as HTTP 500 'internal server error' to callers",
+      "assertion_pseudocode": "mockDB.insertError = genericDBError\nresult, err = GenerateAPIKey(mockDB, 'user-E4', 90, logger)\nassert err != nil\nassert result == nil\nassert mockDB.insertCallCount == 1  // no retries for non-constraint errors"
+    },
+    {
+      "id": "TS-10-E5",
+      "requirement_id": "10-REQ-2.E4",
+      "kind": "unit",
+      "description": "Verify that GenerateAPIKey uses type assertion (not interface methods or wrapper types) to distinguish *sql.DB from *sql.Tx for transaction management.",
+      "preconditions": [
+        "internal/keys package source code is available"
+      ],
+      "input": {},
+      "expected": "Source code of GenerateAPIKey contains type assertion pattern 'if _, ok := tx.(*sql.DB); ok'; no wrapper type or additional interface is introduced for transaction detection",
+      "assertion_pseudocode": "source = readFile('internal/keys/generate.go')\nassert contains(source, '_, ok := tx.(*sql.DB)')\nassert not contains(source, 'type txWrapper')\nassert not contains(source, 'type TxDetector')"
+    },
+    {
+      "id": "TS-10-E6",
+      "requirement_id": "10-REQ-2.E5",
+      "kind": "integration",
+      "description": "Verify that after all 3 key_id collision retry attempts fail with unique constraint violations, GenerateAPIKey returns an error surfaced as HTTP 500.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "Test harness can force all 3 generated key_ids to collide with pre-existing rows"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-E6"
+      },
+      "expected": "GenerateAPIKey returns non-nil error after exactly 3 INSERT attempts; calling handler returns HTTP 500 'internal server error'; no new active key for user-E6",
+      "assertion_pseudocode": "// Pre-insert rows for all 3 expected key_ids to force collision\nfor keyID in getFirst3GeneratedKeyIDs():\n    db.exec('INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at) VALUES (?, ?, ?, ?, ?)', keyID, 'other', 'hash', 0, now())\nresult, err = GenerateAPIKey(db, 'user-E6', 90, logger)\nassert err != nil\nassert result == nil\n// Simulate HTTP layer:\nresp = callViaHandler(GenerateAPIKey, db, 'user-E6', 90)\nassert resp.status == 500\nassert parseJSON(resp.body).error == 'internal server error'"
+    },
+    {
+      "id": "TS-10-E7",
+      "requirement_id": "10-REQ-5.E1",
+      "kind": "integration",
+      "description": "Verify that when the ETag derivation query returns NULL (no keys), GET /api/v1/user/keys returns HTTP 200 with [] and no ETag header.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E7 has no keys in api_keys",
+        "Auth middleware injects user_id='user-E7'"
+      ],
+      "input": {
+        "auth": "API key for user-E7",
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 200; response body is '[]'; ETag header is absent; If-None-Match is not evaluated",
+      "assertion_pseudocode": "resp = GET('/api/v1/user/keys', auth=user_E7_key, headers={'If-None-Match': '\"some-etag\"'})\nassert resp.status == 200\nassert parseJSON(resp.body) == []\nassert 'ETag' not in resp.headers"
+    },
+    {
+      "id": "TS-10-E8",
+      "requirement_id": "10-REQ-5.E2",
+      "kind": "integration",
+      "description": "Verify that revoking a key invalidates the prior ETag so a subsequent GET with If-None-Match returns HTTP 200 (not 304).",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E8 has one active key",
+        "Auth middleware injects user_id='user-E8'"
+      ],
+      "input": {
+        "sequence": [
+          "GET /api/v1/user/keys",
+          "DELETE /api/v1/user/keys/:key_id",
+          "GET /api/v1/user/keys with original If-None-Match"
+        ]
+      },
+      "expected": "First GET: HTTP 200 with ETag. After DELETE. Third GET with original ETag: HTTP 200 (not 304), confirming ETag was invalidated by revocation",
+      "assertion_pseudocode": "resp1 = GET('/api/v1/user/keys', auth=user_E8_key)\nassert resp1.status == 200\noriginalETag = resp1.headers['ETag']\n\nDELETE('/api/v1/user/keys/'+keyID, auth=user_E8_key)\n\nresp2 = GET('/api/v1/user/keys', auth=user_E8_key, headers={'If-None-Match': originalETag})\nassert resp2.status == 200\nassert resp2.headers.get('ETag') != originalETag"
+    },
+    {
+      "id": "TS-10-E9",
+      "requirement_id": "10-REQ-5.E3",
+      "kind": "integration",
+      "description": "Verify that a database error during GET /api/v1/user/keys query returns HTTP 500 'internal server error'.",
+      "preconditions": [
+        "Echo server with key handlers registered",
+        "A mock or broken database that returns an error on query",
+        "Auth middleware injects a valid user_id"
+      ],
+      "input": {
+        "method": "GET",
+        "path": "/api/v1/user/keys"
+      },
+      "expected": "HTTP 500; response body contains error 'internal server error' via APIError envelope",
+      "assertion_pseudocode": "mockDB.queryError = genericDBError\nresp = GET('/api/v1/user/keys', auth=validAPIKey)\nassert resp.status == 500\nbody = parseJSON(resp.body)\nassert body.error == 'internal server error'"
+    },
+    {
+      "id": "TS-10-E10",
+      "requirement_id": "10-REQ-6.E1",
+      "kind": "integration",
+      "description": "Verify that if the refresh UPDATE affects 0 rows (race condition: key deleted between validation SELECT and UPDATE), the handler returns HTTP 404 'key not found'.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E10 has an active key that passes validation",
+        "A second DB connection deletes the key between the validation SELECT and the UPDATE in the handler"
+      ],
+      "input": {
+        "method": "POST",
+        "path": "/api/v1/user/keys/:key_id/refresh"
+      },
+      "expected": "HTTP 404; response body contains error 'key not found'; not HTTP 500",
+      "assertion_pseudocode": "// Simulate race: hook between SELECT and UPDATE to delete the row\ninstallRaceHook(db, afterSelect=lambda: db2.exec('DELETE FROM api_keys WHERE key_id = ?', keyID))\nresp = POST('/api/v1/user/keys/'+keyID+'/refresh', auth=userE10APIKey)\nassert resp.status == 404\nbody = parseJSON(resp.body)\nassert body.error == 'key not found'"
+    },
+    {
+      "id": "TS-10-E11",
+      "requirement_id": "10-REQ-6.E2",
+      "kind": "unit",
+      "description": "Verify that a crypto/rand.Read() failure during refresh secret generation returns HTTP 500 immediately with no retries and no database write.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E11 has an active key",
+        "Auth middleware injects user_id='user-E11' with credential type=API key",
+        "crypto/rand.Read injected to always fail"
+      ],
+      "input": {
+        "method": "POST",
+        "path": "/api/v1/user/keys/:key_id/refresh"
+      },
+      "expected": "HTTP 500 'internal server error'; no retries attempted; DB secret_hash unchanged",
+      "assertion_pseudocode": "originalHash = db.queryRow('SELECT secret_hash FROM api_keys WHERE key_id = ?', keyID).secret_hash\nmockRand.alwaysFail = true\nresp = POST('/api/v1/user/keys/'+keyID+'/refresh', auth=userE11APIKey)\nassert resp.status == 500\nbody = parseJSON(resp.body)\nassert body.error == 'internal server error'\ncurrentHash = db.queryRow('SELECT secret_hash FROM api_keys WHERE key_id = ?', keyID).secret_hash\nassert currentHash == originalHash"
+    },
+    {
+      "id": "TS-10-E12",
+      "requirement_id": "10-REQ-6.E3",
+      "kind": "integration",
+      "description": "Verify that refreshing a key created with expires_days=0 (indefinite) returns expires_at=null in the response and keeps expires_at NULL in the DB.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E12 has an active key with expires_days=0, expires_at IS NULL, revoked_at IS NULL",
+        "Auth middleware injects user_id='user-E12' with credential type=API key"
+      ],
+      "input": {
+        "auth": "API key for user-E12",
+        "method": "POST",
+        "path": "/api/v1/user/keys/:key_id/refresh"
+      },
+      "expected": "HTTP 200; response body has expires_at=null; DB row still has expires_at IS NULL after refresh",
+      "assertion_pseudocode": "resp = POST('/api/v1/user/keys/'+indefiniteKeyID+'/refresh', auth=userE12APIKey)\nassert resp.status == 200\nbody = parseJSON(resp.body)\nassert body.expires_at == null\nrow = db.queryRow('SELECT expires_at FROM api_keys WHERE key_id = ?', indefiniteKeyID)\nassert row.expires_at == NULL"
+    },
+    {
+      "id": "TS-10-E13",
+      "requirement_id": "10-REQ-6.E4",
+      "kind": "integration",
+      "description": "Verify that a non-race-condition database error during refresh SELECT or UPDATE returns HTTP 500 'internal server error'.",
+      "preconditions": [
+        "Echo server with key handlers registered",
+        "Mock database returns a generic error on QueryRow or ExecContext for the refresh operation",
+        "Auth middleware injects a valid user_id with API key credential type"
+      ],
+      "input": {
+        "method": "POST",
+        "path": "/api/v1/user/keys/:key_id/refresh"
+      },
+      "expected": "HTTP 500; response body contains error 'internal server error'",
+      "assertion_pseudocode": "mockDB.queryError = genericDBError\nresp = POST('/api/v1/user/keys/anykey/refresh', auth=validAPIKey)\nassert resp.status == 500\nbody = parseJSON(resp.body)\nassert body.error == 'internal server error'"
+    },
+    {
+      "id": "TS-10-E14",
+      "requirement_id": "10-REQ-7.E1",
+      "kind": "integration",
+      "description": "Verify that a database error during DELETE /api/v1/user/keys/:key_id SELECT or UPDATE returns HTTP 500 'internal server error'.",
+      "preconditions": [
+        "Echo server with key handlers registered",
+        "Mock database returns a generic error on QueryRow or ExecContext for the delete operation",
+        "Auth middleware injects a valid user_id"
+      ],
+      "input": {
+        "method": "DELETE",
+        "path": "/api/v1/user/keys/:key_id"
+      },
+      "expected": "HTTP 500; response body contains error 'internal server error'",
+      "assertion_pseudocode": "mockDB.queryError = genericDBError\nresp = DELETE('/api/v1/user/keys/anykey', auth=validAPIKey)\nassert resp.status == 500\nbody = parseJSON(resp.body)\nassert body.error == 'internal server error'"
+    },
+    {
+      "id": "TS-10-E15",
+      "requirement_id": "10-REQ-8.E1",
+      "kind": "integration",
+      "description": "Verify that GenerateAPIKey sets revoked_at on an expired-but-not-revoked key during the pre-INSERT revocation UPDATE.",
+      "preconditions": [
+        "SQLite database initialised with api_keys table",
+        "User user-E15 has a key with expires_at='2020-01-01T00:00:00Z' (past) and revoked_at IS NULL",
+        "No other keys for user-E15"
+      ],
+      "input": {
+        "expiresDays": 90,
+        "userID": "user-E15"
+      },
+      "expected": "After GenerateAPIKey: the expired key has revoked_at set (not NULL); the new key is the only row with revoked_at IS NULL",
+      "assertion_pseudocode": "expiredKeyID = db.queryRow('SELECT key_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-E15').key_id\nresult, err = GenerateAPIKey(db, 'user-E15', 90, logger)\nassert err == nil\nexpiredRow = db.queryRow('SELECT revoked_at FROM api_keys WHERE key_id = ?', expiredKeyID)\nassert expiredRow.revoked_at != NULL\nnullRevokedCount = queryCount('SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-E15')\nassert nullRevokedCount == 1\nnewActiveRow = db.queryRow('SELECT key_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', 'user-E15')\nassert newActiveRow.key_id == result.KeyID"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-10-SMOKE-1",
+      "execution_path_id": "10-PATH-1",
+      "description": "Smoke test: OAuth callback creates a first API key for a new user via GenerateAPIKey within an existing *sql.Tx transaction, verifying the full happy-path flow.",
+      "trigger": "Simulate the OAuth callback calling apikit.GenerateAPIKey(tx, userID, 90, logger) with an active *sql.Tx that also upserts the user",
+      "real_components": [
+        "internal/keys.GenerateAPIKey",
+        "SQLite api_keys table",
+        "crypto/rand",
+        "crypto/sha256"
+      ],
+      "mockable": [
+        "echo.Logger (replaced with test capturing logger)"
+      ],
+      "expected_effects": [
+        "GenerateAPIKey returns (*APIKeyResult, nil) with FullKey, KeyID, SecretHash, ExpiresAt populated",
+        "After tx.Commit(): exactly one row in api_keys for the user with revoked_at IS NULL",
+        "Row secret_hash == hex(sha256(secret from FullKey))",
+        "Row expires_at approximately now+90*24h",
+        "One INFO log entry emitted with user_id and key_id fields",
+        "FullKey matches ^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$"
+      ]
+    },
+    {
+      "id": "TS-10-SMOKE-2",
+      "execution_path_id": "10-PATH-2",
+      "description": "Smoke test: Authenticated user lists API keys with ETag caching — first request returns HTTP 200 with ETag, second with If-None-Match returns HTTP 304.",
+      "trigger": "Send GET /api/v1/user/keys with no If-None-Match, then send again with the returned ETag in If-None-Match",
+      "real_components": [
+        "internal/keys GET handler",
+        "SQLite api_keys table",
+        "Echo framework",
+        "Auth middleware (spec 05)",
+        "SetETag/CheckETag/FormatUTC from spec 01"
+      ],
+      "mockable": [
+        "Auth middleware (inject user_id directly via context)"
+      ],
+      "expected_effects": [
+        "First request: HTTP 200 with JSON array containing key metadata; ETag header present; Cache-Control: no-store",
+        "Response objects contain only key_id, created_at, expires_at, revoked_at",
+        "Second request with matching If-None-Match: HTTP 304 with empty body",
+        "No secret or secret_hash fields in response"
+      ]
+    },
+    {
+      "id": "TS-10-SMOKE-3",
+      "execution_path_id": "10-PATH-3",
+      "description": "Smoke test: User refreshes an active API key via POST /api/v1/user/keys/:key_id/refresh, verifying the new secret is returned and the DB is updated in-place.",
+      "trigger": "Send POST /api/v1/user/keys/:key_id/refresh authenticated with a valid API key credential for an active, non-expired, non-revoked key",
+      "real_components": [
+        "internal/keys refresh handler",
+        "SQLite api_keys table",
+        "Echo framework",
+        "Auth middleware (spec 05)",
+        "crypto/rand",
+        "crypto/sha256"
+      ],
+      "mockable": [
+        "Auth middleware (inject user_id and credential type=API key via context)",
+        "echo.Logger (capturing)"
+      ],
+      "expected_effects": [
+        "HTTP 200 with JSON body containing key (full key string), key_id (unchanged), expires_at (recalculated or null)",
+        "New secret portion is 32 alphanumeric characters",
+        "DB row has updated secret_hash matching hex(sha256(new_secret))",
+        "DB row created_at updated to approximately now()",
+        "DB row expires_at recalculated from stored expires_days",
+        "Row count in api_keys for user unchanged",
+        "INFO log entry emitted with user_id and key_id"
+      ]
+    },
+    {
+      "id": "TS-10-SMOKE-4",
+      "execution_path_id": "10-PATH-4",
+      "description": "Smoke test: User revokes their own active API key via DELETE /api/v1/user/keys/:key_id, verifying HTTP 200 and revoked_at set in DB.",
+      "trigger": "Send DELETE /api/v1/user/keys/:key_id authenticated with a valid API key or PAT with keys:manage for an active key belonging to the authenticated user",
+      "real_components": [
+        "internal/keys DELETE handler",
+        "SQLite api_keys table",
+        "Echo framework",
+        "Auth middleware (spec 05)"
+      ],
+      "mockable": [
+        "Auth middleware (inject user_id via context)",
+        "echo.Logger (capturing)"
+      ],
+      "expected_effects": [
+        "HTTP 200 with JSON body {key_id: <key_id>, revoked_at: <RFC3339 UTC>}",
+        "DB row for key_id has revoked_at set to approximately now()",
+        "INFO log entry emitted with user_id and key_id",
+        "Cache-Control: no-store present in response"
+      ]
+    },
+    {
+      "id": "TS-10-SMOKE-5",
+      "execution_path_id": "10-PATH-5",
+      "description": "Smoke test: GenerateAPIKey called with *sql.DB when a prior active key exists — prior key is revoked and new key inserted atomically.",
+      "trigger": "Call GenerateAPIKey(db, userID, 30, logger) passing *sql.DB directly for a user with one existing active key",
+      "real_components": [
+        "internal/keys.GenerateAPIKey",
+        "SQLite api_keys table",
+        "crypto/rand",
+        "crypto/sha256"
+      ],
+      "mockable": [
+        "echo.Logger (capturing test logger)"
+      ],
+      "expected_effects": [
+        "Prior active key's revoked_at is set to approximately now()",
+        "New key is inserted with the correct key_id, secret_hash, expires_days=30, expires_at=now+720h",
+        "Exactly one row with revoked_at IS NULL for the user after call",
+        "GenerateAPIKey returns (*APIKeyResult, nil) with FullKey, KeyID, SecretHash, ExpiresAt",
+        "Internal transaction committed successfully",
+        "INFO log entry emitted with user_id and key_id"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

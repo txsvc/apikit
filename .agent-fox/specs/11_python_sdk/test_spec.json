@@ -1,0 +1,1211 @@
+{
+  "$schema": null,
+  "spec_id": "11",
+  "spec_name": "python_sdk",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-11-1",
+      "requirement_id": "11-REQ-1.1",
+      "kind": "unit",
+      "description": "Verify pyproject.toml declares the correct package name, Python requirement, runtime dependency, and dev/test dependencies.",
+      "preconditions": [
+        "File `packages/sdk-python/pyproject.toml` exists in the repository.",
+        "Python 3.12+ and `uv` are available in the environment."
+      ],
+      "input": "Parse `packages/sdk-python/pyproject.toml` with a TOML parser.",
+      "expected": "project.name == 'apikit', requires-python == '>=3.12', 'httpx>=0.27' in dependencies, 'respx>=0.21' and 'mypy>=1.10' and 'ruff>=0.4' and 'pytest' in optional-dependencies.dev.",
+      "assertion_pseudocode": "data = parse_toml('packages/sdk-python/pyproject.toml')\nassert data['project']['name'] == 'apikit'\nassert data['project']['requires-python'] == '>=3.12'\nassert any('httpx' in d for d in data['project']['dependencies'])\ndev_deps = data['project']['optional-dependencies']['dev']\nassert any('respx' in d for d in dev_deps)\nassert any('mypy' in d for d in dev_deps)\nassert any('ruff' in d for d in dev_deps)\nassert any('pytest' in d for d in dev_deps)"
+    },
+    {
+      "id": "TS-11-2",
+      "requirement_id": "11-REQ-1.2",
+      "kind": "unit",
+      "description": "Verify the package layout includes all required source and test files at the correct paths.",
+      "preconditions": [
+        "Repository is checked out under `packages/sdk-python/`."
+      ],
+      "input": "File system check for existence of each required path.",
+      "expected": "All of `src/apikit/__init__.py`, `src/apikit/client.py`, `src/apikit/models.py`, `src/apikit/exceptions.py`, `tests/__init__.py`, `tests/test_client.py`, `tests/test_models.py`, `tests/test_exceptions.py` exist under `packages/sdk-python/`.",
+      "assertion_pseudocode": "for path in [\n  'packages/sdk-python/src/apikit/__init__.py',\n  'packages/sdk-python/src/apikit/client.py',\n  'packages/sdk-python/src/apikit/models.py',\n  'packages/sdk-python/src/apikit/exceptions.py',\n  'packages/sdk-python/tests/__init__.py',\n  'packages/sdk-python/tests/test_client.py',\n  'packages/sdk-python/tests/test_models.py',\n  'packages/sdk-python/tests/test_exceptions.py'\n]:\n  assert file_exists(path)"
+    },
+    {
+      "id": "TS-11-3",
+      "requirement_id": "11-REQ-1.3",
+      "kind": "unit",
+      "description": "Verify that `from apikit import Client, APIError, User, Organization` succeeds and that the exported symbols are the expected types.",
+      "preconditions": [
+        "`packages/sdk-python` is installed or on the Python path.",
+        "Python 3.12+ runtime is available."
+      ],
+      "input": "Import statement: `from apikit import Client, APIError, User, Organization`.",
+      "expected": "No ImportError is raised; `Client`, `APIError`, `User`, and `Organization` are accessible and are the correct types (class objects).",
+      "assertion_pseudocode": "from apikit import Client, APIError, User, Organization\nassert isinstance(Client, type)\nassert isinstance(APIError, type)\nassert isinstance(User, type)\nassert isinstance(Organization, type)"
+    },
+    {
+      "id": "TS-11-4",
+      "requirement_id": "11-REQ-1.4",
+      "kind": "unit",
+      "description": "Verify pyproject.toml contains no PyPI publishing configuration such as twine or flit settings.",
+      "preconditions": [
+        "File `packages/sdk-python/pyproject.toml` exists."
+      ],
+      "input": "Parse `packages/sdk-python/pyproject.toml`.",
+      "expected": "No `[project.urls]` publish entry, no `[tool.flit]`, no `[tool.twine]`, and no build-backend pointing to a publishing tool.",
+      "assertion_pseudocode": "data = parse_toml('packages/sdk-python/pyproject.toml')\nassert 'publish' not in data.get('project', {}).get('urls', {})\nassert 'flit' not in data.get('tool', {})\nassert 'twine' not in data.get('tool', {})"
+    },
+    {
+      "id": "TS-11-5",
+      "requirement_id": "11-REQ-2.1",
+      "kind": "unit",
+      "description": "Verify the Client constructor accepts base_url (required), mount_point (optional, default '/api/v1'), api_key (optional), and timeout (optional, default 30.0) without raising.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Client('https://api.example.com', mount_point='/api/v1', api_key='tok', timeout=30.0)",
+      "expected": "A `Client` instance is created with no exception; default values are applied when optional args are omitted.",
+      "assertion_pseudocode": "from apikit import Client\nc1 = Client('https://api.example.com')\nassert c1 is not None\nc2 = Client('https://api.example.com', mount_point='/v2', api_key='tok', timeout=5.0)\nassert c2 is not None\n# verify defaults\nc3 = Client('https://api.example.com')\nassert c3._mount_point == '/api/v1'\nassert c3._timeout == 30.0"
+    },
+    {
+      "id": "TS-11-6",
+      "requirement_id": "11-REQ-2.2",
+      "kind": "unit",
+      "description": "Verify that trailing slashes on base_url and mount_point are stripped at construction time.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Client('https://api.example.com/', mount_point='/api/v1/')",
+      "expected": "Stored base_url is 'https://api.example.com' and stored mount_point is '/api/v1' with no trailing slash.",
+      "assertion_pseudocode": "from apikit import Client\nc = Client('https://api.example.com/', mount_point='/api/v1/')\nassert c._base_url == 'https://api.example.com'\nassert c._mount_point == '/api/v1'"
+    },
+    {
+      "id": "TS-11-7",
+      "requirement_id": "11-REQ-2.3",
+      "kind": "unit",
+      "description": "Verify that healthz, readyz, and version methods send requests to base_url without mount_point, and all other methods use base_url + mount_point.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed for HTTP mocking."
+      ],
+      "input": "Client('https://api.example.com', mount_point='/api/v1'); call healthz(), readyz(), version(), and get_user().",
+      "expected": "healthz hits 'https://api.example.com/healthz', readyz hits 'https://api.example.com/readyz', version hits 'https://api.example.com/version', get_user hits 'https://api.example.com/api/v1/user'.",
+      "assertion_pseudocode": "with respx.mock:\n  route_healthz = respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  route_readyz = respx.get('https://api.example.com/readyz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  route_version = respx.get('https://api.example.com/version').mock(return_value=httpx.Response(200, json={'version':'1.0','build_time':'t','commit':'c','mount_point':'/api/v1'}))\n  route_user = respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', mount_point='/api/v1', api_key='tok')\n  c.healthz(); c.readyz(); c.version(); c.get_user()\n  assert route_healthz.called\n  assert route_readyz.called\n  assert route_version.called\n  assert route_user.called"
+    },
+    {
+      "id": "TS-11-8",
+      "requirement_id": "11-REQ-2.4",
+      "kind": "unit",
+      "description": "Verify that the Client forwards the timeout value to the underlying httpx.Client, and that timeout=None disables the timeout.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Client('https://api.example.com', timeout=5.0) and Client('https://api.example.com', timeout=None).",
+      "expected": "The internal httpx.Client is configured with timeout=5.0 in the first case and timeout=None in the second case.",
+      "assertion_pseudocode": "from apikit import Client\nc1 = Client('https://api.example.com', timeout=5.0)\nassert c1._http_client.timeout.connect == 5.0 or c1._http_client.timeout == 5.0\nc2 = Client('https://api.example.com', timeout=None)\nassert c2._http_client.timeout is None or c2._http_client.timeout == httpx.Timeout(None)"
+    },
+    {
+      "id": "TS-11-9",
+      "requirement_id": "11-REQ-3.1",
+      "kind": "unit",
+      "description": "Verify that Client implements the context manager protocol and that __enter__ returns self and __exit__ closes the underlying httpx.Client.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "`with Client('https://api.example.com') as c:` block that makes no requests.",
+      "expected": "__enter__ returns the Client instance; after the with block, the underlying httpx.Client is closed.",
+      "assertion_pseudocode": "from apikit import Client\nwith Client('https://api.example.com') as c:\n  assert c is not None\n  inner_http = c._http_client\n# after the block\nassert inner_http.is_closed"
+    },
+    {
+      "id": "TS-11-10",
+      "requirement_id": "11-REQ-3.2",
+      "kind": "unit",
+      "description": "Verify that __exit__ closes the httpx.Client and does not suppress exceptions raised inside the with block.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "`with Client(...) as c:` block that raises a ValueError.",
+      "expected": "ValueError propagates out of the with block; the underlying httpx.Client is closed.",
+      "assertion_pseudocode": "from apikit import Client\ncaught_exception = None\ninner_http = None\ntry:\n  with Client('https://api.example.com') as c:\n    inner_http = c._http_client\n    raise ValueError('test error')\nexcept ValueError as e:\n  caught_exception = e\nassert caught_exception is not None\nassert str(caught_exception) == 'test error'\nassert inner_http.is_closed"
+    },
+    {
+      "id": "TS-11-11",
+      "requirement_id": "11-REQ-4.1",
+      "kind": "unit",
+      "description": "Verify that when api_key is set, every request includes Authorization: Bearer <api_key> header.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com', api_key='ak_secret'); call get_user().",
+      "expected": "The outgoing GET request has 'Authorization' header equal to 'Bearer ak_secret'.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='ak_secret')\n  c.get_user()\n  assert route.calls.last.request.headers['authorization'] == 'Bearer ak_secret'"
+    },
+    {
+      "id": "TS-11-12",
+      "requirement_id": "11-REQ-4.2",
+      "kind": "unit",
+      "description": "Verify that when api_key is None, no Authorization header is sent on requests.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com', api_key=None); call healthz().",
+      "expected": "The outgoing GET request has no 'Authorization' header.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  c = Client('https://api.example.com', api_key=None)\n  c.healthz()\n  assert 'authorization' not in route.calls.last.request.headers"
+    },
+    {
+      "id": "TS-11-13",
+      "requirement_id": "11-REQ-5.1",
+      "kind": "unit",
+      "description": "Verify that every outgoing request includes Accept: application/json header.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com'); call healthz().",
+      "expected": "The outgoing GET request has 'Accept' header equal to 'application/json'.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  c = Client('https://api.example.com')\n  c.healthz()\n  assert route.calls.last.request.headers['accept'] == 'application/json'"
+    },
+    {
+      "id": "TS-11-14",
+      "requirement_id": "11-REQ-5.2",
+      "kind": "unit",
+      "description": "Verify that POST and PATCH requests include Content-Type: application/json header.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call update_user(full_name='Test').",
+      "expected": "The outgoing PATCH request has 'Content-Type' header equal to 'application/json'.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.patch('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  c.update_user(full_name='Test')\n  assert 'application/json' in route.calls.last.request.headers['content-type']"
+    },
+    {
+      "id": "TS-11-15",
+      "requirement_id": "11-REQ-6.1",
+      "kind": "unit",
+      "description": "Verify that last_etag and last_request_id are reset to None at the start of each request and then populated from response headers when present.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user() twice: first response includes ETag and X-Request-ID; second response omits them.",
+      "expected": "After first call: last_etag == 'etag-value', last_request_id == 'req-id-value'. After second call: last_etag is None, last_request_id is None.",
+      "assertion_pseudocode": "with respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_USER_DICT, headers={'ETag': 'etag-1', 'X-Request-ID': 'req-1'}),\n    httpx.Response(200, json=SAMPLE_USER_DICT)\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  c.get_user()\n  assert c.last_etag == 'etag-1'\n  assert c.last_request_id == 'req-1'\n  c.get_user()\n  assert c.last_etag is None\n  assert c.last_request_id is None"
+    },
+    {
+      "id": "TS-11-16",
+      "requirement_id": "11-REQ-6.2",
+      "kind": "unit",
+      "description": "Verify that last_etag is None after a response that does not include an ETag header.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client; call healthz() with a mocked response that has no ETag header.",
+      "expected": "client.last_etag is None after the call.",
+      "assertion_pseudocode": "with respx.mock:\n  respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  c = Client('https://api.example.com')\n  c.healthz()\n  assert c.last_etag is None"
+    },
+    {
+      "id": "TS-11-17",
+      "requirement_id": "11-REQ-6.3",
+      "kind": "unit",
+      "description": "Verify that last_request_id is None after a response that does not include an X-Request-ID header.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client; call healthz() with a mocked response that has no X-Request-ID header.",
+      "expected": "client.last_request_id is None after the call.",
+      "assertion_pseudocode": "with respx.mock:\n  respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  c = Client('https://api.example.com')\n  c.healthz()\n  assert c.last_request_id is None"
+    },
+    {
+      "id": "TS-11-18",
+      "requirement_id": "11-REQ-7.1",
+      "kind": "unit",
+      "description": "Verify that when if_none_match is provided to a conditional GET, the If-None-Match header is sent.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user(if_none_match='\"abc123\"').",
+      "expected": "The outgoing GET request has 'If-None-Match' header equal to '\"abc123\"'.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  c.get_user(if_none_match='\"abc123\"')\n  assert route.calls.last.request.headers['if-none-match'] == '\"abc123\"'"
+    },
+    {
+      "id": "TS-11-19",
+      "requirement_id": "11-REQ-7.2",
+      "kind": "unit",
+      "description": "Verify that NotModifiedError is raised when the server returns HTTP 304 to a conditional GET.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user(if_none_match='\"etag\"') with mocked 304 response.",
+      "expected": "NotModifiedError is raised; it is not an instance of APIError.",
+      "assertion_pseudocode": "from apikit import Client, NotModifiedError, APIError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(304))\n  c = Client('https://api.example.com', api_key='tok')\n  raised = None\n  try:\n    c.get_user(if_none_match='\"etag\"')\n  except NotModifiedError as e:\n    raised = e\n  assert raised is not None\n  assert not isinstance(raised, APIError)"
+    },
+    {
+      "id": "TS-11-20",
+      "requirement_id": "11-REQ-7.3",
+      "kind": "unit",
+      "description": "Verify that when if_none_match is None, the If-None-Match header is omitted from the request.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user(if_none_match=None).",
+      "expected": "The outgoing GET request has no 'If-None-Match' header.",
+      "assertion_pseudocode": "with respx.mock:\n  route = respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  c.get_user(if_none_match=None)\n  assert 'if-none-match' not in route.calls.last.request.headers"
+    },
+    {
+      "id": "TS-11-21",
+      "requirement_id": "11-REQ-8.1",
+      "kind": "unit",
+      "description": "Verify APIError defines __init__ with code and message, stores both as instance attributes, and is catchable as Exception.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "APIError(code=404, message='not found')",
+      "expected": "e.code == 404, e.message == 'not found', isinstance(e, Exception) is True, str(e) == 'not found'.",
+      "assertion_pseudocode": "from apikit import APIError\ne = APIError(code=404, message='not found')\nassert e.code == 404\nassert e.message == 'not found'\nassert isinstance(e, Exception)\nassert str(e) == 'not found'"
+    },
+    {
+      "id": "TS-11-22",
+      "requirement_id": "11-REQ-8.2",
+      "kind": "unit",
+      "description": "Verify that a 4xx response with a valid JSON error envelope raises APIError with code and message from the envelope.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 400 response with body '{\"error\": {\"code\": 400, \"message\": \"bad request\"}}'.",
+      "expected": "APIError is raised with e.code == 400 and e.message == 'bad request'.",
+      "assertion_pseudocode": "from apikit import Client, APIError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(\n    return_value=httpx.Response(400, json={'error': {'code': 400, 'message': 'bad request'}})\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  raised = None\n  try:\n    c.get_user()\n  except APIError as e:\n    raised = e\n  assert raised is not None\n  assert raised.code == 400\n  assert raised.message == 'bad request'"
+    },
+    {
+      "id": "TS-11-23",
+      "requirement_id": "11-REQ-8.3",
+      "kind": "unit",
+      "description": "Verify that a 4xx response with a non-JSON body raises APIError with the HTTP status code and raw body text as message.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 500 response with plain text body 'Internal Server Error'.",
+      "expected": "APIError is raised with e.code == 500 and e.message == 'Internal Server Error'.",
+      "assertion_pseudocode": "from apikit import Client, APIError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(\n    return_value=httpx.Response(500, text='Internal Server Error')\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  raised = None\n  try:\n    c.get_user()\n  except APIError as e:\n    raised = e\n  assert raised is not None\n  assert raised.code == 500\n  assert raised.message == 'Internal Server Error'"
+    },
+    {
+      "id": "TS-11-24",
+      "requirement_id": "11-REQ-8.4",
+      "kind": "unit",
+      "description": "Verify that a 4xx/5xx response with an empty body raises APIError with code set to the HTTP status code and message 'Unexpected error'.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 503 response with empty body.",
+      "expected": "APIError raised with e.code == 503 and e.message == 'Unexpected error'.",
+      "assertion_pseudocode": "from apikit import Client, APIError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(\n    return_value=httpx.Response(503, content=b'')\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  raised = None\n  try:\n    c.get_user()\n  except APIError as e:\n    raised = e\n  assert raised is not None\n  assert raised.code == 503\n  assert raised.message == 'Unexpected error'"
+    },
+    {
+      "id": "TS-11-25",
+      "requirement_id": "11-REQ-8.5",
+      "kind": "unit",
+      "description": "Verify that UnauthorizedError, ForbiddenError, NotFoundError, and ConflictError are raised for 401, 403, 404, and 409 responses respectively, and each is an instance of APIError.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked responses returning 401, 403, 404, and 409 with valid JSON error envelopes.",
+      "expected": "Each raises its specific subclass; each is also an instance of APIError.",
+      "assertion_pseudocode": "from apikit import Client, APIError, UnauthorizedError, ForbiddenError, NotFoundError, ConflictError\nstatus_to_exc = {401: UnauthorizedError, 403: ForbiddenError, 404: NotFoundError, 409: ConflictError}\nfor status_code, exc_cls in status_to_exc.items():\n  with respx.mock:\n    respx.get('https://api.example.com/api/v1/user').mock(\n      return_value=httpx.Response(status_code, json={'error': {'code': status_code, 'message': 'err'}})\n    )\n    c = Client('https://api.example.com', api_key='tok')\n    raised = None\n    try:\n      c.get_user()\n    except exc_cls as e:\n      raised = e\n    assert raised is not None\n    assert isinstance(raised, APIError)"
+    },
+    {
+      "id": "TS-11-26",
+      "requirement_id": "11-REQ-8.6",
+      "kind": "unit",
+      "description": "Verify that NotModifiedError is a direct subclass of Exception and not of APIError.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect NotModifiedError class hierarchy.",
+      "expected": "issubclass(NotModifiedError, Exception) is True; issubclass(NotModifiedError, APIError) is False.",
+      "assertion_pseudocode": "from apikit import NotModifiedError, APIError\nassert issubclass(NotModifiedError, Exception)\nassert not issubclass(NotModifiedError, APIError)\ne = NotModifiedError()\nassert not isinstance(e, APIError)"
+    },
+    {
+      "id": "TS-11-27",
+      "requirement_id": "11-REQ-9.1",
+      "kind": "unit",
+      "description": "Verify that all ten response dataclasses (User, APIKey, APIKeyWithSecret, PAT, PATWithSecret, Organization, OAuthProvider, AuthCallbackResponse, VersionInfo, HealthStatus) are importable and are dataclasses.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Import all response dataclasses from apikit.",
+      "expected": "All ten classes exist, are dataclasses (dataclasses.is_dataclass returns True), and are importable without error.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import User, APIKey, APIKeyWithSecret, PAT, PATWithSecret, Organization, OAuthProvider, AuthCallbackResponse, VersionInfo, HealthStatus\nfor cls in [User, APIKey, APIKeyWithSecret, PAT, PATWithSecret, Organization, OAuthProvider, AuthCallbackResponse, VersionInfo, HealthStatus]:\n  assert dataclasses.is_dataclass(cls)"
+    },
+    {
+      "id": "TS-11-28",
+      "requirement_id": "11-REQ-9.2",
+      "kind": "unit",
+      "description": "Verify that dataclass field names use snake_case matching JSON keys (e.g., key_id, created_at, provider_id).",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect field names of User, APIKey, Organization, and PAT dataclasses.",
+      "expected": "User has field 'created_at', APIKey has field 'key_id', Organization has field 'created_at', PAT has field 'token_id'.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import User, APIKey, Organization, PAT\nuser_fields = {f.name for f in dataclasses.fields(User)}\nassert 'created_at' in user_fields\nassert 'provider_id' in user_fields\napikey_fields = {f.name for f in dataclasses.fields(APIKey)}\nassert 'key_id' in apikey_fields\npat_fields = {f.name for f in dataclasses.fields(PAT)}\nassert 'token_id' in pat_fields"
+    },
+    {
+      "id": "TS-11-29",
+      "requirement_id": "11-REQ-9.3",
+      "kind": "unit",
+      "description": "Verify that status on User and Organization, and role on User, are typed as plain str without enum enforcement.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect type annotations of User.status, User.role, Organization.status.",
+      "expected": "All three fields have annotation str (not an Enum subclass); arbitrary string values are accepted in from_dict.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import User, Organization\nuser_hints = {f.name: f.type for f in dataclasses.fields(User)}\nassert user_hints['status'] == str or user_hints['status'] is str\nassert user_hints['role'] == str or user_hints['role'] is str\norg_hints = {f.name: f.type for f in dataclasses.fields(Organization)}\nassert org_hints['status'] == str or org_hints['status'] is str\n# Arbitrary value accepted\nu = User.from_dict({**SAMPLE_USER_DICT, 'status': 'custom_value', 'role': 'superuser'})\nassert u.status == 'custom_value'\nassert u.role == 'superuser'"
+    },
+    {
+      "id": "TS-11-30",
+      "requirement_id": "11-REQ-9.4",
+      "kind": "unit",
+      "description": "Verify that APIKeyWithSecret has exactly the fields key, key_id, and expires_at, with created_at and revoked_at absent.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect fields of APIKeyWithSecret dataclass.",
+      "expected": "APIKeyWithSecret has exactly three fields: key (str), key_id (str), expires_at (datetime | None).",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import APIKeyWithSecret\nfields = {f.name for f in dataclasses.fields(APIKeyWithSecret)}\nassert fields == {'key', 'key_id', 'expires_at'}\nassert 'created_at' not in fields\nassert 'revoked_at' not in fields"
+    },
+    {
+      "id": "TS-11-31",
+      "requirement_id": "11-REQ-9.5",
+      "kind": "unit",
+      "description": "Verify that AuthCallbackResponse has fields user: User and api_key: APIKeyWithSecret.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect fields of AuthCallbackResponse dataclass.",
+      "expected": "AuthCallbackResponse has fields 'user' and 'api_key'; their types are User and APIKeyWithSecret respectively.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import AuthCallbackResponse, User, APIKeyWithSecret\nfields = {f.name: f for f in dataclasses.fields(AuthCallbackResponse)}\nassert 'user' in fields\nassert 'api_key' in fields\nassert fields['user'].type is User or fields['user'].type == 'User'\nassert fields['api_key'].type is APIKeyWithSecret or fields['api_key'].type == 'APIKeyWithSecret'"
+    },
+    {
+      "id": "TS-11-32",
+      "requirement_id": "11-REQ-9.6",
+      "kind": "unit",
+      "description": "Verify that list_org_members returns list[User] and that no OrgMember type is defined in apikit.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Call list_org_members with mocked response returning a JSON array of user dicts.",
+      "expected": "Return value is a list of User instances; `from apikit import OrgMember` raises ImportError.",
+      "assertion_pseudocode": "from apikit import Client, User\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/orgs/org-1/members').mock(\n    return_value=httpx.Response(200, json=[SAMPLE_USER_DICT])\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  members = c.list_org_members('org-1')\n  assert isinstance(members, list)\n  assert all(isinstance(m, User) for m in members)\ntry:\n  from apikit import OrgMember\n  assert False, 'should have raised ImportError'\nexcept ImportError:\n  pass"
+    },
+    {
+      "id": "TS-11-33",
+      "requirement_id": "11-REQ-10.1",
+      "kind": "unit",
+      "description": "Verify that from_dict on a response dataclass correctly parses RFC 3339 datetime strings into datetime objects and constructs nested dataclass instances.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "User.from_dict({'id':'u1','username':'alice','email':'a@b.com','full_name':None,'status':'active','role':'user','provider':'github','provider_id':'gh-1','created_at':'2024-01-15T12:00:00Z','updated_at':'2024-06-01T00:00:00Z'})",
+      "expected": "Returns a User instance with created_at and updated_at as datetime objects (timezone-aware or naive UTC).",
+      "assertion_pseudocode": "from datetime import datetime\nfrom apikit import User\nu = User.from_dict({'id':'u1','username':'alice','email':'a@b.com','full_name':None,'status':'active','role':'user','provider':'github','provider_id':'gh-1','created_at':'2024-01-15T12:00:00Z','updated_at':'2024-06-01T00:00:00Z'})\nassert isinstance(u.created_at, datetime)\nassert isinstance(u.updated_at, datetime)\nassert u.id == 'u1'\nassert u.username == 'alice'"
+    },
+    {
+      "id": "TS-11-34",
+      "requirement_id": "11-REQ-10.2",
+      "kind": "unit",
+      "description": "Verify that from_dict silently ignores unknown/extra keys not defined on the dataclass.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "HealthStatus.from_dict({'status': 'ok', 'unknown_future_field': 'some_value', 'another_new_field': 42})",
+      "expected": "Returns HealthStatus(status='ok') without raising any exception.",
+      "assertion_pseudocode": "from apikit import HealthStatus\nresult = HealthStatus.from_dict({'status': 'ok', 'unknown_future_field': 'some_value', 'another_new_field': 42})\nassert result.status == 'ok'"
+    },
+    {
+      "id": "TS-11-35",
+      "requirement_id": "11-REQ-11.1",
+      "kind": "unit",
+      "description": "Verify that to_dict on a request dataclass omits optional fields that are None and returns a dict suitable for JSON encoding.",
+      "preconditions": [
+        "`apikit` package is importable (internal request dataclasses accessible)."
+      ],
+      "input": "UpdateOrgRequest(name=None, url='https://example.com').to_dict()",
+      "expected": "Returns {'url': 'https://example.com'} without a 'name' key.",
+      "assertion_pseudocode": "from apikit.models import UpdateOrgRequest\nresult = UpdateOrgRequest(name=None, url='https://example.com').to_dict()\nassert 'name' not in result\nassert result.get('url') == 'https://example.com'\nassert None not in result.values()"
+    },
+    {
+      "id": "TS-11-36",
+      "requirement_id": "11-REQ-12.1",
+      "kind": "unit",
+      "description": "Verify that all six internal request dataclasses are defined and pass mypy strict mode.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`mypy` is installed."
+      ],
+      "input": "Import UpdateUserRequest, CreateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, AuthCallbackRequest from apikit.models.",
+      "expected": "All six classes are importable as dataclasses; `uv run mypy .` exits with code 0.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit.models import UpdateUserRequest, CreateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, AuthCallbackRequest\nfor cls in [UpdateUserRequest, CreateUserRequest, CreateTokenRequest, CreateOrgRequest, UpdateOrgRequest, AuthCallbackRequest]:\n  assert dataclasses.is_dataclass(cls)\n# None of these appear in public Client method signatures (inspected via inspect.signature)"
+    },
+    {
+      "id": "TS-11-37",
+      "requirement_id": "11-REQ-12.2",
+      "kind": "unit",
+      "description": "Verify that CreateTokenRequest and AuthCallbackRequest have expires field typed as int with default value 90.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Inspect fields of CreateTokenRequest and AuthCallbackRequest.",
+      "expected": "Both have 'expires' field of type int with default 90.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit.models import CreateTokenRequest, AuthCallbackRequest\nfor cls in [CreateTokenRequest, AuthCallbackRequest]:\n  fields = {f.name: f for f in dataclasses.fields(cls)}\n  assert 'expires' in fields\n  assert fields['expires'].default == 90\n  instance = cls(**{f.name: f.default if f.default is not dataclasses.MISSING else ('x' if f.type == str else []) for f in dataclasses.fields(cls)})\n  assert instance.expires == 90"
+    },
+    {
+      "id": "TS-11-38",
+      "requirement_id": "11-REQ-13.1",
+      "kind": "unit",
+      "description": "Verify that healthz(), readyz(), and version() methods send GET to base_url (without mount_point) and return the correct typed objects.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com', mount_point='/api/v1'); call healthz(), readyz(), version().",
+      "expected": "healthz() returns HealthStatus(status='ok'), readyz() returns HealthStatus(status='ok'), version() returns VersionInfo with correct fields; all URLs hit base_url directly.",
+      "assertion_pseudocode": "from apikit import Client, HealthStatus, VersionInfo\nwith respx.mock:\n  respx.get('https://api.example.com/healthz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  respx.get('https://api.example.com/readyz').mock(return_value=httpx.Response(200, json={'status':'ok'}))\n  respx.get('https://api.example.com/version').mock(return_value=httpx.Response(200, json={'version':'1.0','build_time':'t','commit':'c','mount_point':'/api/v1'}))\n  c = Client('https://api.example.com', mount_point='/api/v1')\n  h = c.healthz(); assert isinstance(h, HealthStatus); assert h.status == 'ok'\n  r = c.readyz(); assert isinstance(r, HealthStatus); assert r.status == 'ok'\n  v = c.version(); assert isinstance(v, VersionInfo); assert v.version == '1.0'"
+    },
+    {
+      "id": "TS-11-39",
+      "requirement_id": "11-REQ-14.1",
+      "kind": "unit",
+      "description": "Verify that get_providers() sends GET to mount_point + /auth/providers and returns a list of OAuthProvider instances.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client; call get_providers().",
+      "expected": "Returns a list of OAuthProvider instances on HTTP 200.",
+      "assertion_pseudocode": "from apikit import Client, OAuthProvider\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/auth/providers').mock(\n    return_value=httpx.Response(200, json=[{'name':'github','authorize_url':'https://github.com/login/oauth/authorize'}])\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  providers = c.get_providers()\n  assert isinstance(providers, list)\n  assert len(providers) == 1\n  assert isinstance(providers[0], OAuthProvider)\n  assert providers[0].name == 'github'"
+    },
+    {
+      "id": "TS-11-40",
+      "requirement_id": "11-REQ-14.2",
+      "kind": "unit",
+      "description": "Verify that exchange_oauth_code() sends POST to mount_point + /auth/callback with correct body and returns AuthCallbackResponse.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client; call exchange_oauth_code(provider='github', code='abc', redirect_uri='https://app.example.com/cb', expires=30).",
+      "expected": "POST is sent to '/api/v1/auth/callback'; body contains provider, code, redirect_uri, expires=30; returns AuthCallbackResponse with nested User and APIKeyWithSecret.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, AuthCallbackResponse\nwith respx.mock:\n  route = respx.post('https://api.example.com/api/v1/auth/callback').mock(\n    return_value=httpx.Response(200, json={'user': SAMPLE_USER_DICT, 'api_key': SAMPLE_API_KEY_WITH_SECRET_DICT})\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.exchange_oauth_code(provider='github', code='abc', redirect_uri='https://app.example.com/cb', expires=30)\n  assert isinstance(result, AuthCallbackResponse)\n  body = json.loads(route.calls.last.request.content)\n  assert body['provider'] == 'github'\n  assert body['code'] == 'abc'\n  assert body['redirect_uri'] == 'https://app.example.com/cb'\n  assert body['expires'] == 30"
+    },
+    {
+      "id": "TS-11-41",
+      "requirement_id": "11-REQ-15.1",
+      "kind": "unit",
+      "description": "Verify get_user() returns User on 200 and raises NotModifiedError on 304.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user() then get_user(if_none_match='etag') with mocked 200 then 304.",
+      "expected": "First call returns User instance; second call raises NotModifiedError.",
+      "assertion_pseudocode": "from apikit import Client, User, NotModifiedError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_USER_DICT),\n    httpx.Response(304)\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  u = c.get_user()\n  assert isinstance(u, User)\n  raised = None\n  try:\n    c.get_user(if_none_match='etag')\n  except NotModifiedError as e:\n    raised = e\n  assert raised is not None"
+    },
+    {
+      "id": "TS-11-42",
+      "requirement_id": "11-REQ-15.2",
+      "kind": "unit",
+      "description": "Verify update_user() sends PATCH to /user with correct body and returns User.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call update_user(full_name='Alice Smith').",
+      "expected": "PATCH sent to '/api/v1/user' with body {\"full_name\": \"Alice Smith\"}; returns User.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, User\nwith respx.mock:\n  route = respx.patch('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.update_user(full_name='Alice Smith')\n  assert isinstance(result, User)\n  body = json.loads(route.calls.last.request.content)\n  assert body['full_name'] == 'Alice Smith'"
+    },
+    {
+      "id": "TS-11-43",
+      "requirement_id": "11-REQ-15.3",
+      "kind": "unit",
+      "description": "Verify list_keys() sends GET to /user/keys and returns list[APIKey].",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_keys().",
+      "expected": "Returns a list of APIKey instances on HTTP 200.",
+      "assertion_pseudocode": "from apikit import Client, APIKey\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user/keys').mock(\n    return_value=httpx.Response(200, json=[SAMPLE_API_KEY_DICT])\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  keys = c.list_keys()\n  assert isinstance(keys, list)\n  assert all(isinstance(k, APIKey) for k in keys)"
+    },
+    {
+      "id": "TS-11-44",
+      "requirement_id": "11-REQ-15.4",
+      "kind": "unit",
+      "description": "Verify refresh_key() sends POST to /user/keys/{key_id}/refresh and parses HTTP 200 response as APIKeyWithSecret.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call refresh_key('key-abc').",
+      "expected": "POST sent to '/api/v1/user/keys/key-abc/refresh'; returns APIKeyWithSecret on HTTP 200.",
+      "assertion_pseudocode": "from apikit import Client, APIKeyWithSecret\nwith respx.mock:\n  route = respx.post('https://api.example.com/api/v1/user/keys/key-abc/refresh').mock(\n    return_value=httpx.Response(200, json=SAMPLE_API_KEY_WITH_SECRET_DICT)\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.refresh_key('key-abc')\n  assert isinstance(result, APIKeyWithSecret)\n  assert route.called"
+    },
+    {
+      "id": "TS-11-45",
+      "requirement_id": "11-REQ-15.5",
+      "kind": "unit",
+      "description": "Verify revoke_key() sends DELETE to /user/keys/{key_id} and returns None on 204.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call revoke_key('key-abc').",
+      "expected": "DELETE sent to '/api/v1/user/keys/key-abc'; returns None.",
+      "assertion_pseudocode": "from apikit import Client\nwith respx.mock:\n  respx.delete('https://api.example.com/api/v1/user/keys/key-abc').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.revoke_key('key-abc')\n  assert result is None"
+    },
+    {
+      "id": "TS-11-46",
+      "requirement_id": "11-REQ-15.6",
+      "kind": "unit",
+      "description": "Verify list_tokens() sends GET to /user/tokens and returns list[PAT].",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_tokens().",
+      "expected": "Returns a list of PAT instances on HTTP 200.",
+      "assertion_pseudocode": "from apikit import Client, PAT\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user/tokens').mock(\n    return_value=httpx.Response(200, json=[SAMPLE_PAT_DICT])\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  tokens = c.list_tokens()\n  assert isinstance(tokens, list)\n  assert all(isinstance(t, PAT) for t in tokens)"
+    },
+    {
+      "id": "TS-11-47",
+      "requirement_id": "11-REQ-15.7",
+      "kind": "unit",
+      "description": "Verify create_token() sends POST to /user/tokens with serialized body and returns PATWithSecret on 201.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call create_token(name='my-token', permissions=['read'], expires=30).",
+      "expected": "POST sent with body {name:'my-token', permissions:['read'], expires:30}; returns PATWithSecret on HTTP 201.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, PATWithSecret\nwith respx.mock:\n  route = respx.post('https://api.example.com/api/v1/user/tokens').mock(\n    return_value=httpx.Response(201, json=SAMPLE_PAT_WITH_SECRET_DICT)\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.create_token(name='my-token', permissions=['read'], expires=30)\n  assert isinstance(result, PATWithSecret)\n  body = json.loads(route.calls.last.request.content)\n  assert body['name'] == 'my-token'\n  assert body['permissions'] == ['read']\n  assert body['expires'] == 30"
+    },
+    {
+      "id": "TS-11-48",
+      "requirement_id": "11-REQ-15.8",
+      "kind": "unit",
+      "description": "Verify get_token() returns PAT on 200 and raises NotModifiedError on 304.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_token('tok-1') then get_token('tok-1', if_none_match='etag') with mocked 200 then 304.",
+      "expected": "First call returns PAT; second call raises NotModifiedError.",
+      "assertion_pseudocode": "from apikit import Client, PAT, NotModifiedError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user/tokens/tok-1').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_PAT_DICT),\n    httpx.Response(304)\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  t = c.get_token('tok-1')\n  assert isinstance(t, PAT)\n  raised = None\n  try:\n    c.get_token('tok-1', if_none_match='etag')\n  except NotModifiedError as e:\n    raised = e\n  assert raised is not None"
+    },
+    {
+      "id": "TS-11-49",
+      "requirement_id": "11-REQ-15.9",
+      "kind": "unit",
+      "description": "Verify revoke_token() sends DELETE to /user/tokens/{token_id} and returns None on 204.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call revoke_token('tok-1').",
+      "expected": "DELETE sent to '/api/v1/user/tokens/tok-1'; returns None.",
+      "assertion_pseudocode": "from apikit import Client\nwith respx.mock:\n  respx.delete('https://api.example.com/api/v1/user/tokens/tok-1').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.revoke_token('tok-1')\n  assert result is None"
+    },
+    {
+      "id": "TS-11-50",
+      "requirement_id": "11-REQ-15.10",
+      "kind": "unit",
+      "description": "Verify list_user_orgs() sends GET to /user/orgs and returns list[Organization].",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_user_orgs().",
+      "expected": "Returns a list of Organization instances on HTTP 200.",
+      "assertion_pseudocode": "from apikit import Client, Organization\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user/orgs').mock(\n    return_value=httpx.Response(200, json=[SAMPLE_ORG_DICT])\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  orgs = c.list_user_orgs()\n  assert isinstance(orgs, list)\n  assert all(isinstance(o, Organization) for o in orgs)"
+    },
+    {
+      "id": "TS-11-51",
+      "requirement_id": "11-REQ-16.1",
+      "kind": "unit",
+      "description": "Verify list_users() sends GET to /users and appends include_blocked=true query param only when True.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_users() and list_users(include_blocked=True).",
+      "expected": "First call URL has no include_blocked param; second call URL includes include_blocked=true.",
+      "assertion_pseudocode": "from apikit import Client\nwith respx.mock:\n  route1 = respx.get('https://api.example.com/api/v1/users').mock(return_value=httpx.Response(200, json=[SAMPLE_USER_DICT]))\n  route2 = respx.get(url__regex=r'.*include_blocked=true.*').mock(return_value=httpx.Response(200, json=[SAMPLE_USER_DICT]))\n  c = Client('https://api.example.com', api_key='tok')\n  c.list_users()\n  assert 'include_blocked' not in str(route1.calls.last.request.url)\n  c.list_users(include_blocked=True)\n  assert 'include_blocked=true' in str(route2.calls.last.request.url)"
+    },
+    {
+      "id": "TS-11-52",
+      "requirement_id": "11-REQ-16.2",
+      "kind": "unit",
+      "description": "Verify get_user_by_id() sends GET to /users/{id} and returns User on 200 or raises NotModifiedError on 304.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_user_by_id('user-1') then get_user_by_id('user-1', if_none_match='etag').",
+      "expected": "First call returns User; second call raises NotModifiedError.",
+      "assertion_pseudocode": "from apikit import Client, User, NotModifiedError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/users/user-1').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_USER_DICT),\n    httpx.Response(304)\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  u = c.get_user_by_id('user-1')\n  assert isinstance(u, User)\n  raised = None\n  try:\n    c.get_user_by_id('user-1', if_none_match='etag')\n  except NotModifiedError as e:\n    raised = e\n  assert raised is not None"
+    },
+    {
+      "id": "TS-11-53",
+      "requirement_id": "11-REQ-16.3",
+      "kind": "unit",
+      "description": "Verify create_user() sends POST to /users with correct body and returns User on 201.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call create_user(username='alice', email='a@b.com', provider='github', provider_id='gh-1').",
+      "expected": "POST sent to '/api/v1/users' with serialized body; returns User on HTTP 201.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, User\nwith respx.mock:\n  route = respx.post('https://api.example.com/api/v1/users').mock(return_value=httpx.Response(201, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.create_user(username='alice', email='a@b.com', provider='github', provider_id='gh-1')\n  assert isinstance(result, User)\n  body = json.loads(route.calls.last.request.content)\n  assert body == {'username':'alice','email':'a@b.com','provider':'github','provider_id':'gh-1'}"
+    },
+    {
+      "id": "TS-11-54",
+      "requirement_id": "11-REQ-16.4",
+      "kind": "unit",
+      "description": "Verify update_user_by_id() sends PATCH to /users/{id} with full_name body and returns User.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call update_user_by_id('user-1', full_name='Bob').",
+      "expected": "PATCH sent to '/api/v1/users/user-1' with body {full_name: 'Bob'}; returns User on 200.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, User\nwith respx.mock:\n  route = respx.patch('https://api.example.com/api/v1/users/user-1').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.update_user_by_id('user-1', full_name='Bob')\n  assert isinstance(result, User)\n  body = json.loads(route.calls.last.request.content)\n  assert body['full_name'] == 'Bob'"
+    },
+    {
+      "id": "TS-11-55",
+      "requirement_id": "11-REQ-16.5",
+      "kind": "unit",
+      "description": "Verify promote_user, demote_user, block_user, and unblock_user each send POST to correct path and return User on 200.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call promote_user('u1'), demote_user('u1'), block_user('u1'), unblock_user('u1').",
+      "expected": "Each sends POST to the correct path suffix (/promote, /demote, /block, /unblock) and returns User.",
+      "assertion_pseudocode": "from apikit import Client, User\nfor action in ['promote', 'demote', 'block', 'unblock']:\n  with respx.mock:\n    route = respx.post(f'https://api.example.com/api/v1/users/u1/{action}').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n    c = Client('https://api.example.com', api_key='tok')\n    method = getattr(c, f'{action}_user')\n    result = method('u1')\n    assert isinstance(result, User)\n    assert route.called"
+    },
+    {
+      "id": "TS-11-56",
+      "requirement_id": "11-REQ-16.6",
+      "kind": "unit",
+      "description": "Verify list_user_keys() and revoke_user_key() send correct requests and return expected types.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_user_keys('u1') and revoke_user_key('u1', 'key-1').",
+      "expected": "list_user_keys returns list[APIKey]; revoke_user_key returns None on 204.",
+      "assertion_pseudocode": "from apikit import Client, APIKey\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/users/u1/keys').mock(return_value=httpx.Response(200, json=[SAMPLE_API_KEY_DICT]))\n  respx.delete('https://api.example.com/api/v1/users/u1/keys/key-1').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  keys = c.list_user_keys('u1')\n  assert all(isinstance(k, APIKey) for k in keys)\n  result = c.revoke_user_key('u1', 'key-1')\n  assert result is None"
+    },
+    {
+      "id": "TS-11-57",
+      "requirement_id": "11-REQ-16.7",
+      "kind": "unit",
+      "description": "Verify list_user_tokens() and revoke_user_token() send correct requests and return expected types.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_user_tokens('u1') and revoke_user_token('u1', 'tok-1').",
+      "expected": "list_user_tokens returns list[PAT]; revoke_user_token returns None on 204.",
+      "assertion_pseudocode": "from apikit import Client, PAT\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/users/u1/tokens').mock(return_value=httpx.Response(200, json=[SAMPLE_PAT_DICT]))\n  respx.delete('https://api.example.com/api/v1/users/u1/tokens/tok-1').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  tokens = c.list_user_tokens('u1')\n  assert all(isinstance(t, PAT) for t in tokens)\n  result = c.revoke_user_token('u1', 'tok-1')\n  assert result is None"
+    },
+    {
+      "id": "TS-11-58",
+      "requirement_id": "11-REQ-17.1",
+      "kind": "unit",
+      "description": "Verify create_org() sends POST to /orgs with correct body and returns Organization on 201.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call create_org(name='Acme', slug='acme', url='https://acme.com').",
+      "expected": "POST sent to '/api/v1/orgs' with body {name:'Acme',slug:'acme',url:'https://acme.com'}; returns Organization on HTTP 201.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, Organization\nwith respx.mock:\n  route = respx.post('https://api.example.com/api/v1/orgs').mock(return_value=httpx.Response(201, json=SAMPLE_ORG_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.create_org(name='Acme', slug='acme', url='https://acme.com')\n  assert isinstance(result, Organization)\n  body = json.loads(route.calls.last.request.content)\n  assert body['name'] == 'Acme' and body['slug'] == 'acme'"
+    },
+    {
+      "id": "TS-11-59",
+      "requirement_id": "11-REQ-17.2",
+      "kind": "unit",
+      "description": "Verify list_orgs() sends GET to /orgs and appends include_blocked=true only when True.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_orgs() and list_orgs(include_blocked=True).",
+      "expected": "First call has no include_blocked param; second call has include_blocked=true.",
+      "assertion_pseudocode": "from apikit import Client\nwith respx.mock:\n  route1 = respx.get('https://api.example.com/api/v1/orgs').mock(return_value=httpx.Response(200, json=[SAMPLE_ORG_DICT]))\n  c = Client('https://api.example.com', api_key='tok')\n  c.list_orgs()\n  assert 'include_blocked' not in str(route1.calls.last.request.url)\n  route2 = respx.get(url__regex=r'.*include_blocked=true.*').mock(return_value=httpx.Response(200, json=[SAMPLE_ORG_DICT]))\n  c.list_orgs(include_blocked=True)\n  assert 'include_blocked=true' in str(route2.calls.last.request.url)"
+    },
+    {
+      "id": "TS-11-60",
+      "requirement_id": "11-REQ-17.3",
+      "kind": "unit",
+      "description": "Verify get_org() sends GET to /orgs/{id} and raises NotModifiedError on 304.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call get_org('org-1') then get_org('org-1', if_none_match='etag').",
+      "expected": "First call returns Organization; second call raises NotModifiedError.",
+      "assertion_pseudocode": "from apikit import Client, Organization, NotModifiedError\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/orgs/org-1').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_ORG_DICT),\n    httpx.Response(304)\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  o = c.get_org('org-1')\n  assert isinstance(o, Organization)\n  raised = None\n  try:\n    c.get_org('org-1', if_none_match='etag')\n  except NotModifiedError as e:\n    raised = e\n  assert raised is not None"
+    },
+    {
+      "id": "TS-11-61",
+      "requirement_id": "11-REQ-17.4",
+      "kind": "unit",
+      "description": "Verify update_org() sends PATCH with only non-None fields in body and returns Organization.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call update_org('org-1', name='NewName', url=None).",
+      "expected": "PATCH sent to '/api/v1/orgs/org-1' with body {name:'NewName'} (url omitted); returns Organization on 200.",
+      "assertion_pseudocode": "import json\nfrom apikit import Client, Organization\nwith respx.mock:\n  route = respx.patch('https://api.example.com/api/v1/orgs/org-1').mock(return_value=httpx.Response(200, json=SAMPLE_ORG_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.update_org('org-1', name='NewName', url=None)\n  assert isinstance(result, Organization)\n  body = json.loads(route.calls.last.request.content)\n  assert 'name' in body and body['name'] == 'NewName'\n  assert 'url' not in body"
+    },
+    {
+      "id": "TS-11-62",
+      "requirement_id": "11-REQ-17.5",
+      "kind": "unit",
+      "description": "Verify delete_org(), block_org(), and unblock_org() send correct requests and return expected types.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call delete_org('org-1'), block_org('org-1'), unblock_org('org-1').",
+      "expected": "delete_org returns None on 204; block_org and unblock_org return Organization on 200.",
+      "assertion_pseudocode": "from apikit import Client, Organization\nwith respx.mock:\n  respx.delete('https://api.example.com/api/v1/orgs/org-1').mock(return_value=httpx.Response(204))\n  respx.post('https://api.example.com/api/v1/orgs/org-1/block').mock(return_value=httpx.Response(200, json=SAMPLE_ORG_DICT))\n  respx.post('https://api.example.com/api/v1/orgs/org-1/unblock').mock(return_value=httpx.Response(200, json=SAMPLE_ORG_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  assert c.delete_org('org-1') is None\n  assert isinstance(c.block_org('org-1'), Organization)\n  assert isinstance(c.unblock_org('org-1'), Organization)"
+    },
+    {
+      "id": "TS-11-63",
+      "requirement_id": "11-REQ-17.6",
+      "kind": "unit",
+      "description": "Verify list_org_members(), add_org_member(), and remove_org_member() send correct requests and return expected types.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client with api_key; call list_org_members('org-1'), add_org_member('org-1','u-1'), remove_org_member('org-1','u-1').",
+      "expected": "list_org_members returns list[User]; add_org_member returns None on 204; remove_org_member returns None on 204.",
+      "assertion_pseudocode": "from apikit import Client, User\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/orgs/org-1/members').mock(return_value=httpx.Response(200, json=[SAMPLE_USER_DICT]))\n  respx.put('https://api.example.com/api/v1/orgs/org-1/members/u-1').mock(return_value=httpx.Response(204))\n  respx.delete('https://api.example.com/api/v1/orgs/org-1/members/u-1').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  members = c.list_org_members('org-1')\n  assert all(isinstance(m, User) for m in members)\n  assert c.add_org_member('org-1', 'u-1') is None\n  assert c.remove_org_member('org-1', 'u-1') is None"
+    },
+    {
+      "id": "TS-11-64",
+      "requirement_id": "11-REQ-18.1",
+      "kind": "unit",
+      "description": "Verify that HTTP 200 and 201 responses are parsed into the documented return type.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 200 response for get_user() and mocked 201 response for create_user().",
+      "expected": "get_user() returns User; create_user() returns User parsed from 201 response body.",
+      "assertion_pseudocode": "from apikit import Client, User\nwith respx.mock:\n  respx.get('https://api.example.com/api/v1/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  respx.post('https://api.example.com/api/v1/users').mock(return_value=httpx.Response(201, json=SAMPLE_USER_DICT))\n  c = Client('https://api.example.com', api_key='tok')\n  assert isinstance(c.get_user(), User)\n  assert isinstance(c.create_user(username='a', email='a@b.com', provider='p', provider_id='p1'), User)"
+    },
+    {
+      "id": "TS-11-65",
+      "requirement_id": "11-REQ-18.2",
+      "kind": "unit",
+      "description": "Verify that DELETE and PUT endpoints returning 204 return None without parsing body.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 204 responses for revoke_key and add_org_member.",
+      "expected": "Both return None.",
+      "assertion_pseudocode": "from apikit import Client\nwith respx.mock:\n  respx.delete('https://api.example.com/api/v1/user/keys/k1').mock(return_value=httpx.Response(204))\n  respx.put('https://api.example.com/api/v1/orgs/o1/members/u1').mock(return_value=httpx.Response(204))\n  c = Client('https://api.example.com', api_key='tok')\n  assert c.revoke_key('k1') is None\n  assert c.add_org_member('o1', 'u1') is None"
+    },
+    {
+      "id": "TS-11-66",
+      "requirement_id": "11-REQ-18.3",
+      "kind": "unit",
+      "description": "Verify that refresh_key parses HTTP 200 response as APIKeyWithSecret (not treating it as 201 Created).",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked POST /user/keys/k1/refresh returning HTTP 200 with APIKeyWithSecret JSON.",
+      "expected": "refresh_key returns an APIKeyWithSecret instance; the result lacks created_at and revoked_at fields.",
+      "assertion_pseudocode": "import dataclasses\nfrom apikit import Client, APIKeyWithSecret\nwith respx.mock:\n  respx.post('https://api.example.com/api/v1/user/keys/k1/refresh').mock(\n    return_value=httpx.Response(200, json={'key':'sec','key_id':'k1','expires_at':None})\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  result = c.refresh_key('k1')\n  assert isinstance(result, APIKeyWithSecret)\n  field_names = {f.name for f in dataclasses.fields(result)}\n  assert 'created_at' not in field_names\n  assert 'revoked_at' not in field_names"
+    },
+    {
+      "id": "TS-11-67",
+      "requirement_id": "11-REQ-19.1",
+      "kind": "unit",
+      "description": "Verify that public Client methods with body parameters enforce keyword-only arguments (raise TypeError on positional).",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "Call update_user('Alice Smith') with a positional argument.",
+      "expected": "TypeError is raised because full_name is keyword-only.",
+      "assertion_pseudocode": "from apikit import Client\nimport pytest\nc = Client('https://api.example.com', api_key='tok')\ntry:\n  c.update_user('Alice Smith')  # positional arg\n  assert False, 'Should have raised TypeError'\nexcept TypeError:\n  pass"
+    },
+    {
+      "id": "TS-11-68",
+      "requirement_id": "11-REQ-20.1",
+      "kind": "integration",
+      "description": "Verify that all tests pass when running `uv run pytest -q` from the sdk-python directory.",
+      "preconditions": [
+        "`packages/sdk-python` directory exists with pyproject.toml.",
+        "`uv` is installed.",
+        "All source files are in place."
+      ],
+      "input": "Shell command: `cd packages/sdk-python && uv run pytest -q`",
+      "expected": "pytest exits with code 0 and all tests pass.",
+      "assertion_pseudocode": "result = subprocess.run(['uv', 'run', 'pytest', '-q'], cwd='packages/sdk-python', capture_output=True)\nassert result.returncode == 0"
+    },
+    {
+      "id": "TS-11-69",
+      "requirement_id": "11-REQ-20.2",
+      "kind": "integration",
+      "description": "Verify that `uv run ruff check .` passes with no errors from the sdk-python directory.",
+      "preconditions": [
+        "`packages/sdk-python` directory exists.",
+        "`uv` and `ruff` are available."
+      ],
+      "input": "Shell command: `cd packages/sdk-python && uv run ruff check .`",
+      "expected": "ruff exits with code 0 and reports no errors.",
+      "assertion_pseudocode": "result = subprocess.run(['uv', 'run', 'ruff', 'check', '.'], cwd='packages/sdk-python', capture_output=True)\nassert result.returncode == 0"
+    },
+    {
+      "id": "TS-11-70",
+      "requirement_id": "11-REQ-20.3",
+      "kind": "integration",
+      "description": "Verify that `uv run mypy .` passes in strict mode with no errors from the sdk-python directory.",
+      "preconditions": [
+        "`packages/sdk-python` directory exists.",
+        "`uv` and `mypy` are available.",
+        "`pyproject.toml` configures mypy strict mode."
+      ],
+      "input": "Shell command: `cd packages/sdk-python && uv run mypy .`",
+      "expected": "mypy exits with code 0 and reports no errors.",
+      "assertion_pseudocode": "result = subprocess.run(['uv', 'run', 'mypy', '.'], cwd='packages/sdk-python', capture_output=True)\nassert result.returncode == 0"
+    },
+    {
+      "id": "TS-11-71",
+      "requirement_id": "11-REQ-20.4",
+      "kind": "unit",
+      "description": "Verify that the test suite covers all documented scenarios including URL construction, headers, serialization, deserialization, error handling, conditional GET, context manager, and refresh_key 200 parsing.",
+      "preconditions": [
+        "`packages/sdk-python/tests/` contains test_client.py, test_models.py, test_exceptions.py.",
+        "`uv run pytest -q` passes."
+      ],
+      "input": "Inspect test files for presence of tests covering each documented category.",
+      "expected": "Each of the listed categories has at least one pytest test function.",
+      "assertion_pseudocode": "# Verified via presence of tests that cover:\n# 1. URL construction (base_url-only vs mount_point)\n# 2. Trailing slash normalization\n# 3. Authorization header presence/absence\n# 4. Content-Type and Accept headers\n# 5. Request body serialization (datetime, optional fields omitted)\n# 6. Response deserialization with datetime parsing\n# 7. from_dict ignores unknown fields\n# 8. APIError on 4xx/5xx with valid envelope\n# 9. APIError on non-JSON body\n# 10. APIError on empty body ('Unexpected error')\n# 11. UnauthorizedError, ForbiddenError, NotFoundError, ConflictError subclasses\n# 12. NotModifiedError on 304\n# 13. last_etag and last_request_id populated/reset\n# 14. Context manager closes httpx.Client without suppressing exceptions\n# 15. timeout forwarding\n# 16. refresh_key parses 200 as APIKeyWithSecret\nassert all_categories_covered_in_test_files('packages/sdk-python/tests/')"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-11-P1",
+      "property_id": "11-PROP-1",
+      "validates": [
+        "11-REQ-2.2",
+        "11-REQ-2.E1"
+      ],
+      "description": "For any base_url and mount_point with or without trailing slashes, no constructed URL contains double slashes in the path after the scheme.",
+      "for_any_strategy": "Generate arbitrary strings for base_url (including with 0-3 trailing slashes) and mount_point (with 0-3 trailing/leading slashes) using hypothesis strategies: base_url drawn from ['https://api.example.com', 'https://api.example.com/', 'https://api.example.com///']; mount_point drawn from ['', '/', '/api/v1', '/api/v1/', '/v2//'].",
+      "invariant_check": "for each (base_url, mount_point) pair:\n  c = Client(base_url, mount_point=mount_point)\n  for path in ['/healthz', '/readyz', '/version', '/user', '/users', '/orgs']:\n    if path in ['/healthz', '/readyz', '/version']:\n      url = c._base_url + path\n    else:\n      url = c._base_url + c._mount_point + path\n    path_part = url.replace('https://', '').replace('http://', '')\n    assert '//' not in path_part"
+    },
+    {
+      "id": "TS-11-P2",
+      "property_id": "11-PROP-2",
+      "validates": [
+        "11-REQ-2.3",
+        "11-REQ-13.1"
+      ],
+      "description": "For any non-empty mount_point, URLs for healthz, readyz, and version never contain the mount_point string in the path portion.",
+      "for_any_strategy": "Generate non-empty mount_point strings from ['/api/v1', '/v2', '/api', '/mount'] using hypothesis or parametrize; base_url is fixed as 'https://api.example.com'.",
+      "invariant_check": "for mount_point in ['/api/v1', '/v2', '/api', '/mount']:\n  c = Client('https://api.example.com', mount_point=mount_point)\n  for method_url in [c._base_url + '/healthz', c._base_url + '/readyz', c._base_url + '/version']:\n    path_after_host = method_url.split('api.example.com')[1]\n    assert mount_point not in path_after_host"
+    },
+    {
+      "id": "TS-11-P3",
+      "property_id": "11-PROP-3",
+      "validates": [
+        "11-REQ-6.1"
+      ],
+      "description": "For any sequence of Client method calls, last_etag and last_request_id are always None at the start of each request before response headers are read.",
+      "for_any_strategy": "Parametrize over sequences of 2-5 calls to methods including get_user, healthz, list_keys; alternate responses with and without ETag/X-Request-ID headers.",
+      "invariant_check": "with respx.mock:\n  # first response includes ETag, second does not\n  respx.get(url__regex='.*').mock(side_effect=[\n    httpx.Response(200, json=SAMPLE_DATA, headers={'ETag': 'etag-1', 'X-Request-ID': 'req-1'}),\n    httpx.Response(200, json=SAMPLE_DATA),\n    httpx.Response(200, json=SAMPLE_DATA, headers={'ETag': 'etag-2'}),\n  ])\n  c = Client('https://api.example.com', api_key='tok')\n  # Monkeypatch _send to capture last_etag at request START before response\n  # Assert that at the beginning of each call, both properties equal None\n  # This is verified by inspecting the reset behavior in the implementation"
+    },
+    {
+      "id": "TS-11-P4",
+      "property_id": "11-PROP-4",
+      "validates": [
+        "11-REQ-10.2"
+      ],
+      "description": "For any dict with arbitrary additional keys passed to any dataclass from_dict, no exception is raised due to unknown keys.",
+      "for_any_strategy": "For each response dataclass [HealthStatus, VersionInfo, OAuthProvider, APIKey, APIKeyWithSecret, PAT, PATWithSecret, User, Organization, AuthCallbackResponse]: generate valid base dicts and append random additional keys with arbitrary values.",
+      "invariant_check": "extra_keys = {'unknown_future_field': 'value', 'another_new_field': 42, 'nested_new': {'a': 1}}\nfor cls, base_dict in VALID_BASE_DICTS.items():\n  merged = {**base_dict, **extra_keys}\n  result = cls.from_dict(merged)\n  assert result is not None\n  # No TypeError or KeyError raised"
+    },
+    {
+      "id": "TS-11-P5",
+      "property_id": "11-PROP-5",
+      "validates": [
+        "11-REQ-11.1"
+      ],
+      "description": "For any internal request dataclass instance with some optional fields set to None, to_dict() returns a dict with no None values.",
+      "for_any_strategy": "For each request dataclass [UpdateOrgRequest, CreateOrgRequest, AuthCallbackRequest, CreateTokenRequest]: generate instances with all combinations of optional fields set to None vs a non-None value.",
+      "invariant_check": "for cls, kwargs_variants in OPTIONAL_FIELD_VARIANTS.items():\n  for kwargs in kwargs_variants:\n    instance = cls(**kwargs)\n    d = instance.to_dict()\n    assert None not in d.values()\n    for key, val in d.items():\n      assert val is not None"
+    },
+    {
+      "id": "TS-11-P6",
+      "property_id": "11-PROP-6",
+      "validates": [
+        "11-REQ-8.5"
+      ],
+      "description": "For any 401, 403, 404, or 409 response, the raised exception is both an instance of its specific subclass and an instance of APIError.",
+      "for_any_strategy": "Parametrize over status codes [401, 403, 404, 409] mapped to [UnauthorizedError, ForbiddenError, NotFoundError, ConflictError] with valid JSON error envelopes.",
+      "invariant_check": "status_to_cls = {401: UnauthorizedError, 403: ForbiddenError, 404: NotFoundError, 409: ConflictError}\nfor status, exc_cls in status_to_cls.items():\n  with respx.mock:\n    respx.get('https://api.example.com/api/v1/user').mock(\n      return_value=httpx.Response(status, json={'error': {'code': status, 'message': 'err'}})\n    )\n    c = Client('https://api.example.com', api_key='tok')\n    try:\n      c.get_user()\n    except exc_cls as e:\n      assert isinstance(e, exc_cls)\n      assert isinstance(e, APIError)"
+    },
+    {
+      "id": "TS-11-P7",
+      "property_id": "11-PROP-7",
+      "validates": [
+        "11-REQ-8.6",
+        "11-REQ-7.2"
+      ],
+      "description": "For any 304 response to a conditional GET, the raised NotModifiedError is never an instance of APIError.",
+      "for_any_strategy": "Parametrize over all conditional GET methods [get_user, get_user_by_id, get_org, get_token] with a mocked 304 response.",
+      "invariant_check": "for method_name, args, kwargs in [\n  ('get_user', [], {'if_none_match': 'etag'}),\n  ('get_user_by_id', ['u1'], {'if_none_match': 'etag'}),\n  ('get_org', ['o1'], {'if_none_match': 'etag'}),\n  ('get_token', ['t1'], {'if_none_match': 'etag'}),\n]:\n  with respx.mock:\n    respx.get(url__regex='.*').mock(return_value=httpx.Response(304))\n    c = Client('https://api.example.com', api_key='tok')\n    try:\n      getattr(c, method_name)(*args, **kwargs)\n    except NotModifiedError as e:\n      assert not isinstance(e, APIError)\n    except Exception:\n      pass  # unexpected; let test framework catch it"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-11-E1",
+      "requirement_id": "11-REQ-1.E1",
+      "kind": "unit",
+      "description": "Verify that mypy reports an error when the runtime Python version is below 3.12 as declared in requires-python.",
+      "preconditions": [
+        "pyproject.toml has `requires-python = '>=3.12'`.",
+        "A Python version < 3.12 is available in the environment."
+      ],
+      "input": "Run mypy with Python < 3.12 against the apikit package.",
+      "expected": "mypy exits with non-zero status and reports a Python version incompatibility error.",
+      "assertion_pseudocode": "result = subprocess.run(['python3.11', '-m', 'mypy', '.'], cwd='packages/sdk-python', capture_output=True)\nassert result.returncode != 0\nassert 'python_requires' in result.stderr.decode() or 'version' in result.stderr.decode().lower()"
+    },
+    {
+      "id": "TS-11-E2",
+      "requirement_id": "11-REQ-2.E1",
+      "kind": "unit",
+      "description": "Verify that multiple trailing slashes on base_url are all stripped so no double slashes appear in constructed URLs.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com///', mount_point='/api/v1')",
+      "expected": "Stored base_url is 'https://api.example.com'; all constructed URLs contain no double slashes after the scheme.",
+      "assertion_pseudocode": "from apikit import Client\nc = Client('https://api.example.com///', mount_point='/api/v1')\nassert c._base_url == 'https://api.example.com'\nassert '//' not in c._base_url.replace('https://', '')\nassert '//' not in (c._base_url + c._mount_point + '/user').replace('https://', '')"
+    },
+    {
+      "id": "TS-11-E3",
+      "requirement_id": "11-REQ-2.E2",
+      "kind": "unit",
+      "description": "Verify that an empty string mount_point is stored as-is and URL construction remains correct.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Client('https://api.example.com', mount_point='')",
+      "expected": "mount_point is stored as '' and non-health endpoint URLs are constructed as base_url + path (no double slashes).",
+      "assertion_pseudocode": "from apikit import Client\nc = Client('https://api.example.com', mount_point='')\nassert c._mount_point == ''\n# URL construction for /user should be 'https://api.example.com/user'\nwith respx.mock:\n  route = respx.get('https://api.example.com/user').mock(return_value=httpx.Response(200, json=SAMPLE_USER_DICT))\n  c2 = Client('https://api.example.com', mount_point='', api_key='tok')\n  c2.get_user()\n  assert route.called"
+    },
+    {
+      "id": "TS-11-E4",
+      "requirement_id": "11-REQ-3.E1",
+      "kind": "unit",
+      "description": "Verify that if closing the underlying httpx.Client raises an exception, that exception propagates without suppression.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "Ability to patch httpx.Client.close to raise an exception."
+      ],
+      "input": "Client context manager where httpx.Client.close() raises RuntimeError.",
+      "expected": "RuntimeError propagates out of the __exit__ call; no suppression occurs.",
+      "assertion_pseudocode": "from unittest.mock import patch\nfrom apikit import Client\nraised = None\ntry:\n  with patch('httpx.Client.close', side_effect=RuntimeError('close failed')):\n    with Client('https://api.example.com') as c:\n      pass  # no exception inside block\nexcept RuntimeError as e:\n  raised = e\nassert raised is not None\nassert str(raised) == 'close failed'"
+    },
+    {
+      "id": "TS-11-E5",
+      "requirement_id": "11-REQ-8.E1",
+      "kind": "unit",
+      "description": "Verify that a 5xx response with a JSON body missing code or message sub-fields falls back to APIError with HTTP status code and raw response text.",
+      "preconditions": [
+        "`apikit` package is importable.",
+        "`respx` is installed."
+      ],
+      "input": "Mocked 500 response with JSON body '{\"error\": {\"detail\": \"missing fields\"}}'.",
+      "expected": "APIError raised with code=500 and message equals the raw response text; no KeyError or AttributeError propagates.",
+      "assertion_pseudocode": "from apikit import Client, APIError\nwith respx.mock:\n  body_text = '{\"error\": {\"detail\": \"missing fields\"}}'\n  respx.get('https://api.example.com/api/v1/user').mock(\n    return_value=httpx.Response(500, text=body_text)\n  )\n  c = Client('https://api.example.com', api_key='tok')\n  raised = None\n  try:\n    c.get_user()\n  except APIError as e:\n    raised = e\n  assert raised is not None\n  assert raised.code == 500\n  assert raised.message == body_text"
+    },
+    {
+      "id": "TS-11-E6",
+      "requirement_id": "11-REQ-10.E1",
+      "kind": "unit",
+      "description": "Verify that from_dict raises ValueError when a required datetime field contains a malformed string.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "User.from_dict({'id':'u1','username':'alice','email':'a@b.com','full_name':None,'status':'active','role':'user','provider':'github','provider_id':'gh-1','created_at':'not-a-date','updated_at':'2024-01-01T00:00:00Z'})",
+      "expected": "ValueError is raised; no partial User instance is returned.",
+      "assertion_pseudocode": "from apikit import User\nraised = None\ntry:\n  User.from_dict({'id':'u1','username':'alice','email':'a@b.com','full_name':None,'status':'active','role':'user','provider':'github','provider_id':'gh-1','created_at':'not-a-date','updated_at':'2024-01-01T00:00:00Z'})\nexcept ValueError as e:\n  raised = e\nassert raised is not None"
+    },
+    {
+      "id": "TS-11-E7",
+      "requirement_id": "11-REQ-10.E2",
+      "kind": "unit",
+      "description": "Verify that from_dict raises KeyError or TypeError when a required non-optional field is missing from the input dict.",
+      "preconditions": [
+        "`apikit` package is importable."
+      ],
+      "input": "User.from_dict({'username':'alice'}) — missing id, email, status, role, provider, provider_id, created_at, updated_at.",
+      "expected": "KeyError or TypeError is raised; no exception masking occurs.",
+      "assertion_pseudocode": "from apikit import User\nraised = None\ntry:\n  User.from_dict({'username': 'alice'})\nexcept (KeyError, TypeError) as e:\n  raised = e\nassert raised is not None"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-11-SMOKE-1",
+      "execution_path_id": "11-PATH-1",
+      "description": "Smoke test for the full successful authenticated GET with ETag caching path: construct client, send GET /user, receive 200 with ETag and X-Request-ID, deserialize User, and verify last_etag is populated.",
+      "trigger": "Developer instantiates Client with base_url, mount_point, api_key (trailing slashes on both), then calls get_user().",
+      "real_components": [
+        "Client",
+        "User.from_dict",
+        "httpx.Client"
+      ],
+      "mockable": [
+        "httpx transport layer (via respx.mock)"
+      ],
+      "expected_effects": [
+        "URL sent is 'https://api.example.com/api/v1/user' (no double slashes).",
+        "Request includes Authorization: Bearer <api_key> and Accept: application/json headers.",
+        "last_etag is set to the ETag header value from the response.",
+        "last_request_id is set to the X-Request-ID header value from the response.",
+        "Return value is a User instance with correctly parsed datetime fields.",
+        "No exception is raised."
+      ]
+    },
+    {
+      "id": "TS-11-SMOKE-2",
+      "execution_path_id": "11-PATH-2",
+      "description": "Smoke test for the API error response path: call get_user_by_id for a non-existent user, receive 404 with JSON error envelope, verify NotFoundError is raised with correct code and message.",
+      "trigger": "Developer calls client.get_user_by_id('non-existent-id').",
+      "real_components": [
+        "Client",
+        "NotFoundError",
+        "APIError"
+      ],
+      "mockable": [
+        "httpx transport layer (via respx.mock returning 404 with JSON error envelope)"
+      ],
+      "expected_effects": [
+        "GET request is sent to 'https://api.example.com/api/v1/users/non-existent-id'.",
+        "NotFoundError is raised with code=404 and message='user not found'.",
+        "NotFoundError is an instance of APIError.",
+        "No other exception type propagates."
+      ]
+    },
+    {
+      "id": "TS-11-SMOKE-3",
+      "execution_path_id": "11-PATH-3",
+      "description": "Smoke test for the conditional GET raising NotModifiedError path: call get_org with if_none_match, server returns 304, verify NotModifiedError raised.",
+      "trigger": "Developer calls client.get_org(org_id, if_none_match='previously_stored_etag').",
+      "real_components": [
+        "Client",
+        "NotModifiedError"
+      ],
+      "mockable": [
+        "httpx transport layer (via respx.mock returning 304)"
+      ],
+      "expected_effects": [
+        "GET request is sent to 'https://api.example.com/api/v1/orgs/{id}' with If-None-Match header.",
+        "NotModifiedError is raised.",
+        "isinstance(raised, APIError) is False.",
+        "No Organization object is returned."
+      ]
+    },
+    {
+      "id": "TS-11-SMOKE-4",
+      "execution_path_id": "11-PATH-4",
+      "description": "Smoke test for context manager with exception propagation: open Client as context manager, raise an exception inside, verify httpx.Client is closed and the exception propagates.",
+      "trigger": "Developer opens `with Client(base_url, api_key=key) as client:` and raises ValueError inside.",
+      "real_components": [
+        "Client.__enter__",
+        "Client.__exit__",
+        "httpx.Client.close"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "__enter__ returns the Client instance.",
+        "httpx.Client.close() is called unconditionally.",
+        "ValueError propagates out of the with block unchanged.",
+        "__exit__ returns None (does not suppress the exception)."
+      ]
+    },
+    {
+      "id": "TS-11-SMOKE-5",
+      "execution_path_id": "11-PATH-5",
+      "description": "Smoke test for the OAuth code exchange end-to-end path: call exchange_oauth_code with provider, code, redirect_uri, and expires; verify POST body, Content-Type header, and deserialized AuthCallbackResponse.",
+      "trigger": "Developer calls client.exchange_oauth_code(provider='github', code='abc', redirect_uri='https://app.example.com/cb', expires=30).",
+      "real_components": [
+        "Client",
+        "AuthCallbackRequest.to_dict",
+        "AuthCallbackResponse.from_dict",
+        "User.from_dict",
+        "APIKeyWithSecret.from_dict"
+      ],
+      "mockable": [
+        "httpx transport layer (via respx.mock returning 200 with AuthCallbackResponse JSON)"
+      ],
+      "expected_effects": [
+        "POST is sent to 'https://api.example.com/api/v1/auth/callback'.",
+        "Content-Type header is 'application/json'.",
+        "Request body contains provider='github', code='abc', redirect_uri='https://app.example.com/cb', expires=30.",
+        "Return value is AuthCallbackResponse with .user as User and .api_key as APIKeyWithSecret.",
+        "No exception is raised."
+      ]
+    },
+    {
+      "id": "TS-11-SMOKE-6",
+      "execution_path_id": "11-PATH-6",
+      "description": "Smoke test for health probe URL resolution with trailing slashes: construct Client with trailing slashes on base_url and mount_point, call healthz(), verify URL hits base_url directly without mount_point.",
+      "trigger": "Developer calls Client('https://api.example.com/', mount_point='/api/v1/').healthz().",
+      "real_components": [
+        "Client",
+        "HealthStatus.from_dict"
+      ],
+      "mockable": [
+        "httpx transport layer (via respx.mock returning 200 with {status: ok})"
+      ],
+      "expected_effects": [
+        "GET request is sent to exactly 'https://api.example.com/healthz' (no mount_point, no double slashes).",
+        "Return value is HealthStatus(status='ok').",
+        "No exception is raised.",
+        "client._base_url == 'https://api.example.com' (trailing slash stripped).",
+        "client._mount_point == '/api/v1' (trailing slash stripped)."
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

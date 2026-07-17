@@ -1,0 +1,639 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The `cli_core` PRD (spec 13) is exceptionally thorough and well-structured. It covers all four required sections \u2014 Intent, Goals, Non-Goals, and Background (via Source Reference) \u2014 with high precision and depth. The spec clearly defines the binary entry point, command tree architecture, credential resolution, config management, output formatting, exit codes, agent interface, build-time variables, and embeddability pattern. Repository layout, interfaces, error handling, testing strategy, design decisions, and a glossary are all present and detailed. The dependency on `go_sdk` (spec 12) is explicit and well-reasoned. No active-spec conflicts were identified. One minor cross-spec observation is noted below, but it does not block readiness.",
+      "gaps": [
+        "Minor: The dependency table references `01_server_core` only for the shared `TokenPrefix` build-time variable. This relationship is informational rather than a runtime dependency, but the PRD does not clarify whether the CLI needs to be built with the same TokenPrefix value as the server, or how operators are expected to coordinate these values across builds. This is a deployment/operations concern rather than a spec gap, but a brief note in the Background or Design Decisions section would help.",
+        "Minor: The `PersistentPreRunE` hook description says commands that don't require authentication skip client creation, but the mechanism for opting out is not specified (e.g., a flag, annotation, or command-level override). The spec mentions it but doesn't define the skip condition precisely.",
+        "Minor: The `help --json` spec says commands without annotations default to `api_key` auth level, but it is not stated how the walker handles the root command itself or pure group/parent commands that have no `RunE` (i.e., non-leaf commands). The spec says only leaf commands with `RunE` are collected, but group commands like `user` or `admin` may warrant clarification.",
+        "Observation (not blocking): There is no explicit mention of how the CLI handles the case where `$HOME` is unset or unresolvable (e.g., in containerized or CI environments). The error path for this condition is not described.",
+        "Cross-spec observation (not blocking): The `admin_bootstrap` spec (spec 05) involves a break-glass admin token mechanism that likely interacts with the credential resolution chain (specifically `api_key`). The cli_core PRD does not reference this relationship. Specs 14/15 may cover this, but it is worth confirming that the admin bootstrap token format is compatible with the CLI's credential resolution and config storage."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the mechanism by which a command opts out of the `PersistentPreRunE` client-creation step? For example, is there a specific annotation (e.g., `\"auth\": \"none\"`), a command-level `PersistentPreRunE` override, or a skip list by command name?",
+          "context": "The PRD states that commands like `version` and `help` skip client creation, but the opt-out mechanism is not defined. This is needed to implement `PersistentPreRunE` correctly and to ensure specs 14/15 can reliably declare commands as auth-exempt.",
+          "options": [
+            "Use the `auth: none` annotation on the command to signal PersistentPreRunE to skip client creation",
+            "Override PersistentPreRunE at the command level to suppress the parent hook",
+            "Maintain an explicit skip-list of command names in root.go",
+            "Always attempt client creation but tolerate nil client gracefully in each command"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How should the CLI handle an unresolvable `$HOME` directory (e.g., in CI, containers, or restricted environments)? Should it fall back to a relative path, fail with a descriptive exit-2 error, or support an override env var (e.g., `AKC_CONFIG_DIR`)?",
+          "context": "The config directory is hard-coded to `$HOME/.<prefix>/`. In environments where `$HOME` is unset or unwritable, the CLI would fail to initialize. An override mechanism or clear error path would improve robustness.",
+          "options": [
+            "Fail with exit code 2 and a descriptive error message naming the missing HOME variable",
+            "Support an override env var (e.g., AKC_CONFIG_DIR or <PREFIX>_CONFIG_DIR) to replace the default path",
+            "Fall back to the current working directory if HOME is unset",
+            "Document the limitation in Non-Goals and leave it for a future iteration"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the CLI's `help --json` output include non-leaf parent/group commands (e.g., `user`, `admin`) as entries with `composite: true`, or strictly only leaf commands that have a `RunE` function?",
+          "context": "The PRD currently says the walker collects 'leaf commands (commands with a RunE function).' However, group commands like `user` or `admin users` are meaningful navigational nodes that an agent might want to discover. Clarifying this affects the agent interface contract.",
+          "options": [
+            "Strictly only leaf commands with RunE \u2014 group commands are implicit from the name prefix",
+            "Include group commands as entries with composite: true and no method/path",
+            "Include group commands only if they have a description annotation",
+            "Leave this as an implementation decision for spec 14/15 when those commands are added"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "The PRD is thorough, well-structured, and covers the majority of concerns for a CLI core component at a high level of detail. The intent, goals, non-goals, technical stack, functional requirements, interfaces, error handling, testing strategy, design decisions, and glossary are all present and internally consistent. However, several gaps and ambiguities remain that could cause misalignment during implementation, particularly around: (1) context key type safety for client storage, (2) the exact behavior of `PersistentPreRunE` inheritance with Cobra's parent-child hook chain, (3) the default auth annotation for commands missing it, (4) how `--json` flag interacts with `--help` mechanically in Cobra, (5) the behavior when `user_id` is missing but a command only needs `api_key`, and (6) some missing test coverage items around atomic write failures and concurrent access.",
+      "gaps": [
+        "Context key type safety: The spec shows storing the client in context via `context.WithValue` but does not define the key type. Using a plain string key risks collisions with consuming projects. A private unexported key type should be specified.",
+        "PersistentPreRunE hook chaining: Cobra does NOT automatically chain parent PersistentPreRunE hooks when a child command defines its own PersistentPreRunE or PreRunE. The spec does not address how specs 14 and 15 must handle this \u2014 they either must call the parent hook manually or the root must use a different composition pattern.",
+        "Default auth annotation for unannotated commands: The spec says commands without annotations will have `null` for method/path and `\"api_key\"` as the default auth level for help --json output, but it is ambiguous whether `PersistentPreRunE` also defaults to full credential resolution for unannotated commands (i.e., absence of `\"auth\": \"none\"` implies full auth).",
+        "Mechanical implementation of `--json` flag with `--help`: Cobra's `--help` flag triggers a special help action and exits before `RunE`. The spec does not explain how `akc help --json` and `akc <command> --help --json` are mechanically intercepted \u2014 whether via a custom help function, a `help` subcommand with a `--json` flag, or a SetHelpFunc override.",
+        "Credential resolution granularity vs. PersistentPreRunE: The spec states resolution is lazy and per-field, but `PersistentPreRunE` resolves all fields and creates a single client. The interaction between lazy per-field resolution (for commands like `version`) and the eager client construction in `PersistentPreRunE` is underspecified \u2014 particularly for commands that have `\"auth\": \"none\"` but still need `endpoint_url`.",
+        "Missing `user_id` handling: `apikit.NewClient` is shown accepting `endpointURL` and `WithAPIKey(apiKey)`, but `user_id` is also a resolved credential. The spec does not clarify whether `user_id` is passed to the client constructor, stored separately, or handled differently.",
+        "Atomic write failure cleanup: The testing strategy mentions verifying the original file is preserved if a write fails, but the spec body does not describe what happens to the temp file on failure (should it be deleted? left in place silently?).",
+        "Concurrency/locking on config file: The spec does not address concurrent CLI invocations reading/writing the same config file. While atomic rename prevents corruption on write, simultaneous reads during a write are not addressed.",
+        "RootCommand() location ambiguity: The spec states `RootCommand()` is in the root `apikit` package but the implementation is in `internal/cli`. The repository layout and interfaces section do not show the root package shim file, which could cause confusion.",
+        "Missing specification for `Execute()` error propagation: `Execute()` is defined as returning an error, but `main.go` only calls `os.Exit(1)` on error without writing an error envelope. This may cause silent failures where the error is not printed before exit."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What type should be used as the context key when storing the `apikit.Client` in the Cobra command context? Should the spec mandate an unexported struct type (e.g., `type contextKey struct{}`) to prevent key collisions with consuming projects?",
+          "context": "Using a plain string as a `context.WithValue` key is a known Go anti-pattern that risks collisions. Specifying the key type here prevents implementation divergence and bugs when consuming projects also use the context.",
+          "options": [
+            "Use an unexported struct type (e.g., `type contextKey struct{}; var clientKey = contextKey{}`)",
+            "Use a package-level unexported string constant",
+            "Leave the implementation detail to the implementer"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "How should `PersistentPreRunE` hook chaining work when commands in specs 14 and 15 need their own `PreRunE` or `PersistentPreRunE`? Should the spec mandate a helper function that child commands must call, or should the root use a middleware/wrapper pattern?",
+          "context": "Cobra does not automatically call parent `PersistentPreRunE` when a child defines its own. If specs 14/15 define `PreRunE` hooks without calling the parent, client initialization will be silently skipped. This is a common Cobra pitfall.",
+          "options": [
+            "Mandate that all child PreRunE functions call `cli.RunParentPersistentPreRunE(cmd, args)` as their first step",
+            "Use a command wrapper/decorator pattern at registration time so child commands never need to worry about it",
+            "Rely on Cobra's `PersistentPreRunE` on the root only and prohibit child commands from defining their own `PersistentPreRunE`",
+            "Document the pitfall and leave composition to specs 14/15"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "How is the `--json` flag on `--help` mechanically implemented in Cobra? Is `help` a dedicated subcommand with its own `--json` flag, or is `--json` a persistent flag that intercepts Cobra's built-in help action?",
+          "context": "Cobra's built-in `--help` flag triggers `cmd.Help()` and exits before `RunE` runs. The implementation mechanism determines whether `--json` needs to be a persistent flag checked inside a custom `SetHelpFunc`, a `help` subcommand entirely replacing Cobra's default, or something else. This decision significantly impacts the implementation.",
+          "options": [
+            "Implement `help` as a dedicated Cobra subcommand (replacing the default) with its own `--json` flag and `RunE`",
+            "Use `cmd.SetHelpFunc()` on the root to intercept `--help` and check for a persistent `--json` flag",
+            "Use a custom `help` subcommand alongside Cobra's built-in `--help`, where `akc help --json` hits the subcommand and `akc <cmd> --help --json` uses SetHelpFunc"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "How is `user_id` passed to the `apikit.Client`? The constructor shown in the spec only uses `endpointURL` and `WithAPIKey(apiKey)`. Is `user_id` a client option, a per-request header, or used differently?",
+          "context": "The spec resolves `user_id` as a credential but only shows `endpoint_url` and `api_key` being passed to `apikit.NewClient`. If `user_id` is needed by the client, the constructor signature or an `WithUserID()` option must be specified. If it is not passed to the client at construction time, the spec should explain when/how it is used.",
+          "options": [
+            "Add `apikit.WithUserID(userID)` as a third option to `apikit.NewClient`",
+            "`user_id` is passed as a per-request parameter by individual commands, not at client construction",
+            "`user_id` is stored separately in the context alongside the client and accessed by commands that need it",
+            "Clarify from the Go SDK spec (spec 12) \u2014 the CLI should match whatever the SDK defines"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "What should happen to the temporary file if an atomic config write fails mid-operation (e.g., after `os.CreateTemp` but before `os.Rename`)? Should the spec mandate explicit cleanup?",
+          "context": "The spec says 'the temp file is left behind but the original config is intact' on process crash, but does not specify behavior for non-crash failures (e.g., permissions error on rename). Without explicit cleanup, temp files accumulate in the config directory.",
+          "options": [
+            "Mandate `defer os.Remove(tmpFile)` before the rename, so temp files are always cleaned up on failure",
+            "Leave the temp file on failure (document this behavior explicitly)",
+            "Use `os.CreateTemp` with a recognizable pattern and document that users can safely delete `*.tmp` files in the config directory"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should `main.go`'s error handling print an error envelope to stdout before calling `os.Exit(1)`, or is it acceptable that `Execute()` itself handles all error printing before returning?",
+          "context": "Currently `main.go` calls `os.Exit(1)` on any error from `Execute()` without printing anything. If `Execute()` always prints the error envelope before returning, this is fine \u2014 but if it can return an error without printing (e.g., Cobra's own usage errors), silent exits will occur. The contract needs to be explicit.",
+          "options": [
+            "Mandate that `Execute()` always prints the error envelope before returning a non-nil error, so `main.go` never needs to print",
+            "`main.go` should print a fallback error envelope if `Execute()` returns an error without having printed",
+            "Use `cobra.Command.SilenceErrors = true` and `cobra.Command.SilenceUsage = true` and mandate `Execute()` handles all output"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-written PRD for the CLI Core component. It demonstrates senior-level requirements engineering: every functional area has precise behavioral definitions, edge cases are explicitly handled, design decisions are justified, and the testing strategy maps directly to requirements. The spec is nearly implementation-ready. A small number of minor gaps and clarification opportunities exist, but none block implementation.",
+      "gaps": [
+        "The error handling table states API errors write a 'message to stderr' in addition to the JSON envelope on stdout, but the Output Formatting section and design decisions say human-readable messages go to stderr while error envelopes go to stdout. The table entry for 'API error (4xx/5xx)' should clarify whether any additional stderr output is expected or if the table note is erroneous.",
+        "The credential resolution section states that the `version` command 'resolves endpoint_url independently using ResolveField if needed, constructing a minimal client solely for the Version(ctx) call.' However, ResolveField requires the flag value and flagChanged boolean. It is not specified how the version command accesses the persistent --endpoint-url flag value outside of PersistentPreRunE (since it skips that hook). The mechanism for reading persistent flag values in auth-exempt commands should be described.",
+        "The `help` subcommand is described as replacing Cobra's default help command, but the spec does not explicitly address how the custom help command handles `akc help <topic>` (i.e., help for a named subcommand group). It is unclear whether `akc help user` falls back to Cobra's default or is handled by the custom walker.",
+        "The flag descriptor's `default` field is specified as 'omitted when empty/zero for non-bool types' \u2014 the behavior for bool flags with a default of false is not explicitly stated (omit or include?).",
+        "The integration test for 'Root command initialization' states it 'prints usage to stderr (not stdout) and exits 0,' but with SilenceUsage: true, Cobra suppresses its own usage output. The expected behavior when running `akc` with no args and no subcommand should be clarified \u2014 does the root command print usage, and if so, via what mechanism?",
+        "The spec does not define what happens when `os.Rename` fails mid-atomic-write due to a cross-device link error (which cannot occur if the temp file is in the same directory, but this assumption is only implicit). The rationale for requiring the same directory is present but the error path if CreateTemp fails in that directory is not mentioned.",
+        "The `PrintError` function signature in the Interfaces section takes `err error`, but the error handling section specifies that for client-side errors code is 0. It is not fully specified whether PrintError accepts a pre-constructed error envelope struct or derives the code/message from the error type internally \u2014 implementors may make different choices."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "In the error handling table, the 'API error (4xx/5xx)' row says 'Error envelope JSON to stdout, message to stderr.' Should API errors also produce a human-readable message on stderr, or is the table note a copy error and only the JSON envelope goes to stdout (consistent with the design decision that all error output is JSON to stdout)?",
+          "context": "The Output Formatting section and the design decision 'Error envelope on stdout, not stderr' suggest all error output is JSON to stdout. The table note implies a stderr message for API errors specifically, which contradicts this. Clarifying this prevents implementors from producing stderr output that agents would see unexpectedly.",
+          "options": [
+            "Only the JSON error envelope to stdout \u2014 no stderr message for API errors (remove the table note)",
+            "API errors write the JSON envelope to stdout AND a human-readable message to stderr (keep the table note, update Output Formatting to match)",
+            "API errors write JSON to stdout; stderr message is optional/at implementor discretion"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "How does the `version` command (annotated `auth: none`, skipping PersistentPreRunE) access the `--endpoint-url` persistent flag value to call ResolveField?",
+          "context": "The spec says version resolves endpoint_url independently using ResolveField 'if needed.' ResolveField needs the flag value and a flagChanged boolean. Since PersistentPreRunE is skipped, the standard resolution path doesn't run. The version command's RunE must access the persistent flag directly \u2014 should it call cmd.Root().PersistentFlags().GetString(\"endpoint-url\") and cmd.Root().PersistentFlags().Changed(\"endpoint-url\"), or is there a helper provided?",
+          "options": [
+            "version command calls cmd.Root().PersistentFlags() to read the flag value and Changed status directly, then passes them to ResolveField",
+            "A package-level helper (e.g., ResolveEndpointURL(cmd)) is provided that encapsulates this pattern for reuse by auth-exempt commands",
+            "The version command skips ResolveField entirely and only reads the env var and config file (flag value is not checked for auth-exempt commands)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "When `akc help <subcommand-group>` is invoked (e.g., `akc help user`), what is the expected behavior of the custom help subcommand?",
+          "context": "The spec replaces Cobra's default help command with a custom one. Cobra's default help command handles `help <command>` by printing the named command's usage. If the custom implementation only handles `--json` and falls back to 'standard Cobra help text,' it should be clarified whether that fallback properly handles named subcommand arguments or only prints the root help.",
+          "options": [
+            "The custom help command delegates named-command help (e.g., `help user`) to Cobra's default help behavior",
+            "The custom help command only handles `help` (no args) and `help --json`; `help user` is not a supported invocation",
+            "The custom help command handles `help <command> --json` for single-command JSON output in addition to the full-tree case"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "For the `default` field in flag descriptors in `help --json` output: should bool flags with a default value of `false` include `\"default\": false` or omit the field entirely?",
+          "context": "The spec says default is 'omitted when empty/zero for non-bool types.' This implies bool flags might be treated differently. Agents may need to know the default to correctly interpret flag absence. A consistent rule avoids implementor ambiguity.",
+          "options": [
+            "Bool flags always include `default` (true or false) \u2014 never omit for bools",
+            "Bool flags omit `default` when false, include when true (consistent with non-bool zero-omit rule)",
+            "All flags omit `default` when the value is the zero value for the type (false for bool, \"\" for string, 0 for int)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "When `akc` is invoked with no subcommand and no flags, what exactly is printed and to which stream? The integration test says 'prints usage to stderr (not stdout) and exits 0,' but SilenceUsage: true suppresses Cobra's automatic usage printing.",
+          "context": "With SilenceErrors and SilenceUsage both true, Cobra will not automatically print usage on error or on bare invocation. If the root command has no RunE, Cobra prints the help text by default. Clarifying whether the root command has a RunE, uses the default help printing, or explicitly prints to stderr ensures the integration test is implementable.",
+          "options": [
+            "The root command has no RunE; Cobra prints its default help text to stdout on bare invocation (update the test expectation)",
+            "The root command has a RunE that explicitly writes usage/help to stderr and returns nil",
+            "The root command's help function (SetHelpFunc) is responsible for all help output, and bare `akc` invocation triggers it \u2014 output stream depends on SetHelpFunc implementation"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-crafted PRD for the CLI Core component. It is thorough, internally consistent, and demonstrates strong engineering discipline. The spec is production-ready with clearly defined goals, non-goals, functional requirements, interface contracts, error handling tables, testing strategy, design decisions, and a comprehensive glossary. Only a small number of clarifying gaps were identified \u2014 none of which block implementation.",
+      "gaps": [
+        "The error envelope specifies `code: 0` for client-side errors, but it is not explicitly stated whether `0` might conflict with a legitimate HTTP-like code from the server. A note clarifying that `0` is a sentinel value meaning 'no HTTP status' (as opposed to a server-originated code) would prevent implementor confusion.",
+        "The `ResolveField` internal API signature is described in prose but not as a Go function signature. Including the exact signature (e.g., `func ResolveField(flagValue string, flagChanged bool, envVar string, configValue string) (string, error)`) in the Interfaces section would eliminate ambiguity.",
+        "The `Execute()` function signature returns only `error`, but the spec describes it as 'always prints error envelopes before returning.' It is implied but not explicitly stated whether `Execute()` also writes the success output, or whether that is delegated to individual command `RunE` functions. Clarifying the division of output responsibility between `Execute()` and individual commands would be helpful.",
+        "The PRD does not specify behavior when the config file exists but is partially malformed TOML (e.g., one valid field and one invalid field). The error handling table covers 'Config file unparseable' at a high level, but it is unclear whether partial parse results are accepted or the whole file is rejected.",
+        "The `help --json` walker collects 'only leaf commands \u2014 commands that have a RunE (or Run) function.' It is not specified how the walker handles commands that use `RunE` but are themselves parent commands with children (i.e., a command with both `RunE` and subcommands). Should such a command be treated as a leaf, a group, or both?",
+        "The persistent `--json` flag is defined on the root command and described as meaningful 'only in a help context.' The spec does not address whether this flag causes any observable side-effect if accidentally passed to a non-help command (e.g., `akc version --json`). Clarifying that non-help commands silently ignore `--json` would prevent ambiguity.",
+        "The spec states that `akc help <subcommand>` (e.g., `akc help user`) delegates to Cobra's default help behavior. It is not specified how the dedicated `help` subcommand determines whether its first positional argument is a subcommand name vs. the `--json` flag being absent \u2014 i.e., the routing logic between JSON mode and delegation mode for the `help` subcommand is not detailed.",
+        "The testing strategy does not include a test for the `SaveConfig` atomic write path where the rename itself fails (after the temp file is written). This edge case is distinct from `os.CreateTemp` failing and verifying temp file cleanup in that specific scenario is important for correctness."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should `code: 0` in the error envelope be explicitly documented as a sentinel meaning 'no HTTP status code' (client-side error), distinct from any server-originated error code? Would any server-originated error ever legitimately return code 0?",
+          "context": "The spec uses `code: 0` for all client-side errors. If the server ever returns a response body with `code: 0`, the CLI's error handling could be ambiguous. Clarifying that 0 is a CLI-only sentinel prevents future confusion.",
+          "options": [
+            "Yes, document 0 as a CLI sentinel; server codes are always non-zero HTTP status codes",
+            "No change needed; the distinction is sufficiently implied by context"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What should happen when `config.toml` exists but contains malformed or partially invalid TOML? Should the CLI reject the entire file (exit 2), accept valid fields and zero-value the rest, or something else?",
+          "context": "The error handling table covers 'Config file unparseable' but does not distinguish between a fully invalid file and a partially valid one. The BurntSushi/toml library's behavior on partial parse should be made explicit.",
+          "options": [
+            "Reject the entire file on any parse error, exit 2 with error envelope",
+            "Accept whatever fields parsed successfully, zero-value the rest",
+            "Reject only if required fields are unparseable"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "How should the `help --json` walker treat a Cobra command that has both a `RunE` function set AND child subcommands (i.e., it is both executable and a parent)?",
+          "context": "The walker collects 'only leaf commands \u2014 commands that have a RunE.' If a command has RunE but also has children (an uncommon but valid Cobra pattern), should it appear in `help --json` as an executable entry, be excluded as a group command, or appear as both?",
+          "options": [
+            "Include it as a leaf (RunE presence is the only criterion)",
+            "Exclude it if it has children (treat as a group command)",
+            "Include it as a separate entry AND include its children normally"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What is the observable behavior when `--json` is passed to a non-help command (e.g., `akc version --json`)? Should the flag be silently ignored, cause an 'unknown flag' error, or have some other defined behavior?",
+          "context": "`--json` is defined as a persistent flag meaningful only in help contexts. Since it is persistent, Cobra will accept it on any command. Defining what non-help commands do with it prevents inconsistent behavior.",
+          "options": [
+            "Silently ignore --json on non-help commands",
+            "Print a warning to stderr that --json is ignored, but proceed normally",
+            "Document explicitly that --json is reserved for help contexts and non-help commands ignore it (no warning)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "For the dedicated `help` subcommand, how does it distinguish between `akc help --json` (JSON mode) and `akc help user` (delegation mode)? Should this routing logic be specified (e.g., check for `--json` flag first, then treat remaining args as subcommand names)?",
+          "context": "The spec describes two behaviors for the `help` subcommand but does not detail the conditional logic. Making the routing explicit would prevent implementors from having to infer it.",
+          "options": [
+            "Check --json flag first; if set, output JSON tree regardless of positional args. Otherwise, delegate positional args to Cobra's default help.",
+            "Treat --json and positional subcommand args as mutually exclusive; error if both are provided.",
+            "Leave routing logic to implementor discretion"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This is a high-quality, detailed PRD that covers CLI architecture, configuration, error handling, output formatting, build variables, and the agent interface comprehensively. The spec is well-structured with clear functional requirements, design decisions, and a thorough testing strategy. However, several gaps remain that could create ambiguity for implementors, particularly around edge cases in credential resolution, the `Execute()` error-handling contract, versioning of the `help --json` schema, and a few behavioral specifics that are either underspecified or potentially conflicting.",
+      "gaps": [
+        "The `Execute()` function signature returns `error`, but the exact mechanism by which `Execute()` intercepts errors from individual `RunE` functions (to call `PrintError` before returning) is not specified. Cobra's default behavior does not provide a post-RunE hook; the spec needs to clarify whether a custom `RunE` wrapper, a Cobra `PersistentPostRunE`, or an explicit `Execute()` wrapper around `rootCmd.Execute()` is used to intercept and print errors.",
+        "The credential resolution section states resolution is 'lazy' (per-command), but `PersistentPreRunE` is described as resolving all three credentials for every non-auth-exempt command. There is a contradiction: if resolution is lazy and per-field, some commands may succeed with only `endpoint_url` and `api_key` and never need `user_id`, yet `PersistentPreRunE` would fail if `user_id` is missing. The spec should clarify which fields are required by `PersistentPreRunE` for non-exempt commands.",
+        "The `help --json` JSON schema version is not specified. If consuming projects or agents depend on the schema, a breaking change (e.g., adding a required field) would be silent. A `schema_version` field or a versioning policy should be addressed.",
+        "The `akc help --json` routing section states positional args are ignored when `--json` is set, but the spec does not define what happens with `akc help <subcommand> --json` when `--json` appears after the subcommand name. Cobra's flag parsing may interpret this differently than `akc help --json <subcommand>`, and the behavior should be explicitly specified.",
+        "The `SaveConfig` function's exported API does not specify whether it takes a `*CLIConfig` or serializes from a struct. The signature in the Interfaces section (`SaveConfig(configDir string, cfg *CLIConfig) error`) is clear, but the TOML marshaling library (`BurntSushi/toml`) is listed as a dependency yet `encoding/toml` or `toml.Marshal` semantics are not confirmed \u2014 the `BurntSushi/toml` package does not export a `Marshal` function in older versions. The spec should confirm the TOML marshaling approach.",
+        "The `ResolveField` helper's error message format is underspecified. The spec says it should 'name the field, the flag, and the env var' but gives no example. A concrete format (or at least a template) would prevent inconsistent error messages across the three credentials.",
+        "The `PersistentPreRunE` annotation check uses `cmd.Annotations[\"auth\"] == \"none\"` where `cmd` is the 'actually invoked (leaf) command.' The mechanism for obtaining the leaf command inside `PersistentPreRunE` (i.e., that `cmd` in `PersistentPreRunE` is the leaf command, not the root) should be confirmed, as this is a Cobra-specific behavior that implementors may not assume correctly.",
+        "The spec does not address what happens if `TokenPrefix` is an empty string at build time (e.g., `-ldflags` is used but the value is accidentally blank). The config directory would become `$HOME/./` which is unusual. A validation step or a fallback to the default 'ak' should be specified.",
+        "The testing strategy specifies testing the `help` subcommand delegation to Cobra's default behavior (`akc help user`), but does not specify whether the integration test uses a real Cobra tree with a `user` command group registered, or a mock. This gap could lead to incomplete test coverage.",
+        "The `version` command's JSON output field names (`cli_version`, `build`, `prefix`, `server_version`) are shown in an example but not formally specified as a Go struct. If the `server_version` sub-object is the SDK's typed response struct, its field names should be referenced explicitly to prevent drift between the CLI output and the SDK struct."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "How does `Execute()` intercept errors from individual command `RunE` functions to call `PrintError` before returning? Which mechanism is used?",
+          "context": "Cobra's `rootCmd.Execute()` returns the error from `RunE` but does not provide a built-in post-error hook for printing. The spec states `Execute()` always prints error envelopes before returning, but does not describe the interception mechanism. Without this, implementors may use incompatible approaches (e.g., each `RunE` calls `PrintError` itself vs. a central wrapper).",
+          "options": [
+            "Each individual command's `RunE` calls `PrintError(err)` on failure before returning the error, and `Execute()` in `internal/cli` wraps `rootCmd.Execute()` but does not call `PrintError` again",
+            "`Execute()` in `internal/cli` wraps `rootCmd.Execute()`, checks the returned error, calls `PrintError(err)` centrally, and then returns the error to `main.go`",
+            "A `PersistentPostRunE` on the root command calls `PrintError` after any failing child command",
+            "A custom Cobra `RunE` wrapper function is used for all commands to ensure `PrintError` is called before the error propagates"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Which of the three credential fields (`endpoint_url`, `user_id`, `api_key`) are required by `PersistentPreRunE` for non-auth-exempt commands, and which are optional (i.e., missing values are allowed through)?",
+          "context": "The spec describes credential resolution as 'lazy' and per-command, but `PersistentPreRunE` is described as resolving credentials and constructing a client for all non-exempt commands. If `PersistentPreRunE` fails when `user_id` is missing but a command only needs `endpoint_url` and `api_key`, commands will fail unnecessarily. Clarifying which fields are mandatory at the `PersistentPreRunE` level prevents over-strict validation.",
+          "options": [
+            "All three fields (`endpoint_url`, `user_id`, `api_key`) are required by `PersistentPreRunE` for all non-exempt commands",
+            "Only `endpoint_url` and `api_key` are required by `PersistentPreRunE`; `user_id` is resolved but missing values are allowed (stored as empty string in context)",
+            "`PersistentPreRunE` resolves all three fields but only fails if `endpoint_url` or `api_key` are missing; `user_id` is optional",
+            "All three are resolved lazily \u2014 `PersistentPreRunE` attempts resolution for each and stores results (including errors) in context; individual commands decide which missing fields are fatal"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Should the `help --json` output include a `schema_version` field to allow agents and consuming projects to detect breaking changes to the JSON schema?",
+          "context": "As the CLI evolves, new fields may be added or existing fields may change meaning. Without a schema version, agents cannot detect incompatible changes. However, adding versioning now adds complexity. A decision either way should be documented in the spec.",
+          "options": [
+            "Yes \u2014 add a `schema_version` field (e.g., `\"schema_version\": 1`) to the top-level `help --json` object",
+            "No \u2014 the CLI version field already serves as an indirect schema version indicator",
+            "No \u2014 defer schema versioning to a future iteration; document it as a known future concern"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What is the exact behavior when `--json` appears after a subcommand name in `akc help`, e.g., `akc help user --json`? Does this also output the full JSON tree?",
+          "context": "The spec currently specifies that `akc help --json` and `akc help --json user` both output the full JSON tree. However, `akc help user --json` may be parsed differently by Cobra (the `--json` persistent flag may or may not be visible depending on how the `help` subcommand processes positional args). This edge case needs explicit specification to avoid inconsistent behavior.",
+          "options": [
+            "`akc help user --json` outputs the full JSON tree (same as `akc help --json`) \u2014 Cobra sees `--json` as a persistent flag regardless of position",
+            "`akc help user --json` shows standard Cobra help text for the `user` command group (treating `user` as the subcommand arg and ignoring `--json` because it appears after a positional arg in a non-standard position)",
+            "`akc help user --json` is undefined/unsupported; only `akc help --json` and `akc help --json <subcommand>` are supported forms"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "What is the exact error message format for `ResolveField` when all sources are unset? Please provide a concrete example for each of the three credential fields.",
+          "context": "The spec says the error should 'name the field, the flag, and the env var' but gives no format example. Inconsistent error messages across the three fields would harm usability and make the integration tests brittle. A canonical format prevents this.",
+          "options": [
+            "\"missing required credential: use --endpoint-url flag, ENDPOINT_URL env var, or set endpoint_url in config\" (and analogous for user_id/api_key)",
+            "\"endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file\" (and analogous)",
+            "\"no value for endpoint_url: --endpoint-url flag, ENDPOINT_URL environment variable, or config file endpoint_url must be set\" (and analogous)",
+            "Custom format \u2014 please specify"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "In `PersistentPreRunE`, when checking `cmd.Annotations[\"auth\"] == \"none\"`, is `cmd` confirmed to be the leaf (actually invoked) command rather than the root command? And should this be explicitly documented with a code example?",
+          "context": "Cobra passes the command that was matched (the leaf command) as the `cmd` argument to `PersistentPreRunE`. This is correct behavior, but implementors unfamiliar with Cobra may assume `cmd` is the command where `PersistentPreRunE` is defined (the root). Confirming and documenting this prevents a subtle bug where auth-exempt commands are not correctly skipped.",
+          "options": [
+            "Yes \u2014 confirm explicitly in the spec that Cobra passes the leaf command as `cmd` in `PersistentPreRunE`, and add a brief code comment to the example",
+            "No \u2014 this is standard Cobra behavior; implementors should consult Cobra documentation; no change needed in the spec",
+            "Yes \u2014 add a negative test case that verifies the annotation check uses the leaf command's annotations, not the root command's"
+          ],
+          "required": false
+        },
+        {
+          "id": "q7",
+          "text": "What should happen if `TokenPrefix` is an empty string at build time (e.g., accidentally blanked in the ldflags)?",
+          "context": "If `TokenPrefix` resolves to an empty string, the config directory becomes `$HOME/./` (effectively `$HOME/`), which is semantically wrong and could lead to unintended file creation at the home directory root. A validation step or fallback behavior would prevent this class of build misconfiguration.",
+          "options": [
+            "Validate at startup: if `TokenPrefix` is empty, exit with code 2 and a descriptive error envelope",
+            "Fall back silently to the default value \"ak\" if `TokenPrefix` is empty at runtime",
+            "No validation needed \u2014 build systems are responsible for ensuring a non-empty `TokenPrefix`; document this as a build-time responsibility only"
+          ],
+          "required": false
+        },
+        {
+          "id": "q8",
+          "text": "What is the Go struct definition for the `version` command's JSON output, and does `server_version` directly reuse the SDK's typed response struct?",
+          "context": "The spec shows a JSON example for `akc version` output but does not define the Go struct. If `server_version` is the SDK's `VersionResponse` struct (or equivalent), its field names must match the JSON example exactly. Specifying the struct prevents drift between the CLI output and the SDK struct, and makes the contract between spec 12 and spec 13 explicit.",
+          "options": [
+            "Define a `VersionOutput` struct in the spec with explicit field names matching the JSON example; `server_version` embeds the SDK's `VersionResponse` type directly",
+            "Define a `VersionOutput` struct in the spec with explicit field names; `server_version` is a separate CLI-defined struct that mirrors the SDK response (to avoid coupling the CLI output format to the SDK struct)",
+            "Leave the struct definition to the implementor; the JSON example in the spec is the authoritative contract",
+            "The SDK's `VersionResponse` struct is used directly as the top-level output (extended with CLI fields)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is an exceptionally well-crafted PRD. It is comprehensive, internally consistent, and demonstrates a high level of engineering rigor. The spec covers all major concerns \u2014 binary entry point, command structure, config management, credential resolution, output formatting, error handling, exit codes, build-time variables, the agent interface, and embeddability \u2014 with precise Go idioms, concrete code snippets, and explicit design rationale for every significant decision. The testing strategy is thorough, covering both unit and integration scenarios down to edge cases like atomic write failure simulation and Cobra hook-chaining pitfalls. The glossary and dependency table add further clarity. There are only a handful of minor gaps worth noting, none of which block implementation.",
+      "gaps": [
+        "The ResolveField function signature in the Interfaces section includes a note that the caller passes 'the already-resolved field name, flag name, and env var name for inclusion in the error message,' but the signature itself only shows (flagValue string, flagChanged bool, envVar string, configValue string). The field name, flag name, and error-message format string are not reflected in the signature, leaving implementors to infer how the canonical error message is composed inside ResolveField. A concrete signature such as ResolveField(fieldName, flagName, flagValue string, flagChanged bool, envVarName, configValue string) (string, error) would remove ambiguity.",
+        "The spec states that InitConfig creates the config file with 'empty values' but does not explicitly define how the TOML encoder handles zero-value string fields (i.e., whether BurntSushi/toml encodes endpoint_url = \"\" or omits the key). For agents and users who read the config file, knowing whether all three keys are always present (even when empty) matters. A concrete example of the written file content would resolve this.",
+        "The relationship between the 'user_id' resolution in PersistentPreRunE and the canonical error message from ResolveField is slightly inconsistent: ResolveField returns an error when all sources are unset, but for user_id the caller is expected to suppress that error and store an empty string instead. The spec describes this behavior in prose but does not show the call site pattern or clarify whether ResolveField is called with a different error-handling wrapper for user_id vs. the other two fields.",
+        "The spec defines env var names as ENDPOINT_URL, USER_ID, and API_KEY without any prefix (e.g., AKC_ENDPOINT_URL). For a CLI that supports a configurable TokenPrefix and is designed to be embedded by consuming projects, unprefixed env var names create a high risk of collision with other tools or the host environment. The decision to use unprefixed names is not explained in the Design Decisions section.",
+        "The 'help --json' walker is described as collecting 'only leaf commands' (those with RunE), but the spec does not address what happens with Cobra's automatically-registered 'help' and 'completion' built-in commands, which have RunE set internally. It is unclear whether these built-in commands are filtered from the JSON output or included.",
+        "The spec does not address concurrent access to config.toml (e.g., two CLI invocations running simultaneously). While the atomic write prevents partial writes, simultaneous reads and writes could result in lost updates. Even a brief note on whether this is a non-goal or an accepted limitation would be useful.",
+        "The Testing Strategy references registering a 'user command group (even as a stub)' for integration tests, but does not specify where these stubs live or whether they are part of this spec's deliverables. A reference to specs 14/15 or a note that stubs are test-only fixtures would clarify the test setup dependencies."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the exact function signature for ResolveField, including parameters for field name, flag name, and any other values needed to produce the canonical error message?",
+          "context": "The Interfaces section shows a 4-parameter signature but the prose says the caller passes field name, flag name, and env var name for inclusion in the error message. The signature needs to match the implementation contract to avoid ambiguity for implementors.",
+          "options": [
+            "ResolveField(fieldName, flagName, flagValue string, flagChanged bool, envVarName, configValue string) (string, error)",
+            "ResolveField(flagValue string, flagChanged bool, envVar string, configValue string) (string, error) \u2014 and the caller formats the error message externally",
+            "ResolveField(fieldName, flagName, envVarName, flagValue string, flagChanged bool, configValue string) (string, error)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "When InitConfig creates a new config.toml with 'empty values,' are all three keys written explicitly (e.g., endpoint_url = \"\") or are they omitted entirely, resulting in an empty file?",
+          "context": "The spec shows the expected file content with all three keys set to empty strings, but does not confirm whether BurntSushi/toml encodes zero-value string fields or omits them. This affects what users and tools see when they open the config file.",
+          "options": [
+            "All three keys are always written explicitly, even when their values are empty strings (endpoint_url = \"\", user_id = \"\", api_key = \"\")",
+            "Keys with empty-string values are omitted by the TOML encoder; the file may be empty or partial",
+            "The file is written from a hard-coded template string to guarantee all three keys appear regardless of encoder behavior"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "How does the PersistentPreRunE call site handle the error returned by ResolveField for user_id, given that a missing user_id is not an error at that level?",
+          "context": "ResolveField returns an error when all sources are unset. For user_id, the spec says the empty string is stored rather than returning an error. It is not shown whether ResolveField is called differently for user_id or whether the caller discards the error explicitly.",
+          "options": [
+            "ResolveField is called the same way for user_id, but the caller explicitly ignores the returned error and stores the empty string",
+            "A separate ResolveOptionalField helper (or variant) is used for user_id that returns empty string instead of error",
+            "ResolveField accepts a 'required' bool parameter that controls whether it returns an error or an empty string on missing"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Why are the environment variable names unprefixed (ENDPOINT_URL, USER_ID, API_KEY) rather than prefixed (e.g., AKC_ENDPOINT_URL)? Is this intentional and, if so, should it be documented as a design decision?",
+          "context": "Unprefixed env var names like USER_ID and API_KEY are extremely common in other tools and host environments, creating a high collision risk. The TokenPrefix build-time variable suggests per-deployment branding is supported, but the env vars do not follow the same pattern. This omission in the Design Decisions section may indicate an oversight.",
+          "options": [
+            "Intentional \u2014 the master PRD mandates these exact names and it is a non-goal to prefix them",
+            "Unintentional \u2014 env vars should be prefixed with the binary name or TokenPrefix (e.g., AKC_ENDPOINT_URL or <PREFIX>_ENDPOINT_URL)",
+            "Intentional \u2014 but a design decision entry explaining the rationale should be added"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "Are Cobra's built-in 'help' and 'completion' commands (which have RunE set internally) included in or excluded from the help --json output?",
+          "context": "The spec says the walker collects all commands with RunE as leaf commands. Cobra automatically registers a 'help' command (and optionally a 'completion' command) with RunE set. If these are included, the JSON output may surprise agents. If excluded, the filtering logic needs to be specified.",
+          "options": [
+            "The built-in 'help' command is replaced by the custom help subcommand defined in this spec, so no built-in 'help' RunE exists to include; 'completion' is excluded by name or by the absence of the 'method'/'path' annotations",
+            "Both built-in commands are included as-is in the JSON output",
+            "Built-in Cobra commands are excluded from the walker by checking for the absence of a 'method' annotation and filtering them out explicitly"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is exceptionally comprehensive and all five previously identified actionable gaps have been fully resolved. The ResolveField signature is now a concrete 7-parameter form with fieldName, flagName, envVarName, and a required bool, eliminating any ambiguity for implementors. The InitConfig file format is now specified as a hard-coded template string, guaranteeing all three keys always appear. The user_id optional resolution is cleanly expressed via the required bool parameter with a concrete call-site example. The unprefixed env var naming decision is now documented as an intentional design decision matching the master PRD. Cobra built-in command filtering is addressed structurally (completion is never registered; annotation presence is the filter criterion) and documented in both the walker section and the glossary. The concurrent write limitation is documented as an accepted limitation in Non-Goals, the Error Handling table, and the Config Mutation section. Integration test stubs are clarified as test-only fixtures in help_test.go. The PersistentPreRunE step ordering is tightened (auth check \u2192 TokenPrefix check \u2192 $HOME check \u2192 config init \u2192 ...). All answers have been faithfully incorporated without introducing new inconsistencies.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "note": "Use the auth annotation. Commands annotated with auth: none in their Annotations map will skip client creation in PersistentPreRunE. This is consistent with how the help --json walker already reads annotations."
+        },
+        "q2": {
+          "choice": 0,
+          "note": "Fail with exit code 2 and a descriptive error message. The CLI targets Unix-like systems with $HOME, and this is consistent with the Non-Goals section excluding Windows path conventions. Containerized environments should set HOME explicitly."
+        },
+        "q3": {
+          "choice": 0,
+          "note": "Strictly only leaf commands with RunE. Group commands are implicit from the name prefix (e.g., user show implies a user group). This keeps the agent interface clean and avoids confusing agents with non-executable entries."
+        }
+      },
+      "timestamp": "2026-07-17T13:07:09.782147+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "note": "Use an unexported struct type for context key safety. This is idiomatic Go and prevents collisions with consuming projects."
+        },
+        "q2": {
+          "choice": 2,
+          "note": "Rely on PersistentPreRunE on the root only. Child commands use PreRunE (not PersistentPreRunE) for their own setup. Cobra calls parent PersistentPreRunE automatically when the child does not define its own PersistentPreRunE. This is the simplest approach and avoids the chaining pitfall entirely."
+        },
+        "q3": {
+          "choice": 2,
+          "note": "Use a dedicated help subcommand for 'akc help --json' and SetHelpFunc on the root for 'akc <cmd> --help --json'. The help subcommand handles the full tree output. SetHelpFunc checks for a persistent --json flag and outputs single-command JSON when set."
+        },
+        "q4": {
+          "choice": 2,
+          "note": "user_id is stored separately in the context alongside the client. The Go SDK Client does not use user_id \u2014 it is a CLI-level value used by specific commands that need to know which user is authenticated (e.g., for display purposes or to pass as a parameter). The SDK's WithAPIKey is the only authentication mechanism."
+        },
+        "q5": {
+          "choice": 0,
+          "note": "Mandate defer os.Remove(tmpFile) to clean up temp files on failure. This prevents accumulation."
+        },
+        "q6": {
+          "choice": 2,
+          "note": "Use SilenceErrors and SilenceUsage on the root command. Execute() handles all output including error envelopes before returning. main.go only sets the exit code."
+        }
+      },
+      "timestamp": "2026-07-17T13:11:31.938985+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "note": "Only the JSON error envelope goes to stdout. No stderr message for API errors. Remove the table note to be consistent with the design decision."
+        },
+        "q2": {
+          "choice": 1,
+          "note": "Provide a package-level helper ResolveEndpointURL(cmd) that encapsulates reading the persistent flag and calling ResolveField. This is reusable by any auth-exempt command that needs endpoint_url."
+        },
+        "q3": {
+          "choice": 0,
+          "note": "The custom help command delegates named-command help to Cobra's default help behavior. 'akc help user' shows standard Cobra help text for the user command group. 'akc help --json' shows the full JSON tree."
+        },
+        "q4": {
+          "choice": 2,
+          "note": "All flags omit default when the value is the zero value for the type. This is consistent and simple for agents to parse \u2014 absence of default means use the type's zero value."
+        },
+        "q5": {
+          "choice": 0,
+          "note": "The root command has no RunE. Cobra prints its default help text to stdout on bare invocation. Update the integration test expectation accordingly."
+        }
+      },
+      "timestamp": "2026-07-17T13:16:06.171614+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "note": "Document 0 as a CLI sentinel. Server error codes are always non-zero HTTP status codes (400+). Code 0 unambiguously means client-side error."
+        },
+        "q2": {
+          "choice": 0,
+          "note": "Reject the entire file on any parse error. Config file is simple (3 fields). A corrupt file should be fixed, not silently partially loaded."
+        },
+        "q3": {
+          "choice": 0,
+          "note": "Include it as a leaf if RunE is present. RunE presence is the sole criterion. This is the simplest rule and agents can handle it."
+        },
+        "q4": {
+          "choice": 2,
+          "note": "Document that --json is reserved for help contexts. Non-help commands silently ignore it with no warning. Keep it simple."
+        },
+        "q5": {
+          "choice": 0,
+          "note": "Check --json flag first. If set, output JSON tree regardless of positional args. Otherwise, delegate to Cobra's default help for any positional args."
+        }
+      },
+      "timestamp": "2026-07-17T13:21:17.915366+00:00"
+    },
+    {
+      "assessment_index": 4,
+      "answers": {
+        "q1": {
+          "choice": 1,
+          "note": "Execute() in internal/cli wraps rootCmd.Execute(), checks the returned error, calls PrintError(err) centrally, and then returns the error to main.go. This centralizes error output in one place and ensures every error path produces a JSON envelope."
+        },
+        "q2": {
+          "choice": 2,
+          "note": "PersistentPreRunE resolves all three fields but only fails if endpoint_url or api_key are missing. user_id is resolved and stored in context but a missing value is allowed (stored as empty string). Commands that need user_id (like display) check it themselves."
+        },
+        "q3": {
+          "choice": 2,
+          "note": "Defer schema versioning to a future iteration. The CLI version field serves as an indirect indicator for now."
+        },
+        "q4": {
+          "choice": 0,
+          "note": "akc help user --json outputs the full JSON tree. Cobra sees --json as a persistent flag regardless of position. This is the simplest behavior and avoids special-casing flag position."
+        },
+        "q5": {
+          "choice": 1,
+          "note": "Use format: 'endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file' (and analogous for user_id/api_key). Short, clear, actionable."
+        },
+        "q6": {
+          "choice": 0,
+          "note": "Confirm explicitly in the spec that Cobra passes the leaf command as cmd in PersistentPreRunE. This is a known pitfall worth documenting."
+        },
+        "q7": {
+          "choice": 0,
+          "note": "Validate at startup. If TokenPrefix is empty, exit with code 2 and a descriptive error. An empty prefix creates dangerous paths."
+        },
+        "q8": {
+          "choice": 0,
+          "note": "Define a VersionOutput struct with explicit field names. server_version embeds the SDK's VersionResponse type directly, making the coupling explicit."
+        }
+      },
+      "timestamp": "2026-07-17T13:28:42.682529+00:00"
+    },
+    {
+      "assessment_index": 5,
+      "answers": {
+        "q1": {
+          "choice": 0,
+          "note": "Use the 6-parameter signature that includes fieldName, flagName, and envVarName. This lets ResolveField compose the canonical error message internally."
+        },
+        "q2": {
+          "choice": 2,
+          "note": "Write from a hard-coded template string. This guarantees all three keys always appear in the file, regardless of TOML encoder behavior, making the file self-documenting for users."
+        },
+        "q3": {
+          "choice": 2,
+          "note": "Add a required bool parameter to ResolveField. When required is false, a missing value returns empty string instead of error. This is clean and reusable."
+        },
+        "q4": {
+          "choice": 2,
+          "note": "Intentional. The master PRD defines these exact env var names. Add a design decision entry explaining: unprefixed env vars match the master PRD convention and are consistent with the CLI's single-config design. Consuming projects that need namespacing can define their own env var mapping."
+        },
+        "q5": {
+          "choice": 0,
+          "note": "The built-in help command is replaced by the custom help subcommand. The completion command is not enabled by default. Any unexpected built-in commands that slip through are filtered out by the walker if they lack the method/path annotations."
+        }
+      },
+      "timestamp": "2026-07-17T13:37:08.053728+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

@@ -1,0 +1,1613 @@
+{
+  "$schema": null,
+  "spec_id": "09",
+  "spec_name": "pat_lifecycle",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/handlers/... -count=1 -v -run 'PAT|Token|generateToken|generateSecret|hashSecret'",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 8,
+      "to_group": 8,
+      "relationship": "PATHandler uses APIError() and apikit.TokenPrefix from server_core; Cache-Control middleware from server_core applies to all PAT routes",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 8,
+      "to_group": 8,
+      "relationship": "PATHandler uses db.DB, db.WithTx, db.WrapError, db.ErrNotFound, db.FormatTime, db.ParseTime from database_layer",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "05",
+      "from_group": 8,
+      "to_group": 8,
+      "relationship": "PATHandler uses auth.GetAuthInfo(), auth.GetUserID(), auth.RequirePermission(), and auth.PermissionRegistry from auth_middleware",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: token generation, hashing, and constructor",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for generateTokenID and generateSecret",
+          "details": [
+            "In internal/handlers/pat_test.go, write TestGenerateTokenID_Length verifying result is exactly 8 chars.",
+            "Write TestGenerateTokenID_Alphanumeric verifying all chars are in [a-z0-9].",
+            "Write TestGenerateSecret_Length verifying result is exactly 32 chars.",
+            "Write TestGenerateSecret_Alphanumeric verifying all chars are in [a-z0-9].",
+            "Write property-based loop test (TS-09-P8) verifying each function terminates in bounded iterations."
+          ],
+          "test_spec_refs": [
+            "TS-09-5",
+            "TS-09-6",
+            "TS-09-P8"
+          ],
+          "requirement_refs": [
+            "09-REQ-2.1",
+            "09-REQ-2.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for hashSecret and token format construction",
+          "details": [
+            "Write TestHashSecret_Deterministic verifying same input always yields same output.",
+            "Write TestHashSecret_KnownVector verifying hashSecret('hello') == '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
+            "Write TestCreatePAT_TokenFormat verifying token matches ^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$.",
+            "Write property loop (TS-09-P6) over N successful creates verifying token regex and prefix each time."
+          ],
+          "test_spec_refs": [
+            "TS-09-7",
+            "TS-09-8",
+            "TS-09-P6"
+          ],
+          "requirement_refs": [
+            "09-REQ-2.3",
+            "09-REQ-2.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for NewPATHandler constructor and RegisterRoutes",
+          "details": [
+            "Write TestNewPATHandler_Success verifying non-nil *PATHandler returned when both params non-nil.",
+            "Write TestNewPATHandler_NilDB using assertPanics wrapper verifying panic when database is nil.",
+            "Write TestNewPATHandler_NilRegistry verifying panic when registry is nil.",
+            "Write TestRegisterRoutes verifying all four routes are registered on the Echo group."
+          ],
+          "test_spec_refs": [
+            "TS-09-1",
+            "TS-09-2",
+            "TS-09-E1"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.1",
+            "09-REQ-1.2",
+            "09-REQ-1.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "Spec tests compile and fail (red) as expected before implementation: go test ./internal/handlers/... -count=1 -run 'TestGenerateToken|TestGenerateSecret|TestHashSecret|TestNewPATHandler|TestRegisterRoutes'",
+          "No linter errors introduced: go vet ./...",
+          "Test file is syntactically valid Go and imports are resolved"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: CreatePAT request validation",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for name and permissions validation",
+          "details": [
+            "Write TestCreatePAT_MissingName and TestCreatePAT_EmptyName expecting HTTP 400 'name is required'.",
+            "Write TestCreatePAT_NameTooLong with 256-char name expecting HTTP 400 'name must be 255 characters or fewer'.",
+            "Write TestCreatePAT_MissingPermissions and TestCreatePAT_EmptyPermissions expecting HTTP 400 'permissions are required'.",
+            "Write TestCreatePAT_MalformedJSON expecting HTTP 400 'invalid request body'."
+          ],
+          "test_spec_refs": [
+            "TS-09-9",
+            "TS-09-10",
+            "TS-09-11",
+            "TS-09-15"
+          ],
+          "requirement_refs": [
+            "09-REQ-3.1",
+            "09-REQ-3.2",
+            "09-REQ-3.3",
+            "09-REQ-3.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write unit tests for permission format and registry validation",
+          "details": [
+            "Write TestCreatePAT_InvalidPermissionFormat with 'usersread' (no colon) expecting HTTP 400 'invalid permission format: usersread'.",
+            "Write TestCreatePAT_UnknownPermission with 'widgets:delete' expecting HTTP 400 'unknown permission: widgets:delete'.",
+            "Write TestCreatePAT_PermissionFailFast verifying only first error is returned when multiple permissions are invalid (TS-09-E5)."
+          ],
+          "test_spec_refs": [
+            "TS-09-12",
+            "TS-09-13",
+            "TS-09-E5"
+          ],
+          "requirement_refs": [
+            "09-REQ-3.4",
+            "09-REQ-3.5",
+            "09-REQ-3.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write unit tests for expires validation and defaulting",
+          "details": [
+            "Write TestCreatePAT_InvalidExpires covering values [7, 365, 999, 1, -1] expecting HTTP 400 'expires must be 0, 30, 60, or 90'.",
+            "Write TestCreatePAT_DefaultExpires verifying omitted expires results in expires_at = created_at + 90*24h.",
+            "Write TestCreatePAT_NoExpiry verifying expires=0 yields expires_at: null in response and NULL in DB.",
+            "Write TestCreatePAT_InvalidExpiresExtended covering edge values [-1, 29, 31, 59, 61, 89, 91] (TS-09-E4)."
+          ],
+          "test_spec_refs": [
+            "TS-09-14",
+            "TS-09-16",
+            "TS-09-E3",
+            "TS-09-E4"
+          ],
+          "requirement_refs": [
+            "09-REQ-3.6",
+            "09-REQ-3.8",
+            "09-REQ-3.E1",
+            "09-REQ-3.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestCreatePAT_Missing|TestCreatePAT_Empty|TestCreatePAT_NameTooLong|TestCreatePAT_Malformed|TestCreatePAT_Invalid|TestCreatePAT_Unknown|TestCreatePAT_Default|TestCreatePAT_NoExpiry'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests: CreatePAT privilege escalation and auth",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write unit tests for privilege escalation checks",
+          "details": [
+            "Write TestCreatePAT_PrivilegeEscalation_PAT: PAT with [tokens:manage, users:read] requesting [keys:manage] expects HTTP 403 'cannot grant permission: keys:manage'.",
+            "Write TestCreatePAT_APIKey_AnyRegisteredPermission: API key can create PAT with any registered permission, expects HTTP 201.",
+            "Write TestCreatePAT_RegistryCheckBeforeEscalation: PAT credential requesting unregistered permission gets 400 not 403 (TS-09-19).",
+            "Write TestCreatePAT_EscalationSubsetAllowed and TestCreatePAT_EscalationSupersetDenied (TS-09-E6)."
+          ],
+          "test_spec_refs": [
+            "TS-09-17",
+            "TS-09-18",
+            "TS-09-19",
+            "TS-09-E6"
+          ],
+          "requirement_refs": [
+            "09-REQ-4.1",
+            "09-REQ-4.2",
+            "09-REQ-4.3",
+            "09-REQ-4.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write integration tests for CreatePAT permission requirement",
+          "details": [
+            "Write TestCreatePAT_RequiresTokensManage: PAT with only [tokens:read] calling POST /user/tokens expects HTTP 403.",
+            "Verify no PAT row is inserted in the database when permission is denied.",
+            "Use auth middleware stub that enforces tokens:manage check."
+          ],
+          "test_spec_refs": [
+            "TS-09-25"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write property test for privilege escalation invariant",
+          "details": [
+            "Write TestPATPrivilegeEscalation_Property iterating over arbitrary subsets P and Q of registered permissions.",
+            "Assert HTTP 201 when Q ⊆ P and credential is a PAT.",
+            "Assert HTTP 403 with 'cannot grant permission:' prefix when Q ⊄ P and credential is a PAT.",
+            "Assert HTTP 201 for any valid Q when credential is an API key."
+          ],
+          "test_spec_refs": [
+            "TS-09-P4"
+          ],
+          "requirement_refs": [
+            "09-REQ-4.1",
+            "09-REQ-4.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestCreatePAT_Privilege|TestCreatePAT_APIKey|TestCreatePAT_Registry|TestCreatePAT_Requires|TestPATPrivilegeEscalation'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write tests: CreatePAT storage, response, and transaction",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write integration tests for successful PAT creation response",
+          "details": [
+            "Write TestCreatePAT_Success: valid request returns HTTP 201 with CreatePATResponse containing token_id (8 chars), token matching regex, permissions in insertion order.",
+            "Write TestCreatePAT_SecretHashed: verify pats table row has secret_hash == SHA-256(secret) and no plaintext.",
+            "Write TestCreatePAT_PermissionsInsertionOrder: submitted order ['orgs:read','tokens:read','users:read'] preserved in response and DB.",
+            "Write TestCreatePAT_ResponseOmitsRevokedAtAndExpiresDays: verify no revoked_at or expires_days keys in response."
+          ],
+          "test_spec_refs": [
+            "TS-09-20",
+            "TS-09-21",
+            "TS-09-22",
+            "TS-09-23"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.1",
+            "09-REQ-5.2",
+            "09-REQ-5.3",
+            "09-REQ-5.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for duplicate names and transaction rollback",
+          "details": [
+            "Write TestCreatePAT_DuplicateName: two PATs with same name both return HTTP 201 with distinct token_ids; two rows in DB.",
+            "Write TestCreatePAT_TransactionRollback: mock db.WithTx to return error; expect HTTP 500, no row inserted.",
+            "Write TestCreatePAT_GeneratedBeforeTransaction: mock WithTx to capture token_id then fail; verify captured token_id not in DB (TS-09-E8)."
+          ],
+          "test_spec_refs": [
+            "TS-09-24",
+            "TS-09-26",
+            "TS-09-E7",
+            "TS-09-E8"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.5",
+            "09-REQ-5.7",
+            "09-REQ-5.E1",
+            "09-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write edge case tests for crypto/rand failure",
+          "details": [
+            "Write TestCreatePAT_RandFailure: mock crypto/rand to return error; expect HTTP 500 'internal server error'.",
+            "Verify no token field in error response.",
+            "Verify pats table has zero rows after failed creation.",
+            "Use dependency injection or build tag to mock crypto/rand.Read."
+          ],
+          "test_spec_refs": [
+            "TS-09-E2"
+          ],
+          "requirement_refs": [
+            "09-REQ-2.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Write property tests for secret storage invariant",
+          "details": [
+            "Write TestPATSecretNeverPersisted_Property over N valid creates.",
+            "After each create, extract secret from token string (segment after last '_pat_<id>_').",
+            "Assert pats row secret_hash == sha256Hex(secret).",
+            "Assert no field in the pats row equals the plaintext secret."
+          ],
+          "test_spec_refs": [
+            "TS-09-P1"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.1",
+            "09-REQ-5.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestCreatePAT_Success|TestCreatePAT_Secret|TestCreatePAT_Permissions|TestCreatePAT_Duplicate|TestCreatePAT_Transaction|TestCreatePAT_Rand|TestPATSecret'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write tests: ListPATs handler",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write integration tests for ListPATs success cases",
+          "details": [
+            "Write TestListPATs_Success: user with 3 PATs returns HTTP 200 JSON array ordered by created_at DESC.",
+            "Write TestListPATs_IncludesExpiredAndRevoked: active, expired, revoked PATs all appear in response.",
+            "Write TestListPATs_NoSecrets: verify no secret_hash, token, or expires_days keys in any array element.",
+            "Write TestListPATs_OtherUserTokensExcluded: user-1 with 2 PATs, user-2 with 3 PATs; user-1 sees only 2."
+          ],
+          "test_spec_refs": [
+            "TS-09-27",
+            "TS-09-28",
+            "TS-09-29",
+            "TS-09-30"
+          ],
+          "requirement_refs": [
+            "09-REQ-6.1",
+            "09-REQ-6.2",
+            "09-REQ-6.3",
+            "09-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write tests for ListPATs edge cases and permissions",
+          "details": [
+            "Write TestListPATs_RequiresTokensRead: PAT with only tokens:manage gets HTTP 403.",
+            "Write TestListPATs_Empty: user with no PATs gets HTTP 200 with empty array [].",
+            "Write TestListPATs_DBError: mock query to return error; expect HTTP 500 'internal server error'.",
+            "Write integration test TestListPATs_OrderByCreatedAtDesc verifying descending chronological order."
+          ],
+          "test_spec_refs": [
+            "TS-09-31",
+            "TS-09-E9",
+            "TS-09-E10"
+          ],
+          "requirement_refs": [
+            "09-REQ-6.5",
+            "09-REQ-6.E1",
+            "09-REQ-6.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Write property test for user isolation invariant (list)",
+          "details": [
+            "Write TestPATUserIsolation_Property: generate pairs (userA, userB), create PATs for userA.",
+            "For each PAT token_id, send GET /user/tokens/:id and DELETE /user/tokens/:id as userB.",
+            "Assert all responses are HTTP 404 with 'token not found'.",
+            "Verify ListPATs as userB never returns userA's PATs."
+          ],
+          "test_spec_refs": [
+            "TS-09-P2"
+          ],
+          "requirement_refs": [
+            "09-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestListPATs|TestPATUserIsolation'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "tests",
+      "title": "Write tests: GetPAT and RevokePAT handlers",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Write integration and unit tests for GetPAT",
+          "details": [
+            "Write TestGetPAT_Success: user-1 owns token 'abc12345'; GET returns HTTP 200 with PATResponse (no token/secret fields).",
+            "Write TestGetPAT_NotFound: non-existent token_id returns HTTP 404 'token not found'.",
+            "Write TestGetPAT_RequiresTokensRead: PAT with only tokens:manage gets HTTP 403.",
+            "Write TestGetPAT_OtherUserToken: user-1 requesting user-2's token gets HTTP 404 not 403 (TS-09-E11).",
+            "Write TestGetPAT_DBError: mock query returns generic error; expect HTTP 500 (TS-09-E12)."
+          ],
+          "test_spec_refs": [
+            "TS-09-32",
+            "TS-09-33",
+            "TS-09-34",
+            "TS-09-E11",
+            "TS-09-E12"
+          ],
+          "requirement_refs": [
+            "09-REQ-7.1",
+            "09-REQ-7.2",
+            "09-REQ-7.3",
+            "09-REQ-7.E1",
+            "09-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Write integration tests for RevokePAT success and permission",
+          "details": [
+            "Write TestRevokePAT_Success: DELETE active PAT returns HTTP 200 with revoked_at set; row persists in DB.",
+            "Write TestRevokePAT_RequiresTokensManage: PAT with only tokens:read gets HTTP 403; revoked_at stays null.",
+            "Write TestRevokePAT_DoesNotDelete: verify pats table still contains row after revocation."
+          ],
+          "test_spec_refs": [
+            "TS-09-35",
+            "TS-09-37",
+            "TS-09-38"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.1",
+            "09-REQ-8.3",
+            "09-REQ-8.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Write unit and integration tests for RevokePAT error cases and concurrency",
+          "details": [
+            "Write TestRevokePAT_NotFound: non-existent token_id returns HTTP 404 'token not found'.",
+            "Write TestRevokePAT_AlreadyRevoked: already-revoked token returns HTTP 400 'token already revoked'.",
+            "Write TestRevokePAT_OtherUserToken: user-2's token returns HTTP 404 not 403 (TS-09-E14).",
+            "Write TestRevokePAT_Concurrent: two goroutines DELETE same token; assert exactly one HTTP 200 and one HTTP 400 (TS-09-E13).",
+            "Write TestRevokePAT_DBError: mock UPDATE to fail; expect HTTP 500 (TS-09-E15)."
+          ],
+          "test_spec_refs": [
+            "TS-09-36",
+            "TS-09-E13",
+            "TS-09-E14",
+            "TS-09-E15"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.2",
+            "09-REQ-8.E1",
+            "09-REQ-8.E2",
+            "09-REQ-8.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Write property test for revocation idempotency and Cache-Control",
+          "details": [
+            "Write TestRevocationIdempotency_Property: N concurrent DELETEs; assert count(200)==1 and count(400)==N-1.",
+            "Write TestCacheControlHeader_Property: arbitrary valid/invalid requests to all four endpoints; assert Cache-Control: no-store present on every response."
+          ],
+          "test_spec_refs": [
+            "TS-09-P5",
+            "TS-09-P7"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.E1",
+            "09-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestGetPAT|TestRevokePAT|TestRevocationIdempotency|TestCacheControl'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "tests",
+      "title": "Write tests: integration flows, visibility rules, and smoke tests",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Write end-to-end integration tests for PAT lifecycle flows",
+          "details": [
+            "Write TestCreateAndListPATs: create 3 PATs, list and verify all present in created_at DESC order.",
+            "Write TestCreateAndGetPAT: create a PAT, get it by token_id, verify metadata matches.",
+            "Write TestCreateAndRevokePAT: create, revoke, then GET verifying revoked_at is set.",
+            "Write TestListPATs_IncludesExpiredVisible and TestGetPAT_IncludesRevokedVisible (TS-09-39, TS-09-40).",
+            "Write TestBlockedUser_RejectedByMiddleware: blocked user request rejected before handler (TS-09-E16)."
+          ],
+          "test_spec_refs": [
+            "TS-09-39",
+            "TS-09-40",
+            "TS-09-41",
+            "TS-09-E16"
+          ],
+          "requirement_refs": [
+            "09-REQ-9.1",
+            "09-REQ-9.2",
+            "09-REQ-9.3",
+            "09-REQ-9.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Write authentication and Cache-Control integration tests",
+          "details": [
+            "Write TestAllEndpoints_Unauthenticated: verify all four endpoints return HTTP 401 when no auth header provided.",
+            "Write TestCacheControl: verify all four endpoints return Cache-Control: no-store on both success and error responses.",
+            "Write TestPATPermissionCheck_Read: GET endpoints require tokens:read.",
+            "Write TestPATPermissionCheck_Manage: POST and DELETE require tokens:manage."
+          ],
+          "test_spec_refs": [
+            "TS-09-3",
+            "TS-09-4"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.3",
+            "09-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Write permissions insertion order property test",
+          "details": [
+            "Write TestPermissionsInsertionOrder_Property over all permutations of ['users:read', 'orgs:read', 'tokens:read'].",
+            "After create, verify create response, list response, get response, and revoke response all return permissions in the same order submitted.",
+            "Assert no reordering occurs at any stage of the lifecycle."
+          ],
+          "test_spec_refs": [
+            "TS-09-P3"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Spec tests compile and fail (red): go test ./internal/handlers/... -count=1 -run 'TestCreateAndList|TestCreateAndGet|TestCreateAndRevoke|TestAllEndpoints|TestCacheControl|TestPATPermission|TestPermissionsInsertionOrder|TestBlockedUser'",
+          "All existing passing tests remain green: go test ./... -count=1",
+          "No linter errors: go vet ./..."
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement internal token generation and hashing utilities",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Define tokenAlphabet constant and PATHandler struct",
+          "details": [
+            "Create internal/handlers/pat.go.",
+            "Define const tokenAlphabet = \"abcdefghijklmnopqrstuvwxyz0123456789\".",
+            "Define PATHandler struct with fields db *db.DB and registry *auth.PermissionRegistry.",
+            "Implement NewPATHandler(database *db.DB, registry *auth.PermissionRegistry) *PATHandler with nil guards that panic with descriptive messages.",
+            "Add stub RegisterRoutes(g *echo.Group) method body with panic(\"not implemented\")."
+          ],
+          "test_spec_refs": [
+            "TS-09-1"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.1",
+            "09-REQ-2.1",
+            "09-REQ-2.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Implement generateTokenID and generateSecret using crypto/rand",
+          "details": [
+            "Implement generateTokenID() (string, error): use crypto/rand.Read to fill a byte slice, map each byte modulo len(tokenAlphabet) to a character, return 8-char result.",
+            "Implement generateSecret() (string, error): same approach, return 32-char result.",
+            "On crypto/rand.Read error, return empty string and non-nil error.",
+            "Ensure no unbounded retry loops; read exactly the needed bytes."
+          ],
+          "test_spec_refs": [
+            "TS-09-5",
+            "TS-09-6",
+            "TS-09-E2"
+          ],
+          "requirement_refs": [
+            "09-REQ-2.1",
+            "09-REQ-2.2",
+            "09-REQ-2.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Implement hashSecret using crypto/sha256 and encoding/hex",
+          "details": [
+            "Implement hashSecret(secret string) string.",
+            "Use sha256.Sum256([]byte(secret)) to get [32]byte digest.",
+            "Use hex.EncodeToString(digest[:]) to convert to lowercase hex.",
+            "Function is pure and deterministic — no error return needed."
+          ],
+          "test_spec_refs": [
+            "TS-09-7"
+          ],
+          "requirement_refs": [
+            "09-REQ-2.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Unit tests for generateTokenID, generateSecret, hashSecret pass: go test ./internal/handlers/... -count=1 -run 'TestGenerateToken|TestGenerateSecret|TestHashSecret|TestNewPATHandler|TestRegisterRoutes'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-2.1, 09-REQ-2.2, 09-REQ-2.3 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement CreatePAT handler — validation and privilege escalation",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement CreatePAT request body parsing and name/permissions validation",
+          "details": [
+            "Define CreatePATRequest struct with Name string, Permissions []string, Expires *int json tags.",
+            "In CreatePAT handler, decode JSON body via c.Bind(); on error return APIError(c, 400, 'invalid request body').",
+            "Validate name: empty → 400 'name is required'; len > 255 → 400 'name must be 255 characters or fewer'.",
+            "Validate permissions: nil or empty → 400 'permissions are required'.",
+            "For each permission: count colons; != 1 → 400 'invalid permission format: <p>'; not in registry → 400 'unknown permission: <p>'. Stop at first error.",
+            "Call auth.RequirePermission(c, 'tokens', 'manage') before validation (or after — per execution path, before body parsing)."
+          ],
+          "test_spec_refs": [
+            "TS-09-9",
+            "TS-09-10",
+            "TS-09-11",
+            "TS-09-12",
+            "TS-09-13",
+            "TS-09-15"
+          ],
+          "requirement_refs": [
+            "09-REQ-3.1",
+            "09-REQ-3.2",
+            "09-REQ-3.3",
+            "09-REQ-3.4",
+            "09-REQ-3.5",
+            "09-REQ-3.7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement expires validation and privilege escalation check",
+          "details": [
+            "Validate expires: if nil, default to 90; if value not in {0, 30, 60, 90} → 400 'expires must be 0, 30, 60, or 90'.",
+            "After registry validation, call auth.GetAuthInfo(c) to determine credential type.",
+            "If credential is a PAT, iterate requested permissions; for each not in creating PAT's permissions → 403 'cannot grant permission: <p>'.",
+            "If credential is an API key, skip escalation check entirely."
+          ],
+          "test_spec_refs": [
+            "TS-09-14",
+            "TS-09-16",
+            "TS-09-17",
+            "TS-09-18",
+            "TS-09-19"
+          ],
+          "requirement_refs": [
+            "09-REQ-3.6",
+            "09-REQ-3.8",
+            "09-REQ-4.1",
+            "09-REQ-4.2",
+            "09-REQ-4.3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "Validation and escalation tests pass: go test ./internal/handlers/... -count=1 -run 'TestCreatePAT_Missing|TestCreatePAT_Empty|TestCreatePAT_NameTooLong|TestCreatePAT_Malformed|TestCreatePAT_Invalid|TestCreatePAT_Unknown|TestCreatePAT_Default|TestCreatePAT_NoExpiry|TestCreatePAT_Privilege|TestCreatePAT_APIKey|TestCreatePAT_Registry'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-3 and 09-REQ-4 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement CreatePAT handler — token generation, storage, and response",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement token generation, hashing, and expires_at calculation",
+          "details": [
+            "After validation, call generateTokenID(); on error → 500 'internal server error'.",
+            "Call generateSecret(); on error → 500 'internal server error'.",
+            "Compute secretHash = hashSecret(secret).",
+            "Construct token = fmt.Sprintf('%s_pat_%s_%s', apikit.TokenPrefix, tokenID, secret).",
+            "Capture createdAt = time.Now().UTC().",
+            "Calculate expiresAt: if expires == 0, expiresAt = nil; otherwise expiresAt = createdAt + expires*24*time.Hour."
+          ],
+          "test_spec_refs": [
+            "TS-09-20",
+            "TS-09-21",
+            "TS-09-E2"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.1",
+            "09-REQ-5.2",
+            "09-REQ-5.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement transactional INSERT into pats table",
+          "details": [
+            "Serialize permissions []string to JSON using json.Marshal; on error → 500.",
+            "Call db.WithTx(func(tx) error) wrapping the INSERT: token_id, user_id, name, secret_hash, permissions (JSON), expires_days, expires_at, created_at.",
+            "Use db.FormatTime for timestamp columns.",
+            "On WithTx error → 500 'internal server error' via APIError(); transaction auto-rolled-back."
+          ],
+          "test_spec_refs": [
+            "TS-09-24",
+            "TS-09-E7"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.5",
+            "09-REQ-5.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Construct and return CreatePATResponse with Cache-Control header",
+          "details": [
+            "Define CreatePATResponse struct: TokenID, Name, Token, Permissions []string, ExpiresAt *string, CreatedAt string.",
+            "Populate response with token_id, name, plaintext token, permissions (insertion order), formatted expires_at (null if nil), created_at.",
+            "Omit revoked_at and expires_days from response struct (no field defined).",
+            "Set response header Cache-Control: no-store before returning.",
+            "Return c.JSON(201, resp).",
+            "Allow duplicate names without error (no uniqueness check in handler)."
+          ],
+          "test_spec_refs": [
+            "TS-09-22",
+            "TS-09-23",
+            "TS-09-26",
+            "TS-09-4"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.3",
+            "09-REQ-5.4",
+            "09-REQ-5.7",
+            "09-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "CreatePAT integration tests pass: go test ./internal/handlers/... -count=1 -run 'TestCreatePAT_Success|TestCreatePAT_SecretHashed|TestCreatePAT_Permissions|TestCreatePAT_Duplicate|TestCreatePAT_Transaction|TestCreatePAT_Rand'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-5.1 through 09-REQ-5.7 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "checkpoint",
+      "title": "Checkpoint: CreatePAT fully implemented and tests green",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Run all CreatePAT tests and verify green",
+          "details": [
+            "Run: go test ./internal/handlers/... -count=1 -run 'TestCreatePAT|TestNewPATHandler|TestRegisterRoutes|TestGenerate|TestHash'",
+            "Verify all CreatePAT tests pass.",
+            "Run TS-09-SMOKE-1 manually or as part of smoke suite to confirm end-to-end create flow.",
+            "Confirm pats table row contains correct secret_hash and permissions JSON."
+          ],
+          "test_spec_refs": [
+            "TS-09-SMOKE-1"
+          ],
+          "requirement_refs": [
+            "09-REQ-3",
+            "09-REQ-4",
+            "09-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Audit CreatePAT implementation for security properties",
+          "details": [
+            "Search pat.go for any log.Print, fmt.Println, or storage of plaintext secret — must find none.",
+            "Verify Cache-Control: no-store is set before every return path in CreatePAT (including error paths).",
+            "Confirm no panic(\"not implemented\") stubs remain in CreatePAT or its helpers."
+          ],
+          "test_spec_refs": [
+            "TS-09-P1",
+            "TS-09-P7"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.2",
+            "09-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "All CreatePAT and utility tests pass: go test ./internal/handlers/... -count=1 -run 'TestCreatePAT|TestGenerate|TestHash|TestNewPATHandler'",
+          "Full test suite passes: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "grep -n 'panic(\"not implemented\")' internal/handlers/pat.go returns no CreatePAT-related lines"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "standard",
+      "title": "Implement ListPATs handler",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Implement ListPATs query and response serialization",
+          "details": [
+            "Implement ListPATs(c echo.Context) error handler.",
+            "Call auth.RequirePermission(c, 'tokens', 'read'); on fail return early (middleware handles response).",
+            "Get userID via auth.GetUserID(c).",
+            "Query pats table: SELECT token_id, name, permissions, created_at, expires_at, revoked_at FROM pats WHERE user_id = ? ORDER BY created_at DESC.",
+            "For each row, parse permissions JSON via json.Unmarshal; parse timestamps via db.ParseTime.",
+            "Build []PATResponse; if no rows, return empty slice (not nil) to produce JSON [].",
+            "Return c.JSON(200, results) with Cache-Control: no-store header."
+          ],
+          "test_spec_refs": [
+            "TS-09-27",
+            "TS-09-28",
+            "TS-09-29",
+            "TS-09-30"
+          ],
+          "requirement_refs": [
+            "09-REQ-6.1",
+            "09-REQ-6.2",
+            "09-REQ-6.3",
+            "09-REQ-6.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "12.2",
+          "title": "Handle ListPATs error cases and empty result",
+          "details": [
+            "On DB query error → APIError(c, 500, 'internal server error').",
+            "On empty result set → return c.JSON(200, []PATResponse{}) — ensures JSON [] not null.",
+            "Verify PATResponse struct has no secret_hash, token, or expires_days JSON tags.",
+            "Auth middleware enforces tokens:read; handler does not duplicate that check beyond RequirePermission call."
+          ],
+          "test_spec_refs": [
+            "TS-09-31",
+            "TS-09-E9",
+            "TS-09-E10"
+          ],
+          "requirement_refs": [
+            "09-REQ-6.5",
+            "09-REQ-6.E1",
+            "09-REQ-6.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "ListPATs tests pass: go test ./internal/handlers/... -count=1 -run 'TestListPATs|TestCreateAndList'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-6 acceptance criteria met; TS-09-SMOKE-2 passes"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "standard",
+      "title": "Implement GetPAT handler",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Implement GetPAT query with dual-column user isolation",
+          "details": [
+            "Implement GetPAT(c echo.Context) error handler.",
+            "Call auth.RequirePermission(c, 'tokens', 'read').",
+            "Extract token_id from c.Param('token_id').",
+            "Get userID via auth.GetUserID(c).",
+            "Query: SELECT token_id, name, permissions, created_at, expires_at, revoked_at FROM pats WHERE token_id = ? AND user_id = ?.",
+            "If row not found (db.ErrNotFound or zero rows) → APIError(c, 404, 'token not found') — both nonexistent and other-user tokens return 404.",
+            "On other DB error → APIError(c, 500, 'internal server error').",
+            "Parse permissions JSON and timestamps; build PATResponse; return c.JSON(200, resp) with Cache-Control: no-store."
+          ],
+          "test_spec_refs": [
+            "TS-09-32",
+            "TS-09-33",
+            "TS-09-34",
+            "TS-09-E11",
+            "TS-09-E12"
+          ],
+          "requirement_refs": [
+            "09-REQ-7.1",
+            "09-REQ-7.2",
+            "09-REQ-7.3",
+            "09-REQ-7.E1",
+            "09-REQ-7.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "GetPAT tests pass: go test ./internal/handlers/... -count=1 -run 'TestGetPAT|TestCreateAndGet'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-7 acceptance criteria met; TS-09-SMOKE-3 passes"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "standard",
+      "title": "Implement RevokePAT handler",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Implement conditional UPDATE and zero-row disambiguation logic",
+          "details": [
+            "Implement RevokePAT(c echo.Context) error handler.",
+            "Call auth.RequirePermission(c, 'tokens', 'manage').",
+            "Extract token_id from c.Param('token_id'); get userID via auth.GetUserID(c).",
+            "Execute UPDATE pats SET revoked_at = ? WHERE token_id = ? AND user_id = ? AND revoked_at IS NULL.",
+            "If rowsAffected == 1: query the updated row; build PATResponse with revoked_at; return c.JSON(200, resp).",
+            "If rowsAffected == 0: run disambiguation SELECT: if no row for (token_id, user_id) → 404 'token not found'; if row has revoked_at set → 400 'token already revoked'.",
+            "Row is never deleted — UPDATE only sets revoked_at."
+          ],
+          "test_spec_refs": [
+            "TS-09-35",
+            "TS-09-36",
+            "TS-09-38",
+            "TS-09-E13",
+            "TS-09-E14"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.1",
+            "09-REQ-8.2",
+            "09-REQ-8.4",
+            "09-REQ-8.E1",
+            "09-REQ-8.E2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Handle RevokePAT error cases and register all routes",
+          "details": [
+            "On UPDATE DB error → APIError(c, 500, 'internal server error').",
+            "On follow-up SELECT DB error → APIError(c, 500, 'internal server error').",
+            "Implement RegisterRoutes(g *echo.Group) fully: g.POST('/user/tokens', h.CreatePAT), g.GET('/user/tokens', h.ListPATs), g.GET('/user/tokens/:token_id', h.GetPAT), g.DELETE('/user/tokens/:token_id', h.RevokePAT).",
+            "Remove any remaining panic('not implemented') stubs."
+          ],
+          "test_spec_refs": [
+            "TS-09-37",
+            "TS-09-E15",
+            "TS-09-2"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.3",
+            "09-REQ-8.E3",
+            "09-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "RevokePAT tests pass: go test ./internal/handlers/... -count=1 -run 'TestRevokePAT|TestCreateAndRevoke|TestRevocationIdempotency'",
+          "All existing tests still pass: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "09-REQ-8 acceptance criteria met; TS-09-SMOKE-4 passes",
+          "grep -rn 'panic(\"not implemented\")' internal/handlers/pat.go returns no output"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "kind": "checkpoint",
+      "title": "Checkpoint: all handlers implemented, integration tests green",
+      "subtasks": [
+        {
+          "id": "15.1",
+          "title": "Run full handler test suite and verify all tests pass",
+          "details": [
+            "Run: go test ./internal/handlers/... -count=1 -v",
+            "All tests must pass including ListPATs, GetPAT, RevokePAT, and integration flows.",
+            "Run smoke tests TS-09-SMOKE-2, TS-09-SMOKE-3, TS-09-SMOKE-4 against a real in-memory SQLite database.",
+            "Verify PATs ordered by created_at DESC in list responses."
+          ],
+          "test_spec_refs": [
+            "TS-09-SMOKE-2",
+            "TS-09-SMOKE-3",
+            "TS-09-SMOKE-4"
+          ],
+          "requirement_refs": [
+            "09-REQ-6",
+            "09-REQ-7",
+            "09-REQ-8",
+            "09-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "15.2",
+          "title": "Verify property tests and concurrent revocation safety",
+          "details": [
+            "Run property tests: go test ./internal/handlers/... -count=1 -run 'TestPATUserIsolation|TestPermissionsInsertionOrder|TestRevocationIdempotency'",
+            "Verify concurrent revocation test passes: exactly one HTTP 200, one HTTP 400.",
+            "Verify user isolation: no cross-user PAT visibility.",
+            "Verify permissions insertion order is preserved through full lifecycle."
+          ],
+          "test_spec_refs": [
+            "TS-09-P2",
+            "TS-09-P3",
+            "TS-09-P5"
+          ],
+          "requirement_refs": [
+            "09-REQ-8.E1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "15.V",
+        "checks": [
+          "All handler tests pass: go test ./internal/handlers/... -count=1",
+          "Full test suite passes: go test ./... -count=1",
+          "No linter errors: go vet ./...",
+          "All four SMOKE tests (TS-09-SMOKE-1 through TS-09-SMOKE-4) pass"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "16.1",
+          "title": "Trace execution paths and verify no stubs remain",
+          "details": [
+            "Verify 09-PATH-1 (create): POST /user/tokens → auth middleware → CreatePAT → generateTokenID → generateSecret → hashSecret → db.WithTx INSERT → HTTP 201.",
+            "Verify 09-PATH-2 (list): GET /user/tokens → auth middleware → ListPATs → DB SELECT → HTTP 200.",
+            "Verify 09-PATH-3 (get): GET /user/tokens/:id → auth middleware → GetPAT → DB SELECT WHERE token_id AND user_id → HTTP 200 or 404.",
+            "Verify 09-PATH-4 (revoke): DELETE /user/tokens/:id → auth middleware → RevokePAT → conditional UPDATE → HTTP 200 or 400/404.",
+            "Verify 09-PATH-5 end-to-end: create via API key → store token → revoke via PAT credential → audit in listing.",
+            "Run: grep -rn 'panic(\"not implemented\")\\|// TODO\\|FIXME' internal/handlers/pat.go — must return no output."
+          ],
+          "test_spec_refs": [
+            "TS-09-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.2",
+          "title": "Verify return value propagation and error handling completeness",
+          "details": [
+            "Confirm CreatePAT returns the error from db.WithTx to the handler (not swallowed).",
+            "Confirm generateTokenID and generateSecret errors are propagated to CreatePAT and result in HTTP 500.",
+            "Confirm RevokePAT disambiguation SELECT error is handled with HTTP 500 (not a silent failure).",
+            "Confirm all handler return paths set Cache-Control: no-store before returning (including error paths).",
+            "Code review: check every 'return' statement in pat.go has the Cache-Control header set or that it is set globally via middleware."
+          ],
+          "test_spec_refs": [
+            "TS-09-E7",
+            "TS-09-E15"
+          ],
+          "requirement_refs": [
+            "09-REQ-5.E1",
+            "09-REQ-8.E3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.3",
+          "title": "Run all smoke tests with real components",
+          "details": [
+            "Run all five smoke tests against real in-memory SQLite and real auth middleware stubs.",
+            "TS-09-SMOKE-1: create PAT, verify token format and secret_hash in DB.",
+            "TS-09-SMOKE-2: list PATs including revoked, verify order and no secrets.",
+            "TS-09-SMOKE-3: get single PAT, verify metadata.",
+            "TS-09-SMOKE-4: revoke PAT, verify row persists with revoked_at set.",
+            "TS-09-SMOKE-5: full lifecycle — create via API key, revoke via PAT, verify audit trail in listing.",
+            "All responses must have Cache-Control: no-store."
+          ],
+          "test_spec_refs": [
+            "TS-09-SMOKE-1",
+            "TS-09-SMOKE-2",
+            "TS-09-SMOKE-3",
+            "TS-09-SMOKE-4",
+            "TS-09-SMOKE-5"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.3",
+            "09-REQ-1.4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "16.4",
+          "title": "Cross-spec entry point verification",
+          "details": [
+            "Confirm NewPATHandler is called from production server initialization code (e.g., main.go or server setup), not only in tests.",
+            "Confirm RegisterRoutes is called on the group returned by server.APIGroup() in production code.",
+            "Confirm auth middleware is installed on the Echo group before PAT routes are registered.",
+            "Verify that auth.GetAuthInfo(), auth.GetUserID(), and auth.RequirePermission() calls in pat.go reference the correct imported package path from spec 05.",
+            "Verify db.WithTx, db.FormatTime, db.ParseTime, db.ErrNotFound references resolve to spec 02 package."
+          ],
+          "test_spec_refs": [
+            "TS-09-3"
+          ],
+          "requirement_refs": [
+            "09-REQ-1.1",
+            "09-REQ-1.2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "16.V",
+        "checks": [
+          "Full test suite passes with no skipped tests: go test ./... -count=1 -v 2>&1 | grep -E 'FAIL|SKIP' | wc -l == 0",
+          "No stub markers remain: grep -rn 'panic(\"not implemented\")' internal/handlers/pat.go returns no output",
+          "No linter errors: go vet ./...",
+          "All five smoke tests pass: go test ./internal/handlers/... -count=1 -run 'SMOKE'",
+          "Cache-Control header present on all responses: go test ./internal/handlers/... -count=1 -run 'TestCacheControl|TestPATPermission'",
+          "09-PROP-1 through 09-PROP-7 invariants verified via property tests: go test ./internal/handlers/... -count=1 -run 'Property|Idempotency|Isolation|InsertionOrder'"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "09-REQ-1.1",
+      "test_spec_id": "TS-09-1",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-1.2",
+      "test_spec_id": "TS-09-2",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-1.3",
+      "test_spec_id": "TS-09-3",
+      "task_id": "16.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-1.4",
+      "test_spec_id": "TS-09-4",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-1.E1",
+      "test_spec_id": "TS-09-E1",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-2.1",
+      "test_spec_id": "TS-09-5",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-2.2",
+      "test_spec_id": "TS-09-6",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-2.3",
+      "test_spec_id": "TS-09-7",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-2.4",
+      "test_spec_id": "TS-09-8",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-2.E1",
+      "test_spec_id": "TS-09-E2",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.1",
+      "test_spec_id": "TS-09-9",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.2",
+      "test_spec_id": "TS-09-10",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.3",
+      "test_spec_id": "TS-09-11",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.4",
+      "test_spec_id": "TS-09-12",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.5",
+      "test_spec_id": "TS-09-13",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.6",
+      "test_spec_id": "TS-09-14",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.7",
+      "test_spec_id": "TS-09-15",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.8",
+      "test_spec_id": "TS-09-16",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.E1",
+      "test_spec_id": "TS-09-E3",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.E2",
+      "test_spec_id": "TS-09-E4",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-3.E3",
+      "test_spec_id": "TS-09-E5",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-4.1",
+      "test_spec_id": "TS-09-17",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-4.2",
+      "test_spec_id": "TS-09-18",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-4.3",
+      "test_spec_id": "TS-09-19",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-4.E1",
+      "test_spec_id": "TS-09-E6",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.1",
+      "test_spec_id": "TS-09-20",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.2",
+      "test_spec_id": "TS-09-21",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.3",
+      "test_spec_id": "TS-09-22",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.4",
+      "test_spec_id": "TS-09-23",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.5",
+      "test_spec_id": "TS-09-24",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.6",
+      "test_spec_id": "TS-09-25",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.7",
+      "test_spec_id": "TS-09-26",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.E1",
+      "test_spec_id": "TS-09-E7",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-5.E2",
+      "test_spec_id": "TS-09-E8",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.1",
+      "test_spec_id": "TS-09-27",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.2",
+      "test_spec_id": "TS-09-28",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.3",
+      "test_spec_id": "TS-09-29",
+      "task_id": "12.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.4",
+      "test_spec_id": "TS-09-30",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.5",
+      "test_spec_id": "TS-09-31",
+      "task_id": "12.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.E1",
+      "test_spec_id": "TS-09-E9",
+      "task_id": "12.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-6.E2",
+      "test_spec_id": "TS-09-E10",
+      "task_id": "12.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-7.1",
+      "test_spec_id": "TS-09-32",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-7.2",
+      "test_spec_id": "TS-09-33",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-7.3",
+      "test_spec_id": "TS-09-34",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-7.E1",
+      "test_spec_id": "TS-09-E11",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-7.E2",
+      "test_spec_id": "TS-09-E12",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.1",
+      "test_spec_id": "TS-09-35",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.2",
+      "test_spec_id": "TS-09-36",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.3",
+      "test_spec_id": "TS-09-37",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.4",
+      "test_spec_id": "TS-09-38",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.E1",
+      "test_spec_id": "TS-09-E13",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.E2",
+      "test_spec_id": "TS-09-E14",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-8.E3",
+      "test_spec_id": "TS-09-E15",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-9.1",
+      "test_spec_id": "TS-09-39",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-9.2",
+      "test_spec_id": "TS-09-40",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-9.3",
+      "test_spec_id": "TS-09-41",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "09-REQ-9.E1",
+      "test_spec_id": "TS-09-E16",
+      "task_id": "16.4",
+      "test_path": null
+    }
+  ]
+}

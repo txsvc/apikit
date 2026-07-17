@@ -1,0 +1,1230 @@
+{
+  "$schema": null,
+  "spec_id": "13",
+  "spec_name": "cli_core",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-13-1",
+      "requirement_id": "13-REQ-1.1",
+      "kind": "unit",
+      "description": "main.go calls cli.Execute() and passes the returned error to os.Exit(cli.ExitCode(err)), producing no output itself.",
+      "preconditions": [
+        "cmd/akc/main.go exists",
+        "internal/cli package is compiled"
+      ],
+      "input": "Execute() returns a non-nil error of type plain error",
+      "expected": "os.Exit is called with the integer returned by ExitCode(err); no bytes written to stdout or stderr by main.go itself",
+      "assertion_pseudocode": "capture stdout/stderr; invoke main(); assert stdout contains only what Execute() wrote; assert main.go added no additional bytes; assert os.Exit was called with ExitCode(err)"
+    },
+    {
+      "id": "TS-13-2",
+      "requirement_id": "13-REQ-1.2",
+      "kind": "unit",
+      "description": "Execute() calls PrintError(err) on any non-nil error returned by rootCmd.Execute() before returning that error.",
+      "preconditions": [
+        "internal/cli package initialised with a stub RunE that returns a plain error"
+      ],
+      "input": "rootCmd.Execute() returns a non-nil error",
+      "expected": "stdout contains exactly one JSON error envelope; Execute() returns the same non-nil error",
+      "assertion_pseudocode": "buf = captureStdout(); err = Execute(); assert err != nil; assert buf contains '{\"error\":{'; assert buf has exactly one occurrence of '{\"error\":'"
+    },
+    {
+      "id": "TS-13-3",
+      "requirement_id": "13-REQ-1.3",
+      "kind": "unit",
+      "description": "Root command is configured with SilenceErrors and SilenceUsage so Cobra never prints its own error or usage text.",
+      "preconditions": [
+        "internal/cli root command initialised"
+      ],
+      "input": "inspect rootCmd fields after initialisation",
+      "expected": "rootCmd.SilenceErrors == true and rootCmd.SilenceUsage == true",
+      "assertion_pseudocode": "rootCmd = buildRootCommand(); assert rootCmd.SilenceErrors == true; assert rootCmd.SilenceUsage == true"
+    },
+    {
+      "id": "TS-13-4",
+      "requirement_id": "13-REQ-1.4",
+      "kind": "unit",
+      "description": "Individual command RunE calls PrintJSON on success and returns nil without calling PrintError.",
+      "preconditions": [
+        "a stub command with RunE that calls PrintJSON and returns nil is registered"
+      ],
+      "input": "invoke the stub command successfully",
+      "expected": "stdout contains valid JSON result; stderr is empty; no error envelope written",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); err = invokeStubCommand(); assert err == nil; assert isValidJSON(stdout); assert not contains(stdout, '\"error\"'); assert stderr == ''"
+    },
+    {
+      "id": "TS-13-5",
+      "requirement_id": "13-REQ-1.5",
+      "kind": "unit",
+      "description": "On failure, RunE returns the error to Execute() which calls PrintError centrally, producing exactly one envelope.",
+      "preconditions": [
+        "a stub command with RunE that returns a plain error is registered"
+      ],
+      "input": "invoke the stub command that returns an error",
+      "expected": "stdout contains exactly one JSON error envelope; no duplicate envelopes",
+      "assertion_pseudocode": "stdout = captureStdout(); Execute(); count = occurrences(stdout, '\"error\":'); assert count == 1"
+    },
+    {
+      "id": "TS-13-6",
+      "requirement_id": "13-REQ-2.1",
+      "kind": "unit",
+      "description": "Root command defines --endpoint-url, --user-id, --api-key, and --json as persistent flags available to all subcommands.",
+      "preconditions": [
+        "internal/cli root command initialised"
+      ],
+      "input": "inspect root command's persistent flag set",
+      "expected": "PersistentFlags() contains flags named 'endpoint-url' (string), 'user-id' (string), 'api-key' (string), 'json' (bool)",
+      "assertion_pseudocode": "flags = rootCmd.PersistentFlags(); assert flags.Lookup('endpoint-url').Value.Type() == 'string'; assert flags.Lookup('user-id').Value.Type() == 'string'; assert flags.Lookup('api-key').Value.Type() == 'string'; assert flags.Lookup('json').Value.Type() == 'bool'"
+    },
+    {
+      "id": "TS-13-7",
+      "requirement_id": "13-REQ-2.2",
+      "kind": "unit",
+      "description": "Invoking the root command with no subcommand and no flags causes Cobra to print help text to stdout and exit 0.",
+      "preconditions": [
+        "internal/cli root command initialised with no RunE"
+      ],
+      "input": "Execute() called with args = []",
+      "expected": "stdout contains help text; exit code 0; stderr is empty",
+      "assertion_pseudocode": "stdout = captureStdout(); err = Execute(); assert err == nil; assert len(stdout) > 0; assert contains(stdout, 'Usage') or contains(stdout, 'akc')"
+    },
+    {
+      "id": "TS-13-8",
+      "requirement_id": "13-REQ-2.3",
+      "kind": "unit",
+      "description": "Non-help commands silently ignore the --json persistent flag, producing identical output with or without it.",
+      "preconditions": [
+        "version command registered and annotated with 'auth': 'none'",
+        "no endpoint configured"
+      ],
+      "input": "invoke 'akc version' once with --json and once without",
+      "expected": "both invocations produce identical stdout content; no warning or error emitted for the --json flag",
+      "assertion_pseudocode": "out1 = captureStdout(); Execute(['version']); out2 = captureStdout(); Execute(['version', '--json']); assert out1 == out2"
+    },
+    {
+      "id": "TS-13-9",
+      "requirement_id": "13-REQ-2.4",
+      "kind": "unit",
+      "description": "Root apikit package exports RootCommand() as a shim delegating to internal/cli.RootCommand().",
+      "preconditions": [
+        "root apikit package compiled"
+      ],
+      "input": "call apikit.RootCommand()",
+      "expected": "returned *cobra.Command is non-nil; its Use field matches the CLI binary name; no internal/cli import required by caller",
+      "assertion_pseudocode": "cmd = apikit.RootCommand(); assert cmd != nil; assert cmd.Use contains 'akc'"
+    },
+    {
+      "id": "TS-13-10",
+      "requirement_id": "13-REQ-3.1",
+      "kind": "unit",
+      "description": "version_info.go declares Version, Build, and TokenPrefix with correct default values.",
+      "preconditions": [
+        "internal/cli package compiled without -ldflags overrides"
+      ],
+      "input": "read package-level variables Version, Build, TokenPrefix",
+      "expected": "Version == 'dev'; Build == 'unknown'; TokenPrefix == 'ak'",
+      "assertion_pseudocode": "assert cli.Version == 'dev'; assert cli.Build == 'unknown'; assert cli.TokenPrefix == 'ak'"
+    },
+    {
+      "id": "TS-13-11",
+      "requirement_id": "13-REQ-3.2",
+      "kind": "unit",
+      "description": "PersistentPreRunE returns exit-2 error with the exact message when TokenPrefix is empty, before any config init.",
+      "preconditions": [
+        "TokenPrefix set to empty string in test",
+        "a non-auth-exempt command is registered"
+      ],
+      "input": "invoke any non-auth-exempt command with TokenPrefix = ''",
+      "expected": "stdout contains JSON envelope with code:0 and message 'TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value'; exit code 2",
+      "assertion_pseudocode": "cli.TokenPrefix = ''; stdout = captureStdout(); err = Execute(['someCommand']); env = parseJSON(stdout); assert env.error.code == 0; assert env.error.message == 'TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value'; assert ExitCode(err) == 2"
+    },
+    {
+      "id": "TS-13-12",
+      "requirement_id": "13-REQ-4.1",
+      "kind": "unit",
+      "description": "InitConfig creates the config directory with mode 0700 when it does not exist.",
+      "preconditions": [
+        "temp directory created as HOME; config directory does not exist"
+      ],
+      "input": "call InitConfig(configDir) where configDir does not exist",
+      "expected": "directory created at configDir with permission bits 0700",
+      "assertion_pseudocode": "tmpHome = createTempDir(); configDir = tmpHome + '/.ak'; InitConfig(configDir); info = stat(configDir); assert info.IsDir() == true; assert info.Mode().Perm() == 0700"
+    },
+    {
+      "id": "TS-13-13",
+      "requirement_id": "13-REQ-4.2",
+      "kind": "unit",
+      "description": "InitConfig creates config.toml from the hard-coded template with mode 0600 when it does not exist.",
+      "preconditions": [
+        "config directory exists; config.toml does not exist"
+      ],
+      "input": "call InitConfig(configDir)",
+      "expected": "config.toml created with mode 0600; file contents exactly match the three-line template",
+      "assertion_pseudocode": "InitConfig(configDir); info = stat(configDir+'/config.toml'); assert info.Mode().Perm() == 0600; content = readFile(configDir+'/config.toml'); assert contains(content, 'endpoint_url = \"\"'); assert contains(content, 'user_id = \"\"'); assert contains(content, 'api_key = \"\"')"
+    },
+    {
+      "id": "TS-13-14",
+      "requirement_id": "13-REQ-4.3",
+      "kind": "unit",
+      "description": "InitConfig does not modify an existing config.toml.",
+      "preconditions": [
+        "config directory and config.toml exist with custom content"
+      ],
+      "input": "call InitConfig(configDir) when config.toml already has custom content",
+      "expected": "config.toml content and permissions remain unchanged after InitConfig",
+      "assertion_pseudocode": "originalContent = 'endpoint_url = \"http://example.com\"\\nuser_id = \"u1\"\\napi_key = \"k1\"\\n'; writeFile(configPath, originalContent); InitConfig(configDir); assert readFile(configPath) == originalContent"
+    },
+    {
+      "id": "TS-13-15",
+      "requirement_id": "13-REQ-4.4",
+      "kind": "unit",
+      "description": "CLIConfig struct has three string fields with correct TOML tags.",
+      "preconditions": [
+        "internal/cli package compiled"
+      ],
+      "input": "inspect CLIConfig struct via reflection or TOML round-trip",
+      "expected": "EndpointURL tagged 'endpoint_url', UserID tagged 'user_id', APIKey tagged 'api_key'; all fields are strings",
+      "assertion_pseudocode": "cfg = CLIConfig{EndpointURL: 'e', UserID: 'u', APIKey: 'k'}; encoded = tomlEncode(cfg); assert contains(encoded, 'endpoint_url = \"e\"'); assert contains(encoded, 'user_id = \"u\"'); assert contains(encoded, 'api_key = \"k\"')"
+    },
+    {
+      "id": "TS-13-16",
+      "requirement_id": "13-REQ-5.1",
+      "kind": "unit",
+      "description": "LoadConfig parses a valid config.toml into CLIConfig with all three fields populated.",
+      "preconditions": [
+        "config.toml exists with all three fields set to non-empty values"
+      ],
+      "input": "call LoadConfig(configDir) with a valid TOML file containing endpoint_url, user_id, api_key",
+      "expected": "returns (*CLIConfig, nil) with EndpointURL, UserID, APIKey matching file values",
+      "assertion_pseudocode": "writeFile(configPath, 'endpoint_url = \"http://x\"\\nuser_id = \"u\"\\napi_key = \"k\"\\n'); cfg, err = LoadConfig(configDir); assert err == nil; assert cfg.EndpointURL == 'http://x'; assert cfg.UserID == 'u'; assert cfg.APIKey == 'k'"
+    },
+    {
+      "id": "TS-13-17",
+      "requirement_id": "13-REQ-5.2",
+      "kind": "unit",
+      "description": "LoadConfig rejects any TOML parse error entirely, returning (nil, error) with the canonical message prefix.",
+      "preconditions": [
+        "config.toml exists with syntactically invalid TOML content"
+      ],
+      "input": "call LoadConfig(configDir) with a malformed config.toml",
+      "expected": "returns (nil, error) where error.Error() starts with 'config file is unparseable:'; no partial CLIConfig is returned",
+      "assertion_pseudocode": "writeFile(configPath, 'endpoint_url = !!!INVALID!!!'); cfg, err = LoadConfig(configDir); assert cfg == nil; assert err != nil; assert startsWith(err.Error(), 'config file is unparseable:')"
+    },
+    {
+      "id": "TS-13-18",
+      "requirement_id": "13-REQ-6.1",
+      "kind": "unit",
+      "description": "ResolveField returns the flag value when flagChanged is true, regardless of env or config.",
+      "preconditions": [
+        "env var set to a different value; config has yet another value"
+      ],
+      "input": "call ResolveField('endpoint_url', '--endpoint-url', 'flagVal', true, 'ENDPOINT_URL', 'configVal', true)",
+      "expected": "returns ('flagVal', nil)",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'envVal'); val, err = ResolveField('endpoint_url', '--endpoint-url', 'flagVal', true, 'ENDPOINT_URL', 'configVal', true); assert err == nil; assert val == 'flagVal'"
+    },
+    {
+      "id": "TS-13-19",
+      "requirement_id": "13-REQ-6.1",
+      "kind": "unit",
+      "description": "ResolveField returns the env var value when flag is not changed and env is non-empty.",
+      "preconditions": [
+        "ENDPOINT_URL env var set to 'envVal'; config has 'configVal'"
+      ],
+      "input": "call ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', 'configVal', true)",
+      "expected": "returns ('envVal', nil)",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'envVal'); val, err = ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', 'configVal', true); assert err == nil; assert val == 'envVal'"
+    },
+    {
+      "id": "TS-13-20",
+      "requirement_id": "13-REQ-6.1",
+      "kind": "unit",
+      "description": "ResolveField returns the config value when flag is not changed and env is empty.",
+      "preconditions": [
+        "ENDPOINT_URL env var is empty or unset"
+      ],
+      "input": "call ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', 'configVal', true)",
+      "expected": "returns ('configVal', nil)",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); val, err = ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', 'configVal', true); assert err == nil; assert val == 'configVal'"
+    },
+    {
+      "id": "TS-13-21",
+      "requirement_id": "13-REQ-6.1",
+      "kind": "unit",
+      "description": "ResolveField returns canonical error when required=true and all sources are unset.",
+      "preconditions": [
+        "ENDPOINT_URL env var is unset; configValue is empty string"
+      ],
+      "input": "call ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', '', true)",
+      "expected": "returns ('', error) where error.Error() == 'endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file'",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); val, err = ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', '', true); assert val == ''; assert err != nil; assert err.Error() == 'endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file'"
+    },
+    {
+      "id": "TS-13-22",
+      "requirement_id": "13-REQ-6.1",
+      "kind": "unit",
+      "description": "ResolveField returns ('', nil) when required=false and all sources are unset.",
+      "preconditions": [
+        "USER_ID env var is unset; configValue is empty string"
+      ],
+      "input": "call ResolveField('user_id', '--user-id', '', false, 'USER_ID', '', false)",
+      "expected": "returns ('', nil) — no error for optional missing field",
+      "assertion_pseudocode": "unsetEnv('USER_ID'); val, err = ResolveField('user_id', '--user-id', '', false, 'USER_ID', '', false); assert val == ''; assert err == nil"
+    },
+    {
+      "id": "TS-13-23",
+      "requirement_id": "13-REQ-6.2",
+      "kind": "unit",
+      "description": "ResolveField composes the canonical error message internally from fieldName, flagName, and envVarName parameters.",
+      "preconditions": [
+        "all sources unset; required=true"
+      ],
+      "input": "call ResolveField('api_key', '--api-key', '', false, 'API_KEY', '', true)",
+      "expected": "error message is exactly 'api_key is not set: provide via --api-key, $API_KEY, or config file'",
+      "assertion_pseudocode": "_, err = ResolveField('api_key', '--api-key', '', false, 'API_KEY', '', true); assert err.Error() == 'api_key is not set: provide via --api-key, $API_KEY, or config file'"
+    },
+    {
+      "id": "TS-13-24",
+      "requirement_id": "13-REQ-6.3",
+      "kind": "unit",
+      "description": "PersistentPreRunE resolves endpoint_url and api_key as required, and user_id as optional (empty string stored in context without error).",
+      "preconditions": [
+        "endpoint_url and api_key provided via env; user_id unset in all sources; non-auth-exempt command registered; InitConfig has run"
+      ],
+      "input": "invoke a non-auth-exempt command with ENDPOINT_URL and API_KEY env vars set, USER_ID unset",
+      "expected": "command RunE runs successfully; UserIDFromContext returns empty string; ClientFromContext returns non-nil client",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'http://localhost'); setEnv('API_KEY', 'testkey'); unsetEnv('USER_ID'); err = Execute(['testCmd']); assert err == nil; assert ClientFromContext(ctx) != nil; assert UserIDFromContext(ctx) == ''"
+    },
+    {
+      "id": "TS-13-25",
+      "requirement_id": "13-REQ-6.4",
+      "kind": "unit",
+      "description": "PersistentPreRunE checks flag presence using cmd.Flags().Changed() on the leaf command, not the root.",
+      "preconditions": [
+        "non-auth-exempt leaf command registered; endpoint_url set via flag"
+      ],
+      "input": "invoke leaf command with --endpoint-url flag explicitly set",
+      "expected": "ResolveField receives flagChanged=true and uses the flag value; credential resolved from flag source",
+      "assertion_pseudocode": "stdout = captureStdout(); Execute(['leafCmd', '--endpoint-url', 'http://flag-val', '--api-key', 'k']); verifyResolvedEndpointURL == 'http://flag-val'"
+    },
+    {
+      "id": "TS-13-26",
+      "requirement_id": "13-REQ-6.5",
+      "kind": "unit",
+      "description": "ResolveEndpointURL returns empty string (not an error) when no endpoint is configured in any source.",
+      "preconditions": [
+        "ENDPOINT_URL env var unset; config.toml has empty endpoint_url; --endpoint-url flag not set"
+      ],
+      "input": "call ResolveEndpointURL(cmd) with no endpoint configured anywhere",
+      "expected": "returns empty string; no error",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); writeConfig(configDir, CLIConfig{}); val = ResolveEndpointURL(cmd); assert val == ''"
+    },
+    {
+      "id": "TS-13-27",
+      "requirement_id": "13-REQ-7.1",
+      "kind": "unit",
+      "description": "context.go defines unexported zero-size struct types clientContextKey and userIDContextKey as context keys.",
+      "preconditions": [
+        "internal/cli package compiled"
+      ],
+      "input": "inspect type definitions in context.go via source or reflection",
+      "expected": "clientContextKey and userIDContextKey are unexported struct types; they are zero-size structs",
+      "assertion_pseudocode": "// verified via compilation: no external package can construct clientContextKey{} or userIDContextKey{}; assert sizeof(clientContextKey{}) == 0; assert sizeof(userIDContextKey{}) == 0"
+    },
+    {
+      "id": "TS-13-28",
+      "requirement_id": "13-REQ-7.2",
+      "kind": "unit",
+      "description": "ClientFromContext returns nil when called with a plain context that has no stored client.",
+      "preconditions": [
+        "plain context.Background() used"
+      ],
+      "input": "call ClientFromContext(context.Background())",
+      "expected": "returns nil; no panic",
+      "assertion_pseudocode": "client = ClientFromContext(context.Background()); assert client == nil"
+    },
+    {
+      "id": "TS-13-29",
+      "requirement_id": "13-REQ-7.2",
+      "kind": "unit",
+      "description": "ClientFromContext returns the stored *apikit.Client when one has been stored via PersistentPreRunE.",
+      "preconditions": [
+        "context populated with a client via context.WithValue using clientContextKey{}"
+      ],
+      "input": "call ClientFromContext(ctx) after storing a client",
+      "expected": "returns the exact same *apikit.Client that was stored",
+      "assertion_pseudocode": "mockClient = newMockClient(); ctx = context.WithValue(context.Background(), clientContextKey{}, mockClient); result = ClientFromContext(ctx); assert result == mockClient"
+    },
+    {
+      "id": "TS-13-30",
+      "requirement_id": "13-REQ-7.3",
+      "kind": "unit",
+      "description": "UserIDFromContext returns empty string when called with a plain context.",
+      "preconditions": [
+        "plain context.Background() used"
+      ],
+      "input": "call UserIDFromContext(context.Background())",
+      "expected": "returns empty string; no panic",
+      "assertion_pseudocode": "uid = UserIDFromContext(context.Background()); assert uid == ''"
+    },
+    {
+      "id": "TS-13-31",
+      "requirement_id": "13-REQ-7.3",
+      "kind": "unit",
+      "description": "UserIDFromContext returns the stored user_id string when set in context.",
+      "preconditions": [
+        "context populated with user_id via context.WithValue using userIDContextKey{}"
+      ],
+      "input": "call UserIDFromContext(ctx) after storing 'user-123'",
+      "expected": "returns 'user-123'",
+      "assertion_pseudocode": "ctx = context.WithValue(context.Background(), userIDContextKey{}, 'user-123'); uid = UserIDFromContext(ctx); assert uid == 'user-123'"
+    },
+    {
+      "id": "TS-13-32",
+      "requirement_id": "13-REQ-7.4",
+      "kind": "unit",
+      "description": "PersistentPreRunE stores *apikit.Client and user_id in context via context.WithValue; user_id is not passed to apikit.NewClient.",
+      "preconditions": [
+        "all credentials configured; non-auth-exempt command registered"
+      ],
+      "input": "invoke non-auth-exempt command with endpoint_url, api_key, user_id all configured",
+      "expected": "ClientFromContext returns non-nil client; UserIDFromContext returns the resolved user_id; apikit.NewClient was called with only endpoint_url and api_key",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'http://server'); setEnv('API_KEY', 'k'); setEnv('USER_ID', 'u123'); capturedCtx = nil; registerRunE(func(cmd, args){ capturedCtx = cmd.Context() }); Execute(['cmd']); assert ClientFromContext(capturedCtx) != nil; assert UserIDFromContext(capturedCtx) == 'u123'"
+    },
+    {
+      "id": "TS-13-33",
+      "requirement_id": "13-REQ-8.1",
+      "kind": "unit",
+      "description": "SaveConfig atomically writes CLIConfig to config.toml using a temp file and os.Rename; file has mode 0600.",
+      "preconditions": [
+        "config directory exists and is writable; config.toml may or may not exist"
+      ],
+      "input": "call SaveConfig(configDir, &CLIConfig{EndpointURL: 'http://x', UserID: 'u', APIKey: 'k'})",
+      "expected": "config.toml exists with mode 0600; content is valid TOML with all three fields; no temp files remain in configDir",
+      "assertion_pseudocode": "SaveConfig(configDir, cfg); info = stat(configDir+'/config.toml'); assert info.Mode().Perm() == 0600; content = readFile(configDir+'/config.toml'); parsed = tomlDecode(content); assert parsed.EndpointURL == 'http://x'; tempFiles = listDir(configDir); assert no file in tempFiles matches 'tmp*'"
+    },
+    {
+      "id": "TS-13-34",
+      "requirement_id": "13-REQ-8.2",
+      "kind": "unit",
+      "description": "SaveConfig returns error immediately when os.CreateTemp fails; no temp file or deferred remove registered.",
+      "preconditions": [
+        "config directory made unwritable (chmod 000)"
+      ],
+      "input": "call SaveConfig(configDir, cfg) with unwritable config directory",
+      "expected": "error returned; no temp file left in configDir; original config.toml unchanged",
+      "assertion_pseudocode": "chmod(configDir, 0000); err = SaveConfig(configDir, cfg); assert err != nil; chmod(configDir, 0700); tempFiles = listDir(configDir); assert no file in tempFiles matches 'tmp*'"
+    },
+    {
+      "id": "TS-13-35",
+      "requirement_id": "13-REQ-8.3",
+      "kind": "unit",
+      "description": "When os.Rename fails after temp file is written, deferred os.Remove cleans up the temp file and original config.toml remains untouched.",
+      "preconditions": [
+        "valid config.toml exists; os.Rename will be made to fail by making target directory read-only after os.CreateTemp succeeds"
+      ],
+      "input": "call SaveConfig with injected Rename failure",
+      "expected": "error returned; no temp file remains; original config.toml content is unchanged",
+      "assertion_pseudocode": "originalContent = readFile(configPath); injectRenameFailure(); err = SaveConfig(configDir, newCfg); assert err != nil; assert readFile(configPath) == originalContent; tempFiles = listDir(configDir); assert no temp file remains"
+    },
+    {
+      "id": "TS-13-36",
+      "requirement_id": "13-REQ-8.4",
+      "kind": "unit",
+      "description": "SaveConfig creates the temp file in the same directory as config.toml to guarantee same-filesystem rename.",
+      "preconditions": [
+        "config directory exists"
+      ],
+      "input": "call SaveConfig(configDir, cfg) and observe where temp file is created",
+      "expected": "temp file is created inside configDir before rename; os.Rename source and destination are on the same filesystem",
+      "assertion_pseudocode": "interceptCreateTemp = true; SaveConfig(configDir, cfg); assert capturedTempDir == configDir"
+    },
+    {
+      "id": "TS-13-37",
+      "requirement_id": "13-REQ-9.1",
+      "kind": "unit",
+      "description": "PrintJSON marshals the value with json.MarshalIndent (two-space indent) and writes it to stdout.",
+      "preconditions": [
+        "stdout is captured"
+      ],
+      "input": "call PrintJSON(map[string]string{'key': 'value'})",
+      "expected": "stdout contains '{\\n  \"key\": \"value\"\\n}'; output is valid JSON; no error",
+      "assertion_pseudocode": "buf = captureStdout(); err = PrintJSON(map{'key': 'value'}); assert err == nil; assert buf == '{\\n  \"key\": \"value\"\\n}'"
+    },
+    {
+      "id": "TS-13-38",
+      "requirement_id": "13-REQ-9.2",
+      "kind": "unit",
+      "description": "PrintError writes JSON error envelope to stdout only with correct code and message; nothing written to stderr.",
+      "preconditions": [
+        "stdout and stderr are captured"
+      ],
+      "input": "call PrintError with a plain error 'some client error'",
+      "expected": "stdout == '{\"error\":{\"code\":0,\"message\":\"some client error\"}}'; stderr is empty",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); PrintError(errors.New('some client error')); assert parseJSON(stdout).error.code == 0; assert parseJSON(stdout).error.message == 'some client error'; assert stderr == ''"
+    },
+    {
+      "id": "TS-13-39",
+      "requirement_id": "13-REQ-9.2",
+      "kind": "unit",
+      "description": "PrintError with *apikit.APIError uses the error's HTTP status code (>= 400) and message; code is never 0 for API errors.",
+      "preconditions": [
+        "stdout captured; apiErr with Code=404, Message='not found' constructed"
+      ],
+      "input": "call PrintError(apiErr) where apiErr is *apikit.APIError{Code: 404, Message: 'not found'}",
+      "expected": "stdout envelope has code=404 and message='not found'; code != 0",
+      "assertion_pseudocode": "apiErr = newAPIError(404, 'not found'); stdout = captureStdout(); PrintError(apiErr); env = parseJSON(stdout); assert env.error.code == 404; assert env.error.message == 'not found'; assert env.error.code != 0"
+    },
+    {
+      "id": "TS-13-40",
+      "requirement_id": "13-REQ-9.3",
+      "kind": "unit",
+      "description": "ExitCode returns 0 for nil, 1 for *apikit.APIError, and 2 for all other non-nil errors.",
+      "preconditions": [
+        "internal/cli package compiled"
+      ],
+      "input": "call ExitCode with nil, *apikit.APIError, and plain error respectively",
+      "expected": "returns 0, 1, 2 in that order",
+      "assertion_pseudocode": "assert ExitCode(nil) == 0; assert ExitCode(newAPIError(401, 'unauthorized')) == 1; assert ExitCode(errors.New('some error')) == 2"
+    },
+    {
+      "id": "TS-13-41",
+      "requirement_id": "13-REQ-9.4",
+      "kind": "unit",
+      "description": "Human-readable messages (warnings, progress) are written to stderr only and never appear on stdout.",
+      "preconditions": [
+        "stdout and stderr captured; a command that prints a warning is invoked"
+      ],
+      "input": "invoke 'akc version' with endpoint configured but server unreachable",
+      "expected": "stdout contains only JSON; stderr contains the warning text; warning text not present on stdout",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); Execute(['version']); assert isValidJSON(stdout); assert not contains(stdout, 'warning'); assert contains(stderr, 'warning')"
+    },
+    {
+      "id": "TS-13-42",
+      "requirement_id": "13-REQ-10.1",
+      "kind": "unit",
+      "description": "The version command has 'auth': 'none' and 'composite': 'true' annotations, skipping PersistentPreRunE client creation.",
+      "preconditions": [
+        "internal/cli version command initialised"
+      ],
+      "input": "inspect version command's Annotations map",
+      "expected": "Annotations['auth'] == 'none' and Annotations['composite'] == 'true'",
+      "assertion_pseudocode": "versionCmd = findCommand(rootCmd, 'version'); assert versionCmd.Annotations['auth'] == 'none'; assert versionCmd.Annotations['composite'] == 'true'"
+    },
+    {
+      "id": "TS-13-43",
+      "requirement_id": "13-REQ-10.2",
+      "kind": "unit",
+      "description": "VersionOutput struct has correct fields and JSON tags; ServerVersion uses *apikit.VersionResponse with omitempty.",
+      "preconditions": [
+        "internal/cli package compiled"
+      ],
+      "input": "marshal VersionOutput with nil ServerVersion",
+      "expected": "JSON has cli_version, build, prefix fields; server_version is omitted entirely (not null)",
+      "assertion_pseudocode": "out = VersionOutput{CLIVersion: '1.0', Build: 'abc', Prefix: 'ak', ServerVersion: nil}; json = marshal(out); assert contains(json, '\"cli_version\"'); assert contains(json, '\"build\"'); assert contains(json, '\"prefix\"'); assert not contains(json, 'server_version')"
+    },
+    {
+      "id": "TS-13-44",
+      "requirement_id": "13-REQ-10.3",
+      "kind": "unit",
+      "description": "Version command RunE constructs an apikit.Client and calls client.Version(ctx) when ResolveEndpointURL returns non-empty URL.",
+      "preconditions": [
+        "ENDPOINT_URL set to a mock server URL; mock server returns VersionResponse"
+      ],
+      "input": "invoke 'akc version' with endpoint configured and mock server reachable",
+      "expected": "stdout JSON has server_version object with version, build_time, commit, mount_point fields",
+      "assertion_pseudocode": "mockServer = startMockServer(versionResponse); setEnv('ENDPOINT_URL', mockServer.URL); stdout = captureStdout(); Execute(['version']); env = parseJSON(stdout); assert env.server_version != nil; assert env.server_version.version != ''; assert env.server_version.build_time != ''; assert env.server_version.commit != ''; assert env.server_version.mount_point != ''"
+    },
+    {
+      "id": "TS-13-45",
+      "requirement_id": "13-REQ-10.4",
+      "kind": "unit",
+      "description": "Version command omits server_version and prints no warning when ResolveEndpointURL returns empty string.",
+      "preconditions": [
+        "ENDPOINT_URL unset; --endpoint-url flag not passed; config.toml has empty endpoint_url"
+      ],
+      "input": "invoke 'akc version' with no endpoint configured anywhere",
+      "expected": "stdout JSON has cli_version, build, prefix only; no server_version key; stderr is empty",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); stdout, stderr = captureOutputs(); Execute(['version']); env = parseJSON(stdout); assert env.cli_version != nil; assert not hasKey(env, 'server_version'); assert stderr == ''"
+    },
+    {
+      "id": "TS-13-46",
+      "requirement_id": "13-REQ-10.5",
+      "kind": "unit",
+      "description": "Version command omits server_version and prints warning to stderr when endpoint is configured but server is unreachable.",
+      "preconditions": [
+        "ENDPOINT_URL set to non-listening address; no server running at that address"
+      ],
+      "input": "invoke 'akc version' with endpoint configured but server unreachable",
+      "expected": "stdout JSON has cli_version, build, prefix; no server_version; stderr contains 'warning: could not reach server:'; exit code 0",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'http://127.0.0.1:19999'); stdout, stderr = captureOutputs(); err = Execute(['version']); env = parseJSON(stdout); assert not hasKey(env, 'server_version'); assert contains(stderr, 'warning: could not reach server:'); assert ExitCode(err) == 0"
+    },
+    {
+      "id": "TS-13-47",
+      "requirement_id": "13-REQ-11.1",
+      "kind": "unit",
+      "description": "Custom help subcommand replaces Cobra's default; outputs full JSON tree when --json is set; delegates to Cobra default when --json is not set.",
+      "preconditions": [
+        "internal/cli command tree initialised with stub commands"
+      ],
+      "input": "invoke 'akc help --json' and separately 'akc help'",
+      "expected": "first invocation: stdout is valid JSON with 'commands' array; second invocation: stdout is standard Cobra help text (not JSON)",
+      "assertion_pseudocode": "stdout1 = captureStdout(); Execute(['help', '--json']); assert isValidJSON(stdout1); assert hasKey(parseJSON(stdout1), 'commands'); stdout2 = captureStdout(); Execute(['help']); assert not isValidJSON(stdout2)"
+    },
+    {
+      "id": "TS-13-48",
+      "requirement_id": "13-REQ-11.2",
+      "kind": "unit",
+      "description": "help --json output root object has name, version, and commands array; each command entry has required fields.",
+      "preconditions": [
+        "stub leaf commands registered with Annotations"
+      ],
+      "input": "invoke 'akc help --json'",
+      "expected": "root object has 'name', 'version', 'commands'; each command entry has 'name', 'description', 'method', 'path', 'args', 'flags', 'auth'",
+      "assertion_pseudocode": "stdout = captureStdout(); Execute(['help', '--json']); tree = parseJSON(stdout); assert tree.name != ''; assert tree.version != ''; assert isArray(tree.commands); for cmd in tree.commands: assert hasKey(cmd, 'name'); assert hasKey(cmd, 'description'); assert hasKey(cmd, 'method'); assert hasKey(cmd, 'path'); assert hasKey(cmd, 'args'); assert hasKey(cmd, 'flags'); assert hasKey(cmd, 'auth')"
+    },
+    {
+      "id": "TS-13-49",
+      "requirement_id": "13-REQ-11.3",
+      "kind": "unit",
+      "description": "help --json walker collects only leaf commands (RunE set + at least one Annotations key); excludes group commands without RunE.",
+      "preconditions": [
+        "group command 'user' without RunE registered; leaf command 'user show' with RunE and Annotations registered"
+      ],
+      "input": "invoke 'akc help --json'",
+      "expected": "commands array contains 'user show' but not bare 'user' group command",
+      "assertion_pseudocode": "stdout = captureStdout(); Execute(['help', '--json']); cmds = parseJSON(stdout).commands; names = [c.name for c in cmds]; assert 'user show' in names; assert 'user' not in names"
+    },
+    {
+      "id": "TS-13-50",
+      "requirement_id": "13-REQ-11.4",
+      "kind": "unit",
+      "description": "Flag descriptors omit default for zero-value defaults; include default for non-zero defaults; rule applies to all types including bool.",
+      "preconditions": [
+        "a leaf command with bool flag (default false), string flag (default ''), int flag (default 0), and bool flag (default true) registered"
+      ],
+      "input": "invoke 'akc help --json' and inspect flag descriptors",
+      "expected": "bool(false) descriptor has no 'default' key; string('') descriptor has no 'default' key; int(0) descriptor has no 'default' key; bool(true) descriptor has 'default': true",
+      "assertion_pseudocode": "Execute(['help', '--json']); cmd = findCommandInOutput('leafCmd'); flags = cmd.flags; boolFalseFlag = findFlag(flags, 'myflag'); assert not hasKey(boolFalseFlag, 'default'); boolTrueFlag = findFlag(flags, 'verbose'); assert boolTrueFlag.default == true"
+    },
+    {
+      "id": "TS-13-51",
+      "requirement_id": "13-REQ-11.5",
+      "kind": "unit",
+      "description": "Custom SetHelpFunc outputs single command JSON when --json is set; falls back to Cobra default help without --json.",
+      "preconditions": [
+        "version command registered with Annotations"
+      ],
+      "input": "invoke 'akc version --help --json' and separately 'akc version --help'",
+      "expected": "first: stdout is JSON for version command entry only; second: stdout is standard Cobra help text",
+      "assertion_pseudocode": "stdout1 = captureStdout(); Execute(['version', '--help', '--json']); entry = parseJSON(stdout1); assert entry.name == 'version'; stdout2 = captureStdout(); Execute(['version', '--help']); assert not isValidJSON(stdout2) or not hasKey(parseJSON(stdout2), 'name')"
+    },
+    {
+      "id": "TS-13-52",
+      "requirement_id": "13-REQ-11.6",
+      "kind": "unit",
+      "description": "help --json walker excludes commands with no keys in Annotations (Cobra built-ins); only annotation-carrying commands appear.",
+      "preconditions": [
+        "an unannotated command (simulating Cobra built-in) is present in the tree"
+      ],
+      "input": "invoke 'akc help --json'",
+      "expected": "unannotated command does not appear in commands array; all appearing commands have at least one Annotations key",
+      "assertion_pseudocode": "addUnannotatedCommand(rootCmd, 'builtinCmd'); Execute(['help', '--json']); cmds = parseJSON(stdout).commands; for cmd in cmds: assert cmdHasAnnotations(cmd); assert 'builtinCmd' not in [c.name for c in cmds]"
+    },
+    {
+      "id": "TS-13-53",
+      "requirement_id": "13-REQ-11.7",
+      "kind": "unit",
+      "description": "Commands added by consuming projects via AddCommand with at least the 'auth' annotation automatically appear in help --json output.",
+      "preconditions": [
+        "consuming project command with 'auth': 'api_key' annotation added via AddCommand"
+      ],
+      "input": "invoke 'akc help --json'",
+      "expected": "consuming project command appears in commands array without any additional registration step",
+      "assertion_pseudocode": "thirdPartyCmd = newCommand('myapp do', RunE, Annotations{'auth': 'api_key'}); rootCmd.AddCommand(thirdPartyCmd); stdout = captureStdout(); Execute(['help', '--json']); cmds = parseJSON(stdout).commands; assert 'myapp do' in [c.name for c in cmds]"
+    },
+    {
+      "id": "TS-13-54",
+      "requirement_id": "13-REQ-12.1",
+      "kind": "unit",
+      "description": "All apikit-owned commands have at minimum the 'auth' annotation key with value 'none', 'api_key', or 'admin'.",
+      "preconditions": [
+        "full CLI command tree initialised"
+      ],
+      "input": "walk all leaf commands (those with RunE) in the command tree",
+      "expected": "every leaf command has Annotations['auth'] in {'none', 'api_key', 'admin'}",
+      "assertion_pseudocode": "allLeaves = walkLeafCommands(rootCmd); for cmd in allLeaves: authVal = cmd.Annotations['auth']; assert authVal in ['none', 'api_key', 'admin']"
+    },
+    {
+      "id": "TS-13-55",
+      "requirement_id": "13-REQ-12.2",
+      "kind": "unit",
+      "description": "Child commands use PreRunE (not PersistentPreRunE); root's PersistentPreRunE runs automatically before child's PreRunE.",
+      "preconditions": [
+        "a child command with PreRunE registered; PersistentPreRunE on root records invocation order"
+      ],
+      "input": "invoke the child command",
+      "expected": "root's PersistentPreRunE runs before child's PreRunE; no PersistentPreRunE on child",
+      "assertion_pseudocode": "order = []; rootCmd.PersistentPreRunE records 'root'; childCmd.PreRunE records 'child'; Execute(['childCmd']); assert order == ['root', 'child']; assert childCmd.PersistentPreRunE == nil"
+    },
+    {
+      "id": "TS-13-56",
+      "requirement_id": "13-REQ-12.3",
+      "kind": "unit",
+      "description": "PersistentPreRunE reads auth annotation from the cmd argument (leaf command), not the root command.",
+      "preconditions": [
+        "a leaf command with 'auth': 'none' registered under root; root command has no 'auth' annotation"
+      ],
+      "input": "invoke the leaf command; observe what PersistentPreRunE reads",
+      "expected": "cmd.Annotations['auth'] == 'none' inside PersistentPreRunE; root's annotations not consulted",
+      "assertion_pseudocode": "capturedAnnotations = nil; injectPersistentPreRunE(func(cmd, args){ capturedAnnotations = cmd.Annotations }); Execute(['authNoneCmd']); assert capturedAnnotations['auth'] == 'none'"
+    },
+    {
+      "id": "TS-13-57",
+      "requirement_id": "13-REQ-13.1",
+      "kind": "unit",
+      "description": "version_info.go declares Version, Build, TokenPrefix as package-level var with correct defaults; injectable via -ldflags.",
+      "preconditions": [
+        "binary built without -ldflags overrides"
+      ],
+      "input": "read cli.Version, cli.Build, cli.TokenPrefix",
+      "expected": "Version == 'dev'; Build == 'unknown'; TokenPrefix == 'ak'",
+      "assertion_pseudocode": "assert cli.Version == 'dev'; assert cli.Build == 'unknown'; assert cli.TokenPrefix == 'ak'"
+    },
+    {
+      "id": "TS-13-58",
+      "requirement_id": "13-REQ-13.2",
+      "kind": "unit",
+      "description": "TokenPrefix determines config directory path and is displayed in akc version output.",
+      "preconditions": [
+        "TokenPrefix set to 'myapp' in test; HOME set to temp dir"
+      ],
+      "input": "call InitConfig with TokenPrefix='myapp'; invoke 'akc version'",
+      "expected": "config directory is at $HOME/.myapp/; version output contains 'prefix': 'myapp'",
+      "assertion_pseudocode": "cli.TokenPrefix = 'myapp'; configDir = homeDir + '/.myapp'; InitConfig(configDir); stdout = captureStdout(); Execute(['version']); env = parseJSON(stdout); assert env.prefix == 'myapp'"
+    },
+    {
+      "id": "TS-13-59",
+      "requirement_id": "13-REQ-13.3",
+      "kind": "unit",
+      "description": "Root apikit package exports RootCommand() that delegates to internal/cli.RootCommand(); consuming projects can embed via AddCommand.",
+      "preconditions": [
+        "root apikit package compiled"
+      ],
+      "input": "consuming project calls apikit.RootCommand() and adds to its own root with AddCommand",
+      "expected": "returned command is non-nil; can be added via AddCommand; no internal/cli import needed",
+      "assertion_pseudocode": "akcCmd = apikit.RootCommand(); assert akcCmd != nil; consumerRoot = newCobraCommand('myapp'); consumerRoot.AddCommand(akcCmd); assert findSubcommand(consumerRoot, 'akc') != nil"
+    },
+    {
+      "id": "TS-13-60",
+      "requirement_id": "13-REQ-13.4",
+      "kind": "unit",
+      "description": "internal/cli is declared as an internal package, preventing direct import from outside the module.",
+      "preconditions": [
+        "Go toolchain available"
+      ],
+      "input": "attempt to import github.com/txsvc/apikit/internal/cli from an external module",
+      "expected": "go build fails with 'use of internal package' error",
+      "assertion_pseudocode": "result = goCompile('package main; import _ \"github.com/txsvc/apikit/internal/cli\"'); assert result.exitCode != 0; assert contains(result.stderr, 'internal')"
+    },
+    {
+      "id": "TS-13-61",
+      "requirement_id": "13-REQ-14.1",
+      "kind": "unit",
+      "description": "CLI process exits with code 0 on success, 1 for *apikit.APIError, and 2 for all other errors.",
+      "preconditions": [
+        "ExitCode function available"
+      ],
+      "input": "call ExitCode with nil, *apikit.APIError, and plain error",
+      "expected": "0, 1, 2 respectively",
+      "assertion_pseudocode": "assert ExitCode(nil) == 0; assert ExitCode(newAPIError(403, 'forbidden')) == 1; assert ExitCode(errors.New('config missing')) == 2"
+    },
+    {
+      "id": "TS-13-62",
+      "requirement_id": "13-REQ-14.2",
+      "kind": "unit",
+      "description": "Error envelopes are written exclusively to stdout; stderr is empty for all error conditions.",
+      "preconditions": [
+        "stdout and stderr captured; a command that produces an error is invoked"
+      ],
+      "input": "invoke a command that returns a client error (missing endpoint_url)",
+      "expected": "stdout contains JSON error envelope; stderr is empty",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); Execute(['someCmd']); assert isValidJSON(stdout); assert hasKey(parseJSON(stdout), 'error'); assert stderr == ''"
+    },
+    {
+      "id": "TS-13-63",
+      "requirement_id": "13-REQ-14.3",
+      "kind": "unit",
+      "description": "main.go produces no output; only calls os.Exit(cli.ExitCode(err)) after Execute() returns.",
+      "preconditions": [
+        "cmd/akc/main.go source reviewed; Execute() returns without error"
+      ],
+      "input": "inspect main.go source; Execute() returns nil",
+      "expected": "main.go contains no fmt.Print, os.Stdout.Write, or other output calls; only os.Exit(cli.ExitCode(err))",
+      "assertion_pseudocode": "mainSource = readFile('cmd/akc/main.go'); assert not contains(mainSource, 'fmt.Print'); assert not contains(mainSource, 'os.Stdout'); assert contains(mainSource, 'cli.ExitCode(err)'); assert contains(mainSource, 'os.Exit')"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-13-P1",
+      "property_id": "13-PROP-1",
+      "validates": [
+        "13-REQ-9.2",
+        "13-REQ-14.2",
+        "13-REQ-1.2"
+      ],
+      "description": "For any error condition, PrintError writes exactly one valid JSON error envelope to stdout before Execute() returns, with nothing on stderr.",
+      "for_any_strategy": "arbitrary error values: *apikit.APIError with random code/message, plain errors with random message strings, wrapped errors",
+      "invariant_check": "stdout = captureStdout(); stderr = captureStderr(); Execute(cmdWithError); assert occurrences(stdout, '{\"error\":') == 1; assert isValidJSON(stdout); assert stderr == ''"
+    },
+    {
+      "id": "TS-13-P2",
+      "property_id": "13-PROP-2",
+      "validates": [
+        "13-REQ-9.3",
+        "13-REQ-14.1"
+      ],
+      "description": "For any error value, ExitCode returns exactly 0, 1, or 2 consistently with the error type table.",
+      "for_any_strategy": "nil, *apikit.APIError with random HTTP status codes (400-599), plain errors, wrapped errors",
+      "invariant_check": "for nil: ExitCode(nil) == 0; for *apikit.APIError: ExitCode(err) == 1; for any other non-nil error: ExitCode(err) == 2; no other exit code value is ever returned"
+    },
+    {
+      "id": "TS-13-P3",
+      "property_id": "13-PROP-3",
+      "validates": [
+        "13-REQ-6.1",
+        "13-REQ-6.E1"
+      ],
+      "description": "For any combination of flag, env, and config values, ResolveField returns exactly one deterministic value per the precedence order with no ties.",
+      "for_any_strategy": "random combinations of (flagValue, flagChanged, envValue, configValue, required) covering all 2^3 source-set combinations",
+      "invariant_check": "val, err = ResolveField(field, flag, flagValue, flagChanged, env, configValue, required); if flagChanged and flagValue != '': assert val == flagValue and err == nil; else if envValue != '': assert val == envValue and err == nil; else if configValue != '': assert val == configValue and err == nil; else if required: assert val == '' and err != nil; else assert val == '' and err == nil"
+    },
+    {
+      "id": "TS-13-P4",
+      "property_id": "13-PROP-4",
+      "validates": [
+        "13-REQ-8.1",
+        "13-REQ-8.2",
+        "13-REQ-8.3"
+      ],
+      "description": "For any call to SaveConfig, regardless of failure point, config.toml is never partially written and no temp files remain.",
+      "for_any_strategy": "random CLIConfig values; injected failures at each step (CreateTemp, chmod, close, Rename)",
+      "invariant_check": "originalContent = readFile(configPath) or ''; SaveConfig(configDir, cfg); // success or failure; configContent = readFile(configPath); assert isValidTOML(configContent) or configContent == originalContent; tempFiles = [f for f in listDir(configDir) if isTempFile(f)]; assert len(tempFiles) == 0"
+    },
+    {
+      "id": "TS-13-P5",
+      "property_id": "13-PROP-5",
+      "validates": [
+        "13-REQ-6.E2",
+        "13-REQ-10.1",
+        "13-REQ-12.1"
+      ],
+      "description": "For any command annotated with 'auth': 'none', PersistentPreRunE never loads config, resolves credentials, or constructs an apikit.Client.",
+      "for_any_strategy": "commands with 'auth': 'none' annotation and varying credential configurations (all missing, some present, all present)",
+      "invariant_check": "loadConfigCallCount = 0; resolveFieldCallCount = 0; newClientCallCount = 0; Execute(['authNoneCmd']); assert loadConfigCallCount == 0; assert resolveFieldCallCount == 0; assert newClientCallCount == 0"
+    },
+    {
+      "id": "TS-13-P6",
+      "property_id": "13-PROP-6",
+      "validates": [
+        "13-REQ-11.3",
+        "13-REQ-11.7"
+      ],
+      "description": "For any command registered via AddCommand with at least one Annotations key, it appears in help --json output automatically without additional registration.",
+      "for_any_strategy": "random sets of commands with random Annotations maps (at least containing 'auth' key), registered via AddCommand",
+      "invariant_check": "for each testCmd in registeredAnnotatedCmds: rootCmd.AddCommand(testCmd); stdout = captureStdout(); Execute(['help', '--json']); cmds = parseJSON(stdout).commands; names = [c.name for c in cmds]; assert testCmd.CommandPath() in names"
+    },
+    {
+      "id": "TS-13-P7",
+      "property_id": "13-PROP-7",
+      "validates": [
+        "13-REQ-7.1",
+        "13-REQ-7.E1"
+      ],
+      "description": "For any value stored in context under any external key type, ClientFromContext and UserIDFromContext return only values stored under the unexported struct key types.",
+      "for_any_strategy": "contexts populated with *apikit.Client and string under clientContextKey{} plus arbitrary values under string keys, int keys, and other struct keys",
+      "invariant_check": "for each ctx in generatedContexts: client = ClientFromContext(ctx); uid = UserIDFromContext(ctx); if clientContextKey{} key was set to mockClient: assert client == mockClient; else assert client == nil; if userIDContextKey{} key was set to 'testUID': assert uid == 'testUID'; else assert uid == ''"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-13-E1",
+      "requirement_id": "13-REQ-1.E1",
+      "kind": "unit",
+      "description": "Execute() calls PrintError exactly once when RunE returns an error; does not call PrintError when RunE returns nil.",
+      "preconditions": [
+        "stub commands registered: one that returns error, one that returns nil"
+      ],
+      "input": "invoke error command; then invoke success command",
+      "expected": "error invocation: stdout has exactly one error envelope; success invocation: stdout has no error envelope",
+      "assertion_pseudocode": "stdout1 = captureStdout(); Execute(['errorCmd']); count1 = occurrences(stdout1, '\"error\":'); assert count1 == 1; stdout2 = captureStdout(); Execute(['successCmd']); assert not contains(stdout2, '\"error\":')"
+    },
+    {
+      "id": "TS-13-E2",
+      "requirement_id": "13-REQ-2.E1",
+      "kind": "unit",
+      "description": "When an unrecognized flag is passed, Cobra's error is intercepted; only the CLI's JSON error envelope appears on stdout; nothing on stderr.",
+      "preconditions": [
+        "SilenceErrors and SilenceUsage set to true on root command"
+      ],
+      "input": "invoke 'akc --unknown-flag'",
+      "expected": "stdout contains JSON error envelope with code:0; stderr is empty; exit code 2",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); err = Execute(['--unknown-flag']); env = parseJSON(stdout); assert env.error.code == 0; assert stderr == ''; assert ExitCode(err) == 2"
+    },
+    {
+      "id": "TS-13-E3",
+      "requirement_id": "13-REQ-3.E1",
+      "kind": "unit",
+      "description": "When TokenPrefix is empty but the invoked command has 'auth': 'none', PersistentPreRunE skips TokenPrefix validation and returns nil.",
+      "preconditions": [
+        "TokenPrefix set to empty string; a command with 'auth': 'none' annotation registered"
+      ],
+      "input": "invoke auth-exempt command with TokenPrefix = ''",
+      "expected": "no TokenPrefix error; command proceeds normally; exit code 0",
+      "assertion_pseudocode": "cli.TokenPrefix = ''; err = Execute(['authNoneCmd']); assert err == nil or ExitCode(err) == 0; assert not contains(capturedStdout, 'TokenPrefix is empty')"
+    },
+    {
+      "id": "TS-13-E4",
+      "requirement_id": "13-REQ-4.E1",
+      "kind": "unit",
+      "description": "When $HOME is unresolvable, PersistentPreRunE exits with code 2 and error envelope with the exact message.",
+      "preconditions": [
+        "os.UserHomeDir() mocked to return error; non-auth-exempt command registered"
+      ],
+      "input": "invoke non-auth-exempt command with HOME unresolvable",
+      "expected": "stdout contains JSON envelope with code:0 and message 'cannot determine home directory: $HOME is not set or unresolvable'; exit code 2; no config init attempted",
+      "assertion_pseudocode": "injectUserHomeDirError(); stdout = captureStdout(); err = Execute(['someCmd']); env = parseJSON(stdout); assert env.error.code == 0; assert env.error.message == 'cannot determine home directory: $HOME is not set or unresolvable'; assert ExitCode(err) == 2"
+    },
+    {
+      "id": "TS-13-E5",
+      "requirement_id": "13-REQ-4.E2",
+      "kind": "unit",
+      "description": "When config directory is unwritable and InitConfig fails, PersistentPreRunE propagates exit-2 error.",
+      "preconditions": [
+        "HOME set to unwritable temp dir; non-auth-exempt command registered"
+      ],
+      "input": "invoke non-auth-exempt command with unwritable HOME",
+      "expected": "stdout contains JSON error envelope with code:0; exit code 2",
+      "assertion_pseudocode": "makeUnwritable(homeDir); stdout = captureStdout(); err = Execute(['someCmd']); env = parseJSON(stdout); assert env.error.code == 0; assert ExitCode(err) == 2"
+    },
+    {
+      "id": "TS-13-E6",
+      "requirement_id": "13-REQ-5.E1",
+      "kind": "unit",
+      "description": "LoadConfig rejects partially valid TOML (e.g., two valid fields and one invalid field), returning (nil, error) with no partial result.",
+      "preconditions": [
+        "config.toml exists with two valid fields and one syntactically invalid field"
+      ],
+      "input": "call LoadConfig(configDir) with partially invalid TOML",
+      "expected": "returns (nil, error); error message starts with 'config file is unparseable:'; no CLIConfig returned",
+      "assertion_pseudocode": "writeFile(configPath, 'endpoint_url = \"x\"\\nuser_id = \"u\"\\napi_key = !!!BAD!!!'); cfg, err = LoadConfig(configDir); assert cfg == nil; assert err != nil; assert startsWith(err.Error(), 'config file is unparseable:')"
+    },
+    {
+      "id": "TS-13-E7",
+      "requirement_id": "13-REQ-6.E1",
+      "kind": "unit",
+      "description": "ResolveField treats an empty string config value as unset, falling through to error (required=true) or ('', nil) (required=false).",
+      "preconditions": [
+        "all env vars unset; config value is empty string"
+      ],
+      "input": "call ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', '', true)",
+      "expected": "returns ('', error) — empty config string does not count as valid resolved value",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); val, err = ResolveField('endpoint_url', '--endpoint-url', '', false, 'ENDPOINT_URL', '', true); assert val == ''; assert err != nil; assert contains(err.Error(), 'endpoint_url is not set')"
+    },
+    {
+      "id": "TS-13-E8",
+      "requirement_id": "13-REQ-6.E2",
+      "kind": "unit",
+      "description": "When leaf command has 'auth': 'none', PersistentPreRunE skips all credential resolution and client construction.",
+      "preconditions": [
+        "no credentials configured anywhere; 'auth': 'none' command registered"
+      ],
+      "input": "invoke auth-exempt command with no credentials configured",
+      "expected": "command runs without error; no config loading; no credential resolution; no client creation",
+      "assertion_pseudocode": "unsetAllCredentials(); recordConfigLoadCalls = 0; err = Execute(['authNoneCmd']); assert err == nil or ExitCode(err) == 0; assert recordConfigLoadCalls == 0"
+    },
+    {
+      "id": "TS-13-E9",
+      "requirement_id": "13-REQ-6.E3",
+      "kind": "unit",
+      "description": "PersistentPreRunE reads 'auth' annotation from the Cobra leaf command argument (cmd), not from the root command.",
+      "preconditions": [
+        "leaf command with 'auth': 'none' registered; root command has no 'auth' annotation"
+      ],
+      "input": "invoke the auth-exempt leaf command",
+      "expected": "PersistentPreRunE's cmd argument has Annotations['auth'] == 'none'; root's Annotations is not consulted",
+      "assertion_pseudocode": "capturedCmd = nil; wrapPersistentPreRunE(func(cmd, args){ capturedCmd = cmd }); Execute(['authNoneLeaf']); assert capturedCmd.Annotations['auth'] == 'none'; assert capturedCmd.Use != 'akc'"
+    },
+    {
+      "id": "TS-13-E10",
+      "requirement_id": "13-REQ-7.E1",
+      "kind": "unit",
+      "description": "Consuming project storing value under string key 'client' does not interfere with ClientFromContext returning the correct *apikit.Client.",
+      "preconditions": [
+        "context has both a string-keyed 'client' value and a clientContextKey{}-keyed *apikit.Client"
+      ],
+      "input": "call ClientFromContext(ctx) where ctx has conflicting string key",
+      "expected": "ClientFromContext returns the *apikit.Client stored under clientContextKey{}, not the string-keyed value",
+      "assertion_pseudocode": "mockClient = newMockClient(); ctx = context.WithValue(context.Background(), 'client', 'impostor'); ctx = context.WithValue(ctx, clientContextKey{}, mockClient); result = ClientFromContext(ctx); assert result == mockClient; assert result != 'impostor'"
+    },
+    {
+      "id": "TS-13-E11",
+      "requirement_id": "13-REQ-8.E1",
+      "kind": "unit",
+      "description": "Concurrent calls to SaveConfig result in last-writer-wins; config.toml is never in a partially written state.",
+      "preconditions": [
+        "two goroutines call SaveConfig simultaneously with different CLIConfig values"
+      ],
+      "input": "two concurrent SaveConfig calls",
+      "expected": "config.toml contains exactly one of the two updates; content is valid TOML; no temp files remain",
+      "assertion_pseudocode": "go SaveConfig(configDir, cfg1); go SaveConfig(configDir, cfg2); wait(); content = readFile(configPath); assert isValidTOML(content); cfg = tomlDecode(content); assert cfg == cfg1 or cfg == cfg2; tempFiles = listDir(configDir); assert no temp file remains"
+    },
+    {
+      "id": "TS-13-E12",
+      "requirement_id": "13-REQ-9.E1",
+      "kind": "unit",
+      "description": "PrintError with a plain (non-*apikit.APIError) error emits code:0 and never emits code:0 for *apikit.APIError errors.",
+      "preconditions": [
+        "stdout captured"
+      ],
+      "input": "call PrintError with plain error; then with *apikit.APIError{Code: 500}",
+      "expected": "plain error: envelope code is 0; *apikit.APIError: envelope code is 500 (not 0)",
+      "assertion_pseudocode": "stdout1 = captureStdout(); PrintError(errors.New('oops')); assert parseJSON(stdout1).error.code == 0; stdout2 = captureStdout(); PrintError(newAPIError(500, 'server error')); assert parseJSON(stdout2).error.code == 500; assert parseJSON(stdout2).error.code != 0"
+    },
+    {
+      "id": "TS-13-E13",
+      "requirement_id": "13-REQ-10.E1",
+      "kind": "unit",
+      "description": "Version command's context has a deadline/timeout; client.Version(ctx) call terminates within the deadline when server hangs.",
+      "preconditions": [
+        "ENDPOINT_URL set to a server that never responds; context timeout injected"
+      ],
+      "input": "invoke 'akc version' with a hanging server",
+      "expected": "command returns within the configured deadline; server_version is omitted; warning printed to stderr; exit code 0",
+      "assertion_pseudocode": "setEnv('ENDPOINT_URL', 'http://hanging-server'); start = now(); stdout, stderr = captureOutputs(); err = Execute(['version']); elapsed = now() - start; assert elapsed < 10 seconds; env = parseJSON(stdout); assert not hasKey(env, 'server_version'); assert contains(stderr, 'warning'); assert ExitCode(err) == 0"
+    },
+    {
+      "id": "TS-13-E14",
+      "requirement_id": "13-REQ-11.E1",
+      "kind": "unit",
+      "description": "akc help --json, akc help --json user, and akc help user --json all produce identical full JSON tree output.",
+      "preconditions": [
+        "stub commands registered with Annotations; 'user' group command present"
+      ],
+      "input": "invoke all three variants",
+      "expected": "all three stdout outputs are identical JSON",
+      "assertion_pseudocode": "out1 = captureStdout(); Execute(['help', '--json']); out2 = captureStdout(); Execute(['help', '--json', 'user']); out3 = captureStdout(); Execute(['help', 'user', '--json']); assert out1 == out2; assert out2 == out3"
+    },
+    {
+      "id": "TS-13-E15",
+      "requirement_id": "13-REQ-11.E2",
+      "kind": "unit",
+      "description": "A command with both RunE and child subcommands appears in help --json output as a leaf entry.",
+      "preconditions": [
+        "a command with RunE and child subcommands registered; command has at least 'auth' annotation"
+      ],
+      "input": "invoke 'akc help --json'",
+      "expected": "the dual-mode command appears in commands array as a leaf entry; child subcommands not affected",
+      "assertion_pseudocode": "dualCmd = newCommand('dual', RunE, Annotations{'auth':'api_key'}); dualCmd.AddCommand(childCmd); rootCmd.AddCommand(dualCmd); Execute(['help', '--json']); cmds = parseJSON(stdout).commands; names = [c.name for c in cmds]; assert 'dual' in names"
+    },
+    {
+      "id": "TS-13-E16",
+      "requirement_id": "13-REQ-12.E1",
+      "kind": "unit",
+      "description": "A child command defining PersistentPreRunE shadows the root's hook, breaking client initialization for its subcommands (forbidden pattern documented).",
+      "preconditions": [
+        "a child command with PersistentPreRunE registered (test only to verify the pitfall)"
+      ],
+      "input": "invoke grandchild command under the misbehaving child",
+      "expected": "root's PersistentPreRunE does NOT run; client is not initialized; this negative test confirms the forbidden pattern must not appear in real code",
+      "assertion_pseudocode": "rootCalled = false; rootCmd.PersistentPreRunE records rootCalled = true; childWithBadHook.PersistentPreRunE = func(cmd,args){ return nil }; Execute(['childWithBadHook', 'grandchild']); assert rootCalled == false // demonstrates the shadow"
+    },
+    {
+      "id": "TS-13-E17",
+      "requirement_id": "13-REQ-13.E1",
+      "kind": "unit",
+      "description": "When server and CLI are built with different TokenPrefix values, CLI reads from wrong config directory and produces missing-credential errors (no runtime check for mismatch).",
+      "preconditions": [
+        "server compiled with TokenPrefix='srvprefix'; CLI compiled with TokenPrefix='cliprefix'; credentials in HOME/.srvprefix/config.toml only"
+      ],
+      "input": "invoke CLI command; CLI looks in HOME/.cliprefix/ which has no config",
+      "expected": "exit code 2 with missing credential error envelope (no explicit prefix-mismatch error, just missing credential)",
+      "assertion_pseudocode": "cli.TokenPrefix = 'cliprefix'; writeConfig(homeDir+'/.srvprefix/config.toml', validConfig); stdout = captureStdout(); err = Execute(['someCmd']); env = parseJSON(stdout); assert env.error.code == 0; assert contains(env.error.message, 'is not set'); assert ExitCode(err) == 2"
+    },
+    {
+      "id": "TS-13-E18",
+      "requirement_id": "13-REQ-14.E1",
+      "kind": "unit",
+      "description": "When server returns 4xx/5xx, SDK wraps it as *apikit.APIError; PrintError uses HTTP status as code and server message; exit code 1.",
+      "preconditions": [
+        "mock server configured to return 401 Unauthorized"
+      ],
+      "input": "invoke command against mock server; SDK returns *apikit.APIError{Code: 401, Message: 'unauthorized'}",
+      "expected": "stdout envelope has code=401, message='unauthorized'; exit code 1; stderr empty",
+      "assertion_pseudocode": "stdout, stderr = captureOutputs(); err = Execute(['cmd']); env = parseJSON(stdout); assert env.error.code == 401; assert env.error.message == 'unauthorized'; assert ExitCode(err) == 1; assert stderr == ''"
+    },
+    {
+      "id": "TS-13-E19",
+      "requirement_id": "13-REQ-14.E2",
+      "kind": "unit",
+      "description": "Client-side error (missing endpoint_url) produces code:0 envelope on stdout; exit code 2; stderr empty.",
+      "preconditions": [
+        "no endpoint_url configured anywhere; non-auth-exempt command; api_key configured to isolate the specific error"
+      ],
+      "input": "invoke non-auth-exempt command with no endpoint_url",
+      "expected": "stdout envelope has code:0 and canonical message for endpoint_url; exit code 2; stderr empty",
+      "assertion_pseudocode": "unsetEnv('ENDPOINT_URL'); setEnv('API_KEY', 'k'); stdout, stderr = captureOutputs(); err = Execute(['someCmd']); env = parseJSON(stdout); assert env.error.code == 0; assert contains(env.error.message, 'endpoint_url is not set'); assert ExitCode(err) == 2; assert stderr == ''"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-13-SMOKE-1",
+      "execution_path_id": "13-PATH-1",
+      "description": "Full end-to-end authenticated command: credentials resolved, client constructed, SDK called, JSON result printed, exit 0.",
+      "trigger": "invoke 'akc someCmd' with ENDPOINT_URL, API_KEY, USER_ID env vars set and a mock SDK server running",
+      "real_components": [
+        "cmd/akc/main.go",
+        "internal/cli/root.go",
+        "internal/cli/config.go",
+        "internal/cli/output.go",
+        "internal/cli/context.go"
+      ],
+      "mockable": [
+        "apikit.Client.SomeMethod",
+        "os.UserHomeDir"
+      ],
+      "expected_effects": [
+        "PersistentPreRunE runs: validates TokenPrefix, resolves HOME, creates config dir/file, loads config, resolves credentials, constructs client, stores in context",
+        "leaf command RunE calls ClientFromContext and invokes SDK method",
+        "PrintJSON writes indented JSON result to stdout",
+        "Execute() returns nil to main.go",
+        "process exits with code 0",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-13-SMOKE-2",
+      "execution_path_id": "13-PATH-2",
+      "description": "API error from server: SDK returns *apikit.APIError, Execute() writes error envelope to stdout, process exits 1.",
+      "trigger": "invoke 'akc someCmd' with valid credentials; mock SDK returns *apikit.APIError{Code: 401, Message: 'unauthorized'}",
+      "real_components": [
+        "cmd/akc/main.go",
+        "internal/cli/root.go",
+        "internal/cli/output.go"
+      ],
+      "mockable": [
+        "apikit.Client.SomeMethod (returns APIError)"
+      ],
+      "expected_effects": [
+        "leaf command RunE returns *apikit.APIError without printing",
+        "Execute() calls PrintError(err)",
+        "PrintError writes '{\"error\":{\"code\":401,\"message\":\"unauthorized\"}}' to stdout",
+        "Execute() returns error to main.go",
+        "main.go calls os.Exit(1)",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-13-SMOKE-3",
+      "execution_path_id": "13-PATH-3",
+      "description": "Missing required credential: PersistentPreRunE returns canonical error; Execute() writes code:0 envelope to stdout; process exits 2.",
+      "trigger": "invoke 'akc someCmd' with no endpoint_url in any source; api_key configured",
+      "real_components": [
+        "cmd/akc/main.go",
+        "internal/cli/root.go",
+        "internal/cli/config.go",
+        "internal/cli/output.go"
+      ],
+      "mockable": [
+        "os.UserHomeDir (returns valid dir)",
+        "filesystem (valid config dir)"
+      ],
+      "expected_effects": [
+        "PersistentPreRunE reaches ResolveField for endpoint_url with all sources empty",
+        "ResolveField returns canonical error 'endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file'",
+        "Execute() calls PrintError(err)",
+        "stdout contains '{\"error\":{\"code\":0,\"message\":\"endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file\"}}'",
+        "process exits with code 2",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-13-SMOKE-4",
+      "execution_path_id": "13-PATH-4",
+      "description": "akc version with reachable server: auth-exempt path, ResolveEndpointURL, SDK Version() called, full JSON output with server_version.",
+      "trigger": "invoke 'akc version' with ENDPOINT_URL set to a running mock server",
+      "real_components": [
+        "internal/cli/version.go",
+        "internal/cli/root.go",
+        "internal/cli/output.go"
+      ],
+      "mockable": [
+        "apikit.Client.Version (returns VersionResponse)",
+        "os.UserHomeDir"
+      ],
+      "expected_effects": [
+        "PersistentPreRunE reads 'auth':'none' and returns nil immediately",
+        "version RunE calls ResolveEndpointURL, gets non-empty URL",
+        "minimal apikit.Client constructed; Version(ctx) called with bounded context",
+        "VersionOutput built with ServerVersion from SDK response",
+        "PrintJSON writes JSON with cli_version, build, prefix, server_version to stdout",
+        "process exits with code 0",
+        "stderr is empty"
+      ]
+    },
+    {
+      "id": "TS-13-SMOKE-5",
+      "execution_path_id": "13-PATH-5",
+      "description": "akc help --json: full command tree walker runs, collects leaf commands, outputs JSON tree for agent discovery.",
+      "trigger": "invoke 'akc help --json' with stub command groups registered",
+      "real_components": [
+        "internal/cli/help.go",
+        "internal/cli/root.go",
+        "internal/cli/output.go"
+      ],
+      "mockable": [
+        "stub 'user show' and 'admin users list' commands as test fixtures"
+      ],
+      "expected_effects": [
+        "custom help subcommand detects --json flag",
+        "walker traverses Cobra tree recursively",
+        "only leaf commands with RunE and at least one Annotations key collected",
+        "group commands without RunE excluded",
+        "Cobra built-ins without annotations excluded",
+        "JSON root object with name, version, commands written to stdout",
+        "process exits with code 0"
+      ]
+    },
+    {
+      "id": "TS-13-SMOKE-6",
+      "execution_path_id": "13-PATH-6",
+      "description": "Atomic config write by a spec-14/15 command: temp file created in configDir, renamed atomically, no temp files left, config has correct content.",
+      "trigger": "a spec-14/15 stub command calls SaveConfig with updated CLIConfig after obtaining new credentials",
+      "real_components": [
+        "internal/cli/config.go"
+      ],
+      "mockable": [
+        "os.CreateTemp (observed but real)",
+        "os.Rename (observed but real)"
+      ],
+      "expected_effects": [
+        "CLIConfig marshalled to TOML via toml.NewEncoder",
+        "temp file created inside configDir",
+        "defer os.Remove registered immediately",
+        "temp file permissions set to 0600",
+        "temp file closed",
+        "os.Rename atomically replaces config.toml",
+        "deferred os.Remove targets non-existent renamed path (no-op)",
+        "config.toml has updated content with mode 0600",
+        "no temp files remain in configDir",
+        "process exits with code 0"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}
