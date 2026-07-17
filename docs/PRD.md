@@ -548,6 +548,11 @@ must be able to discover the CLI's capabilities programmatically and consume
 its output without parsing human-readable text. See the Agent Interface
 section below for details.
 
+The CLI is a thin wrapper around the **Go SDK** — it does not make HTTP
+calls directly. Every CLI command delegates to the corresponding Go SDK
+client method. This ensures the CLI and SDK stay in sync and that the SDK
+is the single implementation of the API client logic in Go.
+
 All commands print JSON to stdout and human-readable messages to stderr.
 
 ### Commands
