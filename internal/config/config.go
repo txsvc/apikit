@@ -34,7 +34,3 @@ type LoggingConfig struct {
 	Level string `toml:"level"`
 }
 
-// Load reads config.toml and returns a populated Config.
-func Load() (*Config, error) {
-	return &Config{}, nil // stub: returns zero-value config
-}
