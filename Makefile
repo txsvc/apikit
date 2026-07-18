@@ -3,7 +3,7 @@ BUILD   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
 LDFLAGS := -ldflags "-X github.com/txsvc/apikit.Version=$(VERSION) -X github.com/txsvc/apikit.Build=$(BUILD)"
 
-.PHONY: build test lint check clean
+.PHONY: build test lint check check-spec clean
 
 build:
 	go build -o bin/apikit $(LDFLAGS) ./cmd/apikit
@@ -14,7 +14,10 @@ test:
 lint:
 	go vet ./...
 
-check: lint test
+check-spec:
+	go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml
+
+check: lint test check-spec
 
 clean:
 	rm -f bin/apikit
