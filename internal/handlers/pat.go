@@ -1,11 +1,19 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"io"
+
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit/internal/auth"
 	"github.com/txsvc/apikit/internal/db"
 )
+
+// randReader is the source of cryptographic randomness. Defaults to
+// crypto/rand.Reader. Overridden in tests via export_test.go to simulate
+// crypto/rand failures.
+var randReader io.Reader = rand.Reader
 
 // tokenAlphabet is the 36-character set from which both token_id and secret
 // characters are drawn: lowercase letters and digits.

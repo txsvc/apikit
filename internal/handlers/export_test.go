@@ -1,6 +1,9 @@
 package handlers
 
-import "database/sql"
+import (
+	"database/sql"
+	"io"
+)
 
 // ValidateSlug exposes validateSlug for external tests.
 var ValidateSlug = validateSlug
@@ -21,3 +24,9 @@ var HashSecret = hashSecret
 
 // TokenAlphabet exposes tokenAlphabet for external tests.
 const TokenAlphabet = tokenAlphabet
+
+// SetRandReader allows tests to override the random reader used by
+// generateTokenID and generateSecret for error simulation.
+var SetRandReader = func(r io.Reader) {
+	randReader = r
+}

@@ -1,13 +1,18 @@
 package handlers_test
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -1033,4 +1038,530 @@ func TestPATPrivilegeEscalation_Property(t *testing.T) {
 			}
 		}
 	})
+}
+
+// ========================================================================
+// Task 4 helper functions
+// ========================================================================
+
+// sha256Hex computes the SHA-256 hash of s and returns a lowercase hex string.
+// Used in test assertions to verify secret hashing.
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// extractSecretFromToken extracts the secret (last segment) from a PAT token
+// in the format <prefix>_pat_<token_id>_<secret>.
+func extractSecretFromToken(token string) string {
+	// Split on "_pat_" to get [prefix, <token_id>_<secret>]
+	parts := strings.SplitN(token, "_pat_", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	// The remainder is "<token_id>_<secret>" — split on first "_" to get secret.
+	rest := parts[1]
+	idx := strings.Index(rest, "_")
+	if idx < 0 {
+		return ""
+	}
+	return rest[idx+1:]
+}
+
+// ========================================================================
+// Task 4.1: Integration tests for successful PAT creation response
+// Test Spec: TS-09-20, TS-09-21, TS-09-22, TS-09-23
+// Requirements: 09-REQ-5.1, 09-REQ-5.2, 09-REQ-5.3, 09-REQ-5.4
+// ========================================================================
+
+// TestCreatePAT_Success verifies that POST /user/tokens with a valid request
+// body returns HTTP 201 with a CreatePATResponse containing token_id (8 chars),
+// name matching the request, token matching the canonical regex pattern,
+// permissions in insertion order, non-null expires_at (for expires=90),
+// and a non-empty created_at.
+//
+// Test Spec: TS-09-20
+// Requirement: 09-REQ-5.1
+func TestCreatePAT_Success(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["users:read", "orgs:read"], "expires": 90}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// token_id must be 8 characters.
+	if len(resp.TokenID) != 8 {
+		t.Errorf("expected token_id length 8, got %d: %q", len(resp.TokenID), resp.TokenID)
+	}
+
+	// name must match the request.
+	if resp.Name != "ci-deploy" {
+		t.Errorf("expected name %q, got %q", "ci-deploy", resp.Name)
+	}
+
+	// token must match the canonical regex pattern.
+	pattern := regexp.MustCompile(`^[a-z0-9]+_pat_[a-z0-9]{8}_[a-z0-9]{32}$`)
+	if !pattern.MatchString(resp.Token) {
+		t.Errorf("token %q does not match pattern %s", resp.Token, pattern)
+	}
+
+	// permissions must preserve insertion order.
+	expectedPerms := []string{"users:read", "orgs:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d", len(expectedPerms), len(resp.Permissions))
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+
+	// expires_at must be non-null for expires=90.
+	if resp.ExpiresAt == nil {
+		t.Error("expected non-null expires_at for expires=90")
+	}
+
+	// created_at must be non-empty.
+	if resp.CreatedAt == "" {
+		t.Error("expected non-empty created_at")
+	}
+}
+
+// TestCreatePAT_SecretHashed verifies that the pats table row stores
+// secret_hash = SHA-256(secret) and never contains the plaintext secret.
+//
+// Test Spec: TS-09-21
+// Requirement: 09-REQ-5.2
+func TestCreatePAT_SecretHashed(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Extract secret from the token string.
+	secret := extractSecretFromToken(resp.Token)
+	if secret == "" {
+		t.Fatal("failed to extract secret from token")
+	}
+
+	// Query the database for the stored secret_hash.
+	var secretHash string
+	err := database.SqlDB.QueryRow(
+		"SELECT secret_hash FROM pats WHERE token_id = ?", resp.TokenID,
+	).Scan(&secretHash)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+
+	// Verify secret_hash equals SHA-256(secret).
+	expectedHash := sha256Hex(secret)
+	if secretHash != expectedHash {
+		t.Errorf("secret_hash = %q, want SHA-256(secret) = %q", secretHash, expectedHash)
+	}
+
+	// Verify secret_hash is NOT the plaintext secret.
+	if secretHash == secret {
+		t.Error("secret_hash equals the plaintext secret — secrets must be hashed")
+	}
+}
+
+// TestCreatePAT_PermissionsInsertionOrder verifies that the permissions array
+// is preserved in insertion order in both the CreatePATResponse and the pats
+// table.
+//
+// Test Spec: TS-09-22
+// Requirement: 09-REQ-5.3
+func TestCreatePAT_PermissionsInsertionOrder(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["orgs:read", "tokens:read", "users:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify response permissions match insertion order.
+	expectedPerms := []string{"orgs:read", "tokens:read", "users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions in response, got %d",
+			len(expectedPerms), len(resp.Permissions))
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("response permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+
+	// Verify database stores permissions in the same order.
+	var permJSON string
+	err := database.SqlDB.QueryRow(
+		"SELECT permissions FROM pats WHERE token_id = ?", resp.TokenID,
+	).Scan(&permJSON)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+
+	var dbPerms []string
+	if err := json.Unmarshal([]byte(permJSON), &dbPerms); err != nil {
+		t.Fatalf("failed to parse permissions JSON from DB: %v", err)
+	}
+
+	if len(dbPerms) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions in DB, got %d",
+			len(expectedPerms), len(dbPerms))
+	}
+	for i, perm := range dbPerms {
+		if perm != expectedPerms[i] {
+			t.Errorf("DB permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// TestCreatePAT_ResponseOmitsRevokedAtAndExpiresDays verifies that the HTTP 201
+// response JSON does not contain 'revoked_at' or 'expires_days' keys.
+//
+// Test Spec: TS-09-23
+// Requirement: 09-REQ-5.4
+func TestCreatePAT_ResponseOmitsRevokedAtAndExpiresDays(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Parse as a raw map to check key presence.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse response as map: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if _, exists := raw["revoked_at"]; exists {
+		t.Error("response should not contain 'revoked_at' key for a newly created PAT")
+	}
+
+	if _, exists := raw["expires_days"]; exists {
+		t.Error("response should not contain 'expires_days' key — internal field not exposed")
+	}
+}
+
+// ========================================================================
+// Task 4.2: Tests for duplicate names and transaction rollback
+// Test Spec: TS-09-24, TS-09-26, TS-09-E7, TS-09-E8
+// Requirements: 09-REQ-5.5, 09-REQ-5.7, 09-REQ-5.E1, 09-REQ-5.E2
+// ========================================================================
+
+// TestCreatePAT_DuplicateName verifies that two PATs with the same name can
+// be created for the same user without error; both return HTTP 201 with
+// distinct token_ids, and two rows exist in the database.
+//
+// Test Spec: TS-09-26
+// Requirement: 09-REQ-5.7
+func TestCreatePAT_DuplicateName(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	// Create first PAT with name "ci-deploy".
+	rec1 := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["tokens:read"], "expires": 30}`)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first create: expected HTTP 201, got %d; body: %s",
+			rec1.Code, rec1.Body.String())
+	}
+
+	var resp1 createPATResponse
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("failed to parse first CreatePATResponse: %v", err)
+	}
+
+	// Create second PAT with same name "ci-deploy".
+	rec2 := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["tokens:read"], "expires": 60}`)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("second create: expected HTTP 201, got %d; body: %s",
+			rec2.Code, rec2.Body.String())
+	}
+
+	var resp2 createPATResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("failed to parse second CreatePATResponse: %v", err)
+	}
+
+	// token_ids must be distinct.
+	if resp1.TokenID == resp2.TokenID {
+		t.Errorf("expected distinct token_ids, got same: %q", resp1.TokenID)
+	}
+
+	// Verify two rows exist in the database with name "ci-deploy".
+	var count int
+	err := database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM pats WHERE name = ?", "ci-deploy",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 rows with name 'ci-deploy', got %d", count)
+	}
+}
+
+// TestCreatePAT_TransactionRollback verifies that when the db.WithTx
+// transaction fails, HTTP 500 is returned with message "internal server error"
+// and no PAT row is persisted. The database is closed after server setup to
+// simulate a transaction failure.
+//
+// Test Spec: TS-09-24, TS-09-E7
+// Requirements: 09-REQ-5.5, 09-REQ-5.E1
+func TestCreatePAT_TransactionRollback(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	// Insert a test user while the database is still open.
+	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	handler.RegisterRoutes(g)
+
+	// Close the database AFTER server setup to simulate a DB/transaction failure.
+	// Any db.WithTx call will now fail, triggering the rollback path.
+	database.Close()
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// TestCreatePAT_GeneratedBeforeTransaction verifies that token generation
+// (token_id and secret) occurs before the db.WithTx transaction opens so
+// that a transaction failure discards the generated values cleanly without
+// any intermediate state being partially visible. No token material should
+// appear in the error response.
+//
+// Test Spec: TS-09-E8
+// Requirement: 09-REQ-5.E2
+func TestCreatePAT_GeneratedBeforeTransaction(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	// Insert a test user.
+	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	handler.RegisterRoutes(g)
+
+	// Close the database to cause the WithTx transaction to fail.
+	// Token generation should have already happened before the transaction.
+	database.Close()
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected HTTP 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify no token material is present in the error response.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+
+	if _, exists := raw["token"]; exists {
+		t.Error("error response should not contain a 'token' field — " +
+			"generated token must be discarded on failure")
+	}
+
+	if _, exists := raw["token_id"]; exists {
+		t.Error("error response should not contain a 'token_id' field — " +
+			"generated token_id must be discarded on failure")
+	}
+}
+
+// ========================================================================
+// Task 4.3: Edge case tests for crypto/rand failure
+// Test Spec: TS-09-E2
+// Requirement: 09-REQ-2.E1
+// ========================================================================
+
+// TestCreatePAT_RandFailure verifies that when crypto/rand fails during
+// token generation, the CreatePAT handler returns HTTP 500 with message
+// "internal server error", no token field in the response, and no rows
+// in the pats table.
+//
+// Test Spec: TS-09-E2
+// Requirement: 09-REQ-2.E1
+func TestCreatePAT_RandFailure(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	// Override the random reader to simulate a crypto/rand failure.
+	handlers.SetRandReader(iotest.ErrReader(errors.New("simulated rand failure")))
+	defer handlers.SetRandReader(rand.Reader)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected HTTP 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+
+	// Verify no token field in the error response.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if _, exists := raw["token"]; exists {
+		t.Error("error response should not contain a 'token' field when rand fails")
+	}
+
+	// Verify pats table has zero rows.
+	var count int
+	err := database.SqlDB.QueryRow("SELECT COUNT(*) FROM pats").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 rows in pats table after rand failure, got %d", count)
+	}
+}
+
+// ========================================================================
+// Task 4.4: Property tests for secret storage invariant
+// Test Spec: TS-09-P1
+// Requirements: 09-REQ-5.1, 09-REQ-5.2
+// ========================================================================
+
+// TestPATSecretNeverPersisted_Property is a property-based test that creates
+// N valid PATs with varying inputs and verifies after each creation that:
+// 1. The pats table row has secret_hash == SHA-256(secret)
+// 2. The plaintext secret does not appear in any row field
+//
+// Test Spec: TS-09-P1
+// Requirements: 09-REQ-5.1, 09-REQ-5.2
+func TestPATSecretNeverPersisted_Property(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	// Test with varying inputs: different names, permissions, and expires values.
+	testCases := []struct {
+		name    string
+		perms   string
+		expires int
+	}{
+		{"daily-build", `["users:read"]`, 30},
+		{"staging-deploy", `["orgs:read","users:read"]`, 60},
+		{"prod-monitor", `["tokens:read"]`, 90},
+		{"permanent-key", `["users:read","orgs:read","tokens:read"]`, 0},
+		{"short-name", `["keys:read"]`, 30},
+		{"ci-runner", `["tokens:manage","tokens:read"]`, 60},
+		{"read-only", `["keys:read","users:read","orgs:read"]`, 90},
+		{"full-access", `["users:read","orgs:read","keys:read","keys:manage","tokens:read","tokens:manage"]`, 0},
+	}
+
+	for i, tc := range testCases {
+		body := fmt.Sprintf(`{"name": %q, "permissions": %s, "expires": %d}`,
+			tc.name, tc.perms, tc.expires)
+
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("iteration %d (%s): expected HTTP 201, got %d; body: %s",
+				i, tc.name, rec.Code, rec.Body.String())
+		}
+
+		var resp createPATResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("iteration %d (%s): failed to parse CreatePATResponse: %v",
+				i, tc.name, err)
+		}
+
+		// Extract the secret from the token string.
+		secret := extractSecretFromToken(resp.Token)
+		if secret == "" {
+			t.Fatalf("iteration %d (%s): failed to extract secret from token %q",
+				i, tc.name, resp.Token)
+		}
+
+		// Query all fields from the pats row.
+		var (
+			tokenID    string
+			userID     string
+			name       string
+			secretHash string
+			permsJSON  string
+			createdAt  string
+		)
+		err := database.SqlDB.QueryRow(
+			"SELECT token_id, user_id, name, secret_hash, permissions, created_at "+
+				"FROM pats WHERE token_id = ?",
+			resp.TokenID,
+		).Scan(&tokenID, &userID, &name, &secretHash, &permsJSON, &createdAt)
+		if err != nil {
+			t.Fatalf("iteration %d (%s): failed to query pats table: %v",
+				i, tc.name, err)
+		}
+
+		// Verify secret_hash == SHA-256(secret).
+		expectedHash := sha256Hex(secret)
+		if secretHash != expectedHash {
+			t.Errorf("iteration %d (%s): secret_hash = %q, want SHA-256(secret) = %q",
+				i, tc.name, secretHash, expectedHash)
+		}
+
+		// Verify the plaintext secret does not appear in any row field.
+		rowFields := []string{tokenID, userID, name, secretHash, permsJSON, createdAt}
+		for _, field := range rowFields {
+			if field == secret {
+				t.Errorf("iteration %d (%s): plaintext secret %q found in pats row field",
+					i, tc.name, secret)
+			}
+		}
+	}
 }
