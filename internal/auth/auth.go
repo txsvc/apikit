@@ -43,6 +43,26 @@ func NewPermissionRegistry() *PermissionRegistry {
 	return &PermissionRegistry{}
 }
 
+// Register adds a resource_type:action permission pair to the registry.
+// Returns a non-nil error if the pair is invalid or already registered.
+func (r *PermissionRegistry) Register(resourceType, action string) error {
+	// Stub: not implemented.
+	return errors.New("not implemented")
+}
+
+// IsValid returns true if the resource_type:action pair is registered.
+func (r *PermissionRegistry) IsValid(resourceType, action string) bool {
+	// Stub: not implemented.
+	return false
+}
+
+// List returns all registered resource_type:action strings as a sorted
+// slice in ascending lexicographic order.
+func (r *PermissionRegistry) List() []string {
+	// Stub: not implemented.
+	return nil
+}
+
 // NewAuthMiddleware creates the Echo middleware function for authentication
 // and authorization. Panics if database or registry is nil.
 func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.MiddlewareFunc {
