@@ -1279,7 +1279,7 @@
             "12-REQ-8.4",
             "12-REQ-8.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1313,7 +1313,7 @@
             "12-REQ-8.12",
             "12-REQ-8.13"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1342,7 +1342,7 @@
             "12-REQ-9.5",
             "12-REQ-9.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1369,7 +1369,7 @@
             "12-REQ-9.10",
             "12-REQ-9.11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
