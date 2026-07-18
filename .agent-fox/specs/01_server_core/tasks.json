@@ -1029,7 +1029,7 @@
             "01-REQ-19.1",
             "01-REQ-19.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1059,7 +1059,7 @@
             "01-REQ-15.1",
             "01-REQ-19.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1081,7 +1081,7 @@
             "01-REQ-7.1",
             "01-REQ-7.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1108,7 +1108,7 @@
             "01-REQ-6.5",
             "01-REQ-6.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
