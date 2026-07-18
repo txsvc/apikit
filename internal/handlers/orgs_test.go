@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -1140,6 +1141,494 @@ func TestGetOrg_MembershipDBError(t *testing.T) {
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
 	rec := sendGet(t, e, "/orgs/"+orgID)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 4.1: TestUpdateOrg — PATCH /orgs/:id update handler
+// Test Spec: TS-08-20, TS-08-21, TS-08-22, TS-08-23, TS-08-24, TS-08-25,
+//            TS-08-26, TS-08-E8, TS-08-E9
+// Requirements: 08-REQ-5.1, 08-REQ-5.2, 08-REQ-5.3, 08-REQ-5.4, 08-REQ-5.5,
+//               08-REQ-5.6, 08-REQ-5.7, 08-REQ-5.E1, 08-REQ-5.E2
+// ========================================================================
+
+// TestUpdateOrg_Name verifies that PATCH /orgs/:id with a valid name update
+// returns HTTP 200 with the updated name, an unchanged slug, and an
+// updated_at value that is >= the original.
+//
+// Test Spec: TS-08-20
+// Requirement: 08-REQ-5.1
+func TestUpdateOrg_Name(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "update-name-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Acme Corp", "acme-corp", "https://acme.example.com", "active")
+
+	// Retrieve original to compare updated_at and slug.
+	origRec := sendGet(t, e, "/orgs/"+orgID)
+	if origRec.Code != http.StatusOK {
+		t.Fatalf("setup: expected HTTP 200 on GET, got %d; body: %s", origRec.Code, origRec.Body.String())
+	}
+	original := parseOrgResponse(t, origRec)
+
+	body := `{"name":"Acme Corporation"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	updated := parseOrgResponse(t, rec)
+
+	if updated.Name != "Acme Corporation" {
+		t.Errorf("expected name %q, got %q", "Acme Corporation", updated.Name)
+	}
+	if updated.Slug != original.Slug {
+		t.Errorf("expected slug to remain %q, got %q", original.Slug, updated.Slug)
+	}
+
+	origTime, err1 := time.Parse(time.RFC3339, original.UpdatedAt)
+	updTime, err2 := time.Parse(time.RFC3339, updated.UpdatedAt)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to parse updated_at timestamps: orig=%v upd=%v", err1, err2)
+	}
+	if updTime.Before(origTime) {
+		t.Errorf("expected updated_at %v >= original %v", updTime, origTime)
+	}
+}
+
+// TestUpdateOrg_URL verifies that PATCH /orgs/:id with a valid url update
+// returns HTTP 200 with the updated URL.
+//
+// Requirement: 08-REQ-5.1
+func TestUpdateOrg_URL(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "update-url-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "URL Corp", "url-corp", "https://old.example.com", "active")
+
+	body := `{"url":"https://new.example.com"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	updated := parseOrgResponse(t, rec)
+
+	if updated.URL != "https://new.example.com" {
+		t.Errorf("expected url %q, got %q", "https://new.example.com", updated.URL)
+	}
+	// Name must remain unchanged.
+	if updated.Name != "URL Corp" {
+		t.Errorf("expected name to remain %q, got %q", "URL Corp", updated.Name)
+	}
+}
+
+// TestUpdateOrg_BothFields verifies that PATCH /orgs/:id with both name and
+// url updates returns HTTP 200 with both fields updated.
+//
+// Requirement: 08-REQ-5.1
+func TestUpdateOrg_BothFields(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "update-both-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Both Corp", "both-corp", "https://both.example.com", "active")
+
+	body := `{"name":"Both Updated","url":"https://updated.example.com"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	updated := parseOrgResponse(t, rec)
+
+	if updated.Name != "Both Updated" {
+		t.Errorf("expected name %q, got %q", "Both Updated", updated.Name)
+	}
+	if updated.URL != "https://updated.example.com" {
+		t.Errorf("expected url %q, got %q", "https://updated.example.com", updated.URL)
+	}
+}
+
+// TestUpdateOrg_SlugIgnored verifies that PATCH /orgs/:id with a slug field
+// in the body silently ignores it and keeps the original slug.
+//
+// Test Spec: TS-08-21
+// Requirement: 08-REQ-5.2
+func TestUpdateOrg_SlugIgnored(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "slug-ignore-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Slug Corp", "original-slug", "", "active")
+
+	body := `{"name":"New Name","slug":"new-slug"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	updated := parseOrgResponse(t, rec)
+
+	if updated.Name != "New Name" {
+		t.Errorf("expected name %q, got %q", "New Name", updated.Name)
+	}
+	if updated.Slug != "original-slug" {
+		t.Errorf("expected slug to remain %q, got %q", "original-slug", updated.Slug)
+	}
+}
+
+// TestUpdateOrg_EmptyBody verifies that PATCH /orgs/:id with a body
+// containing no recognized fields (both name and url absent) returns
+// HTTP 400 with error message 'no fields to update'.
+//
+// Test Spec: TS-08-22
+// Requirement: 08-REQ-5.3
+func TestUpdateOrg_EmptyBody(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "empty-body-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "EmptyBody Corp", "emptybody-corp", "", "active")
+
+	body := `{}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "no fields to update")
+}
+
+// TestUpdateOrg_DuplicateName verifies that PATCH /orgs/:id with a name
+// that conflicts with another org returns HTTP 409 with error message
+// 'organization name already exists'.
+//
+// Test Spec: TS-08-23
+// Requirement: 08-REQ-5.4
+func TestUpdateOrg_DuplicateName(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	targetOrgID := "dup-name-target-uuid"
+	insertTestOrg(t, sqlDB, targetOrgID, "Target Corp", "target-corp", "", "active")
+	insertTestOrg(t, sqlDB, "dup-name-taken-uuid", "Taken Name Corp", "taken-name-corp", "", "active")
+
+	body := `{"name":"Taken Name Corp"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+targetOrgID, body)
+
+	assertErrorResponse(t, rec, http.StatusConflict, "organization name already exists")
+}
+
+// TestUpdateOrg_NotFound verifies that PATCH /orgs/:id for a non-existent
+// organization returns HTTP 404 with error message 'organization not found'.
+//
+// Test Spec: TS-08-24
+// Requirement: 08-REQ-5.5
+func TestUpdateOrg_NotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	nonExistentUUID := "00000000-0000-0000-0000-000000000000"
+	body := `{"name":"New Name"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+nonExistentUUID, body)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestUpdateOrg_InvalidID verifies that PATCH /orgs/:id with an invalid
+// UUID path parameter returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-25
+// Requirement: 08-REQ-5.6
+func TestUpdateOrg_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	body := `{"name":"New Name"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/not-a-uuid", body)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestUpdateOrg_NonAdmin verifies that PATCH /orgs/:id from a non-admin
+// user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-26
+// Requirement: 08-REQ-5.7
+func TestUpdateOrg_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-update-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Corp", "nonadmin-corp", "", "active")
+
+	body := `{"name":"New Name"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestUpdateOrg_EmptyName verifies that PATCH /orgs/:id with a name that
+// is empty after whitespace trimming returns HTTP 400 with error message
+// 'name is required'.
+//
+// Test Spec: TS-08-E8
+// Requirement: 08-REQ-5.E1
+func TestUpdateOrg_EmptyName(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "emptyname-update-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "EmptyName Corp", "emptyname-corp", "", "active")
+
+	body := `{"name":"   "}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "name is required")
+}
+
+// TestUpdateOrg_DBError verifies that PATCH /orgs/:id returns HTTP 500
+// with error message 'internal server error' when the DB UPDATE fails
+// with a non-UNIQUE database error. Uses a SQLite BEFORE UPDATE trigger
+// to simulate a database failure on the UPDATE statement while allowing
+// the initial org lookup SELECT to succeed.
+//
+// Test Spec: TS-08-E9
+// Requirement: 08-REQ-5.E2
+func TestUpdateOrg_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	orgID := "dberror-update-org-uuid"
+	insertTestOrg(t, database.SqlDB, orgID, "DBError Corp", "dberror-corp", "", "active")
+
+	// Install a BEFORE UPDATE trigger that raises a generic DB error.
+	// The org lookup (SELECT) succeeds, but the UPDATE statement fails.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_orgs_update BEFORE UPDATE ON orgs
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	body := `{"name":"New Name"}`
+	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, body)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 4.2: TestDeleteOrg — DELETE /orgs/:id handler
+// Test Spec: TS-08-27, TS-08-28, TS-08-29, TS-08-30, TS-08-E10
+// Requirements: 08-REQ-6.1, 08-REQ-6.2, 08-REQ-6.3, 08-REQ-6.4, 08-REQ-6.E1
+// ========================================================================
+
+// TestDeleteOrg_Success verifies that DELETE /orgs/:id from an admin
+// deletes the org, cascade-deletes org_members rows, preserves the user
+// row, and returns HTTP 204 with no body.
+//
+// Test Spec: TS-08-27
+// Requirement: 08-REQ-6.1
+func TestDeleteOrg_Success(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "delete-org-uuid"
+	userID := "delete-user-uuid"
+
+	insertTestUser(t, sqlDB, userID, "deleteuser", "delete@example.com", "github", "gh-del")
+	insertTestOrg(t, sqlDB, orgID, "Delete Corp", "delete-corp", "", "active")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Body must be empty.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for 204 response, got %q", rec.Body.String())
+	}
+
+	// Verify org row is absent.
+	var orgCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&orgCount)
+	if err != nil {
+		t.Fatalf("failed to query orgs table: %v", err)
+	}
+	if orgCount != 0 {
+		t.Errorf("expected org row to be deleted, found %d rows", orgCount)
+	}
+
+	// Verify org_members rows are absent (cascade delete).
+	var memberCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members table: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected org_members rows to be cascade-deleted, found %d rows", memberCount)
+	}
+
+	// Verify user row is preserved.
+	var userCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("failed to query users table: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected user row to be preserved, found %d rows", userCount)
+	}
+}
+
+// TestDeleteOrg_CascadesMembers verifies that deleting an organization
+// with multiple members cascade-deletes all org_members rows for that org.
+//
+// Test Spec: TS-08-27
+// Requirement: 08-REQ-6.1 (cascade aspect)
+func TestDeleteOrg_CascadesMembers(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "cascade-org-uuid"
+	user1ID := "cascade-user-uuid-1"
+	user2ID := "cascade-user-uuid-2"
+
+	insertTestUser(t, sqlDB, user1ID, "user1", "user1@example.com", "github", "gh-u1")
+	insertTestUser(t, sqlDB, user2ID, "user2", "user2@example.com", "github", "gh-u2")
+	insertTestOrg(t, sqlDB, orgID, "Cascade Corp", "cascade-corp", "", "active")
+	insertTestOrgMember(t, sqlDB, orgID, user1ID)
+	insertTestOrgMember(t, sqlDB, orgID, user2ID)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var memberCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members table: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected all org_members rows to be cascade-deleted, found %d rows", memberCount)
+	}
+}
+
+// TestDeleteOrg_UsersPreserved verifies that deleting an organization
+// does not affect user rows in the users table.
+//
+// Test Spec: TS-08-27
+// Requirement: 08-REQ-6.1 (users unaffected aspect)
+func TestDeleteOrg_UsersPreserved(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "preserve-org-uuid"
+	userID := "preserve-user-uuid"
+
+	insertTestUser(t, sqlDB, userID, "preserved", "preserved@example.com", "github", "gh-prsv")
+	insertTestOrg(t, sqlDB, orgID, "Preserve Corp", "preserve-corp", "", "active")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// User row must still exist.
+	var userCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("failed to query users table: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected user row to be preserved after org deletion, found %d rows", userCount)
+	}
+}
+
+// TestDeleteOrg_NotFound verifies that DELETE /orgs/:id for a non-existent
+// organization returns HTTP 404 with error message 'organization not found'.
+//
+// Test Spec: TS-08-28
+// Requirement: 08-REQ-6.2
+func TestDeleteOrg_NotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	nonExistentUUID := "00000000-0000-0000-0000-000000000000"
+	rec := sendDelete(t, e, "/orgs/"+nonExistentUUID)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestDeleteOrg_InvalidID verifies that DELETE /orgs/:id with an invalid
+// UUID path parameter returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-29
+// Requirement: 08-REQ-6.3
+func TestDeleteOrg_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendDelete(t, e, "/orgs/not-a-uuid")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestDeleteOrg_NonAdmin verifies that DELETE /orgs/:id from a non-admin
+// user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-30
+// Requirement: 08-REQ-6.4
+func TestDeleteOrg_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-delete-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Del Corp", "nonadmin-del-corp", "", "active")
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestDeleteOrg_DBError verifies that DELETE /orgs/:id returns HTTP 500
+// with error message 'internal server error' when the DB DELETE fails
+// with a database error. Uses a SQLite BEFORE DELETE trigger to simulate
+// the failure.
+//
+// Test Spec: TS-08-E10
+// Requirement: 08-REQ-6.E1
+func TestDeleteOrg_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	orgID := "dberror-delete-org-uuid"
+	insertTestOrg(t, database.SqlDB, orgID, "DBError Del Corp", "dberror-del-corp", "", "active")
+
+	// Install a BEFORE DELETE trigger that raises a generic DB error.
+	// This allows any prior org lookup to succeed while the DELETE fails.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_orgs_delete BEFORE DELETE ON orgs
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
 
 	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
 }
