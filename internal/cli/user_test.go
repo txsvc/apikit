@@ -28,29 +28,6 @@ type errorEnvelopeSpec15 struct {
 	} `json:"error"`
 }
 
-// writeTOMLConfig writes a minimal config.toml to the given directory.
-func writeTOMLConfig(t *testing.T, configDir, apiKey, endpointURL string) {
-	t.Helper()
-	_ = configDir
-	_ = apiKey
-	_ = endpointURL
-	// Reserved for future config-file-based tests.
-}
-
-// writeTOMLConfigFull writes a config.toml with all fields including user_id.
-func writeTOMLConfigFull(t *testing.T, configDir, apiKey, endpointURL, userID string) {
-	t.Helper()
-	_ = configDir
-	_ = apiKey
-	_ = endpointURL
-	_ = userID
-	// Reserved for future config-file-based tests.
-}
-
-// quoteToml wraps a string in double quotes for TOML values.
-func quoteToml(s string) string {
-	return `"` + s + `"`
-}
 
 // executeUserCmd constructs the user command tree from NewUserCmd, sets the
 // provided args, captures stdout and stderr, and executes. Returns stdout,
