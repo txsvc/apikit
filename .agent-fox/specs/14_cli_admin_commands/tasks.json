@@ -1135,7 +1135,7 @@
             "14-REQ-21.1",
             "14-REQ-22.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1156,7 +1156,7 @@
             "14-REQ-23.1",
             "14-REQ-24.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1180,7 +1180,7 @@
             "14-REQ-23.2",
             "14-REQ-24.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
