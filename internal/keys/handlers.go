@@ -177,7 +177,111 @@ func (h *keyHandlers) listKeys(c echo.Context) error {
 // refreshKey handles POST /user/keys/:key_id/refresh — generates a new secret
 // for an existing, non-revoked, non-expired key.
 func (h *keyHandlers) refreshKey(c echo.Context) error {
-	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "not implemented"})
+	// Step 1: Check credential type — PAT authentication is rejected.
+	info := authctx.GetAuthInfo(c)
+	if info != nil && info.CredentialType == "pat" {
+		return writeAPIError(c, http.StatusUnauthorized, "API key authentication required")
+	}
+
+	userID := authctx.GetUserID(c)
+	keyID := c.Param("key_id")
+
+	// Step 2: Look up the key record.
+	var dbUserID string
+	var dbSecretHash string
+	var dbExpiresDays int
+	var dbExpiresAt sql.NullString
+	var dbRevokedAt sql.NullString
+	var dbCreatedAt string
+
+	err := h.db.QueryRow(
+		`SELECT key_id, user_id, secret_hash, expires_days, expires_at, revoked_at, created_at
+		 FROM api_keys WHERE key_id = ?`,
+		keyID,
+	).Scan(&keyID, &dbUserID, &dbSecretHash, &dbExpiresDays, &dbExpiresAt, &dbRevokedAt, &dbCreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return writeAPIError(c, http.StatusNotFound, "key not found")
+		}
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Step 3: Ownership check — return 404 (not 403) to prevent information leakage.
+	if dbUserID != userID {
+		return writeAPIError(c, http.StatusNotFound, "key not found")
+	}
+
+	// Step 4: Check revocation status.
+	if dbRevokedAt.Valid {
+		return writeAPIError(c, http.StatusBadRequest, "cannot refresh a revoked key")
+	}
+
+	// Step 5: Check expiry status.
+	if dbExpiresAt.Valid {
+		expiresAtTime, parseErr := db.ParseTime(dbExpiresAt.String)
+		if parseErr != nil {
+			return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		if expiresAtTime.Before(time.Now().UTC()) {
+			return writeAPIError(c, http.StatusBadRequest, "cannot refresh an expired key")
+		}
+	}
+
+	// Step 6: Generate new secret.
+	newSecret, err := randAlphanumeric(secretLen)
+	if err != nil {
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	newSecretHash := hashSecret(newSecret)
+
+	// Step 7: Calculate new expires_at from stored expires_days.
+	now := time.Now().UTC()
+	// Use RFC3339Nano for created_at to preserve sub-second precision.
+	// db.FormatTime truncates to whole seconds, but the refresh flow needs
+	// the stored timestamp to faithfully represent the current instant.
+	createdAt := now.Format(time.RFC3339Nano)
+
+	var newExpiresAtDB any   // value for DB column (string or nil)
+	var newExpiresAt *string // value for JSON response
+	if dbExpiresDays > 0 {
+		ea := now.Add(time.Duration(dbExpiresDays) * 24 * time.Hour)
+		eaStr := db.FormatTime(ea)
+		newExpiresAtDB = eaStr
+		// Format for JSON response as RFC 3339.
+		eaFormatted := ea.UTC().Truncate(time.Second).Format(time.RFC3339)
+		newExpiresAt = &eaFormatted
+	}
+
+	// Step 8: UPDATE the key record.
+	result, err := h.db.Exec(
+		`UPDATE api_keys SET secret_hash = ?, expires_at = ?, created_at = ?
+		 WHERE key_id = ? AND user_id = ?`,
+		newSecretHash, newExpiresAtDB, createdAt, keyID, userID,
+	)
+	if err != nil {
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Step 9: Check rows affected — 0 means race condition (key deleted between SELECT and UPDATE).
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if rowsAffected == 0 {
+		return writeAPIError(c, http.StatusNotFound, "key not found")
+	}
+
+	// Step 10: Construct full key and log.
+	fullKey := fmt.Sprintf("%s_%s_%s", defaultTokenPrefix, keyID, newSecret)
+	c.Logger().Infof("api_key_refreshed user_id=%s key_id=%s", userID, keyID)
+
+	// Step 11: Return success response.
+	return c.JSON(http.StatusOK, map[string]any{
+		"key":        fullKey,
+		"key_id":     keyID,
+		"expires_at": newExpiresAt,
+	})
 }
 
 // revokeKey handles DELETE /user/keys/:key_id — permanently revokes a key.

@@ -925,7 +925,7 @@
             "10-REQ-6.6",
             "10-REQ-6.8"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -955,7 +955,7 @@
             "10-REQ-6.E3",
             "10-REQ-6.E4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
