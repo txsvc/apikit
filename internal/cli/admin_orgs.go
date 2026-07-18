@@ -163,7 +163,23 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			if err := runner.DeleteOrg(context.Background(), id); err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, struct{}{}); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -178,7 +194,24 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.BlockOrg(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -193,7 +226,24 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.UnblockOrg(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -230,7 +280,24 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			orgID := args[0]
+			result, err := runner.ListOrgMembers(context.Background(), orgID)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -238,14 +305,31 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 	addCmd := &cobra.Command{
 		Use:   "add",
 		Short: "Add a member to an organization",
-		Args:  cobra.ExactArgs(2),
+		Args:  adminCheckTwoArgs("org_id", "user_id"),
 		Annotations: map[string]string{
 			"method": "PUT",
 			"path":   "/orgs/:id/members/:user_id",
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			orgID := args[0]
+			userID := args[1]
+			if err := runner.AddOrgMember(context.Background(), orgID, userID); err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, struct{}{}); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -253,14 +337,31 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 	removeCmd := &cobra.Command{
 		Use:   "remove",
 		Short: "Remove a member from an organization",
-		Args:  cobra.ExactArgs(2),
+		Args:  adminCheckTwoArgs("org_id", "user_id"),
 		Annotations: map[string]string{
 			"method": "DELETE",
 			"path":   "/orgs/:id/members/:user_id",
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			orgID := args[0]
+			userID := args[1]
+			if err := runner.RemoveOrgMember(context.Background(), orgID, userID); err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, struct{}{}); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 

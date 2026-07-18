@@ -110,6 +110,29 @@ func adminCheckRequiredFlag(cmd *cobra.Command, flagName string) (string, error)
 	return val, nil
 }
 
+// adminCheckTwoArgs returns a Cobra PositionalArgs validator for commands
+// that require exactly two positional arguments. On missing first arg, writes
+// a JSON error envelope with "missing required argument: <arg1Name>". On
+// missing second arg, writes "missing required argument: <arg2Name>".
+func adminCheckTwoArgs(arg1Name, arg2Name string) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			err := fmt.Errorf("missing required argument: %s", arg1Name)
+			_ = adminHandleError(cmd, err)
+			return err
+		}
+		if len(args) < 2 {
+			err := fmt.Errorf("missing required argument: %s", arg2Name)
+			_ = adminHandleError(cmd, err)
+			return err
+		}
+		if len(args) > 2 {
+			return fmt.Errorf("accepts 2 arg(s), received %d", len(args))
+		}
+		return nil
+	}
+}
+
 // adminWarnf writes a warning message to stderr via cmd.ErrOrStderr().
 func adminWarnf(cmd *cobra.Command, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)

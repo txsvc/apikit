@@ -763,7 +763,7 @@ func TestAdminOrgsDeleteCommand(t *testing.T) {
 		deleteOrgErr: nil,
 	}
 
-	stdout, err := executeAdminCmd("orgs", "delete", "o1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "delete", "o1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -854,7 +854,7 @@ func TestAdminOrgsBlockCommand(t *testing.T) {
 		blockOrgResult: &apikit.Organization{ID: "o1", Status: "blocked"},
 	}
 
-	stdout, err := executeAdminCmd("orgs", "block", "o1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "block", "o1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -941,7 +941,7 @@ func TestAdminOrgsUnblockCommand(t *testing.T) {
 		unblockOrgResult: &apikit.Organization{ID: "o1", Status: "active"},
 	}
 
-	stdout, err := executeAdminCmd("orgs", "unblock", "o1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "unblock", "o1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1032,7 +1032,7 @@ func TestAdminOrgsMembersListCommand(t *testing.T) {
 		listMembersResult: []*apikit.User{{ID: "u1", Username: "alice"}},
 	}
 
-	stdout, err := executeAdminCmd("orgs", "members", "list", "o1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "members", "list", "o1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1130,7 +1130,7 @@ func TestAdminOrgsMembersAddCommand(t *testing.T) {
 		addMemberErr: nil,
 	}
 
-	stdout, err := executeAdminCmd("orgs", "members", "add", "o1", "u1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "members", "add", "o1", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1252,7 +1252,7 @@ func TestAdminOrgsMembersRemoveCommand(t *testing.T) {
 		removeMemberErr: nil,
 	}
 
-	stdout, err := executeAdminCmd("orgs", "members", "remove", "o1", "u1")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "members", "remove", "o1", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)

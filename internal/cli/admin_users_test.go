@@ -1820,20 +1820,29 @@ func TestJSONOutputFormatting(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVoidResponseCommands(t *testing.T) {
+	orgsMock := &mockAdminOrgsClient{}
+
 	tests := []struct {
-		name string
-		args []string
+		name   string
+		args   []string
+		client any
 	}{
-		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}},
-		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}},
-		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}},
+		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}, client: makeOrgsRunner(orgsMock)},
+		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
+		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}},
 		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stdout, err := executeAdminCmd(tt.args...)
+			var stdout string
+			var err error
+			if tt.client != nil {
+				stdout, err = executeAdminCmdWithClient(tt.client, tt.args...)
+			} else {
+				stdout, err = executeAdminCmd(tt.args...)
+			}
 
 			if err != nil {
 				t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -2263,20 +2272,29 @@ func TestSDKNotCalledOnValidationFailure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVoidCommandsAlwaysPrintEmpty(t *testing.T) {
+	orgsMock := &mockAdminOrgsClient{}
+
 	voidCmds := []struct {
-		name string
-		args []string
+		name   string
+		args   []string
+		client any
 	}{
-		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}},
-		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}},
-		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}},
+		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}, client: makeOrgsRunner(orgsMock)},
+		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
+		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}},
 		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}},
 	}
 
 	for _, vc := range voidCmds {
 		t.Run(vc.name, func(t *testing.T) {
-			stdout, err := executeAdminCmd(vc.args...)
+			var stdout string
+			var err error
+			if vc.client != nil {
+				stdout, err = executeAdminCmdWithClient(vc.client, vc.args...)
+			} else {
+				stdout, err = executeAdminCmd(vc.args...)
+			}
 
 			if err != nil {
 				t.Errorf("expected nil error (exit 0), got: %v", err)
