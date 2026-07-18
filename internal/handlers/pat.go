@@ -68,6 +68,17 @@ type CreatePATResponse struct {
 	CreatedAt   string   `json:"created_at"`
 }
 
+// PATResponse represents the HTTP 200 response for list, get, and revoke
+// operations — metadata only, never includes the plaintext secret.
+type PATResponse struct {
+	TokenID     string   `json:"token_id"`
+	Name        string   `json:"name"`
+	Permissions []string `json:"permissions"`
+	ExpiresAt   *string  `json:"expires_at"`
+	CreatedAt   string   `json:"created_at"`
+	RevokedAt   *string  `json:"revoked_at"`
+}
+
 // RegisterRoutes registers POST /user/tokens, GET /user/tokens,
 // GET /user/tokens/:token_id, and DELETE /user/tokens/:token_id
 // on the provided Echo group.
@@ -193,9 +204,74 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 	})
 }
 
-// listPATs handles GET /user/tokens.
+// listPATs handles GET /user/tokens — lists all PATs belonging to the
+// authenticated user, ordered by created_at DESC. Returns all PATs regardless
+// of status (active, expired, revoked). Never includes secret_hash, plaintext
+// secret, or expires_days in the response.
 func (h *PATHandler) listPATs(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: require tokens:read permission (09-REQ-6.5).
+	if err := auth.RequirePermission(c, "tokens", "read"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	// Get authenticated user ID (09-REQ-6.4).
+	userID := auth.GetUserID(c)
+
+	// Query all PATs for this user, ordered by created_at DESC (09-REQ-6.1).
+	rows, err := h.database.SqlDB.QueryContext(c.Request().Context(),
+		`SELECT token_id, name, permissions, created_at, expires_at, revoked_at
+		 FROM pats WHERE user_id = ? ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Build response slice; use empty slice (not nil) so JSON serializes as []
+	// rather than null when no rows exist (09-REQ-6.E1).
+	results := make([]PATResponse, 0)
+
+	for rows.Next() {
+		var (
+			tokenID   string
+			name      string
+			permsJSON string
+			createdAt string
+			expiresAt sql.NullString
+			revokedAt sql.NullString
+		)
+
+		if err := rows.Scan(&tokenID, &name, &permsJSON, &createdAt, &expiresAt, &revokedAt); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+
+		// Parse permissions JSON array (09-REQ-6.3 — preserves insertion order).
+		var permissions []string
+		if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+
+		pat := PATResponse{
+			TokenID:     tokenID,
+			Name:        name,
+			Permissions: permissions,
+			CreatedAt:   createdAt,
+		}
+
+		if expiresAt.Valid {
+			pat.ExpiresAt = &expiresAt.String
+		}
+		if revokedAt.Valid {
+			pat.RevokedAt = &revokedAt.String
+		}
+
+		results = append(results, pat)
+	}
+
+	if err := rows.Err(); err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, results)
 }
 
 // getPAT handles GET /user/tokens/:token_id.
