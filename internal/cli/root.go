@@ -41,6 +41,9 @@ func RootCommand() *cobra.Command {
 	// Register subcommands.
 	rootCmd.AddCommand(newVersionCmd())
 
+	// Register custom help command and SetHelpFunc for --json support.
+	registerHelpCommand(rootCmd)
+
 	// PersistentPreRunE is called by Cobra with the leaf command as cmd.
 	// Only the root command defines PersistentPreRunE; child commands
 	// use PreRunE only (13-REQ-12.E1).

@@ -1118,7 +1118,7 @@
             "13-REQ-11.4",
             "13-REQ-11.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1142,7 +1142,7 @@
             "13-REQ-11.5",
             "13-REQ-11.7"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
