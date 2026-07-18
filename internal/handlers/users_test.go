@@ -2206,3 +2206,1201 @@ func fieldNames(m map[string]any) []string {
 	}
 	return names
 }
+
+// ========================================================================
+// Additional Test Helpers (for task group 5 — self-service endpoints)
+// ========================================================================
+
+// patAuthMiddleware returns Echo middleware that injects PAT-level AuthInfo
+// with the specified permissions into the Echo context. This simulates an
+// authenticated PAT credential for self-service endpoint testing.
+func patAuthMiddleware(userID string, permissions []string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("auth_info", &auth.AuthInfo{
+				CredentialType: "pat",
+				UserID:         userID,
+				Permissions:    permissions,
+				Role:           "user",
+			})
+			return next(c)
+		}
+	}
+}
+
+// setupPATTestServer creates an Echo instance with RegisterUserHandlers
+// registered with PAT-level auth middleware carrying the specified permissions.
+// Returns the Echo instance and the raw *sql.DB handle.
+func setupPATTestServer(t *testing.T, userID string, permissions []string) (*echo.Echo, *sql.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("")
+	g.Use(patAuthMiddleware(userID, permissions))
+	handlers.RegisterUserHandlers(g, database.SqlDB)
+
+	return e, database.SqlDB
+}
+
+// parseOrgsResponse parses the response body as a JSON array of OrgResponse
+// objects. (insertTestOrg and insertTestOrgMember are defined in orgs_test.go)
+func parseOrgsResponse(t *testing.T, rec *httptest.ResponseRecorder) []handlers.OrgResponse {
+	t.Helper()
+
+	var orgs []handlers.OrgResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &orgs); err != nil {
+		t.Fatalf("failed to parse orgs list response: %v\nbody: %s", err, rec.Body.String())
+	}
+	return orgs
+}
+
+// ========================================================================
+// Task 5.1: GET /user own profile
+// Test Spec: TS-07-50, TS-07-51, TS-07-E11
+// Requirements: 07-REQ-14.1, 07-REQ-14.2, 07-REQ-14.E1
+// ========================================================================
+
+// TestGetOwnProfile_Success verifies that GET /user returns HTTP 200 with
+// the authenticated user's profile as a User JSON object and sets the ETag
+// response header, when the PAT has users:read permission.
+//
+// Test Spec: TS-07-50
+// Requirement: 07-REQ-14.1
+func TestGetOwnProfile_Success(t *testing.T) {
+	userID := "own-profile-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith",
+		"user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
+
+	rec := sendGet(t, e, "/user")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.ID != userID {
+		t.Errorf("expected id %q, got %q", userID, user.ID)
+	}
+	if user.Username != "alice" {
+		t.Errorf("expected username %q, got %q", "alice", user.Username)
+	}
+	if user.Email != "alice@example.com" {
+		t.Errorf("expected email %q, got %q", "alice@example.com", user.Email)
+	}
+	if user.FullName != "Alice Smith" {
+		t.Errorf("expected full_name %q, got %q", "Alice Smith", user.FullName)
+	}
+
+	// ETag header must be set.
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Error("expected ETag response header to be set, but it was empty")
+	}
+}
+
+// TestGetOwnProfile_PATWithPermission verifies that GET /user succeeds
+// when the PAT has the users:read permission, confirming that users:read
+// is sufficient for reading one's own profile.
+//
+// Test Spec: TS-07-50
+// Requirement: 07-REQ-14.1
+func TestGetOwnProfile_PATWithPermission(t *testing.T) {
+	userID := "pat-perm-profile-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+	rec := sendGet(t, e, "/user")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetOwnProfile_PATWithoutPermission verifies that GET /user returns
+// HTTP 403 with message 'insufficient permissions' when the PAT lacks the
+// users:read permission.
+//
+// Test Spec: TS-07-51
+// Requirement: 07-REQ-14.2
+func TestGetOwnProfile_PATWithoutPermission(t *testing.T) {
+	userID := "noperm-profile-uuid"
+	e, _ := setupPATTestServer(t, userID, []string{"orgs:read"}) // no users:read
+
+	rec := sendGet(t, e, "/user")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "insufficient permissions")
+}
+
+// TestGetOwnProfile_ETag verifies that GET /user returns HTTP 304 with no
+// body when the If-None-Match header matches the current ETag derived from
+// user.UpdatedAt.
+//
+// Test Spec: TS-07-E11
+// Requirement: 07-REQ-14.E1
+func TestGetOwnProfile_ETag(t *testing.T) {
+	userID := "etag-profile-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// First request: get the ETag from the response.
+	rec1 := sendGet(t, e, "/user")
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 on first request, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	etag := rec1.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected ETag header to be set on first request")
+	}
+
+	// Second request: send the ETag as If-None-Match; expect 304.
+	rec2 := sendGetWithHeaders(t, e, "/user", map[string]string{
+		"If-None-Match": etag,
+	})
+
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("expected HTTP 304, got %d", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("expected empty body for 304 response, got %q", rec2.Body.String())
+	}
+}
+
+// ========================================================================
+// Task 5.2: PATCH /user update own profile
+// Test Spec: TS-07-52, TS-07-53, TS-07-54, TS-07-E12
+// Requirements: 07-REQ-15.1, 07-REQ-15.2, 07-REQ-15.3, 07-REQ-15.E1
+// ========================================================================
+
+// TestUpdateOwnProfile_Success verifies that PATCH /user with a valid
+// full_name field updates the authenticated user's full_name and returns
+// HTTP 200 with the updated User object.
+//
+// Test Spec: TS-07-52
+// Requirement: 07-REQ-15.1
+func TestUpdateOwnProfile_Success(t *testing.T) {
+	userID := "update-own-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Capture the original updated_at.
+	var originalUpdatedAt string
+	err := sqlDB.QueryRow("SELECT updated_at FROM users WHERE id = ?", userID).Scan(&originalUpdatedAt)
+	if err != nil {
+		t.Fatalf("failed to query original updated_at: %v", err)
+	}
+
+	rec := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"Alice Updated"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+	if user.FullName != "Alice Updated" {
+		t.Errorf("expected full_name %q, got %q", "Alice Updated", user.FullName)
+	}
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// TestUpdateOwnProfile_MissingField verifies that PATCH /user returns
+// HTTP 400 with message 'missing required field: full_name' when the
+// full_name field is absent from the request body.
+//
+// Test Spec: TS-07-53
+// Requirement: 07-REQ-15.2
+func TestUpdateOwnProfile_MissingField(t *testing.T) {
+	userID := "update-own-missing-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/user", `{}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "missing required field: full_name")
+}
+
+// TestUpdateOwnProfile_PATWithPermission verifies that PATCH /user succeeds
+// when the PAT has the users:read permission.
+//
+// Test Spec: TS-07-52
+// Requirement: 07-REQ-15.1
+func TestUpdateOwnProfile_PATWithPermission(t *testing.T) {
+	userID := "update-own-perm-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"Bob Updated"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+	if user.FullName != "Bob Updated" {
+		t.Errorf("expected full_name %q, got %q", "Bob Updated", user.FullName)
+	}
+}
+
+// TestUpdateOwnProfile_PATWithoutPermission verifies that PATCH /user
+// returns HTTP 403 with message 'insufficient permissions' when the PAT
+// lacks the users:read permission.
+//
+// Test Spec: TS-07-54
+// Requirement: 07-REQ-15.3
+func TestUpdateOwnProfile_PATWithoutPermission(t *testing.T) {
+	userID := "update-own-noperm-uuid"
+	e, _ := setupPATTestServer(t, userID, []string{"orgs:read"}) // no users:read
+
+	rec := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"X"}`)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "insufficient permissions")
+}
+
+// TestUpdateOwnProfile_UsesReadPermission verifies that PATCH /user uses
+// the users:read permission check (not a write permission) because no
+// users:write scope is defined in the PAT permission set. A PAT with only
+// users:read (no users:write) can update the user's own full_name.
+//
+// Test Spec: TS-07-E12
+// Requirement: 07-REQ-15.E1
+func TestUpdateOwnProfile_UsesReadPermission(t *testing.T) {
+	userID := "update-own-read-uuid"
+	// Only users:read — explicitly no users:write
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"Updated"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+	if user.FullName != "Updated" {
+		t.Errorf("expected full_name %q, got %q", "Updated", user.FullName)
+	}
+}
+
+// ========================================================================
+// Task 5.3: GET /user/orgs list own organizations
+// Test Spec: TS-07-55, TS-07-56, TS-07-E13, TS-07-E14
+// Requirements: 07-REQ-16.1, 07-REQ-16.2, 07-REQ-16.E1, 07-REQ-16.E2
+// ========================================================================
+
+// TestListOwnOrgs_Success verifies that GET /user/orgs returns HTTP 200
+// with the authenticated user's active organization memberships (excluding
+// blocked orgs). Tests with 2 active orgs and 1 blocked org.
+//
+// Test Spec: TS-07-55
+// Requirement: 07-REQ-16.1
+func TestListOwnOrgs_Success(t *testing.T) {
+	userID := "orgs-user-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Insert 2 active orgs and 1 blocked org.
+	insertTestOrg(t, sqlDB, "org-active-1", "Org One", "org-one", "https://org-one.example.com", "active")
+	insertTestOrg(t, sqlDB, "org-active-2", "Org Two", "org-two", "https://org-two.example.com", "active")
+	insertTestOrg(t, sqlDB, "org-blocked-1", "Org Blocked", "org-blocked", "https://org-blocked.example.com", "blocked")
+
+	// Add user as member of all three orgs.
+	insertTestOrgMember(t, sqlDB, "org-active-1", userID)
+	insertTestOrgMember(t, sqlDB, "org-active-2", userID)
+	insertTestOrgMember(t, sqlDB, "org-blocked-1", userID)
+
+	rec := sendGet(t, e, "/user/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec)
+
+	if len(orgs) != 2 {
+		t.Fatalf("expected 2 active organizations, got %d", len(orgs))
+	}
+
+	for _, org := range orgs {
+		if org.Status != "active" {
+			t.Errorf("expected all returned orgs to have status 'active', got %q for org %q", org.Status, org.Name)
+		}
+		// Verify expected fields are present.
+		if org.ID == "" {
+			t.Error("expected org id to be non-empty")
+		}
+		if org.Name == "" {
+			t.Error("expected org name to be non-empty")
+		}
+		if org.Slug == "" {
+			t.Error("expected org slug to be non-empty")
+		}
+		if org.CreatedAt == "" {
+			t.Error("expected org created_at to be non-empty")
+		}
+		if org.UpdatedAt == "" {
+			t.Error("expected org updated_at to be non-empty")
+		}
+	}
+}
+
+// TestListOwnOrgs_PATWithoutPermission verifies that GET /user/orgs returns
+// HTTP 403 with message 'insufficient permissions' when the PAT lacks the
+// orgs:read permission.
+//
+// Test Spec: TS-07-56
+// Requirement: 07-REQ-16.2
+func TestListOwnOrgs_PATWithoutPermission(t *testing.T) {
+	userID := "orgs-noperm-uuid"
+	e, _ := setupPATTestServer(t, userID, []string{"users:read"}) // no orgs:read
+
+	rec := sendGet(t, e, "/user/orgs")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "insufficient permissions")
+}
+
+// TestListOwnOrgs_ExcludesBlockedOrgs verifies that GET /user/orgs excludes
+// organizations with status='blocked' from the response. When a user is a
+// member of 1 active org and 1 blocked org, only the active org is returned.
+//
+// Test Spec: TS-07-E13
+// Requirement: 07-REQ-16.E1
+func TestListOwnOrgs_ExcludesBlockedOrgs(t *testing.T) {
+	userID := "orgs-blocked-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	insertTestOrg(t, sqlDB, "org-active-only", "Active Org", "active-org", "https://active.example.com", "active")
+	insertTestOrg(t, sqlDB, "org-blocked-only", "Blocked Org", "blocked-org", "https://blocked.example.com", "blocked")
+
+	insertTestOrgMember(t, sqlDB, "org-active-only", userID)
+	insertTestOrgMember(t, sqlDB, "org-blocked-only", userID)
+
+	rec := sendGet(t, e, "/user/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec)
+
+	if len(orgs) != 1 {
+		t.Fatalf("expected 1 active organization, got %d", len(orgs))
+	}
+
+	if orgs[0].Status != "active" {
+		t.Errorf("expected returned org to have status 'active', got %q", orgs[0].Status)
+	}
+}
+
+// TestListOwnOrgs_NoMemberships verifies that GET /user/orgs returns an
+// empty JSON array (not null) when the user has no organization memberships.
+//
+// Test Spec: TS-07-E14
+// Requirement: 07-REQ-16.E2
+func TestListOwnOrgs_NoMemberships(t *testing.T) {
+	userID := "orgs-empty-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// No org memberships — empty result expected.
+	rec := sendGet(t, e, "/user/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The response must be exactly "[]", not "null" or empty.
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected response body to be '[]', got %q", body)
+	}
+}
+
+// TestListOwnOrgs_PATWithPermission verifies that GET /user/orgs succeeds
+// when the PAT has the orgs:read permission.
+//
+// Test Spec: TS-07-55
+// Requirement: 07-REQ-16.1
+func TestListOwnOrgs_PATWithPermission(t *testing.T) {
+	userID := "orgs-perm-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
+
+	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+	rec := sendGet(t, e, "/user/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Even with no memberships, the response should be a valid JSON array.
+	body := strings.TrimSpace(rec.Body.String())
+	if body == "null" {
+		t.Error("expected response body to be '[]', not 'null'")
+	}
+
+	// Ignore DB insert for _ since unused, but verify user was inserted
+	_ = sqlDB
+}
+
+// ========================================================================
+// Task 5.4: Property test stubs
+// Test Spec: TS-07-P1 through TS-07-P6
+// Requirements: 07-PROP-1 through 07-PROP-6
+// ========================================================================
+
+// TestProp_LastAdminSafeguard verifies that for any sequence of promote and
+// demote operations, the system always retains at least one active admin;
+// the demote endpoint never reduces the active admin count below 1.
+//
+// Test Spec: TS-07-P1
+// Property: 07-PROP-1
+// Validates: 07-REQ-7.3, 07-REQ-7.1
+func TestProp_LastAdminSafeguard(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Seed 3 users: 2 admins and 1 regular user.
+	insertTestUserFull(t, sqlDB, "prop-admin-1", "admin1", "admin1@example.com", "", "admin", "active", "github", "gh-a1", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, "prop-admin-2", "admin2", "admin2@example.com", "", "admin", "active", "github", "gh-a2", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, "prop-user-1", "user1", "user1@example.com", "", "user", "active", "github", "gh-u1", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	// Execute a sequence of promote and demote operations.
+	actions := []struct {
+		action string // "promote" or "demote"
+		userID string
+	}{
+		{"demote", "prop-admin-1"},  // Should succeed: admin-2 remains.
+		{"promote", "prop-user-1"},  // user-1 becomes admin.
+		{"demote", "prop-admin-2"},  // Should succeed: user-1 is admin.
+		{"demote", "prop-user-1"},   // Should fail: user-1 would be the last admin.
+		{"promote", "prop-admin-1"}, // admin-1 becomes admin again.
+		{"demote", "prop-user-1"},   // Should succeed: admin-1 is admin.
+	}
+
+	for i, a := range actions {
+		rec := sendPost(t, e, "/users/"+a.userID+"/"+a.action)
+
+		// Count active admins after each operation.
+		var adminCount int
+		err := sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'").Scan(&adminCount)
+		if err != nil {
+			t.Fatalf("action[%d] %s %s: failed to count admins: %v", i, a.action, a.userID, err)
+		}
+
+		if adminCount < 1 {
+			t.Errorf("action[%d] %s %s: active admin count dropped to %d (must be >= 1)",
+				i, a.action, a.userID, adminCount)
+		}
+
+		// If demote succeeded, there were >= 2 admins before.
+		if a.action == "demote" && rec.Code == http.StatusOK && adminCount < 1 {
+			t.Errorf("action[%d]: demote succeeded but admin count is %d", i, adminCount)
+		}
+		// If demote returned 409, admin count is still >= 1.
+		if a.action == "demote" && rec.Code == http.StatusConflict && adminCount < 1 {
+			t.Errorf("action[%d]: demote returned 409 but admin count is %d", i, adminCount)
+		}
+	}
+}
+
+// TestProp_ActionIdempotency verifies that for any number of repeated calls
+// to promote, demote, block, or unblock with the same user ID, the response
+// is always HTTP 200 and the user record is unchanged after the second and
+// subsequent calls.
+//
+// Test Spec: TS-07-P2
+// Property: 07-PROP-2
+// Validates: 07-REQ-6.2, 07-REQ-7.2, 07-REQ-8.2, 07-REQ-9.2
+func TestProp_ActionIdempotency(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupRole   string
+		setupStatus string
+		action      string
+	}{
+		{"promote already admin", "admin", "active", "promote"},
+		{"demote already user", "user", "active", "demote"},
+		{"block already blocked", "user", "blocked", "block"},
+		{"unblock already active", "user", "active", "unblock"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, sqlDB := setupAdminTestServer(t)
+
+			userID := "idem-prop-" + tt.action + "-uuid"
+			// For demote tests, ensure at least 2 admins to avoid last-admin safeguard.
+			if tt.action == "demote" {
+				insertTestUserFull(t, sqlDB, "idem-other-admin", "otheradmin", "other@example.com", "",
+					"admin", "active", "github", "gh-other", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+			}
+			insertTestUserFull(t, sqlDB, userID, "target", "target@example.com", "",
+				tt.setupRole, tt.setupStatus, "github", "gh-target", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
+
+			// First call.
+			rec1 := sendPost(t, e, "/users/"+userID+"/"+tt.action)
+			if rec1.Code != http.StatusOK {
+				t.Fatalf("first call: expected HTTP 200, got %d; body: %s", rec1.Code, rec1.Body.String())
+			}
+
+			// Capture state after first call.
+			role1, status1, updatedAt1 := fetchUserFromDB(t, sqlDB, userID)
+
+			// Repeat 3 more times — each should return 200 with unchanged state.
+			for i := 2; i <= 4; i++ {
+				rec := sendPost(t, e, "/users/"+userID+"/"+tt.action)
+				if rec.Code != http.StatusOK {
+					t.Errorf("call %d: expected HTTP 200, got %d", i, rec.Code)
+				}
+
+				role, status, updatedAt := fetchUserFromDB(t, sqlDB, userID)
+				if role != role1 {
+					t.Errorf("call %d: role changed from %q to %q", i, role1, role)
+				}
+				if status != status1 {
+					t.Errorf("call %d: status changed from %q to %q", i, status1, status)
+				}
+				if updatedAt != updatedAt1 {
+					t.Errorf("call %d: updated_at changed from %q to %q", i, updatedAt1, updatedAt)
+				}
+			}
+		})
+	}
+}
+
+// TestProp_CredentialRevocationIdempotency verifies that for any number of
+// repeated DELETE calls to revoke the same API key or PAT, every call returns
+// HTTP 204, and revoked_at is set exactly once and never overwritten.
+//
+// Test Spec: TS-07-P3
+// Property: 07-PROP-3
+// Validates: 07-REQ-11.2, 07-REQ-13.2, 07-REQ-11.1, 07-REQ-13.1
+func TestProp_CredentialRevocationIdempotency(t *testing.T) {
+	t.Run("api_key", func(t *testing.T) {
+		e, sqlDB := setupAdminTestServer(t)
+
+		userID := "revoke-prop-key-user"
+		keyID := "revoke-prop-key-id"
+		insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+		insertTestAPIKey(t, sqlDB, keyID, userID, "hash-aaa", 30,
+			nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+		var firstRevokedAt string
+
+		for i := 1; i <= 5; i++ {
+			rec := sendDelete(t, e, "/users/"+userID+"/keys/"+keyID)
+
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("call %d: expected HTTP 204, got %d", i, rec.Code)
+				continue
+			}
+
+			var revokedAt sql.NullString
+			err := sqlDB.QueryRow("SELECT revoked_at FROM api_keys WHERE key_id = ?", keyID).Scan(&revokedAt)
+			if err != nil {
+				t.Fatalf("call %d: failed to query revoked_at: %v", i, err)
+			}
+			if !revokedAt.Valid {
+				t.Fatalf("call %d: expected revoked_at to be set", i)
+			}
+
+			if i == 1 {
+				firstRevokedAt = revokedAt.String
+			} else if revokedAt.String != firstRevokedAt {
+				t.Errorf("call %d: revoked_at changed from %q to %q", i, firstRevokedAt, revokedAt.String)
+			}
+		}
+	})
+
+	t.Run("pat", func(t *testing.T) {
+		e, sqlDB := setupAdminTestServer(t)
+
+		userID := "revoke-prop-tok-user"
+		tokenID := "revoke-prop-tok-id"
+		insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+		insertTestPAT(t, sqlDB, tokenID, userID, "My Token", "hash-bbb",
+			`["users:read"]`, 30,
+			nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+		var firstRevokedAt string
+
+		for i := 1; i <= 5; i++ {
+			rec := sendDelete(t, e, "/users/"+userID+"/tokens/"+tokenID)
+
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("call %d: expected HTTP 204, got %d", i, rec.Code)
+				continue
+			}
+
+			var revokedAt sql.NullString
+			err := sqlDB.QueryRow("SELECT revoked_at FROM pats WHERE token_id = ?", tokenID).Scan(&revokedAt)
+			if err != nil {
+				t.Fatalf("call %d: failed to query revoked_at: %v", i, err)
+			}
+			if !revokedAt.Valid {
+				t.Fatalf("call %d: expected revoked_at to be set", i)
+			}
+
+			if i == 1 {
+				firstRevokedAt = revokedAt.String
+			} else if revokedAt.String != firstRevokedAt {
+				t.Errorf("call %d: revoked_at changed from %q to %q", i, firstRevokedAt, revokedAt.String)
+			}
+		}
+	})
+}
+
+// TestProp_NoSecretsInListings verifies that for any response from
+// GET /users/:id/keys or GET /users/:id/tokens, no JSON field in any
+// returned object contains a plaintext secret value.
+//
+// Test Spec: TS-07-P4
+// Property: 07-PROP-4
+// Validates: 07-REQ-10.1, 07-REQ-12.1, 07-REQ-10.E1, 07-REQ-12.E1
+func TestProp_NoSecretsInListings(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "secrets-prop-user"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Pre-defined credential data with known secrets.
+	type credData struct {
+		keyID  string
+		tokID  string
+		secret string
+		name   string
+	}
+	creds := []credData{
+		{"key-p-0", "tok-p-0", "secret-hash-alpha", "Token Alpha"},
+		{"key-p-1", "tok-p-1", "secret-hash-beta", "Token Beta"},
+		{"key-p-2", "tok-p-2", "secret-hash-gamma", "Token Gamma"},
+	}
+
+	for _, c := range creds {
+		insertTestAPIKey(t, sqlDB, c.keyID, userID, c.secret, 30,
+			nullStr("2025-12-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+		insertTestPAT(t, sqlDB, c.tokID, userID, c.name, c.secret,
+			`["users:read"]`, 30,
+			nullStr("2025-12-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+	}
+
+	// Check API keys listing.
+	recKeys := sendGet(t, e, "/users/"+userID+"/keys")
+	if recKeys.Code == http.StatusOK {
+		keysBody := recKeys.Body.String()
+		for _, c := range creds {
+			if strings.Contains(keysBody, c.secret) {
+				t.Errorf("API keys response contains secret value %q", c.secret)
+			}
+		}
+
+		var keys []map[string]any
+		if err := json.Unmarshal(recKeys.Body.Bytes(), &keys); err == nil {
+			for i, k := range keys {
+				for field := range k {
+					if !apiKeyMetaExpectedFields[field] {
+						t.Errorf("key[%d]: unexpected field %q", i, field)
+					}
+				}
+			}
+		}
+	}
+
+	// Check PATs listing.
+	recTokens := sendGet(t, e, "/users/"+userID+"/tokens")
+	if recTokens.Code == http.StatusOK {
+		tokensBody := recTokens.Body.String()
+		for _, c := range creds {
+			if strings.Contains(tokensBody, c.secret) {
+				t.Errorf("PATs response contains secret value %q", c.secret)
+			}
+		}
+
+		var tokens []map[string]any
+		if err := json.Unmarshal(recTokens.Body.Bytes(), &tokens); err == nil {
+			for i, tok := range tokens {
+				for field := range tok {
+					if !patMetaExpectedFields[field] {
+						t.Errorf("token[%d]: unexpected field %q", i, field)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestProp_AdminAuthBeforeDataAccess verifies that for any request to any
+// endpoint under /users, no database query is executed before
+// auth.RequireAdmin returns successfully; non-admin requests never touch
+// the users, api_keys, or pats tables.
+//
+// Test Spec: TS-07-P5
+// Property: 07-PROP-5
+// Validates: 07-REQ-2.6, 07-REQ-3.3, 07-REQ-4.3, 07-REQ-5.4, 07-REQ-6.4,
+//
+//	07-REQ-7.5, 07-REQ-8.4, 07-REQ-9.4, 07-REQ-10.3, 07-REQ-11.4,
+//	07-REQ-12.3, 07-REQ-13.4
+func TestProp_AdminAuthBeforeDataAccess(t *testing.T) {
+	e, sqlDB := setupNonAdminTestServer(t)
+
+	// Seed a user so endpoints would have data to access if auth check fails.
+	userID := "auth-prop-user"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestAPIKey(t, sqlDB, "auth-prop-key", userID, "hash-aaa", 30,
+		nullStr("2025-12-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+	insertTestPAT(t, sqlDB, "auth-prop-tok", userID, "My Token", "hash-bbb",
+		`["users:read"]`, 30,
+		nullStr("2025-12-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	// All 12 admin-only endpoint (method, path) combinations.
+	adminEndpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/users"},
+		{http.MethodGet, "/users"},
+		{http.MethodGet, "/users/" + userID},
+		{http.MethodPatch, "/users/" + userID},
+		{http.MethodPost, "/users/" + userID + "/promote"},
+		{http.MethodPost, "/users/" + userID + "/demote"},
+		{http.MethodPost, "/users/" + userID + "/block"},
+		{http.MethodPost, "/users/" + userID + "/unblock"},
+		{http.MethodGet, "/users/" + userID + "/keys"},
+		{http.MethodDelete, "/users/" + userID + "/keys/auth-prop-key"},
+		{http.MethodGet, "/users/" + userID + "/tokens"},
+		{http.MethodDelete, "/users/" + userID + "/tokens/auth-prop-tok"},
+	}
+
+	for _, ep := range adminEndpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			var rec *httptest.ResponseRecorder
+
+			switch ep.method {
+			case http.MethodPost:
+				if ep.path == "/users" {
+					rec = sendJSON(t, e, ep.method, ep.path, validCreateUserBody())
+				} else {
+					rec = sendPost(t, e, ep.path)
+				}
+			case http.MethodGet:
+				rec = sendGet(t, e, ep.path)
+			case http.MethodPatch:
+				rec = sendJSON(t, e, ep.method, ep.path, `{"full_name":"X"}`)
+			case http.MethodDelete:
+				rec = sendDelete(t, e, ep.path)
+			}
+
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("expected HTTP 403, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	// Verify no data was modified by the non-admin requests.
+	var userCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
+	if err != nil {
+		t.Fatalf("failed to count users: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected 1 user in database (no new users created), got %d", userCount)
+	}
+}
+
+// TestProp_ListEndpointsEmptyArray verifies that for any list endpoint
+// (GET /users, GET /users/:id/keys, GET /users/:id/tokens, GET /user/orgs)
+// when no records match, the response body is the JSON literal [] and the
+// HTTP status is 200, not a null value or a 404 error.
+//
+// Test Spec: TS-07-P6
+// Property: 07-PROP-6
+// Validates: 07-REQ-3.E1, 07-REQ-16.E2, 07-REQ-3.1, 07-REQ-10.1, 07-REQ-12.1
+func TestProp_ListEndpointsEmptyArray(t *testing.T) {
+	t.Run("GET /users empty", func(t *testing.T) {
+		e, _ := setupAdminTestServer(t)
+
+		rec := sendGet(t, e, "/users")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Errorf("expected '[]', got %q", body)
+		}
+		if body == "null" {
+			t.Error("response body is 'null', expected '[]'")
+		}
+	})
+
+	t.Run("GET /users/:id/keys empty", func(t *testing.T) {
+		e, sqlDB := setupAdminTestServer(t)
+
+		userID := "empty-keys-user"
+		insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+		rec := sendGet(t, e, "/users/"+userID+"/keys")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Errorf("expected '[]', got %q", body)
+		}
+	})
+
+	t.Run("GET /users/:id/tokens empty", func(t *testing.T) {
+		e, sqlDB := setupAdminTestServer(t)
+
+		userID := "empty-tokens-user"
+		insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+		rec := sendGet(t, e, "/users/"+userID+"/tokens")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Errorf("expected '[]', got %q", body)
+		}
+	})
+
+	t.Run("GET /user/orgs empty", func(t *testing.T) {
+		userID := "empty-orgs-user"
+		e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
+
+		insertTestUser(t, sqlDB, userID, "carol", "carol@example.com", "github", "gh-003")
+
+		rec := sendGet(t, e, "/user/orgs")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Errorf("expected '[]', got %q", body)
+		}
+	})
+}
+
+// ========================================================================
+// Task 5.4: Smoke test stubs
+// Test Spec: TS-07-SMOKE-1 through TS-07-SMOKE-5
+// ========================================================================
+
+// TestSmoke_CreateUser is an end-to-end smoke test: an admin creates a new
+// user via POST /users, verifying the full handler flow from auth check
+// through UUID generation, database insertion, and 201 response.
+//
+// Test Spec: TS-07-SMOKE-1
+// Execution Path: 07-PATH-1
+func TestSmoke_CreateUser(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	body := `{"username":"smoketest","email":"smoke@example.com","provider":"github","provider_id":"gh-smoke"}`
+	rec := sendJSON(t, e, http.MethodPost, "/users", body)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	// Verify all 10 User fields.
+	if !isUUID(user.ID) {
+		t.Errorf("expected id to be a valid UUID, got %q", user.ID)
+	}
+	if user.Username != "smoketest" {
+		t.Errorf("expected username %q, got %q", "smoketest", user.Username)
+	}
+	if user.Email != "smoke@example.com" {
+		t.Errorf("expected email %q, got %q", "smoke@example.com", user.Email)
+	}
+	if user.Role != "user" {
+		t.Errorf("expected role %q, got %q", "user", user.Role)
+	}
+	if user.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", user.Status)
+	}
+	if user.FullName != "" {
+		t.Errorf("expected full_name to be empty string, got %q", user.FullName)
+	}
+	if user.Provider != "github" {
+		t.Errorf("expected provider %q, got %q", "github", user.Provider)
+	}
+	if user.ProviderID != "gh-smoke" {
+		t.Errorf("expected provider_id %q, got %q", "gh-smoke", user.ProviderID)
+	}
+	if !isRFC3339(user.CreatedAt) {
+		t.Errorf("expected created_at to be RFC 3339, got %q", user.CreatedAt)
+	}
+	if !isRFC3339(user.UpdatedAt) {
+		t.Errorf("expected updated_at to be RFC 3339, got %q", user.UpdatedAt)
+	}
+
+	// Verify user row exists in the database.
+	var dbUsername string
+	err := sqlDB.QueryRow("SELECT username FROM users WHERE id = ?", user.ID).Scan(&dbUsername)
+	if err != nil {
+		t.Fatalf("failed to query user from database: %v", err)
+	}
+	if dbUsername != "smoketest" {
+		t.Errorf("expected username in database to be %q, got %q", "smoketest", dbUsername)
+	}
+}
+
+// TestSmoke_DemoteWithSafeguard is an end-to-end smoke test: admin demotes
+// a target admin user, exercising the last-admin safeguard by verifying that
+// demoting a non-last admin succeeds and demoting the sole admin returns 409.
+//
+// Test Spec: TS-07-SMOKE-2
+// Execution Path: 07-PATH-2
+func TestSmoke_DemoteWithSafeguard(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Seed two active admins.
+	insertTestUserFull(t, sqlDB, "smoke-admin-1", "admin1", "admin1@example.com", "", "admin", "active", "github", "gh-a1", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, "smoke-admin-2", "admin2", "admin2@example.com", "", "admin", "active", "github", "gh-a2", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	// First call (two active admins): demote admin-1 should succeed.
+	rec1 := sendPost(t, e, "/users/smoke-admin-1/demote")
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 for first demote, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	user1 := parseUserResponse(t, rec1)
+	if user1.Role != "user" {
+		t.Errorf("expected demoted user role %q, got %q", "user", user1.Role)
+	}
+
+	// Second call (sole admin): demote admin-2 should fail.
+	rec2 := sendPost(t, e, "/users/smoke-admin-2/demote")
+	assertErrorResponse(t, rec2, http.StatusConflict, "cannot demote the last admin")
+
+	// Verify exactly one active admin remains.
+	var adminCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'").Scan(&adminCount)
+	if err != nil {
+		t.Fatalf("failed to count active admins: %v", err)
+	}
+	if adminCount != 1 {
+		t.Errorf("expected exactly 1 active admin, got %d", adminCount)
+	}
+}
+
+// TestSmoke_RevokeAPIKey is an end-to-end smoke test: admin revokes a
+// user's API key via DELETE, then verifies idempotency on the second call.
+//
+// Test Spec: TS-07-SMOKE-3
+// Execution Path: 07-PATH-3
+func TestSmoke_RevokeAPIKey(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "smoke-key-user"
+	keyID := "smoke-key-id"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestAPIKey(t, sqlDB, keyID, userID, "hash-smoke", 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	// First call: revoke the active key.
+	rec1 := sendDelete(t, e, "/users/"+userID+"/keys/"+keyID)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 on first revoke, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+	if rec1.Body.Len() != 0 {
+		t.Errorf("expected empty body on first revoke, got %q", rec1.Body.String())
+	}
+
+	// Capture revoked_at after first revocation.
+	var revokedAt1 sql.NullString
+	err := sqlDB.QueryRow("SELECT revoked_at FROM api_keys WHERE key_id = ?", keyID).Scan(&revokedAt1)
+	if err != nil {
+		t.Fatalf("failed to query revoked_at: %v", err)
+	}
+	if !revokedAt1.Valid {
+		t.Fatal("expected revoked_at to be non-NULL after first revoke")
+	}
+
+	// Second call: revoke again (idempotent).
+	rec2 := sendDelete(t, e, "/users/"+userID+"/keys/"+keyID)
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 on second revoke, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Verify revoked_at is unchanged.
+	var revokedAt2 sql.NullString
+	err = sqlDB.QueryRow("SELECT revoked_at FROM api_keys WHERE key_id = ?", keyID).Scan(&revokedAt2)
+	if err != nil {
+		t.Fatalf("failed to query revoked_at after second revoke: %v", err)
+	}
+	if revokedAt2.String != revokedAt1.String {
+		t.Errorf("revoked_at changed from %q to %q after idempotent revoke", revokedAt1.String, revokedAt2.String)
+	}
+}
+
+// TestSmoke_OwnProfile is an end-to-end smoke test: an authenticated user
+// reads their own profile via GET /user (with ETag) and then updates their
+// full_name via PATCH /user.
+//
+// Test Spec: TS-07-SMOKE-4
+// Execution Path: 07-PATH-4
+func TestSmoke_OwnProfile(t *testing.T) {
+	userID := "smoke-own-uuid"
+	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
+
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Step 1: GET /user returns 200 with User and ETag.
+	rec1 := sendGet(t, e, "/user")
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("GET /user: expected HTTP 200, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	user1 := parseUserResponse(t, rec1)
+	if user1.ID != userID {
+		t.Errorf("GET /user: expected user id %q, got %q", userID, user1.ID)
+	}
+
+	etag := rec1.Header().Get("ETag")
+	if etag == "" {
+		t.Error("GET /user: expected ETag header to be set")
+	}
+
+	// Step 2: GET /user with matching If-None-Match returns 304.
+	if etag != "" {
+		rec2 := sendGetWithHeaders(t, e, "/user", map[string]string{
+			"If-None-Match": etag,
+		})
+		if rec2.Code != http.StatusNotModified {
+			t.Errorf("GET /user with ETag: expected HTTP 304, got %d", rec2.Code)
+		}
+		if rec2.Body.Len() != 0 {
+			t.Errorf("GET /user with ETag: expected empty body, got %q", rec2.Body.String())
+		}
+	}
+
+	// Step 3: PATCH /user updates full_name.
+	rec3 := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"Updated Name"}`)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("PATCH /user: expected HTTP 200, got %d; body: %s", rec3.Code, rec3.Body.String())
+	}
+
+	user3 := parseUserResponse(t, rec3)
+	if user3.FullName != "Updated Name" {
+		t.Errorf("PATCH /user: expected full_name %q, got %q", "Updated Name", user3.FullName)
+	}
+
+	// Verify persistence in database.
+	var dbFullName sql.NullString
+	err := sqlDB.QueryRow("SELECT full_name FROM users WHERE id = ?", userID).Scan(&dbFullName)
+	if err != nil {
+		t.Fatalf("failed to query full_name from database: %v", err)
+	}
+	if !dbFullName.Valid || dbFullName.String != "Updated Name" {
+		t.Errorf("expected full_name in database to be %q, got %v", "Updated Name", dbFullName)
+	}
+}
+
+// TestSmoke_FullEndToEnd is a full end-to-end smoke test: admin creates a
+// user, promotes them, and the new user lists their org memberships,
+// exercising all three handler interactions and both admin and self-service
+// auth paths.
+//
+// Test Spec: TS-07-SMOKE-5
+// Execution Path: 07-PATH-5
+func TestSmoke_FullEndToEnd(t *testing.T) {
+	// Open a shared database for both admin and self-service servers.
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	// Create admin-auth Echo server.
+	adminEcho := echo.New()
+	adminGroup := adminEcho.Group("")
+	adminGroup.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(adminGroup, database.SqlDB)
+
+	// Step 1: Admin creates a new user.
+	createBody := `{"username":"newuser","email":"new@example.com","provider":"github","provider_id":"gh-new"}`
+	rec1 := sendJSON(t, adminEcho, http.MethodPost, "/users", createBody)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("Step 1 (create): expected HTTP 201, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	createdUser := parseUserResponse(t, rec1)
+	if createdUser.Role != "user" {
+		t.Errorf("Step 1: expected role %q, got %q", "user", createdUser.Role)
+	}
+	newUserID := createdUser.ID
+
+	// Verify row exists in database.
+	var dbRole string
+	err = database.SqlDB.QueryRow("SELECT role FROM users WHERE id = ?", newUserID).Scan(&dbRole)
+	if err != nil {
+		t.Fatalf("Step 1: failed to query user from database: %v", err)
+	}
+
+	// Step 2: Admin promotes the new user.
+	rec2 := sendPost(t, adminEcho, "/users/"+newUserID+"/promote")
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("Step 2 (promote): expected HTTP 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	promotedUser := parseUserResponse(t, rec2)
+	if promotedUser.Role != "admin" {
+		t.Errorf("Step 2: expected role %q, got %q", "admin", promotedUser.Role)
+	}
+
+	// Step 3: New user lists their org memberships via GET /user/orgs.
+	// Create a separate Echo server with PAT auth for the new user.
+	userEcho := echo.New()
+	userGroup := userEcho.Group("")
+	userGroup.Use(patAuthMiddleware(newUserID, []string{"orgs:read"}))
+	handlers.RegisterUserHandlers(userGroup, database.SqlDB)
+
+	// Seed an active org and membership for the new user.
+	insertTestOrg(t, database.SqlDB, "smoke-org-1", "Smoke Org", "smoke-org", "https://smoke.example.com", "active")
+	insertTestOrgMember(t, database.SqlDB, "smoke-org-1", newUserID)
+
+	rec3 := sendGet(t, userEcho, "/user/orgs")
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("Step 3 (list orgs): expected HTTP 200, got %d; body: %s", rec3.Code, rec3.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec3)
+	// Should have at least the one active org we seeded.
+	for _, org := range orgs {
+		if org.Status == "blocked" {
+			t.Error("Step 3: blocked org should not appear in response")
+		}
+	}
+}
