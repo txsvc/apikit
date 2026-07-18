@@ -3252,11 +3252,13 @@ func TestBlockedUser_RejectedByMiddleware(t *testing.T) {
 	insertTestUserWithStatus(t, database.SqlDB, "blocked-user-1", "blockeduser",
 		"blocked@example.com", "github", "gh-blocked", "blocked")
 
-	// Insert an API key for the blocked user.
-	secretHash := sha256Hex("test-secret-for-blocked")
+	// Insert an API key for the blocked user. The key_id must not contain
+	// underscores because parseToken splits on the first underscore after
+	// the prefix to separate key_id from secret.
+	secretHash := sha256Hex("testsecretforblocked")
 	_, err = database.SqlDB.Exec(
 		`INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at) VALUES (?, ?, ?, ?, ?)`,
-		"blk_key_1", "blocked-user-1", secretHash, 0, "2024-01-01T00:00:00Z",
+		"blkkey01", "blocked-user-1", secretHash, 0, "2024-01-01T00:00:00Z",
 	)
 	if err != nil {
 		t.Fatalf("failed to insert API key for blocked user: %v", err)
@@ -3274,7 +3276,7 @@ func TestBlockedUser_RejectedByMiddleware(t *testing.T) {
 	handler.RegisterRoutes(g)
 
 	// Construct a valid API key token for the blocked user.
-	token := apikit.TokenPrefix + "_" + "blk_key_1" + "_" + "test-secret-for-blocked"
+	token := apikit.TokenPrefix + "_" + "blkkey01" + "_" + "testsecretforblocked"
 
 	// Send a GET /user/tokens request as the blocked user.
 	req := httptest.NewRequest(http.MethodGet, "/user/tokens", nil)
