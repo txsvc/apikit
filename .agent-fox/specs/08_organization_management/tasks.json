@@ -1131,7 +1131,7 @@
             "08-REQ-7.1",
             "08-REQ-8.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1154,7 +1154,7 @@
             "08-REQ-4.2",
             "08-REQ-4.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1174,7 +1174,7 @@
             "08-REQ-4.6",
             "08-REQ-14.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
