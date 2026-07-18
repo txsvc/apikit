@@ -1,9 +1,14 @@
 package handlers_test
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -428,5 +433,321 @@ func TestRegisterRoutes_PATEndpoints(t *testing.T) {
 
 	if found != len(expected) {
 		t.Errorf("expected %d routes registered, only found %d", len(expected), found)
+	}
+}
+
+// ========================================================================
+// Task 2: Unit tests for CreatePAT request validation
+// ========================================================================
+
+// createPATResponse represents the JSON response from POST /user/tokens
+// for use in test assertions. Includes the one-time plaintext token field.
+type createPATResponse struct {
+	TokenID     string   `json:"token_id"`
+	Name        string   `json:"name"`
+	Token       string   `json:"token"`
+	Permissions []string `json:"permissions"`
+	ExpiresAt   *string  `json:"expires_at"`
+	CreatedAt   string   `json:"created_at"`
+}
+
+// setupCreatePATServer creates an Echo instance with PAT handler routes
+// registered, API key auth middleware injected, and CacheMiddleware applied.
+// A test user is inserted into the database for FK constraint satisfaction.
+// Returns the Echo instance and the db.DB handle.
+func setupCreatePATServer(t *testing.T) (*echo.Echo, *db.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert a test user so that PAT INSERT satisfies FK constraint.
+	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test CreatePAT validation")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	handler.RegisterRoutes(g)
+
+	return e, database
+}
+
+// ========================================================================
+// Task 2.1: Unit tests for name and permissions validation
+// Test Spec: TS-09-9, TS-09-10, TS-09-11, TS-09-15
+// Requirements: 09-REQ-3.1, 09-REQ-3.2, 09-REQ-3.3, 09-REQ-3.7
+// ========================================================================
+
+// TestCreatePAT_MissingName verifies that POST /user/tokens returns HTTP 400
+// with message "name is required" when the name field is absent.
+//
+// Test Spec: TS-09-9
+// Requirement: 09-REQ-3.1
+func TestCreatePAT_MissingName(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"permissions": ["tokens:read"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "name is required")
+}
+
+// TestCreatePAT_EmptyName verifies that POST /user/tokens returns HTTP 400
+// with message "name is required" when the name field is an empty string.
+//
+// Test Spec: TS-09-9
+// Requirement: 09-REQ-3.1
+func TestCreatePAT_EmptyName(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "", "permissions": ["tokens:read"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "name is required")
+}
+
+// TestCreatePAT_NameTooLong verifies that POST /user/tokens returns HTTP 400
+// with message "name must be 255 characters or fewer" when the name exceeds
+// 255 characters.
+//
+// Test Spec: TS-09-10
+// Requirement: 09-REQ-3.2
+func TestCreatePAT_NameTooLong(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	longName := strings.Repeat("a", 256)
+	body := fmt.Sprintf(`{"name": %q, "permissions": ["tokens:read"], "expires": 30}`, longName)
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "name must be 255 characters or fewer")
+}
+
+// TestCreatePAT_MissingPermissions verifies that POST /user/tokens returns
+// HTTP 400 with message "permissions are required" when the permissions field
+// is absent from the request body.
+//
+// Test Spec: TS-09-11
+// Requirement: 09-REQ-3.3
+func TestCreatePAT_MissingPermissions(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "permissions are required")
+}
+
+// TestCreatePAT_EmptyPermissions verifies that POST /user/tokens returns
+// HTTP 400 with message "permissions are required" when the permissions field
+// is an empty array.
+//
+// Test Spec: TS-09-11
+// Requirement: 09-REQ-3.3
+func TestCreatePAT_EmptyPermissions(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": [], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "permissions are required")
+}
+
+// TestCreatePAT_MalformedJSON verifies that POST /user/tokens returns
+// HTTP 400 with message "invalid request body" when the JSON body cannot
+// be decoded.
+//
+// Test Spec: TS-09-15
+// Requirement: 09-REQ-3.7
+func TestCreatePAT_MalformedJSON(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens", "not valid json {")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid request body")
+}
+
+// ========================================================================
+// Task 2.2: Unit tests for permission format and registry validation
+// Test Spec: TS-09-12, TS-09-13, TS-09-E5
+// Requirements: 09-REQ-3.4, 09-REQ-3.5, 09-REQ-3.E3
+// ========================================================================
+
+// TestCreatePAT_InvalidPermissionFormat verifies that POST /user/tokens
+// returns HTTP 400 with message "invalid permission format: usersread" when
+// a permission string does not contain exactly one colon separator.
+//
+// Test Spec: TS-09-12
+// Requirement: 09-REQ-3.4
+func TestCreatePAT_InvalidPermissionFormat(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["usersread"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid permission format: usersread")
+}
+
+// TestCreatePAT_UnknownPermission verifies that POST /user/tokens returns
+// HTTP 400 with message "unknown permission: widgets:delete" when a permission
+// string is well-formed but not registered in the PermissionRegistry.
+//
+// Test Spec: TS-09-13
+// Requirement: 09-REQ-3.5
+func TestCreatePAT_UnknownPermission(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["widgets:delete"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "unknown permission: widgets:delete")
+}
+
+// TestCreatePAT_PermissionFailFast verifies that POST /user/tokens returns
+// only the first validation error when multiple permissions are invalid,
+// confirming fail-fast behavior (no error accumulation).
+//
+// Test Spec: TS-09-E5
+// Requirement: 09-REQ-3.E3
+func TestCreatePAT_PermissionFailFast(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["widgets:delete", "gadgets:create"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "unknown permission: widgets:delete")
+
+	// Verify the error message references only the first invalid permission,
+	// not the second one — confirming fail-fast behavior.
+	resp := parseErrorResponse(t, rec)
+	if strings.Contains(resp.Error.Message, "gadgets:create") {
+		t.Errorf("error message should only reference the first invalid permission, "+
+			"but got: %q", resp.Error.Message)
+	}
+}
+
+// ========================================================================
+// Task 2.3: Unit tests for expires validation and defaulting
+// Test Spec: TS-09-14, TS-09-16, TS-09-E3, TS-09-E4
+// Requirements: 09-REQ-3.6, 09-REQ-3.8, 09-REQ-3.E1, 09-REQ-3.E2
+// ========================================================================
+
+// TestCreatePAT_InvalidExpires verifies that POST /user/tokens returns
+// HTTP 400 with message "expires must be 0, 30, 60, or 90" for invalid
+// expires values.
+//
+// Test Spec: TS-09-14
+// Requirement: 09-REQ-3.6
+func TestCreatePAT_InvalidExpires(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	for _, v := range []int{7, 365, 999, 1, -1} {
+		body := fmt.Sprintf(`{"name": "ci-deploy", "permissions": ["tokens:read"], "expires": %d}`, v)
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+		assertErrorResponse(t, rec, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
+	}
+}
+
+// TestCreatePAT_DefaultExpires verifies that POST /user/tokens treats an
+// omitted expires field as 90 days and returns expires_at = created_at + 90*24h.
+//
+// Test Spec: TS-09-16
+// Requirement: 09-REQ-3.8
+func TestCreatePAT_DefaultExpires(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["tokens:read"]}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.ExpiresAt == nil {
+		t.Fatal("expected non-nil expires_at for default 90-day expiry, got null")
+	}
+
+	createdAt, err := db.ParseTime(resp.CreatedAt)
+	if err != nil {
+		t.Fatalf("failed to parse created_at %q: %v", resp.CreatedAt, err)
+	}
+
+	expiresAt, err := db.ParseTime(*resp.ExpiresAt)
+	if err != nil {
+		t.Fatalf("failed to parse expires_at %q: %v", *resp.ExpiresAt, err)
+	}
+
+	expected := createdAt.Add(90 * 24 * time.Hour)
+	if !expiresAt.Equal(expected) {
+		t.Fatalf("expires_at = %v, want created_at + 90 days = %v", expiresAt, expected)
+	}
+}
+
+// TestCreatePAT_NoExpiry verifies that POST /user/tokens with expires=0
+// sets expires_at to null in the response and NULL in the database.
+//
+// Test Spec: TS-09-E3
+// Requirement: 09-REQ-3.E1
+func TestCreatePAT_NoExpiry(t *testing.T) {
+	e, database := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "forever", "permissions": ["tokens:read"], "expires": 0}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Response should have expires_at: null.
+	if resp.ExpiresAt != nil {
+		t.Fatalf("expected expires_at to be null, got %q", *resp.ExpiresAt)
+	}
+
+	// Verify the database row also has NULL expires_at.
+	var expiresAt sql.NullString
+	err := database.SqlDB.QueryRow(
+		"SELECT expires_at FROM pats WHERE token_id = ?", resp.TokenID,
+	).Scan(&expiresAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if expiresAt.Valid {
+		t.Fatalf("expected NULL expires_at in database, got %q", expiresAt.String)
+	}
+}
+
+// TestCreatePAT_InvalidExpiresExtended verifies that POST /user/tokens
+// returns HTTP 400 with the correct error message for an extended set of
+// invalid expires values, including negative integers and values near the
+// valid boundaries.
+//
+// Test Spec: TS-09-E4
+// Requirement: 09-REQ-3.E2
+func TestCreatePAT_InvalidExpiresExtended(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	for _, v := range []int{-1, 7, 29, 31, 59, 61, 89, 91, 365, 999} {
+		body := fmt.Sprintf(`{"name": "test", "permissions": ["tokens:read"], "expires": %d}`, v)
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+		assertErrorResponse(t, rec, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
 	}
 }
