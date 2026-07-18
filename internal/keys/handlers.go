@@ -285,6 +285,64 @@ func (h *keyHandlers) refreshKey(c echo.Context) error {
 }
 
 // revokeKey handles DELETE /user/keys/:key_id — permanently revokes a key.
+// Accepts authentication via API key or PAT with keys:manage permission
+// (enforced by auth middleware). Self-revocation is permitted because the auth
+// middleware validates the credential before handler execution and does not
+// re-validate mid-flight.
 func (h *keyHandlers) revokeKey(c echo.Context) error {
-	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "not implemented"})
+	userID := authctx.GetUserID(c)
+	keyID := c.Param("key_id")
+
+	// Step 1: Look up the key record.
+	var dbUserID string
+	var dbRevokedAt sql.NullString
+
+	err := h.db.QueryRow(
+		`SELECT key_id, user_id, revoked_at FROM api_keys WHERE key_id = ?`,
+		keyID,
+	).Scan(&keyID, &dbUserID, &dbRevokedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return writeAPIError(c, http.StatusNotFound, "key not found")
+		}
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Step 2: Ownership check — return 404 (not 403) to prevent information leakage.
+	if dbUserID != userID {
+		return writeAPIError(c, http.StatusNotFound, "key not found")
+	}
+
+	// Step 3: Check revocation status — already-revoked keys cannot be revoked again.
+	if dbRevokedAt.Valid {
+		return writeAPIError(c, http.StatusBadRequest, "key is already revoked")
+	}
+
+	// Step 4: No expiry check — expired-but-not-revoked keys are permitted for
+	// deletion to make the final disposition explicit in the audit trail.
+
+	// Step 5: Set revoked_at to current UTC timestamp.
+	now := time.Now().UTC()
+	revokedAtStr := db.FormatTime(now)
+
+	_, err = h.db.Exec(
+		`UPDATE api_keys SET revoked_at = ? WHERE key_id = ? AND user_id = ?`,
+		revokedAtStr, keyID, userID,
+	)
+	if err != nil {
+		return writeAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Step 6: Emit structured INFO log entry with user_id and key_id.
+	c.Logger().Infof("api_key_revoked user_id=%s key_id=%s", userID, keyID)
+
+	// Step 7: Return success response with key_id and revoked_at (RFC 3339 UTC).
+	// Use RFC3339Nano to preserve sub-second precision in the response,
+	// matching the approach used in the refresh handler. db.FormatTime
+	// truncates to whole seconds for DB storage, but the response timestamp
+	// must faithfully represent the current instant.
+	return c.JSON(http.StatusOK, map[string]string{
+		"key_id":     keyID,
+		"revoked_at": now.Format(time.RFC3339Nano),
+	})
 }

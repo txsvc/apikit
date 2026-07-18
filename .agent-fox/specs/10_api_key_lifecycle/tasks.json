@@ -999,7 +999,7 @@
             "10-REQ-7.5",
             "10-REQ-7.8"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1024,7 +1024,7 @@
             "10-REQ-7.7",
             "10-REQ-7.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
