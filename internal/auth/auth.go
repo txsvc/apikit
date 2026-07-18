@@ -34,22 +34,22 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 			// Step 1: Extract Bearer token from Authorization header.
 			header := c.Request().Header.Get("Authorization")
 			if header == "" {
-				return apikit.APIError(c, http.StatusUnauthorized, "missing authorization header")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "missing authorization header")
 			}
 
 			if !strings.HasPrefix(header, "Bearer ") {
-				return apikit.APIError(c, http.StatusUnauthorized, "invalid authorization header format")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "invalid authorization header format")
 			}
 
 			token := header[len("Bearer "):]
 			if token == "" {
-				return apikit.APIError(c, http.StatusUnauthorized, "missing token")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "missing token")
 			}
 
 			// Step 2: Detect credential type.
 			credType, components, err := parseToken(token)
 			if err != nil {
-				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
 
 			// Step 3: Dispatch to credential-type-specific validation.
@@ -69,14 +69,14 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 				// components[0] = token_id, components[1] = secret.
 				authInfo, validationErr = validatePAT(database, components[0], components[1])
 			default:
-				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
 
 			if validationErr != nil {
 				if ae, ok := validationErr.(*authError); ok {
-					return apikit.APIError(c, ae.Code, ae.Message)
+					return apikit.WriteAPIError(c, ae.Code, ae.Message)
 				}
-				return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+				return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 			}
 
 			// Step 4: Inject AuthInfo into request context and call next handler.

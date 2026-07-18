@@ -2061,7 +2061,7 @@ func setupOrgAuthTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
 		return func(c echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
 			if authHeader == "" {
-				return apikit.APIError(c, http.StatusUnauthorized, "missing authorization header")
+				return apikit.WriteAPIError(c, http.StatusUnauthorized, "missing authorization header")
 			}
 			return next(c)
 		}

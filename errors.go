@@ -17,11 +17,11 @@ type errorDetail struct {
 	Message string `json:"message"`
 }
 
-// APIError writes a standard JSON error response envelope to the response.
+// WriteAPIError writes a standard JSON error response envelope to the response.
 // Format: {"error": {"code": <integer>, "message": "<string>"}}
 // Sets Content-Type: application/json; charset=utf-8.
 // Returns the error from c.JSON() directly, propagating write errors.
-func APIError(c echo.Context, code int, message string) error {
+func WriteAPIError(c echo.Context, code int, message string) error {
 	// Explicitly set Content-Type with charset before writing the response,
 	// since Echo v4.15+ omits charset from c.JSON() by default.
 	c.Response().Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -52,5 +52,5 @@ func HTTPErrorHandler(err error, c echo.Context) {
 		}
 	}
 
-	_ = APIError(c, code, message)
+	_ = WriteAPIError(c, code, message)
 }

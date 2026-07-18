@@ -753,7 +753,7 @@ func TestAPIError_WritesStandardEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	err := apikit.APIError(c, 404, "not found")
+	err := apikit.WriteAPIError(c, 404, "not found")
 
 	// Verify Content-Type
 	ct := rec.Header().Get("Content-Type")
@@ -924,13 +924,13 @@ func TestError_PropertyEnvelopeConsistency(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 	api.GET("/bad-request", func(c echo.Context) error {
-		return apikit.APIError(c, 400, "bad request")
+		return apikit.WriteAPIError(c, 400, "bad request")
 	})
 	api.GET("/not-found", func(c echo.Context) error {
-		return apikit.APIError(c, 404, "resource not found")
+		return apikit.WriteAPIError(c, 404, "resource not found")
 	})
 	api.GET("/conflict", func(c echo.Context) error {
-		return apikit.APIError(c, 409, "resource conflict")
+		return apikit.WriteAPIError(c, 409, "resource conflict")
 	})
 	api.GET("/panic", func(c echo.Context) error {
 		panic("test panic for property test")

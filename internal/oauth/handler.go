@@ -319,7 +319,7 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 var errUserBlocked = errors.New("user is blocked")
 
 // oauthError writes a standard JSON error response envelope.
-// Produces the same format as the root apikit.APIError function:
+// Produces the same format as the root apikit.WriteAPIError function:
 //
 //	{"error": {"code": <int>, "message": "<string>"}}
 //

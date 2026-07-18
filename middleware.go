@@ -19,7 +19,7 @@ const contextKeyRequestID = "request_id"
 // panicRecoveryMiddleware returns Echo middleware that recovers from panics
 // in downstream handlers or middleware, logs the panic at error level with
 // structured fields (request_id, panic, stack_trace), and returns HTTP 500
-// via APIError(). This replaces Echo's built-in middleware.Recover().
+// via WriteAPIError(). This replaces Echo's built-in middleware.Recover().
 func panicRecoveryMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -36,7 +36,7 @@ func panicRecoveryMiddleware() echo.MiddlewareFunc {
 					}).Error("panic recovered")
 
 					// Return standard JSON error envelope
-					_ = APIError(c, http.StatusInternalServerError, "internal server error")
+					_ = WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 				}
 			}()
 			return next(c)
@@ -117,12 +117,12 @@ func loggingMiddleware() echo.MiddlewareFunc {
 }
 
 // bodySizeLimitMiddleware returns Echo middleware that rejects requests with
-// a body exceeding maxBytes with HTTP 413 via APIError().
+// a body exceeding maxBytes with HTTP 413 via WriteAPIError().
 func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if c.Request().Body != nil && c.Request().ContentLength > maxBytes {
-				return APIError(c, http.StatusRequestEntityTooLarge, "payload too large")
+				return WriteAPIError(c, http.StatusRequestEntityTooLarge, "payload too large")
 			}
 
 			// For chunked transfers or unknown Content-Length, wrap the body
@@ -164,7 +164,7 @@ func (l *limitedReadCloser) Close() error {
 
 // contentTypeEnforcementMiddleware returns Echo middleware that rejects POST,
 // PUT, and PATCH requests with a Content-Type other than application/json
-// with HTTP 415 via APIError(). GET, DELETE, HEAD, and OPTIONS pass through
+// with HTTP 415 via WriteAPIError(). GET, DELETE, HEAD, and OPTIONS pass through
 // without Content-Type inspection.
 func contentTypeEnforcementMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -174,7 +174,7 @@ func contentTypeEnforcementMiddleware() echo.MiddlewareFunc {
 				ct := c.Request().Header.Get("Content-Type")
 				// Check if Content-Type starts with "application/json"
 				if !strings.HasPrefix(ct, "application/json") {
-					return APIError(c, http.StatusUnsupportedMediaType, "unsupported media type")
+					return WriteAPIError(c, http.StatusUnsupportedMediaType, "unsupported media type")
 				}
 			}
 			return next(c)

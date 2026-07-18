@@ -14,7 +14,7 @@ import (
 )
 
 // authError carries an HTTP status code and message for credential validation
-// failures. The middleware translates these into APIError responses.
+// failures. The middleware translates these into WriteAPIError responses.
 type authError struct {
 	Code    int
 	Message string
