@@ -355,18 +355,164 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 }
 
 // deleteOrg handles DELETE /orgs/:id — deletes an organization.
+// Requires admin access. Validates the :id UUID path parameter and executes a
+// DELETE against the orgs table. The database ON DELETE CASCADE constraint on
+// org_members automatically removes all membership rows for the deleted org;
+// user rows in the users table are unaffected. Returns HTTP 204 with no body
+// on success, 404 when zero rows are affected, and 500 on database error.
 func (h *orgHandlers) deleteOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-6.4).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-6.3).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Execute DELETE (08-REQ-6.1); ON DELETE CASCADE handles org_members.
+	result, err := h.db.Exec("DELETE FROM orgs WHERE id = ?", id)
+	if err != nil {
+		// DB error (08-REQ-6.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Check rows affected — zero means org not found (08-REQ-6.2).
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if rowsAffected == 0 {
+		return apikit.APIError(c, http.StatusNotFound, "organization not found")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // blockOrg handles POST /orgs/:id/block — blocks an organization.
+// Requires admin access. Looks up the org by ID; if the org is already
+// blocked, returns it as-is (idempotent — no UPDATE, no updated_at change).
+// Otherwise sets status='blocked' and updated_at to the current UTC time,
+// re-fetches the row, and returns it. Returns HTTP 200 with OrgResponse.
 func (h *orgHandlers) blockOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-7.5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-7.4).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Fetch current org state (08-REQ-7.3).
+	var org OrgResponse
+	err := h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already blocked → return as-is (08-REQ-7.2, 08-PROP-5).
+	if org.Status == "blocked" {
+		return c.JSON(http.StatusOK, org)
+	}
+
+	// Update status to 'blocked' and set updated_at (08-REQ-7.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		"UPDATE orgs SET status = 'blocked', updated_at = ? WHERE id = ?",
+		now, id,
+	)
+	if err != nil {
+		// DB error on UPDATE (08-REQ-7.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Re-fetch updated org to return.
+	err = h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, org)
 }
 
 // unblockOrg handles POST /orgs/:id/unblock — unblocks an organization.
+// Requires admin access. Looks up the org by ID; if the org is already
+// active, returns it as-is (idempotent — no UPDATE, no updated_at change).
+// Otherwise sets status='active' and updated_at to the current UTC time,
+// re-fetches the row, and returns it. Returns HTTP 200 with OrgResponse.
 func (h *orgHandlers) unblockOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-8.5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-8.4).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Fetch current org state (08-REQ-8.3).
+	var org OrgResponse
+	err := h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already active → return as-is (08-REQ-8.2, 08-PROP-6).
+	if org.Status == "active" {
+		return c.JSON(http.StatusOK, org)
+	}
+
+	// Update status to 'active' and set updated_at (08-REQ-8.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		"UPDATE orgs SET status = 'active', updated_at = ? WHERE id = ?",
+		now, id,
+	)
+	if err != nil {
+		// DB error on UPDATE (08-REQ-8.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Re-fetch updated org to return.
+	err = h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, org)
 }
 
 // listOrgMembers handles GET /orgs/:id/members — lists members of an organization.

@@ -1437,8 +1437,8 @@ func TestUpdateOrg_DBError(t *testing.T) {
 func TestDeleteOrg_Success(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "delete-org-uuid"
-	userID := "delete-user-uuid"
+	orgID := "c0000001-0000-4000-8000-000000000001"
+	userID := "c0000001-0000-4000-8000-100000000001"
 
 	insertTestUser(t, sqlDB, userID, "deleteuser", "delete@example.com", "github", "gh-del")
 	insertTestOrg(t, sqlDB, orgID, "Delete Corp", "delete-corp", "", "active")
@@ -1494,9 +1494,9 @@ func TestDeleteOrg_Success(t *testing.T) {
 func TestDeleteOrg_CascadesMembers(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "cascade-org-uuid"
-	user1ID := "cascade-user-uuid-1"
-	user2ID := "cascade-user-uuid-2"
+	orgID := "c0000002-0000-4000-8000-000000000002"
+	user1ID := "c0000002-0000-4000-8000-100000000001"
+	user2ID := "c0000002-0000-4000-8000-100000000002"
 
 	insertTestUser(t, sqlDB, user1ID, "user1", "user1@example.com", "github", "gh-u1")
 	insertTestUser(t, sqlDB, user2ID, "user2", "user2@example.com", "github", "gh-u2")
@@ -1528,8 +1528,8 @@ func TestDeleteOrg_CascadesMembers(t *testing.T) {
 func TestDeleteOrg_UsersPreserved(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "preserve-org-uuid"
-	userID := "preserve-user-uuid"
+	orgID := "c0000003-0000-4000-8000-000000000003"
+	userID := "c0000003-0000-4000-8000-100000000001"
 
 	insertTestUser(t, sqlDB, userID, "preserved", "preserved@example.com", "github", "gh-prsv")
 	insertTestOrg(t, sqlDB, orgID, "Preserve Corp", "preserve-corp", "", "active")
@@ -1588,7 +1588,7 @@ func TestDeleteOrg_InvalidID(t *testing.T) {
 func TestDeleteOrg_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-delete-org-uuid"
+	orgID := "c0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Del Corp", "nonadmin-del-corp", "", "active")
 
 	rec := sendDelete(t, e, "/orgs/"+orgID)
@@ -1615,7 +1615,7 @@ func TestDeleteOrg_DBError(t *testing.T) {
 	g.Use(adminAuthMiddleware("test-admin-uuid"))
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
-	orgID := "dberror-delete-org-uuid"
+	orgID := "c0000005-0000-4000-8000-000000000005"
 	insertTestOrg(t, database.SqlDB, orgID, "DBError Del Corp", "dberror-del-corp", "", "active")
 
 	// Install a BEFORE DELETE trigger that raises a generic DB error.
@@ -1649,7 +1649,7 @@ func TestDeleteOrg_DBError(t *testing.T) {
 func TestBlockOrg_Success(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "block-success-org-uuid"
+	orgID := "d0000001-0000-4000-8000-000000000001"
 	insertTestOrg(t, sqlDB, orgID, "Block Corp", "block-corp", "", "active")
 
 	// Retrieve original to compare updated_at.
@@ -1688,7 +1688,7 @@ func TestBlockOrg_Success(t *testing.T) {
 func TestBlockOrg_UpdatesTimestamp(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "block-ts-org-uuid"
+	orgID := "d0000002-0000-4000-8000-000000000002"
 	insertTestOrg(t, sqlDB, orgID, "Timestamp Corp", "timestamp-corp", "", "active")
 
 	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
@@ -1718,7 +1718,7 @@ func TestBlockOrg_UpdatesTimestamp(t *testing.T) {
 func TestBlockOrg_Idempotent(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "block-idempotent-org-uuid"
+	orgID := "d0000003-0000-4000-8000-000000000003"
 	insertTestOrg(t, sqlDB, orgID, "Idempotent Corp", "idempotent-corp", "", "active")
 
 	// First block call.
@@ -1785,7 +1785,7 @@ func TestBlockOrg_InvalidID(t *testing.T) {
 func TestBlockOrg_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-block-org-uuid"
+	orgID := "d0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Block Corp", "nonadmin-block-corp", "", "active")
 
 	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
@@ -1812,7 +1812,7 @@ func TestBlockOrg_DBError(t *testing.T) {
 	g.Use(adminAuthMiddleware("test-admin-uuid"))
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
-	orgID := "dberror-block-org-uuid"
+	orgID := "d0000005-0000-4000-8000-000000000005"
 	insertTestOrg(t, database.SqlDB, orgID, "DBError Block Corp", "dberror-block-corp", "", "active")
 
 	// Install a BEFORE UPDATE trigger that raises a generic DB error.
@@ -1846,7 +1846,7 @@ func TestBlockOrg_DBError(t *testing.T) {
 func TestUnblockOrg_Success(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "unblock-success-org-uuid"
+	orgID := "e0000001-0000-4000-8000-000000000001"
 	insertTestOrg(t, sqlDB, orgID, "Unblock Corp", "unblock-corp", "", "blocked")
 
 	// Retrieve the blocked org to compare updated_at.
@@ -1887,7 +1887,7 @@ func TestUnblockOrg_Success(t *testing.T) {
 func TestUnblockOrg_Idempotent(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "unblock-idempotent-org-uuid"
+	orgID := "e0000002-0000-4000-8000-000000000002"
 	insertTestOrg(t, sqlDB, orgID, "Idempotent Unblock Corp", "idempotent-unblock-corp", "", "active")
 
 	// Retrieve original active org to capture its updated_at.
@@ -1952,7 +1952,7 @@ func TestUnblockOrg_InvalidID(t *testing.T) {
 func TestUnblockOrg_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-unblock-org-uuid"
+	orgID := "e0000003-0000-4000-8000-000000000003"
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Unblock Corp", "nonadmin-unblock-corp", "", "blocked")
 
 	rec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
@@ -1979,7 +1979,7 @@ func TestUnblockOrg_DBError(t *testing.T) {
 	g.Use(adminAuthMiddleware("test-admin-uuid"))
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
-	orgID := "dberror-unblock-org-uuid"
+	orgID := "e0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, database.SqlDB, orgID, "DBError Unblock Corp", "dberror-unblock-corp", "", "blocked")
 
 	// Install a BEFORE UPDATE trigger that raises a generic DB error.
