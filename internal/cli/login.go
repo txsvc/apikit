@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -56,15 +59,27 @@ func newCallbackHandler(_ string, _ chan string, _ chan error) http.Handler {
 
 // generateState generates a cryptographically random 64-character hex
 // string for the OAuth state parameter using crypto/rand.
-// Stub — will be implemented in task group 6.
 func generateState() (string, error) {
-	return "", nil
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // buildAuthURL constructs the OAuth authorization URL by parsing the
 // provider's authorize_url, preserving existing query parameters, and
 // appending redirect_uri, state, and response_type=code.
-// Stub — will be implemented in task group 6.
-func buildAuthURL(_, _, _ string) (string, error) {
-	return "", nil
+// Does NOT add client_id — it is already in the authorize_url.
+func buildAuthURL(authorizeURL, redirectURI, state string) (string, error) {
+	u, err := url.Parse(authorizeURL)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("redirect_uri", redirectURI)
+	q.Set("state", state)
+	q.Set("response_type", "code")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
