@@ -1605,3 +1605,604 @@ func TestUnblockUser_NonAdmin(t *testing.T) {
 
 	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
 }
+
+// ========================================================================
+// Additional Test Helpers (for task group 4)
+// ========================================================================
+
+// sendDelete sends an HTTP DELETE request with no body to the given Echo
+// instance and returns the response recorder.
+func sendDelete(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// insertTestAPIKey inserts an API key directly into the api_keys table.
+// expiresAt and revokedAt accept sql.NullString to support NULL values.
+func insertTestAPIKey(t *testing.T, sqlDB *sql.DB, keyID, userID, secretHash string, expiresDays int, expiresAt, revokedAt sql.NullString, createdAt string) {
+	t.Helper()
+
+	_, err := sqlDB.Exec(
+		`INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, expires_at, revoked_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		keyID, userID, secretHash, expiresDays, expiresAt, revokedAt, createdAt,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test API key: %v", err)
+	}
+}
+
+// insertTestPAT inserts a PAT directly into the pats table.
+// expiresAt and revokedAt accept sql.NullString to support NULL values.
+func insertTestPAT(t *testing.T, sqlDB *sql.DB, tokenID, userID, name, secretHash, permissions string, expiresDays int, expiresAt, revokedAt sql.NullString, createdAt string) {
+	t.Helper()
+
+	_, err := sqlDB.Exec(
+		`INSERT INTO pats (token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, revoked_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokenID, userID, name, secretHash, permissions, expiresDays, expiresAt, revokedAt, createdAt,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test PAT: %v", err)
+	}
+}
+
+// nullStr creates a valid sql.NullString from a non-empty string.
+func nullStr(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: true}
+}
+
+// nullStrEmpty creates an invalid (NULL) sql.NullString.
+func nullStrEmpty() sql.NullString {
+	return sql.NullString{Valid: false}
+}
+
+// apiKeyMetaExpectedFields returns the set of field names expected in an
+// APIKeyMeta JSON response object.
+var apiKeyMetaExpectedFields = map[string]bool{
+	"key_id":     true,
+	"user_id":    true,
+	"created_at": true,
+	"expires_at": true,
+	"revoked_at": true,
+}
+
+// patMetaExpectedFields returns the set of field names expected in a
+// PATMeta JSON response object.
+var patMetaExpectedFields = map[string]bool{
+	"token_id":    true,
+	"name":        true,
+	"permissions": true,
+	"user_id":     true,
+	"created_at":  true,
+	"expires_at":  true,
+	"revoked_at":  true,
+}
+
+// ========================================================================
+// Task 4.1: GET /users/:id/keys list API keys
+// Test Spec: TS-07-36, TS-07-37, TS-07-38, TS-07-E9
+// Requirements: 07-REQ-10.1, 07-REQ-10.2, 07-REQ-10.3, 07-REQ-10.E1
+// ========================================================================
+
+// TestListUserKeys_Success verifies that GET /users/:id/keys returns HTTP 200
+// with an array of APIKeyMeta objects for an existing user with two keys
+// (one active, one revoked). Each object must have exactly the expected
+// metadata fields and no secret fields.
+//
+// Test Spec: TS-07-36
+// Requirement: 07-REQ-10.1
+func TestListUserKeys_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "keys-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Insert two API keys: one active, one revoked.
+	insertTestAPIKey(t, sqlDB, "key-active-1", userID, "hash-aaa", 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+	insertTestAPIKey(t, sqlDB, "key-revoked-1", userID, "hash-bbb", 90,
+		nullStrEmpty(), nullStr("2025-02-15T12:00:00Z"), "2024-12-01T00:00:00Z")
+
+	rec := sendGet(t, e, "/users/"+userID+"/keys")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Parse as array of maps to check exact field set.
+	var keys []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("failed to parse response body as JSON array: %v", err)
+	}
+
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 API keys, got %d", len(keys))
+	}
+
+	for i, k := range keys {
+		// Verify exact field set matches APIKeyMeta.
+		if len(k) != len(apiKeyMetaExpectedFields) {
+			t.Errorf("key[%d]: expected %d fields, got %d; fields: %v",
+				i, len(apiKeyMetaExpectedFields), len(k), fieldNames(k))
+		}
+		for fieldName := range apiKeyMetaExpectedFields {
+			if _, exists := k[fieldName]; !exists {
+				t.Errorf("key[%d]: missing expected field %q", i, fieldName)
+			}
+		}
+		// Verify no secret fields are present.
+		for _, secretField := range []string{"secret", "secret_hash", "key", "token"} {
+			if _, exists := k[secretField]; exists {
+				t.Errorf("key[%d]: secret field %q should not be present", i, secretField)
+			}
+		}
+	}
+}
+
+// TestListUserKeys_UserNotFound verifies that GET /users/:id/keys returns
+// HTTP 404 with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-37
+// Requirement: 07-REQ-10.2
+func TestListUserKeys_UserNotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/00000000-0000-0000-0000-000000000000/keys")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestListUserKeys_NonAdmin verifies that GET /users/:id/keys returns HTTP 403
+// with message 'forbidden' when called by a non-admin user.
+//
+// Test Spec: TS-07-38
+// Requirement: 07-REQ-10.3
+func TestListUserKeys_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/some-id/keys")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestListUserKeys_NoSecrets verifies that the API key listing response
+// contains exactly the defined APIKeyMeta fields and no secret values.
+// This is a focused check on the security property: secret_hash must never
+// leak in the response.
+//
+// Test Spec: TS-07-E9
+// Requirement: 07-REQ-10.E1
+func TestListUserKeys_NoSecrets(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "nosecrets-key-uuid"
+	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+	// Insert an API key with a known secret_hash value to ensure it's not returned.
+	insertTestAPIKey(t, sqlDB, "key-sec-1", userID, "super-secret-hash-value", 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	rec := sendGet(t, e, "/users/"+userID+"/keys")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var keys []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("failed to parse response body: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 API key, got %d", len(keys))
+	}
+
+	k := keys[0]
+
+	// Verify exact field set.
+	for fieldName := range k {
+		if !apiKeyMetaExpectedFields[fieldName] {
+			t.Errorf("unexpected field %q in API key response", fieldName)
+		}
+	}
+	for fieldName := range apiKeyMetaExpectedFields {
+		if _, exists := k[fieldName]; !exists {
+			t.Errorf("missing expected field %q in API key response", fieldName)
+		}
+	}
+
+	// Verify secret_hash value is not in any response field.
+	body := rec.Body.String()
+	if strings.Contains(body, "super-secret-hash-value") {
+		t.Error("response body contains the secret_hash value — secrets must not be exposed")
+	}
+}
+
+// ========================================================================
+// Task 4.2: DELETE /users/:id/keys/:key_id revoke API key
+// Test Spec: TS-07-39, TS-07-40, TS-07-41, TS-07-42
+// Requirements: 07-REQ-11.1, 07-REQ-11.2, 07-REQ-11.3, 07-REQ-11.4
+// ========================================================================
+
+// TestRevokeUserKey_Success verifies that DELETE /users/:id/keys/:key_id
+// revokes an active API key: returns HTTP 204 with no body and sets
+// revoked_at in the database to a non-null RFC 3339 UTC timestamp.
+//
+// Test Spec: TS-07-39
+// Requirement: 07-REQ-11.1
+func TestRevokeUserKey_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "revoke-key-user-uuid"
+	keyID := "revoke-key-1"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestAPIKey(t, sqlDB, keyID, userID, "hash-aaa", 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/keys/"+keyID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty response body, got %q", rec.Body.String())
+	}
+
+	// Verify revoked_at is set in the database.
+	var revokedAt sql.NullString
+	err := sqlDB.QueryRow("SELECT revoked_at FROM api_keys WHERE key_id = ?", keyID).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query api_keys: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to be set (non-NULL), but it was NULL")
+	}
+	if !isRFC3339(revokedAt.String) {
+		t.Errorf("expected revoked_at to be RFC 3339 format, got %q", revokedAt.String)
+	}
+}
+
+// TestRevokeUserKey_AlreadyRevoked verifies that DELETE /users/:id/keys/:key_id
+// is idempotent: revoking an already-revoked key returns HTTP 204 without
+// overwriting the original revoked_at timestamp.
+//
+// Test Spec: TS-07-40
+// Requirement: 07-REQ-11.2
+func TestRevokeUserKey_AlreadyRevoked(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "idem-key-user-uuid"
+	keyID := "idem-key-1"
+	originalRevokedAt := "2025-02-15T12:00:00Z"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestAPIKey(t, sqlDB, keyID, userID, "hash-aaa", 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStr(originalRevokedAt), "2025-01-01T00:00:00Z")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/keys/"+keyID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty response body, got %q", rec.Body.String())
+	}
+
+	// Verify revoked_at is unchanged.
+	var revokedAt sql.NullString
+	err := sqlDB.QueryRow("SELECT revoked_at FROM api_keys WHERE key_id = ?", keyID).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query api_keys: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to remain set, but it was NULL")
+	}
+	if revokedAt.String != originalRevokedAt {
+		t.Errorf("expected revoked_at to remain %q, got %q", originalRevokedAt, revokedAt.String)
+	}
+}
+
+// TestRevokeUserKey_NotFound verifies that DELETE /users/:id/keys/:key_id
+// returns HTTP 404 with message 'api key not found' when no matching key
+// exists for the given user.
+//
+// Test Spec: TS-07-41
+// Requirement: 07-REQ-11.3
+func TestRevokeUserKey_NotFound(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "nokey-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/keys/nonexistent-key-id")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "api key not found")
+}
+
+// TestRevokeUserKey_NonAdmin verifies that DELETE /users/:id/keys/:key_id
+// returns HTTP 403 with message 'forbidden' when called by a non-admin user.
+//
+// Test Spec: TS-07-42
+// Requirement: 07-REQ-11.4
+func TestRevokeUserKey_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendDelete(t, e, "/users/some-id/keys/some-key")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// ========================================================================
+// Task 4.3: GET /users/:id/tokens list PATs
+// Test Spec: TS-07-43, TS-07-44, TS-07-45, TS-07-E10
+// Requirements: 07-REQ-12.1, 07-REQ-12.2, 07-REQ-12.3, 07-REQ-12.E1
+// ========================================================================
+
+// TestListUserTokens_Success verifies that GET /users/:id/tokens returns
+// HTTP 200 with an array of PATMeta objects for an existing user with two
+// PATs (one active, one revoked). Each object must have exactly the expected
+// metadata fields and no secret fields.
+//
+// Test Spec: TS-07-43
+// Requirement: 07-REQ-12.1
+func TestListUserTokens_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "tokens-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Insert two PATs: one active, one revoked.
+	insertTestPAT(t, sqlDB, "tok-active-1", userID, "My PAT", "hash-tok-aaa",
+		`["users:read","orgs:read"]`, 90,
+		nullStr("2025-04-01T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+	insertTestPAT(t, sqlDB, "tok-revoked-1", userID, "Old PAT", "hash-tok-bbb",
+		`["users:read"]`, 30,
+		nullStrEmpty(), nullStr("2025-02-10T10:00:00Z"), "2024-12-01T00:00:00Z")
+
+	rec := sendGet(t, e, "/users/"+userID+"/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Parse as array of maps to check exact field set.
+	var tokens []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("failed to parse response body as JSON array: %v", err)
+	}
+
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 PATs, got %d", len(tokens))
+	}
+
+	for i, tok := range tokens {
+		// Verify exact field set matches PATMeta.
+		if len(tok) != len(patMetaExpectedFields) {
+			t.Errorf("token[%d]: expected %d fields, got %d; fields: %v",
+				i, len(patMetaExpectedFields), len(tok), fieldNames(tok))
+		}
+		for fieldName := range patMetaExpectedFields {
+			if _, exists := tok[fieldName]; !exists {
+				t.Errorf("token[%d]: missing expected field %q", i, fieldName)
+			}
+		}
+		// Verify no secret fields are present.
+		for _, secretField := range []string{"secret", "secret_hash", "key", "token"} {
+			if _, exists := tok[secretField]; exists {
+				t.Errorf("token[%d]: secret field %q should not be present", i, secretField)
+			}
+		}
+	}
+}
+
+// TestListUserTokens_UserNotFound verifies that GET /users/:id/tokens returns
+// HTTP 404 with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-44
+// Requirement: 07-REQ-12.2
+func TestListUserTokens_UserNotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/00000000-0000-0000-0000-000000000000/tokens")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestListUserTokens_NonAdmin verifies that GET /users/:id/tokens returns
+// HTTP 403 with message 'forbidden' when called by a non-admin user.
+//
+// Test Spec: TS-07-45
+// Requirement: 07-REQ-12.3
+func TestListUserTokens_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/some-id/tokens")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestListUserTokens_NoSecrets verifies that the PAT listing response contains
+// exactly the defined PATMeta fields and no secret values. This is a focused
+// check on the security property: secret_hash must never leak in the response.
+//
+// Test Spec: TS-07-E10
+// Requirement: 07-REQ-12.E1
+func TestListUserTokens_NoSecrets(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "nosecrets-tok-uuid"
+	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
+
+	// Insert a PAT with a known secret_hash value to ensure it's not returned.
+	insertTestPAT(t, sqlDB, "tok-sec-1", userID, "Secret PAT", "ultra-secret-hash-value",
+		`["users:read"]`, 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	rec := sendGet(t, e, "/users/"+userID+"/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var tokens []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("failed to parse response body: %v", err)
+	}
+
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 PAT, got %d", len(tokens))
+	}
+
+	tok := tokens[0]
+
+	// Verify exact field set.
+	for fieldName := range tok {
+		if !patMetaExpectedFields[fieldName] {
+			t.Errorf("unexpected field %q in PAT response", fieldName)
+		}
+	}
+	for fieldName := range patMetaExpectedFields {
+		if _, exists := tok[fieldName]; !exists {
+			t.Errorf("missing expected field %q in PAT response", fieldName)
+		}
+	}
+
+	// Verify secret_hash value is not in any response field.
+	body := rec.Body.String()
+	if strings.Contains(body, "ultra-secret-hash-value") {
+		t.Error("response body contains the secret_hash value — secrets must not be exposed")
+	}
+}
+
+// ========================================================================
+// Task 4.4: DELETE /users/:id/tokens/:token_id revoke PAT
+// Test Spec: TS-07-46, TS-07-47, TS-07-48, TS-07-49
+// Requirements: 07-REQ-13.1, 07-REQ-13.2, 07-REQ-13.3, 07-REQ-13.4
+// ========================================================================
+
+// TestRevokeUserToken_Success verifies that DELETE /users/:id/tokens/:token_id
+// revokes an active PAT: returns HTTP 204 with no body and sets revoked_at
+// in the database to a non-null RFC 3339 UTC timestamp.
+//
+// Test Spec: TS-07-46
+// Requirement: 07-REQ-13.1
+func TestRevokeUserToken_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "revoke-tok-user-uuid"
+	tokenID := "revoke-tok-1"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestPAT(t, sqlDB, tokenID, userID, "My Token", "hash-tok-aaa",
+		`["users:read"]`, 30,
+		nullStr("2025-01-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/tokens/"+tokenID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty response body, got %q", rec.Body.String())
+	}
+
+	// Verify revoked_at is set in the database.
+	var revokedAt sql.NullString
+	err := sqlDB.QueryRow("SELECT revoked_at FROM pats WHERE token_id = ?", tokenID).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to be set (non-NULL), but it was NULL")
+	}
+	if !isRFC3339(revokedAt.String) {
+		t.Errorf("expected revoked_at to be RFC 3339 format, got %q", revokedAt.String)
+	}
+}
+
+// TestRevokeUserToken_AlreadyRevoked verifies that DELETE
+// /users/:id/tokens/:token_id is idempotent: revoking an already-revoked PAT
+// returns HTTP 204 without overwriting the original revoked_at timestamp.
+//
+// Test Spec: TS-07-47
+// Requirement: 07-REQ-13.2
+func TestRevokeUserToken_AlreadyRevoked(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "idem-tok-user-uuid"
+	tokenID := "idem-tok-1"
+	originalRevokedAt := "2025-02-15T12:00:00Z"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+	insertTestPAT(t, sqlDB, tokenID, userID, "Old Token", "hash-tok-aaa",
+		`["users:read"]`, 30,
+		nullStrEmpty(), nullStr(originalRevokedAt), "2024-12-01T00:00:00Z")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/tokens/"+tokenID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty response body, got %q", rec.Body.String())
+	}
+
+	// Verify revoked_at is unchanged.
+	var revokedAt sql.NullString
+	err := sqlDB.QueryRow("SELECT revoked_at FROM pats WHERE token_id = ?", tokenID).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to remain set, but it was NULL")
+	}
+	if revokedAt.String != originalRevokedAt {
+		t.Errorf("expected revoked_at to remain %q, got %q", originalRevokedAt, revokedAt.String)
+	}
+}
+
+// TestRevokeUserToken_NotFound verifies that DELETE /users/:id/tokens/:token_id
+// returns HTTP 404 with message 'token not found' when no matching token
+// exists for the given user.
+//
+// Test Spec: TS-07-48
+// Requirement: 07-REQ-13.3
+func TestRevokeUserToken_NotFound(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "notok-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendDelete(t, e, "/users/"+userID+"/tokens/nonexistent-token-id")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "token not found")
+}
+
+// TestRevokeUserToken_NonAdmin verifies that DELETE /users/:id/tokens/:token_id
+// returns HTTP 403 with message 'forbidden' when called by a non-admin user.
+//
+// Test Spec: TS-07-49
+// Requirement: 07-REQ-13.4
+func TestRevokeUserToken_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendDelete(t, e, "/users/some-id/tokens/some-token")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// fieldNames returns the keys of a map for debug output.
+func fieldNames(m map[string]any) []string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	return names
+}
