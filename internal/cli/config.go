@@ -19,3 +19,9 @@ func InitConfig(_ string) error {
 func LoadConfig(_ string) (*CLIConfig, error) {
 	return nil, nil
 }
+
+// SaveConfig atomically writes an updated CLIConfig to config.toml.
+// Stub — will be implemented in task group 10.
+func SaveConfig(_ string, _ *CLIConfig) error {
+	return nil
+}
