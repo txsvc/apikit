@@ -19,7 +19,12 @@ func newAdminTokensCmd() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List a user's personal access tokens",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("user_id"),
+		Annotations: map[string]string{
+			"method": "GET",
+			"path":   "/users/:id/tokens",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -30,6 +35,11 @@ func newAdminTokensCmd() *cobra.Command {
 		Use:   "revoke",
 		Short: "Revoke a user's personal access token",
 		Args:  cobra.ExactArgs(2),
+		Annotations: map[string]string{
+			"method": "DELETE",
+			"path":   "/users/:id/tokens/:token_id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},

@@ -11,6 +11,13 @@ import (
 type clientContextKey struct{}
 type userIDContextKey struct{}
 
+// ContextWithClient stores an API client in the context.
+// The client is stored as any to avoid import cycles between
+// internal/cli and the root apikit package.
+func ContextWithClient(ctx context.Context, client any) context.Context {
+	return context.WithValue(ctx, clientContextKey{}, client)
+}
+
 // ClientFromContext retrieves the API client from a context.
 // Returns nil if no client was stored (e.g., auth-exempt commands).
 // Stub — will be implemented in task group 9.

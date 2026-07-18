@@ -200,6 +200,58 @@ func parseErrorEnvelope(t *testing.T, stdout string) errorEnvelope {
 }
 
 // ---------------------------------------------------------------------------
+// Test helpers for mock injection
+// ---------------------------------------------------------------------------
+
+// makeUsersRunner creates a UsersRunner that wraps a mockAdminUsersClient,
+// bridging the typed mock interface to the any-typed function values used
+// by the production code (which cannot import apikit due to import cycles).
+func makeUsersRunner(mock *mockAdminUsersClient) *cli.UsersRunner {
+	return &cli.UsersRunner{
+		ListUsers: func(ctx context.Context, includeBlocked bool) (any, error) {
+			return mock.ListUsers(ctx, &apikit.ListUsersOptions{IncludeBlocked: includeBlocked})
+		},
+		GetUserByID: func(ctx context.Context, id string) (any, error) {
+			resp, err := mock.GetUserByID(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return resp.Data, nil
+		},
+		CreateUser: func(ctx context.Context, username, email, provider, providerID string) (any, error) {
+			return mock.CreateUser(ctx, &apikit.CreateUserRequest{
+				Username:   username,
+				Email:      email,
+				Provider:   provider,
+				ProviderID: providerID,
+			})
+		},
+	}
+}
+
+// executeAdminCmdWithClient is like executeAdminCmd but injects a client
+// (typically a *cli.UsersRunner) into the command's context before execution.
+func executeAdminCmdWithClient(client any, args ...string) (stdout string, err error) {
+	cmd := cli.NewAdminCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs(args)
+
+	if client != nil {
+		ctx := cli.ContextWithClient(context.Background(), client)
+		cmd.SetContext(ctx)
+	}
+
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	silenceSubcommands(cmd)
+
+	err = cmd.Execute()
+	return buf.String(), err
+}
+
+// ---------------------------------------------------------------------------
 // TS-14-7: Every admin subcommand with a RunE executes loadConfig,
 // newClient, validates args/flags, calls the SDK method, and prints JSON
 // to stdout on success.
@@ -211,7 +263,7 @@ func TestCommonSuccessPattern(t *testing.T) {
 		listUsersResult: []*apikit.User{{ID: "u1", Username: "alice"}},
 	}
 
-	stdout, err := executeAdminCmd("users", "list")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	// Expect the command to succeed (exit code 0).
 	if err != nil {
@@ -236,11 +288,11 @@ func TestCommonSuccessPattern(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCommonAPIError(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		getUserErr: &apikit.APIError{Code: 403, Message: "forbidden"},
 	}
 
-	stdout, err := executeAdminCmd("users", "show", "user-1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "show", "user-1")
 
 	// Expect an error (exit code 1 for API errors).
 	if err == nil {
@@ -268,11 +320,11 @@ func TestCommonAPIError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCommonNetworkError(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		listUsersErr: errors.New("connection refused"),
 	}
 
-	stdout, err := executeAdminCmd("users", "list")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	// Expect an error (exit code 2 for client errors).
 	if err == nil {
@@ -340,7 +392,7 @@ func TestContextIsBackground(t *testing.T) {
 		listUsersResult: []*apikit.User{},
 	}
 
-	_, _ = executeAdminCmd("users", "list")
+	_, _ = executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	if !mock.listUsersCalled {
 		t.Fatal("ListUsers was not called; cannot verify context")
@@ -474,7 +526,7 @@ func TestNonUUIDPassthrough(t *testing.T) {
 		getUserErr: &apikit.APIError{Code: 404, Message: "user not found"},
 	}
 
-	stdout, err := executeAdminCmd("users", "show", "not-a-uuid")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "show", "not-a-uuid")
 
 	// The SDK should have been called with the non-UUID string.
 	if !mock.getUserCalled {
@@ -509,7 +561,7 @@ func TestEmptyStringFlagPassthrough(t *testing.T) {
 		createUserErr: &apikit.APIError{Code: 400, Message: "username required"},
 	}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock),
 		"users", "create",
 		"--username", "",
 		"--email", "a@b.com",
@@ -553,7 +605,7 @@ func TestAdminUsersListCommand(t *testing.T) {
 		listUsersResult: []*apikit.User{{ID: "u1", Username: "alice"}},
 	}
 
-	stdout, err := executeAdminCmd("users", "list")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -598,7 +650,7 @@ func TestAdminUsersListIncludeBlocked(t *testing.T) {
 		listUsersResult: []*apikit.User{{ID: "u1"}},
 	}
 
-	stdout, err := executeAdminCmd("users", "list", "--include-blocked")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list", "--include-blocked")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -677,7 +729,7 @@ func TestAdminUsersShowCommand(t *testing.T) {
 		},
 	}
 
-	stdout, err := executeAdminCmd("users", "show", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "show", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -772,7 +824,7 @@ func TestAdminUsersCreateCommand(t *testing.T) {
 		createUserResult: &apikit.User{ID: "u2", Username: "bob"},
 	}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock),
 		"users", "create",
 		"--username", "bob",
 		"--email", "bob@x.com",
@@ -1555,11 +1607,11 @@ func TestAdminUsersUnblockMissingID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersAPIError403(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		listUsersErr: &apikit.APIError{Code: 403, Message: "forbidden"},
 	}
 
-	stdout, err := executeAdminCmd("users", "list")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	// Expect an error (exit code 1 for API errors).
 	if err == nil {
@@ -1585,11 +1637,11 @@ func TestAdminUsersAPIError403(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersAPIError404(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		getUserErr: &apikit.APIError{Code: 404, Message: "user not found"},
 	}
 
-	stdout, err := executeAdminCmd("users", "show", "u999")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "show", "u999")
 
 	// Expect an error (exit code 1 for API errors).
 	if err == nil {
@@ -1615,11 +1667,11 @@ func TestAdminUsersAPIError404(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersNetworkError(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		listUsersErr: errors.New("dial tcp: connection refused"),
 	}
 
-	stdout, err := executeAdminCmd("users", "list")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	// Expect an error (exit code 2 for client/network errors).
 	if err == nil {
@@ -1689,9 +1741,9 @@ func TestExitCodeInvariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_ = tt.mockSetup()
+			mock := tt.mockSetup()
 
-			_, err := executeAdminCmd(tt.args...)
+			_, err := executeAdminCmdWithClient(makeUsersRunner(mock), tt.args...)
 
 			if tt.wantErr && err == nil {
 				t.Error("expected non-nil error")
@@ -1723,13 +1775,13 @@ func TestExitCodeInvariants(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJSONOutputFormatting(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		getUserResult: &apikit.Response[apikit.User]{
 			Data: apikit.User{ID: "u1", Username: "alice"},
 		},
 	}
 
-	stdout, err := executeAdminCmd("users", "show", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "show", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -2002,26 +2054,46 @@ func TestNoIntegrationTestFiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStdoutAlwaysValidJSON(t *testing.T) {
-	scenarios := []struct {
+	// Success scenarios need mock injection.
+	successMock := &mockAdminUsersClient{
+		listUsersResult: []*apikit.User{{ID: "u1"}},
+		getUserResult: &apikit.Response[apikit.User]{
+			Data: apikit.User{ID: "u1"},
+		},
+	}
+	runner := makeUsersRunner(successMock)
+
+	successScenarios := []struct {
 		name string
 		args []string
 	}{
-		// Success scenarios.
 		{name: "users list success", args: []string{"users", "list"}},
 		{name: "users show success", args: []string{"users", "show", "u1"}},
-		// Error scenarios (missing args).
+	}
+
+	for _, s := range successScenarios {
+		t.Run(s.name, func(t *testing.T) {
+			stdout, _ := executeAdminCmdWithClient(runner, s.args...)
+			if stdout != "" && !json.Valid([]byte(stdout)) {
+				t.Errorf("stdout is not valid JSON: %q", stdout)
+			}
+		})
+	}
+
+	// Error scenarios (missing args) — no injection needed.
+	errorScenarios := []struct {
+		name string
+		args []string
+	}{
 		{name: "users show missing id", args: []string{"users", "show"}},
 		{name: "users create missing flags", args: []string{"users", "create"}},
 		{name: "keys list missing user_id", args: []string{"keys", "list"}},
 		{name: "tokens list missing user_id", args: []string{"tokens", "list"}},
 	}
 
-	for _, s := range scenarios {
+	for _, s := range errorScenarios {
 		t.Run(s.name, func(t *testing.T) {
 			stdout, _ := executeAdminCmd(s.args...)
-
-			// stdout may be empty for stub implementations, but when present
-			// it must be valid JSON.
 			if stdout != "" && !json.Valid([]byte(stdout)) {
 				t.Errorf("stdout is not valid JSON: %q", stdout)
 			}
@@ -2037,27 +2109,32 @@ func TestStdoutAlwaysValidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExitCodeAlways012(t *testing.T) {
-	scenarios := []struct {
+	// Success case needs mock injection.
+	t.Run("success", func(t *testing.T) {
+		mock := &mockAdminUsersClient{
+			listUsersResult: []*apikit.User{{ID: "u1"}},
+		}
+		_, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
+		if err != nil {
+			t.Errorf("expected nil error, got: %v", err)
+		}
+	})
+
+	// Error cases don't need injection.
+	errorScenarios := []struct {
 		name    string
 		args    []string
-		wantErr bool
 	}{
-		{name: "success", args: []string{"users", "list"}, wantErr: false},
-		{name: "missing arg", args: []string{"users", "show"}, wantErr: true},
-		{name: "missing flag", args: []string{"users", "create"}, wantErr: true},
+		{name: "missing arg", args: []string{"users", "show"}},
+		{name: "missing flag", args: []string{"users", "create"}},
 	}
 
-	for _, s := range scenarios {
+	for _, s := range errorScenarios {
 		t.Run(s.name, func(t *testing.T) {
 			_, err := executeAdminCmd(s.args...)
-
-			if s.wantErr && err == nil {
+			if err == nil {
 				t.Error("expected non-nil error")
 			}
-			if !s.wantErr && err != nil {
-				t.Errorf("expected nil error, got: %v", err)
-			}
-
 			// Once ExitCode() is implemented in spec 13, verify:
 			//   code := cli.ExitCode(err)
 			//   if code != 0 && code != 1 && code != 2 {
@@ -2258,11 +2335,20 @@ func TestParentCommandsExitZeroNoConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPrintJSONFailureExits2(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		listUsersResult: []*apikit.User{{ID: "u1"}},
+	}
+
 	// Create a command and set stdout to a writer that always fails.
 	cmd := cli.NewAdminCmd()
 	cmd.SetOut(&failWriter{})
 	cmd.SetErr(new(strings.Builder))
 	cmd.SetArgs([]string{"users", "list"})
+
+	// Inject mock client via context.
+	ctx := cli.ContextWithClient(context.Background(), makeUsersRunner(mock))
+	cmd.SetContext(ctx)
+
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	silenceSubcommands(cmd)
@@ -2270,9 +2356,9 @@ func TestPrintJSONFailureExits2(t *testing.T) {
 	err := cmd.Execute()
 
 	// When printJSON fails, the command should return an error.
-	// NOTE: With stub implementation this may not fail; the test documents
-	// the expected behavior for when printJSON is implemented.
-	_ = err
+	if err == nil {
+		t.Error("expected error when stdout writer fails")
+	}
 }
 
 // failWriter is a writer that always returns an error.
@@ -2295,7 +2381,7 @@ func TestContextNoDeadline(t *testing.T) {
 		listUsersResult: []*apikit.User{},
 	}
 
-	_, _ = executeAdminCmd("users", "list")
+	_, _ = executeAdminCmdWithClient(makeUsersRunner(mock), "users", "list")
 
 	if !mock.listUsersCalled {
 		t.Skip("ListUsers was not called; skipping context check (stub implementation)")

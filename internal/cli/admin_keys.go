@@ -19,7 +19,12 @@ func newAdminKeysCmd() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List a user's API keys",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("user_id"),
+		Annotations: map[string]string{
+			"method": "GET",
+			"path":   "/users/:id/keys",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -30,6 +35,11 @@ func newAdminKeysCmd() *cobra.Command {
 		Use:   "revoke",
 		Short: "Revoke a user's API key",
 		Args:  cobra.ExactArgs(2),
+		Annotations: map[string]string{
+			"method": "DELETE",
+			"path":   "/users/:id/keys/:key_id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},

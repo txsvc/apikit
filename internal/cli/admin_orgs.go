@@ -20,6 +20,11 @@ func newAdminOrgsCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all organizations",
 		Args:  cobra.NoArgs,
+		Annotations: map[string]string{
+			"method": "GET",
+			"path":   "/orgs",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -31,6 +36,11 @@ func newAdminOrgsCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a new organization",
 		Args:  cobra.NoArgs,
+		Annotations: map[string]string{
+			"method": "POST",
+			"path":   "/orgs",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -43,7 +53,12 @@ func newAdminOrgsCmd() *cobra.Command {
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update an organization by ID",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("id"),
+		Annotations: map[string]string{
+			"method": "PATCH",
+			"path":   "/orgs/:id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -55,7 +70,12 @@ func newAdminOrgsCmd() *cobra.Command {
 	deleteCmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete an organization by ID",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("id"),
+		Annotations: map[string]string{
+			"method": "DELETE",
+			"path":   "/orgs/:id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -65,7 +85,12 @@ func newAdminOrgsCmd() *cobra.Command {
 	blockCmd := &cobra.Command{
 		Use:   "block",
 		Short: "Block an organization",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("id"),
+		Annotations: map[string]string{
+			"method": "POST",
+			"path":   "/orgs/:id/block",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -75,7 +100,12 @@ func newAdminOrgsCmd() *cobra.Command {
 	unblockCmd := &cobra.Command{
 		Use:   "unblock",
 		Short: "Unblock an organization",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("id"),
+		Annotations: map[string]string{
+			"method": "POST",
+			"path":   "/orgs/:id/unblock",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -107,7 +137,12 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List members of an organization",
-		Args:  cobra.ExactArgs(1),
+		Args:  adminCheckMissingArg("id"),
+		Annotations: map[string]string{
+			"method": "GET",
+			"path":   "/orgs/:id/members",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -118,6 +153,11 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 		Use:   "add",
 		Short: "Add a member to an organization",
 		Args:  cobra.ExactArgs(2),
+		Annotations: map[string]string{
+			"method": "PUT",
+			"path":   "/orgs/:id/members/:user_id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},
@@ -128,6 +168,11 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 		Use:   "remove",
 		Short: "Remove a member from an organization",
 		Args:  cobra.ExactArgs(2),
+		Annotations: map[string]string{
+			"method": "DELETE",
+			"path":   "/orgs/:id/members/:user_id",
+			"auth":   "admin",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("not implemented")
 		},

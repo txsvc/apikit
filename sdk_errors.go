@@ -19,6 +19,16 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("API error %d: %s", e.Code, e.Message)
 }
 
+// ErrorCode returns the HTTP status code from the API error.
+// Used by internal/cli to detect API errors via interface matching
+// without importing the root apikit package (avoiding import cycles).
+func (e *APIError) ErrorCode() int { return e.Code }
+
+// ErrorMessage returns the error message from the API error.
+// Used by internal/cli to detect API errors via interface matching
+// without importing the root apikit package (avoiding import cycles).
+func (e *APIError) ErrorMessage() string { return e.Message }
+
 // ErrNotModified is a sentinel error returned when a conditional GET
 // receives HTTP 304 (Not Modified). Callers check with errors.Is.
 var ErrNotModified = errors.New("not modified")
