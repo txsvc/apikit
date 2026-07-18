@@ -800,7 +800,7 @@
           "requirement_refs": [
             "11-REQ-13.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -819,7 +819,7 @@
             "11-REQ-14.1",
             "11-REQ-14.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -858,7 +858,7 @@
             "11-REQ-15.9",
             "11-REQ-15.10"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
