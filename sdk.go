@@ -255,13 +255,13 @@ func (c *Client) GetUser(ctx context.Context, opts ...RequestOption) (*Response[
 }
 
 // UpdateUser calls PATCH /user to update the authenticated user.
-func (c *Client) UpdateUser(ctx context.Context, req *UpdateUserRequest) (*Response[User], error) {
+func (c *Client) UpdateUser(ctx context.Context, req *UpdateUserRequest) (*User, error) {
 	var result User
-	status, header, err := c.do(ctx, "PATCH", c.mountPoint+"/user", req, &result)
+	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/user", req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[User]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // ListKeys calls GET /user/keys to list the authenticated user's API keys.
@@ -278,23 +278,24 @@ func (c *Client) ListKeys(ctx context.Context) ([]*APIKeyMeta, error) {
 }
 
 // RevokeKey calls DELETE /user/keys/:keyID to revoke an API key.
-func (c *Client) RevokeKey(ctx context.Context, keyID string) (*Response[RevokeKeyResponse], error) {
+// Returns *RevokeKeyResponse on HTTP 200 success.
+func (c *Client) RevokeKey(ctx context.Context, keyID string) (*RevokeKeyResponse, error) {
 	var result RevokeKeyResponse
-	status, header, err := c.do(ctx, "DELETE", c.mountPoint+"/user/keys/"+keyID, nil, &result)
+	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/user/keys/"+keyID, nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[RevokeKeyResponse]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // RefreshKey calls POST /user/keys/:keyID/refresh to refresh an API key.
-func (c *Client) RefreshKey(ctx context.Context, keyID string) (*Response[APIKeyFull], error) {
+func (c *Client) RefreshKey(ctx context.Context, keyID string) (*APIKeyFull, error) {
 	var result APIKeyFull
-	status, header, err := c.do(ctx, "POST", c.mountPoint+"/user/keys/"+keyID+"/refresh", nil, &result)
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/user/keys/"+keyID+"/refresh", nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[APIKeyFull]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // ListTokens calls GET /user/tokens to list the authenticated user's PATs.
@@ -311,13 +312,13 @@ func (c *Client) ListTokens(ctx context.Context) ([]*PAT, error) {
 }
 
 // CreateToken calls POST /user/tokens to create a new personal access token.
-func (c *Client) CreateToken(ctx context.Context, req *CreateTokenRequest) (*Response[PATFull], error) {
+func (c *Client) CreateToken(ctx context.Context, req *CreateTokenRequest) (*PATFull, error) {
 	var result PATFull
-	status, header, err := c.do(ctx, "POST", c.mountPoint+"/user/tokens", req, &result)
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/user/tokens", req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[PATFull]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // GetToken calls GET /user/tokens/:tokenID to fetch a PAT by ID.
@@ -334,6 +335,19 @@ func (c *Client) GetToken(ctx context.Context, tokenID string, opts ...RequestOp
 func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
 	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/user/tokens/"+tokenID, nil, nil)
 	return err
+}
+
+// ListUserOrgs calls GET /user/orgs to list the authenticated user's organizations.
+func (c *Client) ListUserOrgs(ctx context.Context) ([]*Organization, error) {
+	var result []*Organization
+	_, _, err := c.do(ctx, "GET", c.mountPoint+"/user/orgs", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []*Organization{}
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -398,53 +412,102 @@ func (c *Client) ListUsers(ctx context.Context, opts *ListUsersOptions) ([]*User
 }
 
 // CreateUser calls POST /users to create a new user (admin).
-func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*Response[User], error) {
+func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
 	var result User
-	status, header, err := c.do(ctx, "POST", c.mountPoint+"/users", req, &result)
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users", req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[User]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // UpdateUserByID calls PATCH /users/:id to update a user by ID (admin).
-func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateUserRequest) (*Response[User], error) {
+func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateUserRequest) (*User, error) {
 	var result User
-	status, header, err := c.do(ctx, "PATCH", c.mountPoint+"/users/"+userID, req, &result)
+	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/users/"+userID, req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[User]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // BlockUser calls POST /users/:id/block to block a user (admin).
-func (c *Client) BlockUser(ctx context.Context, userID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/block", nil, nil)
-	return err
+func (c *Client) BlockUser(ctx context.Context, userID string) (*User, error) {
+	var result User
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/block", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // UnblockUser calls POST /users/:id/unblock to unblock a user (admin).
-func (c *Client) UnblockUser(ctx context.Context, userID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/unblock", nil, nil)
-	return err
+func (c *Client) UnblockUser(ctx context.Context, userID string) (*User, error) {
+	var result User
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/unblock", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // PromoteUser calls POST /users/:id/promote to promote a user to admin (admin).
-func (c *Client) PromoteUser(ctx context.Context, userID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/promote", nil, nil)
-	return err
+func (c *Client) PromoteUser(ctx context.Context, userID string) (*User, error) {
+	var result User
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/promote", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // DemoteUser calls POST /users/:id/demote to demote an admin to user (admin).
-func (c *Client) DemoteUser(ctx context.Context, userID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/demote", nil, nil)
-	return err
+func (c *Client) DemoteUser(ctx context.Context, userID string) (*User, error) {
+	var result User
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/demote", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListUserKeys calls GET /users/:userID/keys to list a user's API keys (admin).
+func (c *Client) ListUserKeys(ctx context.Context, userID string) ([]*APIKeyMeta, error) {
+	var result []*APIKeyMeta
+	_, _, err := c.do(ctx, "GET", c.mountPoint+"/users/"+userID+"/keys", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []*APIKeyMeta{}
+	}
+	return result, nil
 }
 
 // RevokeUserKey calls DELETE /users/:userID/keys/:keyID to revoke a user's
 // API key (admin).
 func (c *Client) RevokeUserKey(ctx context.Context, userID, keyID string) error {
 	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/users/"+userID+"/keys/"+keyID, nil, nil)
+	return err
+}
+
+// ListUserTokens calls GET /users/:userID/tokens to list a user's PATs (admin).
+func (c *Client) ListUserTokens(ctx context.Context, userID string) ([]*PAT, error) {
+	var result []*PAT
+	_, _, err := c.do(ctx, "GET", c.mountPoint+"/users/"+userID+"/tokens", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []*PAT{}
+	}
+	return result, nil
+}
+
+// RevokeUserToken calls DELETE /users/:userID/tokens/:tokenID to revoke a
+// user's PAT (admin).
+func (c *Client) RevokeUserToken(ctx context.Context, userID, tokenID string) error {
+	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/users/"+userID+"/tokens/"+tokenID, nil, nil)
 	return err
 }
 

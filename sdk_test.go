@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1660,5 +1661,738 @@ func TestWrappedObjectFails(t *testing.T) {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		t.Errorf("expected plain error, not *APIError; got %v", apiErr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.1: Authenticated user endpoints (GetUser, UpdateUser, ListKeys,
+//           RefreshKey, RevokeKey)
+// Test Specs: TS-12-45, TS-12-46, TS-12-47, TS-12-48, TS-12-49
+// Requirements: 12-REQ-7.1, 12-REQ-7.2, 12-REQ-7.3, 12-REQ-7.4, 12-REQ-7.5
+// ---------------------------------------------------------------------------
+
+// TestGetUserHappyPath verifies that GetUser sends a GET request to
+// mountPoint+"/user" and returns *Response[User] with decoded user data
+// (TS-12-45).
+func TestGetUserHappyPath(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetUser returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user" {
+		t.Errorf("path = %q, want /api/v1/user", capturedPath)
+	}
+	if resp == nil {
+		t.Fatal("GetUser returned nil response")
+	}
+	if resp.Data.ID == "" {
+		t.Error("resp.Data.ID is empty, want non-empty")
+	}
+	if resp.Data.Username != "alice" {
+		t.Errorf("resp.Data.Username = %q, want %q", resp.Data.Username, "alice")
+	}
+}
+
+// TestUpdateUser verifies that UpdateUser sends a PATCH request to
+// mountPoint+"/user" with JSON body always including full_name and returns
+// *User (TS-12-46).
+func TestUpdateUser(t *testing.T) {
+	var capturedBody []byte
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"u1","username":"alice","email":"a@b.com","full_name":"Alice Smith","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.UpdateUser(context.Background(), &UpdateUserRequest{FullName: "Alice Smith"})
+	if err != nil {
+		t.Fatalf("UpdateUser returned error: %v", err)
+	}
+	if capturedMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user" {
+		t.Errorf("path = %q, want /api/v1/user", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("UpdateUser returned nil user")
+	}
+	if !strings.Contains(string(capturedBody), `"full_name":"Alice Smith"`) {
+		t.Errorf("request body missing full_name: %s", capturedBody)
+	}
+}
+
+// TestListKeys verifies that ListKeys sends GET to /user/keys and decodes
+// the bare JSON array into []*APIKeyMeta (TS-12-47).
+func TestListKeys(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"key_id":"k1","created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keys, err := client.ListKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListKeys returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/keys" {
+		t.Errorf("path = %q, want /api/v1/user/keys", capturedPath)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("len(keys) = %d, want 1", len(keys))
+	}
+	if keys[0].KeyID != "k1" {
+		t.Errorf("keys[0].KeyID = %q, want %q", keys[0].KeyID, "k1")
+	}
+}
+
+// TestRefreshKey verifies that RefreshKey sends a POST to
+// /user/keys/{keyID}/refresh and returns *APIKeyFull (TS-12-48).
+func TestRefreshKey(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"key":"new-secret","key_id":"key-1","expires_at":null}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keyFull, err := client.RefreshKey(context.Background(), "key-1")
+	if err != nil {
+		t.Fatalf("RefreshKey returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/keys/key-1/refresh" {
+		t.Errorf("path = %q, want /api/v1/user/keys/key-1/refresh", capturedPath)
+	}
+	if keyFull == nil {
+		t.Fatal("RefreshKey returned nil")
+	}
+	if keyFull.Key != "new-secret" {
+		t.Errorf("keyFull.Key = %q, want %q", keyFull.Key, "new-secret")
+	}
+	if keyFull.KeyID != "key-1" {
+		t.Errorf("keyFull.KeyID = %q, want %q", keyFull.KeyID, "key-1")
+	}
+}
+
+// TestRevokeKey verifies that RevokeKey sends DELETE to /user/keys/{keyID}
+// and returns *RevokeKeyResponse with KeyID and RevokedAt on HTTP 200
+// (TS-12-49).
+func TestRevokeKey(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"key_id":"key-1","revoked_at":"2024-06-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	revokeResp, err := client.RevokeKey(context.Background(), "key-1")
+	if err != nil {
+		t.Fatalf("RevokeKey returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/keys/key-1" {
+		t.Errorf("path = %q, want /api/v1/user/keys/key-1", capturedPath)
+	}
+	if revokeResp == nil {
+		t.Fatal("RevokeKey returned nil")
+	}
+	if revokeResp.KeyID != "key-1" {
+		t.Errorf("revokeResp.KeyID = %q, want %q", revokeResp.KeyID, "key-1")
+	}
+	if revokeResp.RevokedAt.IsZero() {
+		t.Error("revokeResp.RevokedAt is zero time, want non-zero")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.2: Authenticated user endpoints (ListTokens, CreateToken, GetToken,
+//           RevokeToken, ListUserOrgs) and edge case RevokeToken error
+// Test Specs: TS-12-50, TS-12-51, TS-12-52, TS-12-53, TS-12-54, TS-12-E14
+// Requirements: 12-REQ-7.6, 12-REQ-7.7, 12-REQ-7.8, 12-REQ-7.9,
+//               12-REQ-7.10, 12-REQ-7.E2
+// ---------------------------------------------------------------------------
+
+// TestListTokens verifies that ListTokens sends GET to /user/tokens and
+// decodes the bare JSON array into []*PAT (TS-12-50).
+func TestListTokens(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"token_id":"t1","name":"mytoken","permissions":["read"],"created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	tokens, err := client.ListTokens(context.Background())
+	if err != nil {
+		t.Fatalf("ListTokens returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/tokens" {
+		t.Errorf("path = %q, want /api/v1/user/tokens", capturedPath)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("len(tokens) = %d, want 1", len(tokens))
+	}
+	if tokens[0].TokenID != "t1" {
+		t.Errorf("tokens[0].TokenID = %q, want %q", tokens[0].TokenID, "t1")
+	}
+}
+
+// TestCreateToken verifies that CreateToken sends POST to /user/tokens with
+// JSON body and returns *PATFull on 201 (TS-12-51).
+func TestCreateToken(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"token":"tok-secret","token_id":"t1","name":"ci","permissions":["read","write"],"expires_at":null}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	patFull, err := client.CreateToken(context.Background(), &CreateTokenRequest{
+		Name:        "ci",
+		Permissions: []string{"read", "write"},
+	})
+	if err != nil {
+		t.Fatalf("CreateToken returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/tokens" {
+		t.Errorf("path = %q, want /api/v1/user/tokens", capturedPath)
+	}
+	if patFull == nil {
+		t.Fatal("CreateToken returned nil")
+	}
+	if patFull.Token != "tok-secret" {
+		t.Errorf("patFull.Token = %q, want %q", patFull.Token, "tok-secret")
+	}
+	if patFull.TokenID != "t1" {
+		t.Errorf("patFull.TokenID = %q, want %q", patFull.TokenID, "t1")
+	}
+}
+
+// TestGetToken verifies that GetToken sends GET to /user/tokens/{tokenID}
+// and returns *Response[PAT] on success (TS-12-52).
+func TestGetToken(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"token_id":"t1","name":"mytoken","permissions":["read"],"created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetToken(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("GetToken returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/tokens/t1" {
+		t.Errorf("path = %q, want /api/v1/user/tokens/t1", capturedPath)
+	}
+	if resp == nil {
+		t.Fatal("GetToken returned nil response")
+	}
+	if resp.Data.TokenID != "t1" {
+		t.Errorf("resp.Data.TokenID = %q, want %q", resp.Data.TokenID, "t1")
+	}
+}
+
+// TestRevokeToken204 verifies that RevokeToken sends DELETE to
+// /user/tokens/{tokenID} and returns nil error on 204 (TS-12-53).
+func TestRevokeToken204(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.RevokeToken(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("RevokeToken returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/tokens/t1" {
+		t.Errorf("path = %q, want /api/v1/user/tokens/t1", capturedPath)
+	}
+}
+
+// TestListUserOrgs verifies that ListUserOrgs sends GET to /user/orgs and
+// decodes the bare JSON array into []*Organization (TS-12-54).
+func TestListUserOrgs(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"id":"org1","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	orgs, err := client.ListUserOrgs(context.Background())
+	if err != nil {
+		t.Fatalf("ListUserOrgs returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/user/orgs" {
+		t.Errorf("path = %q, want /api/v1/user/orgs", capturedPath)
+	}
+	if len(orgs) != 1 {
+		t.Fatalf("len(orgs) = %d, want 1", len(orgs))
+	}
+	if orgs[0].ID != "org1" {
+		t.Errorf("orgs[0].ID = %q, want %q", orgs[0].ID, "org1")
+	}
+}
+
+// TestRevokeTokenErrorStatus verifies that RevokeToken returns an *APIError
+// when the server returns a non-204 error status (TS-12-E14).
+func TestRevokeTokenErrorStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"Forbidden"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.RevokeToken(context.Background(), "t1")
+	if err == nil {
+		t.Fatal("expected error from 403 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != 403 {
+		t.Errorf("apiErr.Code = %d, want 403", apiErr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.3: Admin user list and single-user endpoints
+// Test Specs: TS-12-57, TS-12-58, TS-12-59, TS-12-E15
+// Requirements: 12-REQ-8.3, 12-REQ-8.4, 12-REQ-8.5, 12-REQ-8.E1
+// ---------------------------------------------------------------------------
+
+// TestGetUserByID verifies that GetUserByID sends GET to /users/{id} and
+// returns *Response[User] with Data populated (TS-12-57).
+func TestGetUserByID(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUserByID(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GetUserByID returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1" {
+		t.Errorf("path = %q, want /api/v1/users/user-1", capturedPath)
+	}
+	if resp == nil {
+		t.Fatal("GetUserByID returned nil response")
+	}
+	if resp.Data.ID != "user-1" {
+		t.Errorf("resp.Data.ID = %q, want %q", resp.Data.ID, "user-1")
+	}
+}
+
+// TestCreateUser verifies that CreateUser sends POST to /users with JSON
+// body and returns *User on 201 (TS-12-58).
+func TestCreateUser(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"u2","username":"bob","email":"bob@example.com","full_name":"","status":"active","role":"user","provider":"github","provider_id":"gh2","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.CreateUser(context.Background(), &CreateUserRequest{
+		Username:   "bob",
+		Email:      "bob@example.com",
+		Provider:   "github",
+		ProviderID: "gh2",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users" {
+		t.Errorf("path = %q, want /api/v1/users", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("CreateUser returned nil user")
+	}
+	if user.Username != "bob" {
+		t.Errorf("user.Username = %q, want %q", user.Username, "bob")
+	}
+	if !strings.Contains(string(capturedBody), `"username":"bob"`) {
+		t.Errorf("request body missing username: %s", capturedBody)
+	}
+}
+
+// TestUpdateUserByID verifies that UpdateUserByID sends PATCH to /users/{id}
+// with full_name body and returns *User (TS-12-59).
+func TestUpdateUserByID(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Bob Smith","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.UpdateUserByID(context.Background(), "user-1", &UpdateUserRequest{FullName: "Bob Smith"})
+	if err != nil {
+		t.Fatalf("UpdateUserByID returned error: %v", err)
+	}
+	if capturedMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1" {
+		t.Errorf("path = %q, want /api/v1/users/user-1", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("UpdateUserByID returned nil user")
+	}
+	if !strings.Contains(string(capturedBody), `"full_name"`) {
+		t.Errorf("request body missing full_name: %s", capturedBody)
+	}
+}
+
+// NOTE: TestListUsersEmptyArray (TS-12-E15, 12-REQ-8.E1) is already covered
+// by TestEmptyArrayListUsers in task 3.5 above, which verifies that ListUsers
+// returns a non-nil empty []*User slice when the server returns [].
+
+// ---------------------------------------------------------------------------
+// Task 4.4: Admin user action endpoints (promote, demote, block, unblock)
+// Test Specs: TS-12-60, TS-12-61, TS-12-62, TS-12-63
+// Requirements: 12-REQ-8.6, 12-REQ-8.7, 12-REQ-8.8, 12-REQ-8.9
+// ---------------------------------------------------------------------------
+
+// TestPromoteUser verifies that PromoteUser sends POST to
+// /users/{id}/promote with no body and returns *User (TS-12-60).
+func TestPromoteUser(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBodyLen int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBodyLen = r.ContentLength
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"admin","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.PromoteUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("PromoteUser returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/promote" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/promote", capturedPath)
+	}
+	if capturedBodyLen > 0 {
+		t.Errorf("expected no body, got Content-Length %d", capturedBodyLen)
+	}
+	if user == nil {
+		t.Fatal("PromoteUser returned nil user")
+	}
+}
+
+// TestDemoteUser verifies that DemoteUser sends POST to /users/{id}/demote
+// with no body and returns *User (TS-12-61).
+func TestDemoteUser(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.DemoteUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("DemoteUser returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/demote" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/demote", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("DemoteUser returned nil user")
+	}
+}
+
+// TestBlockUser verifies that BlockUser sends POST to /users/{id}/block
+// with no body and returns *User (TS-12-62).
+func TestBlockUser(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Alice","status":"blocked","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.BlockUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("BlockUser returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/block" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/block", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("BlockUser returned nil user")
+	}
+}
+
+// TestUnblockUser verifies that UnblockUser sends POST to /users/{id}/unblock
+// with no body and returns *User (TS-12-63).
+func TestUnblockUser(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"user-1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	user, err := client.UnblockUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("UnblockUser returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/unblock" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/unblock", capturedPath)
+	}
+	if user == nil {
+		t.Fatal("UnblockUser returned nil user")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.5: Admin user key and token management endpoints
+// Test Specs: TS-12-64, TS-12-65, TS-12-66, TS-12-67
+// Requirements: 12-REQ-8.10, 12-REQ-8.11, 12-REQ-8.12, 12-REQ-8.13
+// ---------------------------------------------------------------------------
+
+// TestListUserKeys verifies that ListUserKeys sends GET to
+// /users/{userID}/keys and decodes the bare JSON array into []*APIKeyMeta
+// (TS-12-64).
+func TestListUserKeys(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"key_id":"k1","created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keys, err := client.ListUserKeys(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("ListUserKeys returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/keys" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/keys", capturedPath)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("len(keys) = %d, want 1", len(keys))
+	}
+	if keys[0].KeyID != "k1" {
+		t.Errorf("keys[0].KeyID = %q, want %q", keys[0].KeyID, "k1")
+	}
+}
+
+// TestRevokeUserKey verifies that RevokeUserKey sends DELETE to
+// /users/{userID}/keys/{keyID} and returns nil error on 204 (TS-12-65).
+func TestRevokeUserKey(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.RevokeUserKey(context.Background(), "user-1", "key-1")
+	if err != nil {
+		t.Fatalf("RevokeUserKey returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/keys/key-1" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/keys/key-1", capturedPath)
+	}
+}
+
+// TestListUserTokens verifies that ListUserTokens sends GET to
+// /users/{userID}/tokens and decodes the bare JSON array into []*PAT
+// (TS-12-66).
+func TestListUserTokens(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"token_id":"t1","name":"ci","permissions":["read"],"created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	tokens, err := client.ListUserTokens(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("ListUserTokens returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/tokens" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/tokens", capturedPath)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("len(tokens) = %d, want 1", len(tokens))
+	}
+}
+
+// TestRevokeUserToken verifies that RevokeUserToken sends DELETE to
+// /users/{userID}/tokens/{tokenID} and returns nil error on 204 (TS-12-67).
+func TestRevokeUserToken(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.RevokeUserToken(context.Background(), "user-1", "t1")
+	if err != nil {
+		t.Fatalf("RevokeUserToken returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/users/user-1/tokens/t1" {
+		t.Errorf("path = %q, want /api/v1/users/user-1/tokens/t1", capturedPath)
 	}
 }
