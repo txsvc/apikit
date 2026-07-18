@@ -913,7 +913,7 @@
             "05-REQ-6.E2",
             "05-REQ-6.E3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -948,7 +948,7 @@
             "05-REQ-7.E1",
             "05-REQ-7.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
