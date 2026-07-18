@@ -311,7 +311,7 @@
             "13-REQ-7.3",
             "13-REQ-7.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -339,7 +339,7 @@
             "13-REQ-9.3",
             "13-REQ-9.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -364,7 +364,7 @@
             "13-REQ-14.2",
             "13-REQ-14.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
