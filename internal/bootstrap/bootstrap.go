@@ -167,6 +167,14 @@ func runSubsequentBoot(params BootstrapParams) error {
 		return fmt.Errorf("admin_token file exists at %s: save the token securely and delete the file before restarting", absPath)
 	}
 
+	// AdminEmail is silently ignored on subsequent boots (no logging, no DB write).
+
+	// Validate the ADMIN_TOKEN environment variable.
+	envToken := os.Getenv("ADMIN_TOKEN")
+	if envToken == "" {
+		return fmt.Errorf("ADMIN_TOKEN environment variable is required")
+	}
+
 	// Read the stored hash from admin_config.
 	var storedHash string
 	err := params.DB.QueryRow(
@@ -177,12 +185,6 @@ func runSubsequentBoot(params BootstrapParams) error {
 	}
 	if err != nil {
 		return fmt.Errorf("reading admin_token_hash: %w", err)
-	}
-
-	// Read and validate the ADMIN_TOKEN environment variable.
-	envToken := os.Getenv("ADMIN_TOKEN")
-	if envToken == "" {
-		return fmt.Errorf("ADMIN_TOKEN environment variable is required")
 	}
 
 	// Compare hashes using constant-time comparison.
@@ -232,6 +234,9 @@ func runTokenRotation(params BootstrapParams) error {
 // admin role based on the designated admin email stored in admin_config.
 // It returns (true, nil) if the email matches, (false, nil) if it does not
 // match or no admin_email is configured, and (false, error) on database errors.
+//
+// This function is intended for new user creation only (first OAuth login).
+// Callers must not invoke it on updates to existing users.
 func ShouldAutoPromote(_ context.Context, sqlDB *sql.DB, email string) (bool, error) {
 	var storedEmail string
 	err := sqlDB.QueryRow(
