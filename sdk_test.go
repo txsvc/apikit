@@ -3591,3 +3591,445 @@ func TestPropCanonicalTypesUniqueDefinition(t *testing.T) {
 	}
 	// go build ./... succeeding proves no redeclarations exist.
 }
+
+// ---------------------------------------------------------------------------
+// Smoke Tests: End-to-end integration tests with httptest.Server
+// Spec: TS-12-SMOKE-1 through TS-12-SMOKE-6
+// ---------------------------------------------------------------------------
+
+// TestSmokeETagCaptureAndConditionalRefetch verifies the full ETag
+// round-trip: first GET captures the ETag, second GET with If-None-Match
+// returns ErrNotModified (TS-12-SMOKE-1, PATH-1).
+func TestSmokeETagCaptureAndConditionalRefetch(t *testing.T) {
+	const etagValue = `"abc123"`
+	var reqCount int
+	var capturedPaths []string
+	var capturedAuthHeaders []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		capturedPaths = append(capturedPaths, r.URL.Path)
+		capturedAuthHeaders = append(capturedAuthHeaders, r.Header.Get("Authorization"))
+
+		if inm := r.Header.Get("If-None-Match"); inm == etagValue {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etagValue)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("test-key"))
+
+	// First call: capture ETag.
+	resp, err := client.GetUser(context.Background())
+	if err != nil {
+		t.Fatalf("first GetUser: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("first GetUser returned nil response")
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("first GetUser StatusCode = %d, want 200", resp.StatusCode)
+	}
+	if resp.Data.ID == "" {
+		t.Error("first GetUser Data.ID is empty")
+	}
+	etag := resp.ETag()
+	if etag != etagValue {
+		t.Errorf("ETag() = %q, want %q", etag, etagValue)
+	}
+
+	// Second call: conditional GET with If-None-Match.
+	resp2, err := client.GetUser(context.Background(), WithIfNoneMatch(etag))
+	if !errors.Is(err, ErrNotModified) {
+		t.Fatalf("second GetUser err = %v, want ErrNotModified", err)
+	}
+	if resp2 != nil {
+		t.Errorf("second GetUser response should be nil on 304, got %+v", resp2)
+	}
+
+	// Verify request paths.
+	for _, p := range capturedPaths {
+		if p != "/api/v1/user" {
+			t.Errorf("request path = %q, want /api/v1/user", p)
+		}
+	}
+	// Verify authorization header on both requests.
+	for i, auth := range capturedAuthHeaders {
+		if auth != "Bearer test-key" {
+			t.Errorf("request %d Authorization = %q, want %q", i+1, auth, "Bearer test-key")
+		}
+	}
+}
+
+// TestSmokeAPIErrorOn4xx verifies that a 404 from the server is decoded
+// into a typed *APIError inspectable via errors.As (TS-12-SMOKE-2, PATH-2).
+func TestSmokeAPIErrorOn4xx(t *testing.T) {
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":{"code":404,"message":"User not found"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUserByID(context.Background(), "nonexistent-id")
+	if err == nil {
+		t.Fatal("GetUserByID should return error on 404")
+	}
+	if resp != nil {
+		t.Errorf("response should be nil on error, got %+v", resp)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As should return true for *APIError; err = %v", err)
+	}
+	if apiErr.Code != 404 {
+		t.Errorf("apiErr.Code = %d, want 404", apiErr.Code)
+	}
+	if apiErr.Message != "User not found" {
+		t.Errorf("apiErr.Message = %q, want %q", apiErr.Message, "User not found")
+	}
+	if err.Error() != "API error 404: User not found" {
+		t.Errorf("err.Error() = %q, want %q", err.Error(), "API error 404: User not found")
+	}
+	if capturedPath != "/api/v1/users/nonexistent-id" {
+		t.Errorf("path = %q, want /api/v1/users/nonexistent-id", capturedPath)
+	}
+}
+
+// TestSmokeListOrgsIncludeBlocked verifies that ListOrgs with IncludeBlocked
+// sends the correct query parameter and handles an empty result as a non-nil
+// empty slice (TS-12-SMOKE-3, PATH-3).
+func TestSmokeListOrgsIncludeBlocked(t *testing.T) {
+	var capturedMethod, capturedPath, capturedQuery string
+	var capturedAuth string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedQuery = r.URL.RawQuery
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("admin-key"))
+	orgs, err := client.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: true})
+	if err != nil {
+		t.Fatalf("ListOrgs returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs" {
+		t.Errorf("path = %q, want /api/v1/orgs", capturedPath)
+	}
+	if capturedQuery != "include_blocked=true" {
+		t.Errorf("query = %q, want include_blocked=true", capturedQuery)
+	}
+	if capturedAuth != "Bearer admin-key" {
+		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer admin-key")
+	}
+	if orgs == nil {
+		t.Fatal("ListOrgs returned nil slice, want non-nil empty slice")
+	}
+	if len(orgs) != 0 {
+		t.Errorf("len(orgs) = %d, want 0", len(orgs))
+	}
+}
+
+// TestSmokeOrgMemberManagement verifies the CreateOrg → AddOrgMember →
+// ListOrgMembers sequence end-to-end (TS-12-SMOKE-4, PATH-4).
+func TestSmokeOrgMemberManagement(t *testing.T) {
+	var requests []struct {
+		method string
+		path   string
+	}
+
+	const orgJSON = `{"id":"org-42","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`
+	const memberJSON = `[{"id":"user-1","username":"bob","email":"bob@co.com","full_name":"Bob","status":"active","role":"user","provider":"github","provider_id":"gh2","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}]`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, struct {
+			method string
+			path   string
+		}{r.Method, r.URL.Path})
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/v1/orgs":
+			// CreateOrg → 201
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(orgJSON))
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/orgs/org-42/members/user-1":
+			// AddOrgMember → 204
+			w.WriteHeader(204)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/org-42/members":
+			// ListOrgMembers → 200
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(memberJSON))
+		default:
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"code":404,"message":"not found"}}`))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("admin-key"))
+
+	// Step 1: CreateOrg
+	org, err := client.CreateOrg(context.Background(), &CreateOrgRequest{Name: "Acme", Slug: "acme"})
+	if err != nil {
+		t.Fatalf("CreateOrg returned error: %v", err)
+	}
+	if org == nil {
+		t.Fatal("CreateOrg returned nil org")
+	}
+	if org.ID != "org-42" {
+		t.Errorf("org.ID = %q, want %q", org.ID, "org-42")
+	}
+
+	// Step 2: AddOrgMember
+	err = client.AddOrgMember(context.Background(), org.ID, "user-1")
+	if err != nil {
+		t.Fatalf("AddOrgMember returned error: %v", err)
+	}
+
+	// Step 3: ListOrgMembers
+	members, err := client.ListOrgMembers(context.Background(), org.ID)
+	if err != nil {
+		t.Fatalf("ListOrgMembers returned error: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("len(members) = %d, want 1", len(members))
+	}
+	if members[0].Username != "bob" {
+		t.Errorf("members[0].Username = %q, want %q", members[0].Username, "bob")
+	}
+
+	// Verify all requests used Authorization header.
+	if len(requests) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(requests))
+	}
+
+	expectedOps := []struct{ method, path string }{
+		{"POST", "/api/v1/orgs"},
+		{"PUT", "/api/v1/orgs/org-42/members/user-1"},
+		{"GET", "/api/v1/orgs/org-42/members"},
+	}
+	for i, expected := range expectedOps {
+		if requests[i].method != expected.method || requests[i].path != expected.path {
+			t.Errorf("request %d: %s %s, want %s %s",
+				i, requests[i].method, requests[i].path, expected.method, expected.path)
+		}
+	}
+}
+
+// TestSmokeCustomMountPoint verifies that a custom mount point is used for
+// API endpoints but health probes bypass it (TS-12-SMOKE-5, PATH-5).
+func TestSmokeCustomMountPoint(t *testing.T) {
+	var capturedPaths []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPaths = append(capturedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+
+		switch r.URL.Path {
+		case "/api/v2/user":
+			_, _ = w.Write([]byte(testUserJSON))
+		case "/healthz":
+			_, _ = w.Write([]byte(testHealthJSON))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"), WithMountPoint("api/v2"))
+
+	// Verify mount point was normalized.
+	if client.mountPoint != "/api/v2" {
+		t.Errorf("mountPoint = %q, want %q", client.mountPoint, "/api/v2")
+	}
+
+	// API endpoint should use custom mount point.
+	resp, err := client.GetUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetUser returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetUser returned nil response")
+	}
+
+	// Health probe should bypass mount point.
+	health, err := client.Healthz(context.Background())
+	if err != nil {
+		t.Fatalf("Healthz returned error: %v", err)
+	}
+	if health == nil {
+		t.Fatal("Healthz returned nil response")
+	}
+	if health.Status != "ok" {
+		t.Errorf("Healthz status = %q, want %q", health.Status, "ok")
+	}
+
+	// Verify captured paths.
+	if len(capturedPaths) < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", len(capturedPaths))
+	}
+	if capturedPaths[0] != "/api/v2/user" {
+		t.Errorf("GetUser path = %q, want /api/v2/user", capturedPaths[0])
+	}
+	if capturedPaths[1] != "/healthz" {
+		t.Errorf("Healthz path = %q, want /healthz", capturedPaths[1])
+	}
+
+	// Verify no double slashes in any captured path.
+	for _, p := range capturedPaths {
+		if strings.Contains(p, "//") {
+			t.Errorf("double slash found in path: %q", p)
+		}
+	}
+}
+
+// TestSmokeOAuthCodeExchange verifies the full OAuth flow:
+// GetProviders discovers providers, ExchangeOAuthCode exchanges the code
+// for a User and APIKeyFull (TS-12-SMOKE-6, PATH-6).
+func TestSmokeOAuthCodeExchange(t *testing.T) {
+	var capturedAuthHeaders []string
+	var capturedMethods []string
+	var capturedPaths []string
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthHeaders = append(capturedAuthHeaders, r.Header.Get("Authorization"))
+		capturedMethods = append(capturedMethods, r.Method)
+		capturedPaths = append(capturedPaths, r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/auth/providers":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`[{"name":"github","authorize_url":"https://github.com/login/oauth/authorize"}]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v1/auth/callback":
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{
+				"user": {"id":"u-new","username":"newuser","email":"new@co.com","full_name":"New User","status":"active","role":"user","provider":"github","provider_id":"gh-new","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"},
+				"api_key": {"key":"sk-new-secret","key_id":"k-new","expires_at":null}
+			}`))
+		default:
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"code":404,"message":"not found"}}`))
+		}
+	}))
+	defer server.Close()
+
+	// Create unauthenticated client (no API key).
+	client := NewClient(server.URL)
+
+	// Step 1: Discover providers.
+	providers, err := client.GetProviders(context.Background())
+	if err != nil {
+		t.Fatalf("GetProviders returned error: %v", err)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("len(providers) = %d, want 1", len(providers))
+	}
+	if providers[0].Name != "github" {
+		t.Errorf("provider name = %q, want %q", providers[0].Name, "github")
+	}
+
+	// Step 2: Exchange OAuth code.
+	callbackResp, err := client.ExchangeOAuthCode(context.Background(), &AuthCallbackRequest{
+		Provider:    "github",
+		Code:        "auth-code-xyz",
+		RedirectURI: "http://localhost:8080/callback",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeOAuthCode returned error: %v", err)
+	}
+	if callbackResp == nil {
+		t.Fatal("ExchangeOAuthCode returned nil response")
+	}
+	if callbackResp.User == nil || callbackResp.User.ID != "u-new" {
+		t.Errorf("User.ID = %v, want %q", callbackResp.User, "u-new")
+	}
+	if callbackResp.APIKey == nil || callbackResp.APIKey.Key != "sk-new-secret" {
+		t.Errorf("APIKey.Key = %v, want %q", callbackResp.APIKey, "sk-new-secret")
+	}
+
+	// Verify no Authorization header (unauthenticated client).
+	for i, auth := range capturedAuthHeaders {
+		if auth != "" {
+			t.Errorf("request %d: Authorization = %q, want empty (unauthenticated)", i+1, auth)
+		}
+	}
+
+	// Verify request paths.
+	if capturedPaths[0] != "/api/v1/auth/providers" {
+		t.Errorf("GetProviders path = %q, want /api/v1/auth/providers", capturedPaths[0])
+	}
+	if capturedPaths[1] != "/api/v1/auth/callback" {
+		t.Errorf("ExchangeOAuthCode path = %q, want /api/v1/auth/callback", capturedPaths[1])
+	}
+
+	// Verify request body contains expected fields.
+	if !strings.Contains(string(capturedBody), `"provider":"github"`) {
+		t.Errorf("request body missing provider: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"code":"auth-code-xyz"`) {
+		t.Errorf("request body missing code: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"redirect_uri":"http://localhost:8080/callback"`) {
+		t.Errorf("request body missing redirect_uri: %s", capturedBody)
+	}
+
+	// Verify methods.
+	if capturedMethods[0] != "GET" {
+		t.Errorf("GetProviders method = %q, want GET", capturedMethods[0])
+	}
+	if capturedMethods[1] != "POST" {
+		t.Errorf("ExchangeOAuthCode method = %q, want POST", capturedMethods[1])
+	}
+}
+
+// TestSmokeHTTPRedirectFollowed verifies that the SDK follows HTTP
+// redirects automatically using Go's default policy (TS-12-90).
+func TestSmokeHTTPRedirectFollowed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(testHealthJSON))
+			return
+		}
+		http.Redirect(w, r, "/healthz", http.StatusFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	resp, err := client.Healthz(context.Background())
+	if err != nil {
+		t.Fatalf("Healthz with redirect returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("Healthz returned nil after redirect")
+	}
+	if resp.Status != "ok" {
+		t.Errorf("resp.Status = %q, want %q", resp.Status, "ok")
+	}
+}
