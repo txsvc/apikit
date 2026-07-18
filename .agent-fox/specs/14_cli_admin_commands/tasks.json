@@ -827,7 +827,7 @@
             "14-REQ-7.2",
             "14-REQ-3.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -849,7 +849,7 @@
             "14-REQ-8.1",
             "14-REQ-9.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -870,7 +870,7 @@
             "14-REQ-10.1",
             "14-REQ-11.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -897,7 +897,7 @@
             "14-REQ-10.2",
             "14-REQ-11.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
