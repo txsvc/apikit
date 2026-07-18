@@ -516,18 +516,174 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 }
 
 // listOrgMembers handles GET /orgs/:id/members — lists members of an organization.
+// Admin users can view any org's members. Non-admin users can only view members
+// of organizations they belong to (checked via isOrgMember). Returns a JSON array
+// of OrgMemberResponse objects ordered alphabetically by username. Returns an
+// empty JSON array (not null) when the org has no members.
 func (h *orgHandlers) listOrgMembers(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Validate :id path parameter (08-REQ-9.6).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Verify the org exists (08-REQ-9.4).
+	var exists int
+	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", id).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Access control: admin or org member (08-REQ-9.1, 08-REQ-9.2, 08-REQ-9.3).
+	if !auth.IsAdmin(c) {
+		userID := auth.GetUserID(c)
+		isMember, err := isOrgMember(h.db, id, userID)
+		if err != nil {
+			return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		if !isMember {
+			return apikit.APIError(c, http.StatusForbidden, "forbidden")
+		}
+	}
+
+	// Query members via JOIN with users, ordered by username ASC (08-REQ-9.1).
+	rows, err := h.db.Query(
+		`SELECT u.id, u.username, u.email, u.role, om.created_at
+		 FROM org_members om
+		 JOIN users u ON u.id = om.user_id
+		 WHERE om.org_id = ?
+		 ORDER BY u.username ASC`, id,
+	)
+	if err != nil {
+		// DB error on join query (08-REQ-9.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Scan into a non-nil empty slice to ensure [] JSON output (08-REQ-9.5).
+	members := make([]OrgMemberResponse, 0)
+	for rows.Next() {
+		var m OrgMemberResponse
+		if err := rows.Scan(&m.UserID, &m.Username, &m.Email, &m.Role, &m.CreatedAt); err != nil {
+			return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		m.OrgID = id
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, members)
 }
 
 // addOrgMember handles PUT /orgs/:id/members/:user_id — adds a user to an organization.
+// Requires admin access. Validates both UUID path parameters. Verifies the org
+// and user exist before inserting. On primary key conflict (user already a member),
+// returns 204 idempotently without inserting a new row.
 func (h *orgHandlers) addOrgMember(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-10.7).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-10.5).
+	orgID := c.Param("id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Validate :user_id path parameter (08-REQ-10.6).
+	userID := c.Param("user_id")
+	if _, err := uuid.Parse(userID); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid user id")
+	}
+
+	// Verify the org exists (08-REQ-10.3).
+	var orgExists int
+	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", orgID).Scan(&orgExists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Verify the user exists (08-REQ-10.4).
+	var userExists int
+	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", userID).Scan(&userExists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// INSERT into org_members (08-REQ-10.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		"INSERT INTO org_members (org_id, user_id, created_at) VALUES (?, ?, ?)",
+		orgID, userID, now,
+	)
+	if err != nil {
+		// Detect PRIMARY KEY conflict for idempotent behavior (08-REQ-10.2, 08-PROP-7).
+		errStr := err.Error()
+		if strings.Contains(errStr, "UNIQUE constraint failed") ||
+			strings.Contains(errStr, "PRIMARY KEY") {
+			return c.NoContent(http.StatusNoContent)
+		}
+		// Any other DB error (08-REQ-10.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // removeOrgMember handles DELETE /orgs/:id/members/:user_id — removes a user from an organization.
+// Requires admin access. Validates both UUID path parameters. Deletes the
+// org_members row matching (org_id, user_id). Returns 404 when zero rows are
+// affected. The user's account in the users table is not affected.
 func (h *orgHandlers) removeOrgMember(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-11.5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-11.3).
+	orgID := c.Param("id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Validate :user_id path parameter (08-REQ-11.4).
+	userID := c.Param("user_id")
+	if _, err := uuid.Parse(userID); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid user id")
+	}
+
+	// DELETE the membership row (08-REQ-11.1).
+	result, err := h.db.Exec(
+		"DELETE FROM org_members WHERE org_id = ? AND user_id = ?",
+		orgID, userID,
+	)
+	if err != nil {
+		// DB error (08-REQ-11.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Check rows affected — zero means membership not found (08-REQ-11.2).
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if rowsAffected == 0 {
+		return apikit.APIError(c, http.StatusNotFound, "membership not found")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // slugPattern matches slugs of 2+ characters: starts and ends with [a-z0-9],

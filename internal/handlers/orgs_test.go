@@ -2089,9 +2089,9 @@ func setupOrgAuthTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
 func TestListMembers_AsAdmin(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "list-members-org-uuid"
-	aliceID := "list-members-alice-uuid"
-	bobID := "list-members-bob-uuid"
+	orgID := "f0000001-0000-4000-8000-000000000001"
+	aliceID := "f1000001-0000-4000-8000-000000000001"
+	bobID := "f1000002-0000-4000-8000-000000000002"
 
 	// Insert org and two users (alice and bob).
 	insertTestOrg(t, sqlDB, orgID, "Members Org", "members-org", "", "active")
@@ -2149,10 +2149,10 @@ func TestListMembers_AsAdmin(t *testing.T) {
 // Test Spec: TS-08-42
 // Requirement: 08-REQ-9.2
 func TestListMembers_AsMember(t *testing.T) {
-	memberUserID := "list-member-user-uuid"
+	memberUserID := "f1000003-0000-4000-8000-000000000003"
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, memberUserID)
 
-	orgID := "list-member-org-uuid"
+	orgID := "f0000002-0000-4000-8000-000000000002"
 
 	// Insert user, org, and membership.
 	insertTestUser(t, sqlDB, memberUserID, "member", "member@example.com", "github", "gh-member")
@@ -2179,10 +2179,10 @@ func TestListMembers_AsMember(t *testing.T) {
 // Test Spec: TS-08-43
 // Requirement: 08-REQ-9.3
 func TestListMembers_NotMember(t *testing.T) {
-	nonMemberUserID := "list-nonmember-user-uuid"
+	nonMemberUserID := "f1000004-0000-4000-8000-000000000004"
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, nonMemberUserID)
 
-	orgID := "list-nonmember-org-uuid"
+	orgID := "f0000003-0000-4000-8000-000000000003"
 
 	// Insert user and org but NO membership row.
 	insertTestUser(t, sqlDB, nonMemberUserID, "outsider", "outsider@example.com", "github", "gh-outsider")
@@ -2216,7 +2216,7 @@ func TestListMembers_OrgNotFound(t *testing.T) {
 func TestListMembers_Empty(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "empty-members-org-uuid"
+	orgID := "f0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, sqlDB, orgID, "Empty Members Org", "empty-members-org", "", "active")
 
 	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
@@ -2255,8 +2255,8 @@ func TestListMembers_InvalidID(t *testing.T) {
 func TestListMembers_IncludesUserDetails(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "details-members-org-uuid"
-	userID := "details-member-user-uuid"
+	orgID := "f0000005-0000-4000-8000-000000000005"
+	userID := "f1000005-0000-4000-8000-000000000005"
 
 	insertTestOrg(t, sqlDB, orgID, "Details Org", "details-org", "", "active")
 	insertTestUserWithRole(t, sqlDB, userID, "detailuser", "detail@example.com", "github", "gh-detail", "admin")
@@ -2305,7 +2305,7 @@ func TestListMembers_DBError(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	orgID := "dberr-members-org-uuid"
+	orgID := "f0000006-0000-4000-8000-000000000006"
 
 	// Insert org while database is intact.
 	insertTestOrg(t, database.SqlDB, orgID, "DBErr Members Org", "dberr-members-org", "", "active")
@@ -2344,8 +2344,8 @@ func TestListMembers_DBError(t *testing.T) {
 func TestAddMember_Success(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "add-member-org-uuid"
-	userID := "add-member-user-uuid"
+	orgID := "f0000007-0000-4000-8000-000000000007"
+	userID := "f1000006-0000-4000-8000-000000000006"
 
 	insertTestOrg(t, sqlDB, orgID, "Add Member Org", "add-member-org", "", "active")
 	insertTestUser(t, sqlDB, userID, "newmember", "new@example.com", "github", "gh-new")
@@ -2384,8 +2384,8 @@ func TestAddMember_Success(t *testing.T) {
 func TestAddMember_Idempotent(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "idem-member-org-uuid"
-	userID := "idem-member-user-uuid"
+	orgID := "f0000008-0000-4000-8000-000000000008"
+	userID := "f1000007-0000-4000-8000-000000000007"
 
 	insertTestOrg(t, sqlDB, orgID, "Idempotent Org", "idem-member-org", "", "active")
 	insertTestUser(t, sqlDB, userID, "idemuser", "idem@example.com", "github", "gh-idem")
@@ -2425,7 +2425,7 @@ func TestAddMember_Idempotent(t *testing.T) {
 func TestAddMember_OrgNotFound(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	userID := "orgnotfound-user-uuid"
+	userID := "f1000008-0000-4000-8000-000000000008"
 	insertTestUser(t, sqlDB, userID, "existinguser", "exist@example.com", "github", "gh-exist")
 
 	nonExistentOrgUUID := "00000000-0000-0000-0000-000000000000"
@@ -2443,7 +2443,7 @@ func TestAddMember_OrgNotFound(t *testing.T) {
 func TestAddMember_UserNotFound(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "usernotfound-org-uuid"
+	orgID := "f0000009-0000-4000-8000-000000000009"
 	insertTestOrg(t, sqlDB, orgID, "UserNotFound Org", "usernotfound-org", "", "active")
 
 	nonExistentUserUUID := "00000000-0000-0000-0000-000000000001"
@@ -2490,8 +2490,8 @@ func TestAddMember_InvalidUserID(t *testing.T) {
 func TestAddMember_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-add-org-uuid"
-	userID := "nonadmin-add-user-uuid"
+	orgID := "f000000a-0000-4000-8000-00000000000a"
+	userID := "f100000a-0000-4000-8000-00000000000a"
 
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Add Org", "nonadmin-add-org", "", "active")
 	insertTestUser(t, sqlDB, userID, "nonadminadd", "nonadminadd@example.com", "github", "gh-naa")
@@ -2515,8 +2515,8 @@ func TestAddMember_DBError(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	orgID := "dberr-add-org-uuid"
-	userID := "dberr-add-user-uuid"
+	orgID := "f000000b-0000-4000-8000-00000000000b"
+	userID := "f100000b-0000-4000-8000-00000000000b"
 
 	// Insert org and user while database is intact.
 	insertTestOrg(t, database.SqlDB, orgID, "DBErr Add Org", "dberr-add-org", "", "active")
@@ -2558,8 +2558,8 @@ func TestAddMember_DBError(t *testing.T) {
 func TestRemoveMember_Success(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "remove-member-org-uuid"
-	userID := "remove-member-user-uuid"
+	orgID := "f000000c-0000-4000-8000-00000000000c"
+	userID := "f100000c-0000-4000-8000-00000000000c"
 
 	insertTestOrg(t, sqlDB, orgID, "Remove Member Org", "remove-member-org", "", "active")
 	insertTestUser(t, sqlDB, userID, "removable", "removable@example.com", "github", "gh-rem")
@@ -2609,8 +2609,8 @@ func TestRemoveMember_Success(t *testing.T) {
 func TestRemoveMember_NotFound(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "remove-notfound-org-uuid"
-	userID := "remove-notfound-user-uuid"
+	orgID := "f000000d-0000-4000-8000-00000000000d"
+	userID := "f100000d-0000-4000-8000-00000000000d"
 
 	// Insert org and user but NO membership row.
 	insertTestOrg(t, sqlDB, orgID, "NoMember Org", "nomember-org", "", "active")
@@ -2659,8 +2659,8 @@ func TestRemoveMember_InvalidUserID(t *testing.T) {
 func TestRemoveMember_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-remove-org-uuid"
-	userID := "nonadmin-remove-user-uuid"
+	orgID := "f000000e-0000-4000-8000-00000000000e"
+	userID := "f100000e-0000-4000-8000-00000000000e"
 
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Remove Org", "nonadmin-remove-org", "", "active")
 	insertTestUser(t, sqlDB, userID, "nonadminrem", "nonadminrem@example.com", "github", "gh-nar")
@@ -2684,8 +2684,8 @@ func TestRemoveMember_DBError(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	orgID := "dberr-remove-org-uuid"
-	userID := "dberr-remove-user-uuid"
+	orgID := "f000000f-0000-4000-8000-00000000000f"
+	userID := "f100000f-0000-4000-8000-00000000000f"
 
 	// Insert org, user, and membership while database is intact.
 	insertTestOrg(t, database.SqlDB, orgID, "DBErr Remove Org", "dberr-remove-org", "", "active")

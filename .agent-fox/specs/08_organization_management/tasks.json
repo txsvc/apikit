@@ -933,7 +933,7 @@
             "08-REQ-9.6",
             "08-REQ-9.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -967,7 +967,7 @@
             "08-REQ-10.7",
             "08-REQ-10.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -997,7 +997,7 @@
             "08-REQ-11.5",
             "08-REQ-11.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
