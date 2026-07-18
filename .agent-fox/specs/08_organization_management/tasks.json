@@ -222,7 +222,7 @@
             "08-REQ-3.4",
             "08-REQ-3.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -255,7 +255,7 @@
             "08-REQ-4.6",
             "08-REQ-4.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

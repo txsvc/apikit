@@ -742,3 +742,404 @@ func TestCreateOrg_InvalidJSON(t *testing.T) {
 		t.Error("expected a non-empty error message")
 	}
 }
+
+// ========================================================================
+// Task 3: Additional Helpers for List and Get Organization Tests
+// ========================================================================
+
+// setupOrgNonAdminTestServerWithUserID creates an Echo instance with
+// RegisterOrgHandlers registered on a group with non-admin auth middleware
+// using the specified user ID and CacheMiddleware(CacheNoStore).
+// Returns the Echo instance and the raw *sql.DB handle.
+func setupOrgNonAdminTestServerWithUserID(t *testing.T, userID string) (*echo.Echo, *sql.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(userID))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	return e, database.SqlDB
+}
+
+// ========================================================================
+// Task 3.1: TestListOrgs — GET /orgs list handler
+// Test Spec: TS-08-10, TS-08-11, TS-08-12, TS-08-13, TS-08-E6
+// Requirements: 08-REQ-3.1, 08-REQ-3.2, 08-REQ-3.3, 08-REQ-3.4, 08-REQ-3.E1
+// ========================================================================
+
+// TestListOrgs_ExcludesBlocked verifies that GET /orgs without the
+// include_blocked parameter returns only active organizations ordered by
+// name ascending. Blocked organizations are absent from the result.
+//
+// Test Spec: TS-08-10
+// Requirement: 08-REQ-3.1
+func TestListOrgs_ExcludesBlocked(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// Seed 3 orgs: 2 active, 1 blocked. Names chosen to verify alphabetical order.
+	insertTestOrg(t, sqlDB, "org-uuid-zebra", "Zebra Corp", "zebra-corp", "", "active")
+	insertTestOrg(t, sqlDB, "org-uuid-alpha", "Alpha Corp", "alpha-corp", "", "active")
+	insertTestOrg(t, sqlDB, "org-uuid-beta", "Beta Corp", "beta-corp", "", "blocked")
+
+	rec := sendGet(t, e, "/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec)
+	if len(orgs) != 2 {
+		t.Fatalf("expected 2 active orgs, got %d", len(orgs))
+	}
+
+	// Verify ordering: Alpha Corp first, Zebra Corp second.
+	if orgs[0].Name != "Alpha Corp" {
+		t.Errorf("expected first org name %q, got %q", "Alpha Corp", orgs[0].Name)
+	}
+	if orgs[1].Name != "Zebra Corp" {
+		t.Errorf("expected second org name %q, got %q", "Zebra Corp", orgs[1].Name)
+	}
+
+	// Verify blocked org is absent.
+	for _, org := range orgs {
+		if org.Name == "Beta Corp" {
+			t.Error("expected 'Beta Corp' (blocked) to be absent from the result")
+		}
+	}
+}
+
+// TestListOrgs_IncludesBlocked verifies that GET /orgs?include_blocked=true
+// returns all organizations including blocked ones, ordered by name ascending.
+//
+// Test Spec: TS-08-11
+// Requirement: 08-REQ-3.2
+func TestListOrgs_IncludesBlocked(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	insertTestOrg(t, sqlDB, "org-uuid-alpha", "Alpha Corp", "alpha-corp", "", "active")
+	insertTestOrg(t, sqlDB, "org-uuid-beta", "Beta Corp", "beta-corp", "", "blocked")
+
+	rec := sendGet(t, e, "/orgs?include_blocked=true")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec)
+
+	hasAlpha := false
+	hasBeta := false
+	for _, org := range orgs {
+		if org.Name == "Alpha Corp" {
+			hasAlpha = true
+		}
+		if org.Name == "Beta Corp" {
+			hasBeta = true
+		}
+	}
+	if !hasAlpha {
+		t.Error("expected 'Alpha Corp' in the result")
+	}
+	if !hasBeta {
+		t.Error("expected 'Beta Corp' in the result")
+	}
+}
+
+// TestListOrgs_Empty verifies that GET /orgs returns HTTP 200 with an empty
+// JSON array when no organizations exist in the orgs table.
+//
+// Test Spec: TS-08-12
+// Requirement: 08-REQ-3.3
+func TestListOrgs_Empty(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendGet(t, e, "/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The response must be exactly "[]", not "null" or empty.
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected response body to be '[]', got %q", body)
+	}
+}
+
+// TestListOrgs_OrderedByName verifies that GET /orgs returns organizations
+// ordered alphabetically by name ascending, regardless of insertion order.
+//
+// Test Spec: TS-08-10 (ordering aspect)
+// Requirement: 08-REQ-3.1
+func TestListOrgs_OrderedByName(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// Insert in reverse alphabetical order to verify sorting.
+	insertTestOrg(t, sqlDB, "org-uuid-zebra", "Zebra Corp", "zebra-corp", "", "active")
+	insertTestOrg(t, sqlDB, "org-uuid-alpha", "Alpha Corp", "alpha-corp", "", "active")
+
+	rec := sendGet(t, e, "/orgs")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	orgs := parseOrgsResponse(t, rec)
+	if len(orgs) < 2 {
+		t.Fatalf("expected at least 2 orgs, got %d", len(orgs))
+	}
+
+	if orgs[0].Name != "Alpha Corp" {
+		t.Errorf("expected first org to be 'Alpha Corp', got %q", orgs[0].Name)
+	}
+	if orgs[1].Name != "Zebra Corp" {
+		t.Errorf("expected second org to be 'Zebra Corp', got %q", orgs[1].Name)
+	}
+}
+
+// TestListOrgs_NonAdmin verifies that GET /orgs from a non-admin authenticated
+// user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-13
+// Requirement: 08-REQ-3.4
+func TestListOrgs_NonAdmin(t *testing.T) {
+	e, _ := setupOrgNonAdminTestServer(t)
+
+	rec := sendGet(t, e, "/orgs")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestListOrgs_DBError verifies that GET /orgs returns HTTP 500 with error
+// message 'internal server error' when the database query fails.
+//
+// Test Spec: TS-08-E6
+// Requirement: 08-REQ-3.E1
+func TestListOrgs_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	// Close the database AFTER registering handlers to simulate a DB failure.
+	database.Close()
+
+	rec := sendGet(t, e, "/orgs")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 3.2: TestGetOrg — GET /orgs/:id get handler
+// Test Spec: TS-08-14, TS-08-15, TS-08-16, TS-08-17, TS-08-18, TS-08-19, TS-08-E7
+// Requirements: 08-REQ-4.1, 08-REQ-4.2, 08-REQ-4.3, 08-REQ-4.4,
+//               08-REQ-4.5, 08-REQ-4.6, 08-REQ-4.E1
+// ========================================================================
+
+// TestGetOrg_AsAdmin verifies that GET /orgs/:id from an admin with a valid
+// org UUID returns HTTP 200 with the correct OrgResponse fields and a
+// non-empty ETag response header.
+//
+// Test Spec: TS-08-14
+// Requirement: 08-REQ-4.1
+func TestGetOrg_AsAdmin(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "get-org-uuid-1"
+	insertTestOrg(t, sqlDB, orgID, "Admin Org", "admin-org", "https://admin.example.com", "active")
+
+	rec := sendGet(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	org := parseOrgResponse(t, rec)
+
+	if org.ID != orgID {
+		t.Errorf("expected id %q, got %q", orgID, org.ID)
+	}
+	if org.Name != "Admin Org" {
+		t.Errorf("expected name %q, got %q", "Admin Org", org.Name)
+	}
+	if org.Slug != "admin-org" {
+		t.Errorf("expected slug %q, got %q", "admin-org", org.Slug)
+	}
+	if org.URL != "https://admin.example.com" {
+		t.Errorf("expected url %q, got %q", "https://admin.example.com", org.URL)
+	}
+
+	// ETag header must be set.
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Error("expected ETag response header to be set, but it was empty")
+	}
+}
+
+// TestGetOrg_AsMember verifies that GET /orgs/:id from a non-admin user
+// who is a member of the organization returns HTTP 200 with the OrgResponse.
+//
+// Test Spec: TS-08-15
+// Requirement: 08-REQ-4.2
+func TestGetOrg_AsMember(t *testing.T) {
+	memberUserID := "member-user-uuid-1"
+	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, memberUserID)
+
+	orgID := "member-org-uuid-1"
+
+	// Insert the user, org, and membership records (FK constraints require all).
+	insertTestUser(t, sqlDB, memberUserID, "member", "member@example.com", "github", "gh-member")
+	insertTestOrg(t, sqlDB, orgID, "Member Org", "member-org", "", "active")
+	insertTestOrgMember(t, sqlDB, orgID, memberUserID)
+
+	rec := sendGet(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	org := parseOrgResponse(t, rec)
+
+	if org.ID != orgID {
+		t.Errorf("expected id %q, got %q", orgID, org.ID)
+	}
+	if org.Name != "Member Org" {
+		t.Errorf("expected name %q, got %q", "Member Org", org.Name)
+	}
+}
+
+// TestGetOrg_NotMember verifies that GET /orgs/:id from a non-admin user
+// who is NOT a member of the organization returns HTTP 403 with error
+// message 'forbidden'.
+//
+// Test Spec: TS-08-16
+// Requirement: 08-REQ-4.3
+func TestGetOrg_NotMember(t *testing.T) {
+	nonMemberUserID := "non-member-user-uuid-1"
+	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, nonMemberUserID)
+
+	orgID := "forbidden-org-uuid-1"
+
+	// Insert the user and org but NO membership row.
+	insertTestUser(t, sqlDB, nonMemberUserID, "outsider", "outsider@example.com", "github", "gh-outsider")
+	insertTestOrg(t, sqlDB, orgID, "Forbidden Org", "forbidden-org", "", "active")
+
+	rec := sendGet(t, e, "/orgs/"+orgID)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestGetOrg_NotFound verifies that GET /orgs/:id for a non-existent
+// organization UUID returns HTTP 404 with error message 'organization not found'.
+//
+// Test Spec: TS-08-17
+// Requirement: 08-REQ-4.4
+func TestGetOrg_NotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	// Use a valid UUID that does not exist in the orgs table.
+	rec := sendGet(t, e, "/orgs/00000000-0000-0000-0000-000000000000")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestGetOrg_InvalidID verifies that GET /orgs/:id with a path parameter
+// that is not a valid UUID returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-18
+// Requirement: 08-REQ-4.5
+func TestGetOrg_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendGet(t, e, "/orgs/not-a-uuid")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestGetOrg_ETag verifies that GET /orgs/:id with an If-None-Match header
+// matching the current ETag returns HTTP 304 with no body.
+//
+// Test Spec: TS-08-19
+// Requirement: 08-REQ-4.6
+func TestGetOrg_ETag(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "etag-org-uuid-1"
+	insertTestOrg(t, sqlDB, orgID, "ETag Org", "etag-org", "", "active")
+
+	// First request: get the ETag from the response.
+	rec1 := sendGet(t, e, "/orgs/"+orgID)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 on first request, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	etag := rec1.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected ETag header to be set on first request")
+	}
+
+	// Second request: send the ETag as If-None-Match; expect 304.
+	rec2 := sendGetWithHeaders(t, e, "/orgs/"+orgID, map[string]string{
+		"If-None-Match": etag,
+	})
+
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("expected HTTP 304, got %d", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("expected empty body for 304 response, got %q", rec2.Body.String())
+	}
+}
+
+// TestGetOrg_MembershipDBError verifies that GET /orgs/:id returns HTTP 500
+// with error message 'internal server error' when the org lookup succeeds
+// but the isOrgMember query fails with a database error. The org data must
+// NOT be returned.
+//
+// Test Spec: TS-08-E7
+// Requirement: 08-REQ-4.E1
+func TestGetOrg_MembershipDBError(t *testing.T) {
+	nonAdminUserID := "dberr-member-user-uuid"
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	orgID := "dberr-org-uuid-1"
+
+	// Insert user and org while the database is intact.
+	insertTestUser(t, database.SqlDB, nonAdminUserID, "dberr-user", "dberr@example.com", "github", "gh-dberr")
+	insertTestOrg(t, database.SqlDB, orgID, "DBErr Org", "dberr-org", "", "active")
+
+	// Drop the org_members table so the isOrgMember query fails
+	// while the orgs table query still succeeds.
+	_, err = database.SqlDB.Exec("DROP TABLE org_members")
+	if err != nil {
+		t.Fatalf("failed to drop org_members table: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(nonAdminUserID))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	rec := sendGet(t, e, "/orgs/"+orgID)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
