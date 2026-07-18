@@ -2,7 +2,10 @@
 package apikit
 
 import (
+	"github.com/labstack/echo/v4"
 	"github.com/txsvc/apikit/internal/config"
+	"github.com/txsvc/apikit/internal/db"
+	"github.com/txsvc/apikit/internal/keys"
 	"github.com/txsvc/apikit/internal/oauth"
 )
 
@@ -28,8 +31,18 @@ type Provider = oauth.Provider
 // Consuming projects can use *apikit.UserInfo without importing internal/oauth.
 type UserInfo = oauth.UserInfo
 
+// APIKeyResult is a type alias for the internal keys.APIKeyResult struct.
+// Consumers can use *apikit.APIKeyResult without importing internal/keys.
+type APIKeyResult = keys.APIKeyResult
+
 // LoadConfig loads the server configuration from config.toml,
 // respecting XDG base directory conventions.
 func LoadConfig() (*Config, error) {
 	return config.Load()
+}
+
+// GenerateAPIKey creates a new API key for the given user, revoking any
+// existing active keys. It delegates to keys.GenerateAPIKey.
+func GenerateAPIKey(tx db.Executor, userID string, expiresDays int, logger echo.Logger) (*APIKeyResult, error) {
+	return keys.GenerateAPIKey(tx, userID, expiresDays, logger)
 }
