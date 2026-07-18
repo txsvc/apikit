@@ -473,7 +473,7 @@
             "13-REQ-11.2",
             "13-REQ-11.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -497,7 +497,7 @@
             "13-REQ-11.6",
             "13-REQ-11.7"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -518,7 +518,7 @@
             "13-REQ-13.4",
             "13-REQ-13.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
