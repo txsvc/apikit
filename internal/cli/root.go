@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -58,7 +59,7 @@ func RootCommand() *cobra.Command {
 		}
 
 		// Config directory path: $HOME/.<TokenPrefix>/
-		configDir := home + "/." + TokenPrefix
+		configDir := filepath.Join(home, "."+TokenPrefix)
 
 		// Initialize config directory and config.toml if they don't exist.
 		if err := InitConfig(configDir); err != nil {
@@ -72,11 +73,13 @@ func RootCommand() *cobra.Command {
 		}
 
 		// Resolve credentials using four-level precedence chain.
-		flags := cmd.Root().PersistentFlags()
+		// Use cmd.Flags() (the leaf command's merged flag set) for flag
+		// detection, consistent with Cobra passing the leaf command to
+		// PersistentPreRunE (13-REQ-6.4).
 
 		// endpoint_url — required
-		epFlag, _ := flags.GetString("endpoint-url")
-		epChanged := flags.Changed("endpoint-url")
+		epFlag, _ := cmd.Flags().GetString("endpoint-url")
+		epChanged := cmd.Flags().Changed("endpoint-url")
 		var epConfig string
 		if cfg != nil {
 			epConfig = cfg.EndpointURL
@@ -87,8 +90,8 @@ func RootCommand() *cobra.Command {
 		}
 
 		// api_key — required
-		akFlag, _ := flags.GetString("api-key")
-		akChanged := flags.Changed("api-key")
+		akFlag, _ := cmd.Flags().GetString("api-key")
+		akChanged := cmd.Flags().Changed("api-key")
 		var akConfig string
 		if cfg != nil {
 			akConfig = cfg.APIKey
@@ -99,8 +102,8 @@ func RootCommand() *cobra.Command {
 		}
 
 		// user_id — optional (required: false)
-		uidFlag, _ := flags.GetString("user-id")
-		uidChanged := flags.Changed("user-id")
+		uidFlag, _ := cmd.Flags().GetString("user-id")
+		uidChanged := cmd.Flags().Changed("user-id")
 		var uidConfig string
 		if cfg != nil {
 			uidConfig = cfg.UserID
