@@ -56,7 +56,7 @@
             "14-REQ-1.5",
             "14-REQ-1.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -81,7 +81,7 @@
             "14-REQ-2.3",
             "14-REQ-2.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -100,7 +100,7 @@
             "14-REQ-2.5",
             "14-REQ-2.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -127,7 +127,7 @@
             "14-REQ-3.4",
             "14-REQ-3.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -156,7 +156,7 @@
             "14-REQ-5.1",
             "14-REQ-5.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -182,7 +182,7 @@
             "14-REQ-6.1",
             "14-REQ-6.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
