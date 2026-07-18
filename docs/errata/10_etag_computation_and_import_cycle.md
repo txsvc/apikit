@@ -60,3 +60,66 @@ code referencing `auth.AuthInfo` continues to work unchanged.
 
 `internal/keys/handlers.go` imports `internal/authctx` directly to read
 the authenticated user's ID.
+
+## Cross-Spec Wiring: OAuth Callback (10-PATH-1, 10-REQ-3.1)
+
+### Spec says
+
+> 10-PATH-1: OAuth callback handler calls `apikit.GenerateAPIKey(tx, userID, 90, logger)` passing the active `*sql.Tx`
+> 10-REQ-3.1: Consumers calling `apikit.GenerateAPIKey` receive identical behavior to calling `keys.GenerateAPIKey` directly
+
+### Current state
+
+The OAuth callback handler (`internal/oauth/handler.go`) does NOT call
+`apikit.GenerateAPIKey`. It uses a local `GenerateAPIKey(tokenPrefix, expires)`
+function in `internal/oauth/callback.go` with a different signature that:
+
+- Does not accept a `db.Executor` or `logger` parameter
+- Performs key material generation only (no database operations)
+- Has its own revocation UPDATE inline in the handler, separate from the
+  key generation function
+- Does not include the key_id collision retry logic from `internal/keys`
+
+The database operations (revocation UPDATE, INSERT) are inlined in the
+OAuth callback handler transaction rather than delegated to the centralized
+`GenerateAPIKey` function.
+
+### Impact
+
+The duplicate code path works correctly but bypasses the collision retry
+logic (10-REQ-2.7) and the centralized structured logging (10-REQ-2.9).
+This is an expected divergence: spec 06 was implemented before spec 10
+established the centralized `GenerateAPIKey` function. A future
+integration pass should wire the OAuth callback to call
+`apikit.GenerateAPIKey(tx, userID, expires, logger)`.
+
+## Cross-Spec Wiring: RegisterKeyHandlers Bootstrap (10-REQ-4.1)
+
+### Spec says
+
+> 10-REQ-4.1: `RegisterKeyHandlers` accepts `(group *echo.Group, database *sql.DB)` and registers three routes
+
+### Current state
+
+`RegisterKeyHandlers` is implemented and exported but is NOT called from
+any server bootstrap or `main()` code path. The `Server.APIGroup()` method
+exists to expose the API group, but no production code wires
+`keys.RegisterKeyHandlers(apiGroup, db)`.
+
+### Impact
+
+The key lifecycle HTTP endpoints (list, refresh, revoke) are not registered
+in the production server. They are only exercised in tests. A future
+integration pass should add the `RegisterKeyHandlers` call to the server
+bootstrap sequence after auth middleware is applied to the API group.
+
+## WriteAPIError Import Cycle Avoidance (10-REQ-5.E3, 10-REQ-6, 10-REQ-7)
+
+### Divergence
+
+`internal/keys/handlers.go` cannot import the root `apikit` package (to
+call `apikit.WriteAPIError` / `apikit.APIError`) because that would create
+an import cycle (`apikit` → `internal/keys` → `apikit`). Instead, a local
+`writeAPIError` function is inlined in `handlers.go` that produces the
+identical JSON error envelope `{"error": {"code": N, "message": "..."}}`.
+The behavior is equivalent to `APIError` from spec 01.

@@ -438,24 +438,16 @@ func TestProperty_RetryLoopBounded(t *testing.T) {
 			// 1. Total INSERT calls never exceed 3
 			// 2. For >= 3 collisions, GenerateAPIKey returns an error
 
-			// For this property test, we directly verify via the mock executor.
-			mock := &mockExecutor{
-				realDB: database.SqlDB,
-			}
-
-			// Track insert calls by counting INSERT attempts via mock.
-			// For forced collisions, we set an insertErr that wraps as a
-			// unique constraint violation.
+			// Track insert calls via countingMockExecutor which simulates
+			// unique constraint violations for the first N attempts.
 			var insertAttempts int
-			collisionsRemaining := tc.collisionsToForce
-			origMock := &countingMockExecutor{
+			mock := &countingMockExecutor{
 				realDB:              database.SqlDB,
-				collisionsRemaining: collisionsRemaining,
+				collisionsRemaining: tc.collisionsToForce,
 				insertAttempts:      &insertAttempts,
 			}
-			_ = mock // ensure mock is used per pattern
 
-			_, err := keys.GenerateAPIKey(origMock, "user-p8-"+tc.name, 90, testLogger())
+			_, err := keys.GenerateAPIKey(mock, "user-p8-"+tc.name, 90, testLogger())
 
 			if tc.expectErr && err == nil {
 				t.Error("GenerateAPIKey() error = nil; want non-nil (retry budget exhausted)")
@@ -479,13 +471,29 @@ type countingMockExecutor struct {
 	insertAttempts      *int
 }
 
+// sqliteConstraintError satisfies the sqliteErrorCode interface that
+// db.WrapError uses to detect SQLite constraint violations. Code() returns
+// 2067 (SQLITE_CONSTRAINT_UNIQUE) so WrapError maps it to db.ErrConflict.
+type sqliteConstraintError struct {
+	code int
+}
+
+func (e *sqliteConstraintError) Error() string {
+	return fmt.Sprintf("UNIQUE constraint failed: api_keys.key_id (code %d)", e.code)
+}
+func (e *sqliteConstraintError) Code() int { return e.code }
+
+// sqliteConstraintUniqueCode is SQLITE_CONSTRAINT_UNIQUE (2067).
+const sqliteConstraintUniqueCode = 2067
+
 func (m *countingMockExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if strings.Contains(strings.ToUpper(query), "INSERT") {
 		*m.insertAttempts++
 		if m.collisionsRemaining > 0 {
 			m.collisionsRemaining--
-			// Return a unique constraint violation error that db.WrapError recognizes.
-			return nil, fmt.Errorf("UNIQUE constraint failed: api_keys.key_id")
+			// Return an error that satisfies the sqliteErrorCode interface
+			// so db.WrapError correctly maps it to db.ErrConflict.
+			return nil, &sqliteConstraintError{code: sqliteConstraintUniqueCode}
 		}
 	}
 	return m.realDB.ExecContext(ctx, query, args...)
@@ -509,10 +517,15 @@ func (m *countingMockExecutor) QueryRowContext(ctx context.Context, query string
 // TestProperty_RevocationAtomicityUnderFailure verifies that when
 // GenerateAPIKey fails after the revocation UPDATE with *sql.DB, the prior
 // key's revoked_at remains NULL (atomic rollback invariant).
+//
+// Uses *sql.DB (not a mock) with a deterministic rand reader to force all 3
+// INSERT retry attempts to collide with pre-inserted key_ids. This ensures
+// the internal transaction path is exercised and the rollback is real.
 // TS-10-P6 (Requirements: 10-REQ-2.3, 10-REQ-2.E1)
 func TestProperty_RevocationAtomicityUnderFailure(t *testing.T) {
 	database := testDB(t)
 	insertTestUser(t, database.SqlDB, "user-p6")
+	insertTestUser(t, database.SqlDB, "p6-collider")
 
 	// Pre-insert an active key.
 	now := db.FormatTime(time.Now().UTC())
@@ -528,15 +541,26 @@ func TestProperty_RevocationAtomicityUnderFailure(t *testing.T) {
 	}
 	totalBefore := queryTotalCount(t, database.SqlDB, "user-p6")
 
-	// Force all INSERT attempts to fail by pre-inserting keys with the same
-	// key_ids that GenerateAPIKey would produce. We use a failing insert
-	// mechanism via mockExecutor.
-	allFailMock := &mockExecutor{
-		realDB:    database.SqlDB,
-		insertErr: fmt.Errorf("UNIQUE constraint failed: api_keys.key_id"),
+	// Force all 3 INSERT retry attempts to fail by pre-inserting collision
+	// rows. Provide 120 bytes of deterministic data: each 40-byte chunk
+	// (8 key_id + 32 secret) uses a uniform byte value so the generated
+	// key_id is predictable via makeTestKeyID.
+	deterBytes := make([]byte, 120)
+	for i := range deterBytes {
+		deterBytes[i] = byte(i / 40)
 	}
 
-	_, err := keys.GenerateAPIKey(allFailMock, "user-p6", 90, testLogger())
+	// Pre-insert collision rows for the 3 predicted key_ids.
+	for i := range 3 {
+		keyID := makeTestKeyID(byte(i))
+		insertTestKey(t, database.SqlDB, keyID, "p6-collider", "hash", 0, "", "", now)
+	}
+
+	restore := keys.SetRandReader(bytes.NewReader(deterBytes))
+	defer restore()
+
+	// Call with *sql.DB so GenerateAPIKey starts an internal transaction.
+	_, err := keys.GenerateAPIKey(database.SqlDB, "user-p6", 90, testLogger())
 	if err == nil {
 		t.Fatal("GenerateAPIKey() error = nil; want non-nil (all INSERTs failed)")
 	}
@@ -548,7 +572,7 @@ func TestProperty_RevocationAtomicityUnderFailure(t *testing.T) {
 		t.Error("prior key's revoked_at is non-NULL after failed GenerateAPIKey; want NULL (rolled back)")
 	}
 
-	// Invariant: total row count is unchanged.
+	// Invariant: total row count is unchanged (only p6origky + 3 collision rows).
 	totalAfter := queryTotalCount(t, database.SqlDB, "user-p6")
 	if totalAfter != totalBefore {
 		t.Errorf("total key count changed from %d to %d; want unchanged", totalBefore, totalAfter)
