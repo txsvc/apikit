@@ -31,15 +31,6 @@ func cachePublicMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// handleProviders returns an Echo handler for GET /auth/providers.
-// TODO: implement full response in a later task group.
-func handleProviders(registry *Registry) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		_ = registry
-		return c.JSON(http.StatusOK, []any{})
-	}
-}
-
 // handleCallback returns an Echo handler for POST /auth/callback.
 // Currently implements request validation only; the full OAuth flow
 // (exchange, userinfo, upsert, key generation) is implemented in later
