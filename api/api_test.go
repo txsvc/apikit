@@ -12,8 +12,9 @@ import (
 )
 
 // specPath is the path to the OpenAPI specification file relative to the
-// module root. Tests are run via `go test ./api/...` from the module root.
-const specPath = "api/openapi.yaml"
+// package directory. Go test runs with CWD set to the package source
+// directory (api/), so the path is just the filename.
+const specPath = "openapi.yaml"
 
 // loadSpec reads and parses api/openapi.yaml using libopenapi, returning the
 // high-level v3 document model. It calls t.Fatalf on any error (file read,
@@ -837,25 +838,19 @@ func TestOpenAPIPatchDescriptions(t *testing.T) {
 // TestOpenAPIPatchPropertyOnlyFullName enumerates all PATCH operations in the
 // spec and verifies each has a request body with exactly one property
 // (full_name), with no username or email.
+// PROP-5 scopes this constraint to PATCH /user and PATCH /users/{id} only;
+// PATCH /orgs/{id} has a different schema (name, url) per 03-REQ-10.4.
 func TestOpenAPIPatchPropertyOnlyFullName(t *testing.T) {
 	doc := loadSpec(t)
-	if doc.Paths == nil || doc.Paths.PathItems == nil {
-		t.Fatalf("spec has no paths defined")
-	}
-	found := false
-	for path, pi := range doc.Paths.PathItems.FromOldest() {
-		op := getOperation(pi, "patch")
-		if op == nil {
-			continue
-		}
-		found = true
+
+	// Only user PATCH endpoints are subject to the full_name-only constraint.
+	userPatchPaths := []string{"/user", "/users/{id}"}
+	for _, path := range userPatchPaths {
 		t.Run(path, func(t *testing.T) {
+			op := mustGetOp(t, doc, "patch", path)
 			schema := requireRequestBodySchema(t, op, "PATCH "+path)
 			assertPatchBodyOnlyFullName(t, schema, "PATCH "+path)
 		})
-	}
-	if !found {
-		t.Error("no PATCH operations found in spec")
 	}
 }
 

@@ -1,0 +1,1942 @@
+openapi: '3.1.0'
+info:
+  title: apikit API
+  version: 0.1.0
+  description: >-
+    The apikit API provides user management, organization management,
+    authentication, and authorization services.
+
+servers:
+  - url: /api/v1
+    description: Default mount point (configurable per deployment)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Bearer token authentication supporting three credential types:
+        Admin Token (format: <prefix>_admin_<64 hex chars>) for break-glass
+        emergency access with global scope;
+        API Key (format: <prefix>_<key_id>_<secret>) for user-scoped full
+        access to own resources;
+        PAT (format: <prefix>_pat_<token_id>_<secret>) for fine-grained
+        per-permission access.
+
+  headers:
+    XRequestID:
+      description: UUID for distributed tracing, present on every response
+      schema:
+        type: string
+        format: uuid
+    ETag:
+      description: Opaque string for conditional requests. Derivation is an implementation detail of server_core.
+      schema:
+        type: string
+    CacheControlNoStore:
+      description: Cache-Control directive for mutable resources
+      schema:
+        type: string
+        enum:
+          - 'no-store'
+    CacheControlNoCache:
+      description: Cache-Control directive for health probes
+      schema:
+        type: string
+        enum:
+          - 'no-cache'
+    CacheControlPublic:
+      description: Cache-Control directive for static discovery endpoints
+      schema:
+        type: string
+        enum:
+          - 'public, max-age=300'
+
+  parameters:
+    IncludeBlocked:
+      name: include_blocked
+      in: query
+      description: >-
+        When false (default), only resources with status=active are returned.
+        When true, resources with status=blocked are included.
+      schema:
+        type: boolean
+        default: false
+
+  schemas:
+    User:
+      type: object
+      description: A user resource representing an authenticated account.
+      required:
+        - id
+        - username
+        - email
+        - status
+        - role
+        - provider
+        - provider_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the user.
+        username:
+          type: string
+          description: Display name for the user, set at creation and immutable via PATCH.
+        email:
+          type: string
+          description: Email address for the user, set at creation and immutable via PATCH.
+        full_name:
+          type:
+            - string
+            - 'null'
+          description: Optional display name for the user. The only field updatable via PATCH.
+        status:
+          type: string
+          enum:
+            - active
+            - blocked
+          description: Current status of the user account.
+        role:
+          type: string
+          enum:
+            - admin
+            - user
+          description: Access level of the user.
+        provider:
+          type: string
+          description: OAuth identity provider name (e.g. github, google).
+        provider_id:
+          type: string
+          description: Unique user identifier assigned by the OAuth provider.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the user was created (RFC 3339, UTC with Z suffix).
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the user was last modified (RFC 3339, UTC with Z suffix).
+
+    Organization:
+      type: object
+      description: An organization resource.
+      required:
+        - id
+        - name
+        - slug
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the organization.
+        name:
+          type: string
+          description: Display name of the organization.
+        slug:
+          type: string
+          description: URL-safe identifier string, unique within the system.
+        url:
+          type:
+            - string
+            - 'null'
+          description: Optional URL associated with the organization.
+        status:
+          type: string
+          enum:
+            - active
+            - blocked
+          description: Current status of the organization.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the organization was created (RFC 3339, UTC with Z suffix).
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the organization was last modified (RFC 3339, UTC with Z suffix).
+
+    OAuthProvider:
+      type: object
+      description: An OAuth provider configuration.
+      required:
+        - name
+        - authorize_url
+      properties:
+        name:
+          type: string
+          description: Name of the OAuth provider (e.g. github, google).
+        authorize_url:
+          type: string
+          description: URL to initiate the OAuth authorization flow.
+
+    Error:
+      type: object
+      description: >-
+        Standard error envelope. The code field equals the HTTP response
+        status code exactly.
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: integer
+              description: >-
+                The HTTP status code of the response. Mirrors the HTTP status
+                exactly — no additional error codes are used.
+            message:
+              type: string
+              description: A human-readable error description.
+
+    AuthCallbackResponse:
+      type: object
+      description: Response from the OAuth callback endpoint containing user and API key.
+      required:
+        - user
+        - api_key
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        api_key:
+          type: object
+          required:
+            - key
+            - key_id
+            - expires_at
+          properties:
+            key:
+              type: string
+              description: Full API key string including the plaintext secret.
+            key_id:
+              type: string
+              description: The random 8-character alphanumeric identifier portion of the API key.
+            expires_at:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: >-
+                When the API key expires (RFC 3339 UTC). Null when expires=0
+                (permanent, no expiry).
+
+    ApiKeyMetadata:
+      type: object
+      description: API key metadata returned in listings (no plaintext secret).
+      required:
+        - key_id
+        - created_at
+        - expires_at
+        - revoked_at
+      properties:
+        key_id:
+          type: string
+          description: The random 8-character alphanumeric identifier portion of the API key.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the API key was created (RFC 3339, UTC with Z suffix).
+        expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: >-
+            When the API key expires (RFC 3339 UTC). Null when expires=0
+            (permanent, no expiry).
+        revoked_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Timestamp when the API key was revoked (RFC 3339, UTC). Null if not revoked.
+
+    ApiKey:
+      type: object
+      description: API key object returned at creation or refresh, including the plaintext secret.
+      required:
+        - key
+        - key_id
+        - expires_at
+      properties:
+        key:
+          type: string
+          description: >-
+            Full API key credential string including the plaintext secret.
+            Format: <prefix>_<key_id>_<secret>. Only returned at creation or
+            refresh — store securely.
+        key_id:
+          type: string
+          description: The random 8-character alphanumeric identifier portion of the API key.
+        expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: >-
+            When the API key expires (RFC 3339 UTC). Null when expires=0
+            (permanent, no expiry).
+
+    PatMetadata:
+      type: object
+      description: PAT metadata returned in listings (no plaintext secret).
+      required:
+        - token_id
+        - name
+        - permissions
+        - created_at
+        - expires_at
+        - revoked_at
+      properties:
+        token_id:
+          type: string
+          description: The random identifier portion of the personal access token.
+        name:
+          type: string
+          description: Human-readable label for the PAT.
+        permissions:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z_]+:[a-z_]+$'
+            description: >-
+              Permission string in resource_type:action format. Built-in
+              permissions: users:read (read own profile and self-profile
+              updates), orgs:read (read org records and membership lists),
+              keys:read (list own API keys), keys:manage (refresh or revoke
+              own API keys), tokens:read (list own PATs), tokens:manage
+              (create or revoke own PATs).
+          description: Array of granted permission strings.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the PAT was created (RFC 3339, UTC with Z suffix).
+        expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: >-
+            When the PAT expires (RFC 3339 UTC). Null when expires=0
+            (permanent, no expiry).
+        revoked_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Timestamp when the PAT was revoked (RFC 3339, UTC). Null if not revoked.
+
+    Pat:
+      type: object
+      description: PAT object returned at creation, including the plaintext secret.
+      required:
+        - token
+        - token_id
+        - name
+        - permissions
+        - expires_at
+      properties:
+        token:
+          type: string
+          description: >-
+            Full PAT credential string including the plaintext secret.
+            Format: <prefix>_pat_<token_id>_<secret>. Returned only at
+            creation — store securely; it cannot be retrieved again.
+        token_id:
+          type: string
+          description: The random identifier portion of the personal access token.
+        name:
+          type: string
+          description: Human-readable label for the PAT.
+        permissions:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z_]+:[a-z_]+$'
+            description: >-
+              Permission string in resource_type:action format. Built-in
+              permissions: users:read (read own profile and self-profile
+              updates), orgs:read (read org records and membership lists),
+              keys:read (list own API keys), keys:manage (refresh or revoke
+              own API keys), tokens:read (list own PATs), tokens:manage
+              (create or revoke own PATs).
+          description: Array of granted permission strings.
+        expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: >-
+            When the PAT expires (RFC 3339 UTC). Null when expires=0
+            (permanent, no expiry).
+
+  responses:
+    BadRequest:
+      description: Bad request — invalid or malformed request body.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Unauthorized — missing, invalid, expired, or revoked credentials.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Forbidden — valid credentials but insufficient permissions or user blocked.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not Found — the requested resource does not exist.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Conflict — a uniqueness constraint was violated.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PayloadTooLarge:
+      description: Payload Too Large — the request body exceeds the configured size limit.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: Unsupported Media Type — Content-Type must be application/json.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+paths:
+  /healthz:
+    servers:
+      - url: /
+    get:
+      operationId: getHealthz
+      summary: Liveness probe
+      description: >-
+        Liveness probe endpoint that always returns 200. Public — no
+        authentication required.
+      security: []
+      responses:
+        '200':
+          description: Service is alive.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoCache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+
+  /readyz:
+    servers:
+      - url: /
+    get:
+      operationId: getReadyz
+      summary: Readiness probe
+      description: >-
+        Readiness probe endpoint that pings the database. Returns 200 if
+        healthy, 503 if the database is unreachable. Public — no
+        authentication required.
+      security: []
+      responses:
+        '200':
+          description: Service is ready.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoCache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+        '503':
+          description: Service is not ready — database unreachable.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoCache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - unavailable
+
+  /version:
+    servers:
+      - url: /
+    get:
+      operationId: getVersion
+      summary: Version info
+      description: >-
+        Returns server version, build info, and mount point. Public — no
+        authentication required.
+      security: []
+      responses:
+        '200':
+          description: Version information.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoCache'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - version
+                  - commit
+                  - build_time
+                  - mount_point
+                properties:
+                  version:
+                    type: string
+                    description: Server version string.
+                  commit:
+                    type: string
+                    description: Git commit hash of the server build.
+                  build_time:
+                    type: string
+                    description: Server binary build timestamp.
+                  mount_point:
+                    type: string
+                    description: Configured API mount point path.
+
+  /auth/providers:
+    get:
+      operationId: getAuthProviders
+      summary: List OAuth providers
+      description: >-
+        Lists configured OAuth providers. Public — no authentication required.
+        Responses are cacheable for 5 minutes.
+      security: []
+      responses:
+        '200':
+          description: List of configured OAuth providers.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlPublic'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OAuthProvider'
+
+  /auth/callback:
+    post:
+      operationId: postAuthCallback
+      summary: OAuth callback
+      description: >-
+        Exchanges an OAuth authorization code for a user record and API key.
+        Public — no authentication required. Request body must use
+        Content-Type: application/json or receive 415.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - provider
+                - code
+                - redirect_uri
+              properties:
+                provider:
+                  type: string
+                  description: OAuth provider name (e.g. github, google).
+                code:
+                  type: string
+                  description: OAuth authorization code.
+                redirect_uri:
+                  type: string
+                  description: OAuth redirect URI for validation.
+                expires:
+                  type: integer
+                  enum:
+                    - 0
+                    - 30
+                    - 60
+                    - 90
+                  default: 90
+                  description: >-
+                    Expiry in days for the issued API key. 0 means no expiry
+                    (permanent); expires_at will be null. 30, 60, or 90 means
+                    the key expires exactly 24h × N days from creation. Default
+                    is 90 days.
+      responses:
+        '200':
+          description: OAuth callback successful. Returns user and API key.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthCallbackResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+  /user:
+    get:
+      operationId: getUser
+      summary: Get authenticated user
+      description: >-
+        Retrieve the authenticated user's own profile. Accepts Admin Token,
+        API Key, or PAT with users:read permission. Supports conditional
+        requests via If-None-Match header.
+        Request bodies must use Content-Type: application/json or receive 415.
+        Response bodies use Content-Type: application/json; charset=utf-8.
+        204 and 304 responses carry no body and no Content-Type.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          description: ETag value for conditional request. If it matches, 304 is returned.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authenticated user profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '304':
+          description: Not Modified — resource unchanged since the ETag.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    patch:
+      operationId: patchUser
+      summary: Update authenticated user
+      description: >-
+        Update the authenticated user's own profile. Only full_name is
+        updatable; username and email are immutable. Accepts Admin Token,
+        API Key, or PAT with users:read permission.
+        Request body must use Content-Type: application/json or receive 415.
+        Response body uses Content-Type: application/json; charset=utf-8.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - full_name
+              properties:
+                full_name:
+                  type: string
+                  description: New display name for the user.
+      responses:
+        '200':
+          description: Updated user profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+  /user/keys:
+    get:
+      operationId: getUserKeys
+      summary: List user's API keys
+      description: >-
+        List the authenticated user's API key(s). Accepts Admin Token,
+        API Key, or PAT with keys:read permission.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of API key metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeyMetadata'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /user/keys/{key_id}:
+    delete:
+      operationId: deleteUserKey
+      summary: Revoke user's API key
+      description: >-
+        Revoke the authenticated user's own API key. Accepts Admin Token,
+        API Key, or PAT with keys:manage permission.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The API key identifier.
+      responses:
+        '204':
+          description: API key revoked successfully. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /user/keys/{key_id}/refresh:
+    post:
+      operationId: refreshUserKey
+      summary: Refresh user's API key
+      description: >-
+        Refresh the authenticated user's API key with a new secret. Accepts
+        Admin Token, API Key, or PAT with keys:manage permission.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The API key identifier.
+      responses:
+        '200':
+          description: Refreshed API key with new secret.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /user/tokens:
+    get:
+      operationId: getUserTokens
+      summary: List user's PATs
+      description: >-
+        List the authenticated user's personal access tokens. Accepts Admin
+        Token, API Key, or PAT with tokens:read permission.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of PAT metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PatMetadata'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      operationId: createUserToken
+      summary: Create a PAT
+      description: >-
+        Create a new personal access token for the authenticated user. Accepts
+        Admin Token, API Key, or PAT with tokens:manage permission.
+        Request body must use Content-Type: application/json or receive 415.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - permissions
+              properties:
+                name:
+                  type: string
+                  description: Human-readable label for the PAT.
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^[a-z_]+:[a-z_]+$'
+                    description: >-
+                      Permission string in resource_type:action format.
+                  description: Array of permission strings to grant.
+                expires:
+                  type: integer
+                  enum:
+                    - 0
+                    - 30
+                    - 60
+                    - 90
+                  default: 90
+                  description: >-
+                    Expiry in days for the PAT. 0 means no expiry (permanent);
+                    expires_at will be null. 30, 60, or 90 means the token
+                    expires exactly 24h × N days from creation. Default is 90
+                    days.
+      responses:
+        '201':
+          description: PAT created successfully.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pat'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+  /user/tokens/{token_id}:
+    get:
+      operationId: getUserToken
+      summary: Get a specific PAT
+      description: >-
+        Retrieve metadata for a specific PAT owned by the authenticated user.
+        Accepts Admin Token, API Key, or PAT with tokens:read permission.
+        Supports conditional requests via If-None-Match header.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The PAT identifier.
+        - name: If-None-Match
+          in: header
+          description: ETag value for conditional request. If it matches, 304 is returned.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: PAT metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatMetadata'
+        '304':
+          description: Not Modified — resource unchanged since the ETag.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: deleteUserToken
+      summary: Revoke a PAT
+      description: >-
+        Revoke one of the authenticated user's own PATs. Accepts Admin Token,
+        API Key, or PAT with tokens:manage permission.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The PAT identifier.
+      responses:
+        '204':
+          description: PAT revoked successfully. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /user/orgs:
+    get:
+      operationId: getUserOrgs
+      summary: List user's organizations
+      description: >-
+        List the authenticated user's organization memberships. Accepts Admin
+        Token, API Key, or PAT with orgs:read permission.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of organizations the user belongs to.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /users:
+    post:
+      operationId: createUser
+      summary: Create a user (admin)
+      description: >-
+        Create a new user. Admin only. Request body must use Content-Type:
+        application/json or receive 415. Response body uses Content-Type:
+        application/json; charset=utf-8.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - email
+                - provider
+                - provider_id
+              properties:
+                username:
+                  type: string
+                  description: Display name for the user.
+                email:
+                  type: string
+                  description: Email address for the user.
+                provider:
+                  type: string
+                  description: OAuth provider name.
+                provider_id:
+                  type: string
+                  description: Unique user identifier from the OAuth provider.
+      responses:
+        '201':
+          description: User created successfully.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+    get:
+      operationId: listUsers
+      summary: List all users (admin)
+      description: >-
+        List all users. Admin only. When include_blocked is false (default),
+        only users with status=active are returned. When include_blocked is
+        true, users with status=blocked are also included.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IncludeBlocked'
+      responses:
+        '200':
+          description: List of users.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /users/{id}:
+    get:
+      operationId: getUser_admin
+      summary: Get a user by ID (admin)
+      description: >-
+        Retrieve a single user by ID. Admin only. Supports conditional
+        requests via If-None-Match header.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+        - name: If-None-Match
+          in: header
+          description: ETag value for conditional request. If it matches, 304 is returned.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '304':
+          description: Not Modified — resource unchanged since the ETag.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      operationId: patchUser_admin
+      summary: Update a user by ID (admin)
+      description: >-
+        Update a user's profile by ID. Admin only. Only full_name is
+        updatable; username and email are immutable.
+        Request body must use Content-Type: application/json or receive 415.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - full_name
+              properties:
+                full_name:
+                  type: string
+                  description: New display name for the user.
+      responses:
+        '200':
+          description: Updated user profile.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+  /users/{id}/promote:
+    post:
+      operationId: promoteUser
+      summary: Promote user to admin
+      description: >-
+        Grant the admin role to a user. Admin only. Returns User with
+        role=admin.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: User promoted to admin.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/demote:
+    post:
+      operationId: demoteUser
+      summary: Demote user from admin
+      description: >-
+        Revoke the admin role from a user. Admin only. Returns User with
+        role=user. Returns 409 if the target is the last remaining admin.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: User demoted from admin.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /users/{id}/block:
+    post:
+      operationId: blockUser
+      summary: Block a user
+      description: >-
+        Block a user. Admin only. Returns User with status=blocked.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: User blocked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/unblock:
+    post:
+      operationId: unblockUser
+      summary: Unblock a user
+      description: >-
+        Unblock a user. Admin only. Returns User with status=active.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: User unblocked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/keys:
+    get:
+      operationId: listUserKeys_admin
+      summary: List a user's API keys (admin)
+      description: >-
+        List a specific user's API keys. Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: List of API key metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeyMetadata'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/keys/{key_id}:
+    delete:
+      operationId: deleteUserKey_admin
+      summary: Revoke a user's API key (admin)
+      description: >-
+        Revoke a specific user's API key. Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The API key identifier.
+      responses:
+        '204':
+          description: API key revoked. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/tokens:
+    get:
+      operationId: listUserTokens_admin
+      summary: List a user's PATs (admin)
+      description: >-
+        List a specific user's personal access tokens. Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+      responses:
+        '200':
+          description: List of PAT metadata.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PatMetadata'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/tokens/{token_id}:
+    delete:
+      operationId: deleteUserToken_admin
+      summary: Revoke a user's PAT (admin)
+      description: >-
+        Revoke a specific user's personal access token. Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID.
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The PAT identifier.
+      responses:
+        '204':
+          description: PAT revoked. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orgs:
+    post:
+      operationId: createOrg
+      summary: Create an organization (admin)
+      description: >-
+        Create a new organization. Admin only. Returns 409 if name or slug
+        already exists. Request body must use Content-Type: application/json
+        or receive 415.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - slug
+              properties:
+                name:
+                  type: string
+                  description: Display name of the organization.
+                slug:
+                  type: string
+                  description: URL-safe identifier, must be unique.
+                url:
+                  type: string
+                  description: Optional URL associated with the organization.
+      responses:
+        '201':
+          description: Organization created successfully.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+    get:
+      operationId: listOrgs
+      summary: List all organizations (admin)
+      description: >-
+        List all organizations. Admin only. When include_blocked is false
+        (default), only organizations with status=active are returned. When
+        include_blocked is true, organizations with status=blocked are also
+        included.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IncludeBlocked'
+      responses:
+        '200':
+          description: List of organizations.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /orgs/{id}:
+    get:
+      operationId: getOrg
+      summary: Get an organization by ID
+      description: >-
+        Retrieve a single organization by ID. Accessible to admin or member
+        with orgs:read PAT permission. Supports conditional requests via
+        If-None-Match header.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+        - name: If-None-Match
+          in: header
+          description: ETag value for conditional request. If it matches, 304 is returned.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Organization details.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '304':
+          description: Not Modified — resource unchanged since the ETag.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      operationId: patchOrg
+      summary: Update an organization (admin)
+      description: >-
+        Update an organization's name or URL. Admin only. Returns 409 if name
+        conflicts with an existing organization.
+        Request body must use Content-Type: application/json or receive 415.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: New display name for the organization.
+                url:
+                  type: string
+                  description: New URL for the organization.
+      responses:
+        '200':
+          description: Updated organization.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+    delete:
+      operationId: deleteOrg
+      summary: Delete an organization (admin)
+      description: >-
+        Delete an organization. Admin only. Cascades membership removal.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+      responses:
+        '204':
+          description: Organization deleted. Memberships cascaded. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orgs/{id}/block:
+    post:
+      operationId: blockOrg
+      summary: Block an organization (admin)
+      description: >-
+        Block an organization. Admin only. Returns Organization with
+        status=blocked.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+      responses:
+        '200':
+          description: Organization blocked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orgs/{id}/unblock:
+    post:
+      operationId: unblockOrg
+      summary: Unblock an organization (admin)
+      description: >-
+        Unblock an organization. Admin only. Returns Organization with
+        status=active.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+      responses:
+        '200':
+          description: Organization unblocked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orgs/{id}/members:
+    get:
+      operationId: listOrgMembers
+      summary: List organization members
+      description: >-
+        List members of an organization. Accessible to admin or member with
+        orgs:read PAT permission.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+      responses:
+        '200':
+          description: List of organization members.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orgs/{id}/members/{user_id}:
+    put:
+      operationId: addOrgMember
+      summary: Add a member to an organization (admin)
+      description: >-
+        Add a member to an organization. Admin only. No request body — user
+        ID is conveyed entirely via the path parameter.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID to add as a member.
+      responses:
+        '204':
+          description: Member added. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: removeOrgMember
+      summary: Remove a member from an organization (admin)
+      description: >-
+        Remove a member from an organization. Admin only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Organization ID.
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID to remove.
+      responses:
+        '204':
+          description: Member removed. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'

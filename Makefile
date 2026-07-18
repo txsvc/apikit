@@ -15,7 +15,7 @@ lint:
 	go vet ./...
 
 check-spec:
-	go run github.com/pb33f/libopenapi-validator/cmd/openapi-validator@latest api/openapi.yaml
+	go run github.com/pb33f/libopenapi-validator/cmd/validate@latest api/openapi.yaml
 
 check: lint test check-spec
 
