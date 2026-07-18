@@ -4,7 +4,11 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
+
+// ErrNotFound is the sentinel error returned when a queried row does not exist.
+var ErrNotFound = errors.New("not found")
 
 // DB wraps a *sql.DB connection to a SQLite database.
 type DB struct {
