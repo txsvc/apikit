@@ -71,3 +71,42 @@ func hashToken(input string) string {
 	// Stub: not implemented.
 	return ""
 }
+
+// GetUserID returns the authenticated user's UUID from the request context.
+// Returns an empty string if no AuthInfo is present.
+func GetUserID(c echo.Context) string {
+	// Stub: not implemented.
+	return ""
+}
+
+// IsAdmin returns true if the authenticated credential has admin-level access.
+// Returns true only for admin tokens or admin-role API keys; returns false for
+// PATs regardless of the user's role.
+func IsAdmin(c echo.Context) bool {
+	// Stub: not implemented.
+	return false
+}
+
+// RequireAdmin returns HTTP 403 with "forbidden" if the authenticated credential
+// does not have admin-level access. Returns nil if the credential is admin-level.
+func RequireAdmin(c echo.Context) error {
+	// Stub: not implemented — returns nil for all cases.
+	return nil
+}
+
+// RequireOwnerOrAdmin returns HTTP 403 with "forbidden" if the authenticated
+// user is neither the resource owner (matching resourceOwnerID) nor an admin.
+// Returns nil if the user is the owner or has admin-level access.
+func RequireOwnerOrAdmin(c echo.Context, resourceOwnerID string) error {
+	// Stub: not implemented — returns nil for all cases.
+	return nil
+}
+
+// RequirePermission returns HTTP 403 with "insufficient permissions" if a PAT
+// credential lacks the specified resource_type:action permission. For admin
+// tokens and API keys, returns nil without checking permissions (implicit full
+// access). Returns nil if the PAT has the required permission.
+func RequirePermission(c echo.Context, resourceType, action string) error {
+	// Stub: not implemented — returns nil for all cases.
+	return nil
+}
