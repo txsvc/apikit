@@ -38,7 +38,7 @@ func WrapError(err error) error {
 	var sqlErr sqliteErrorCode
 	if errors.As(err, &sqlErr) {
 		switch sqlErr.Code() {
-		case sqlite3.SQLITE_CONSTRAINT_UNIQUE, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
+		case sqlite3.SQLITE_CONSTRAINT_UNIQUE, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY:
 			return ErrConflict
 		case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
 			return ErrDatabaseLocked
