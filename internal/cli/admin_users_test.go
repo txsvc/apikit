@@ -226,6 +226,21 @@ func makeUsersRunner(mock *mockAdminUsersClient) *cli.UsersRunner {
 				ProviderID: providerID,
 			})
 		},
+		UpdateUserByID: func(ctx context.Context, id string, fullName string) (any, error) {
+			return mock.UpdateUserByID(ctx, id, &apikit.UpdateUserRequest{FullName: fullName})
+		},
+		PromoteUser: func(ctx context.Context, id string) (any, error) {
+			return mock.PromoteUser(ctx, id)
+		},
+		DemoteUser: func(ctx context.Context, id string) (any, error) {
+			return mock.DemoteUser(ctx, id)
+		},
+		BlockUser: func(ctx context.Context, id string) (any, error) {
+			return mock.BlockUser(ctx, id)
+		},
+		UnblockUser: func(ctx context.Context, id string) (any, error) {
+			return mock.UnblockUser(ctx, id)
+		},
 	}
 }
 
@@ -1052,7 +1067,7 @@ func TestAdminUsersUpdateCommand(t *testing.T) {
 		updateUserResult: &apikit.User{ID: "u1", FullName: "Alice B"},
 	}
 
-	stdout, err := executeAdminCmd("users", "update", "u1", "--full-name", "Alice B")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "update", "u1", "--full-name", "Alice B")
 
 	// Expect success (exit code 0).
 	if err != nil {
@@ -1098,7 +1113,7 @@ func TestAdminUsersUpdateEmptyFullName(t *testing.T) {
 		updateUserResult: &apikit.User{ID: "u1", FullName: ""},
 	}
 
-	stdout, err := executeAdminCmd("users", "update", "u1", "--full-name", "")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "update", "u1", "--full-name", "")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1228,7 +1243,7 @@ func TestAdminUsersPromoteCommand(t *testing.T) {
 		promoteUserResult: &apikit.User{ID: "u1", Role: "admin"},
 	}
 
-	stdout, err := executeAdminCmd("users", "promote", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "promote", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1316,7 +1331,7 @@ func TestAdminUsersDemoteCommand(t *testing.T) {
 		demoteUserResult: &apikit.User{ID: "u1", Role: "user"},
 	}
 
-	stdout, err := executeAdminCmd("users", "demote", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "demote", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1399,11 +1414,11 @@ func TestAdminUsersDemoteMissingID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersDemoteLastAdmin(t *testing.T) {
-	_ = &mockAdminUsersClient{
+	mock := &mockAdminUsersClient{
 		demoteUserErr: &apikit.APIError{Code: 409, Message: "cannot demote the last admin"},
 	}
 
-	stdout, err := executeAdminCmd("users", "demote", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "demote", "u1")
 
 	// Expect an error (exit code 1 for API errors).
 	if err == nil {
@@ -1433,7 +1448,7 @@ func TestAdminUsersBlockCommand(t *testing.T) {
 		blockUserResult: &apikit.User{ID: "u1", Status: "blocked"},
 	}
 
-	stdout, err := executeAdminCmd("users", "block", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "block", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -1520,7 +1535,7 @@ func TestAdminUsersUnblockCommand(t *testing.T) {
 		unblockUserResult: &apikit.User{ID: "u1", Status: "active"},
 	}
 
-	stdout, err := executeAdminCmd("users", "unblock", "u1")
+	stdout, err := executeAdminCmdWithClient(makeUsersRunner(mock), "users", "unblock", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)

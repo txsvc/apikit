@@ -10,7 +10,12 @@ import "context"
 // In tests, the functions wrap mock SDK clients. In production, they
 // will wrap *apikit.Client methods (wired by PersistentPreRunE in spec 13).
 type UsersRunner struct {
-	ListUsers   func(ctx context.Context, includeBlocked bool) (any, error)
-	GetUserByID func(ctx context.Context, id string) (any, error)
-	CreateUser  func(ctx context.Context, username, email, provider, providerID string) (any, error)
+	ListUsers      func(ctx context.Context, includeBlocked bool) (any, error)
+	GetUserByID    func(ctx context.Context, id string) (any, error)
+	CreateUser     func(ctx context.Context, username, email, provider, providerID string) (any, error)
+	UpdateUserByID func(ctx context.Context, id string, fullName string) (any, error)
+	PromoteUser    func(ctx context.Context, id string) (any, error)
+	DemoteUser     func(ctx context.Context, id string) (any, error)
+	BlockUser      func(ctx context.Context, id string) (any, error)
+	UnblockUser    func(ctx context.Context, id string) (any, error)
 }

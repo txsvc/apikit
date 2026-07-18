@@ -145,7 +145,30 @@ func newAdminUsersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			// Validate required --full-name flag.
+			fullName, err := adminCheckRequiredFlag(cmd, "full-name")
+			if err != nil {
+				return err
+			}
+
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*UsersRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.UpdateUserByID(context.Background(), id, fullName)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 	updateCmd.Flags().String("full-name", "", "Full name of the user")
@@ -161,7 +184,24 @@ func newAdminUsersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*UsersRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.PromoteUser(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -176,7 +216,24 @@ func newAdminUsersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*UsersRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.DemoteUser(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -191,7 +248,24 @@ func newAdminUsersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*UsersRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.BlockUser(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -206,7 +280,24 @@ func newAdminUsersCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*UsersRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			id := args[0]
+			result, err := runner.UnblockUser(context.Background(), id)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
