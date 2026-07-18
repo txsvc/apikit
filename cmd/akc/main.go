@@ -9,5 +9,8 @@ import (
 
 func main() {
 	err := cli.Execute()
+	if err != nil {
+		cli.PrintError(err)
+	}
 	os.Exit(cli.ExitCode(err))
 }
