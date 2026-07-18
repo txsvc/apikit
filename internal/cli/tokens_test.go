@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,6 +23,8 @@ import (
 
 // executeTokensCmd constructs the tokens command tree from NewTokensCmd, sets
 // the provided args, captures stdout and stderr, and executes.
+// Used for tests that do NOT inject a client (e.g., missing-API-key tests,
+// validation tests).
 func executeTokensCmd(args ...string) (stdout, stderr string, err error) {
 	cmd := NewTokensCmd()
 	stdoutBuf := new(bytes.Buffer)
@@ -29,6 +32,30 @@ func executeTokensCmd(args ...string) (stdout, stderr string, err error) {
 	cmd.SetOut(stdoutBuf)
 	cmd.SetErr(stderrBuf)
 	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	for _, sub := range cmd.Commands() {
+		sub.SilenceUsage = true
+		sub.SilenceErrors = true
+	}
+	err = cmd.Execute()
+	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+// executeTokensCmdWithClient is like executeTokensCmd but injects a *cmdClient
+// into the command's context via ContextWithClient. Used for happy-path and
+// integration tests that need an authenticated client.
+func executeTokensCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+	cmd := NewTokensCmd()
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+	cmd.SetOut(stdoutBuf)
+	cmd.SetErr(stderrBuf)
+	cmd.SetArgs(args)
+	if client != nil {
+		ctx := ContextWithClient(context.Background(), client)
+		cmd.SetContext(ctx)
+	}
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	for _, sub := range cmd.Commands() {
@@ -76,7 +103,11 @@ func TestTokensList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeTokensCmd("list")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeTokensCmdWithClient(client, "list")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -132,7 +163,11 @@ func TestTokensCreate_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, stderr, err := executeTokensCmd(
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, stderr, err := executeTokensCmdWithClient(client,
 		"create",
 		"--name", "ci-bot",
 		"--permissions", "users:read,orgs:read",
@@ -313,7 +348,11 @@ func TestTokensShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeTokensCmd("show", "tok-abc123")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeTokensCmdWithClient(client, "show", "tok-abc123")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -365,7 +404,11 @@ func TestTokensRevoke_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, stderr, err := executeTokensCmd("revoke", "tok-abc123")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, stderr, err := executeTokensCmdWithClient(client, "revoke", "tok-abc123")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -414,7 +457,11 @@ func TestTokensRevoke_Property_AlwaysEmitsEmptyJSON(t *testing.T) {
 			}))
 			defer server.Close()
 
-			stdout, stderr, err := executeTokensCmd("revoke", tokenID)
+			client := &cmdClient{
+				endpointURL: server.URL,
+				apiKey:      "ak_k_s",
+			}
+			stdout, stderr, err := executeTokensCmdWithClient(client, "revoke", tokenID)
 
 			if err != nil {
 				t.Errorf("tokens revoke %q returned error: %v", tokenID, err)

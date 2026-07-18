@@ -29,6 +29,7 @@ import (
 // executeOrgsCmd constructs the orgs command tree from NewOrgsCmd, sets the
 // provided args, captures stdout and stderr, and executes. Returns stdout,
 // stderr, and the error from Execute.
+// Used for tests that do NOT inject a client (e.g., missing-API-key tests).
 func executeOrgsCmd(args ...string) (stdout, stderr string, err error) {
 	cmd := NewOrgsCmd()
 	stdoutBuf := new(bytes.Buffer)
@@ -36,6 +37,31 @@ func executeOrgsCmd(args ...string) (stdout, stderr string, err error) {
 	cmd.SetOut(stdoutBuf)
 	cmd.SetErr(stderrBuf)
 	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	for _, sub := range cmd.Commands() {
+		sub.SilenceUsage = true
+		sub.SilenceErrors = true
+	}
+	err = cmd.Execute()
+	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+// executeOrgsCmdWithClient is like executeOrgsCmd but injects a *cmdClient
+// into the command's context via ContextWithClient. Used for happy-path and
+// integration tests that need an authenticated client.
+func executeOrgsCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+	cmd := NewOrgsCmd()
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+	cmd.SetOut(stdoutBuf)
+	cmd.SetErr(stderrBuf)
+	cmd.SetArgs(args)
+	if client != nil {
+		ctx := context.Background()
+		ctx = ContextWithClient(ctx, client)
+		cmd.SetContext(ctx)
+	}
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	for _, sub := range cmd.Commands() {
@@ -86,7 +112,11 @@ func TestOrgsList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeOrgsCmd("list")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeOrgsCmdWithClient(client, "list")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -149,7 +179,11 @@ func TestOrgsShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeOrgsCmd("show", "org-uuid-abc")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeOrgsCmdWithClient(client, "show", "org-uuid-abc")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -217,7 +251,11 @@ func TestOrgsMembers_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeOrgsCmd("members", "org-uuid-abc")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeOrgsCmdWithClient(client, "members", "org-uuid-abc")
 
 	// Exit code must be 0.
 	if err != nil {
