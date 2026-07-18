@@ -17,6 +17,7 @@ func main() {
 		cli.NewKeysCmd(),
 		cli.NewTokensCmd(),
 		cli.NewOrgsCmd(),
+		cli.NewAdminCmd(),
 	)
 
 	err := cli.Execute()
