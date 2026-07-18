@@ -58,10 +58,12 @@ func setupAdminTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
 
 // adminAuthMiddleware returns Echo middleware that injects admin-level AuthInfo
 // into the request context. This simulates an authenticated admin credential.
+// Uses auth.SetAuthInfo to store in context.Context (not c.Set) so that
+// auth.GetAuthInfo, auth.RequireAdmin, and auth.IsAdmin work correctly.
 func adminAuthMiddleware(userID string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			c.Set("auth_info", &auth.AuthInfo{
+			auth.SetAuthInfo(c, &auth.AuthInfo{
 				CredentialType: "api_key",
 				UserID:         userID,
 				Role:           "admin",
@@ -73,10 +75,12 @@ func adminAuthMiddleware(userID string) echo.MiddlewareFunc {
 
 // nonAdminAuthMiddleware returns Echo middleware that injects a non-admin
 // (regular user) AuthInfo into the request context.
+// Uses auth.SetAuthInfo to store in context.Context (not c.Set) so that
+// auth.GetAuthInfo, auth.RequireAdmin, and auth.IsAdmin work correctly.
 func nonAdminAuthMiddleware(userID string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			c.Set("auth_info", &auth.AuthInfo{
+			auth.SetAuthInfo(c, &auth.AuthInfo{
 				CredentialType: "api_key",
 				UserID:         userID,
 				Role:           "user",
@@ -2214,10 +2218,12 @@ func fieldNames(m map[string]any) []string {
 // patAuthMiddleware returns Echo middleware that injects PAT-level AuthInfo
 // with the specified permissions into the Echo context. This simulates an
 // authenticated PAT credential for self-service endpoint testing.
+// Uses auth.SetAuthInfo to store in context.Context (not c.Set) so that
+// auth.GetAuthInfo, auth.RequirePermission, and auth.GetUserID work correctly.
 func patAuthMiddleware(userID string, permissions []string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			c.Set("auth_info", &auth.AuthInfo{
+			auth.SetAuthInfo(c, &auth.AuthInfo{
 				CredentialType: "pat",
 				UserID:         userID,
 				Permissions:    permissions,

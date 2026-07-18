@@ -3,10 +3,15 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit"
+	"github.com/txsvc/apikit/internal/auth"
+	"github.com/txsvc/apikit/internal/db"
 )
 
 // User represents the JSON response object for user endpoints.
@@ -116,13 +121,114 @@ func RegisterUserHandlers(g *echo.Group, database *sql.DB) {
 }
 
 // createUser handles POST /users — creates a new user record.
+// Requires admin access. Validates all four required fields, generates a UUID,
+// inserts into the users table, and returns HTTP 201 with the created User.
+// Detects unique constraint violations on username and (provider, provider_id).
 func (h *userHandlers) createUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-2.6, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Bind request body (07-REQ-2.3).
+	var req CreateUserRequest
+	if err := c.Bind(&req); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Validate required fields (07-REQ-2.2).
+	for _, check := range []struct {
+		value string
+		field string
+	}{
+		{req.Username, "username"},
+		{req.Email, "email"},
+		{req.Provider, "provider"},
+		{req.ProviderID, "provider_id"},
+	} {
+		if check.value == "" {
+			return apikit.APIError(c, http.StatusBadRequest, "missing required field: "+check.field)
+		}
+	}
+
+	// Build user record with defaults (07-REQ-2.1).
+	now := db.FormatTime(time.Now().UTC())
+	user := User{
+		ID:         uuid.New().String(),
+		Username:   req.Username,
+		Email:      req.Email,
+		FullName:   "",
+		Role:       "user",
+		Status:     "active",
+		Provider:   req.Provider,
+		ProviderID: req.ProviderID,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	// INSERT into users table.
+	_, err := h.db.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		user.ID, user.Username, user.Email, user.FullName, user.Role, user.Status,
+		user.Provider, user.ProviderID, user.CreatedAt, user.UpdatedAt,
+	)
+	if err != nil {
+		// Detect unique constraint violations (07-REQ-2.4, 07-REQ-2.5).
+		errStr := err.Error()
+		if strings.Contains(errStr, "UNIQUE constraint failed: users.username") {
+			return apikit.APIError(c, http.StatusConflict, "username already exists")
+		}
+		if strings.Contains(errStr, "UNIQUE constraint failed: users.provider") {
+			return apikit.APIError(c, http.StatusConflict, "provider identity already exists")
+		}
+		// Any unexpected DB error (07-REQ-2.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusCreated, user)
 }
 
 // listUsers handles GET /users — lists all users, optionally including blocked.
+// Requires admin access. By default only active users are returned; pass
+// include_blocked=true to include blocked users. Returns an empty JSON array
+// (not null) when no users match.
 func (h *userHandlers) listUsers(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-3.3, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Build query with optional status filter (07-REQ-3.1, 07-REQ-3.2).
+	query := `SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+	          role, status, provider, provider_id, created_at, updated_at
+	          FROM users`
+	if c.QueryParam("include_blocked") != "true" {
+		query += ` WHERE status = 'active'`
+	}
+
+	rows, err := h.db.Query(query)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Scan rows into a non-nil slice (07-REQ-3.E1, 07-PROP-6).
+	users := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FullName,
+			&u.Role, &u.Status, &u.Provider, &u.ProviderID,
+			&u.CreatedAt, &u.UpdatedAt); err != nil {
+			return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, users)
 }
 
 // getUser handles GET /users/:id — retrieves a single user by ID.

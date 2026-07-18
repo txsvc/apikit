@@ -688,7 +688,7 @@
             "07-REQ-2.3",
             "07-REQ-2.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -712,7 +712,7 @@
             "07-REQ-2.E1",
             "07-REQ-2.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -738,7 +738,7 @@
             "07-REQ-3.E1",
             "07-REQ-3.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

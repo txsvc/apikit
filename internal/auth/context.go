@@ -35,6 +35,15 @@ func setAuthInfoContext(c echo.Context, info *AuthInfo) {
 	c.SetRequest(c.Request().WithContext(ctx))
 }
 
+// SetAuthInfo stores the AuthInfo in the request's context.Context, making it
+// available via GetAuthInfo, IsAdmin, GetUserID, and the Require* helpers.
+// This is the public complement to GetAuthInfo; the auth middleware calls it
+// internally, and test code can call it to inject auth state without running
+// the full middleware stack.
+func SetAuthInfo(c echo.Context, info *AuthInfo) {
+	setAuthInfoContext(c, info)
+}
+
 // GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
 // Returns nil if no AuthInfo has been injected (e.g. in tests without
 // the middleware).
