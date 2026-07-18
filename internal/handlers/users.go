@@ -232,13 +232,105 @@ func (h *userHandlers) listUsers(c echo.Context) error {
 }
 
 // getUser handles GET /users/:id — retrieves a single user by ID.
+// Requires admin access. Sets the ETag header from user.UpdatedAt and
+// supports conditional requests via If-None-Match (returns 304 on cache hit).
 func (h *userHandlers) getUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-4.3, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Parse UpdatedAt string to time.Time for ETag helpers (07-REQ-4.1).
+	// SetETag/CheckETag accept time.Time, not string.
+	updatedAt, err := db.ParseTime(user.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	apikit.SetETag(c, updatedAt)
+
+	// Check If-None-Match for conditional GET (07-REQ-4.E1).
+	if apikit.CheckETag(c, updatedAt) {
+		return c.NoContent(http.StatusNotModified)
+	}
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // updateUser handles PATCH /users/:id — updates a user's full_name.
+// Requires admin access. Uses UpdateUserRequest with FullName *string to
+// distinguish a missing field (nil pointer → 400) from an empty string
+// (clears the field).
 func (h *userHandlers) updateUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-5.4, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Bind request body into UpdateUserRequest (07-REQ-5.2, 07-REQ-5.E2).
+	var req UpdateUserRequest
+	if err := c.Bind(&req); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Check pointer: nil means field was absent → 400 (07-REQ-5.2).
+	if req.FullName == nil {
+		return apikit.APIError(c, http.StatusBadRequest, "missing required field: full_name")
+	}
+
+	// Verify the user exists (07-REQ-5.3).
+	var exists int
+	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Update full_name and updated_at (07-REQ-5.1, 07-REQ-5.E1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET full_name = ?, updated_at = ? WHERE id = ?`,
+		*req.FullName, now, id,
+	)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Fetch the updated user to return in the response.
+	var user User
+	err = h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // promoteUser handles POST /users/:id/promote — sets user role to admin.
