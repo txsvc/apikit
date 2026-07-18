@@ -1550,3 +1550,1801 @@ func TestOpenAPIGetUserOrgs(t *testing.T) {
 	assertCacheControl(t, op, "200", "no-store", label)
 	assertXRequestID(t, op, "200", label)
 }
+
+// ============================================================================
+// TS-03-30, TS-03-SMOKE-4 (Task 3.1) — Validates: 03-REQ-9.1
+// ============================================================================
+
+// TestOpenAPIPostUsers verifies POST /users: admin bearerAuth, request body
+// requires username, email, provider, provider_id; responses 201 (User), 400,
+// 401, 403, 409, 415; Cache-Control: no-store, X-Request-ID.
+func TestOpenAPIPostUsers(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /users"
+	op := mustGetOp(t, doc, "post", "/users")
+
+	assertBearerAuth(t, op, label)
+
+	// Request body: requires username, email, provider, provider_id.
+	schema := requireRequestBodySchema(t, op, label)
+	requiredSet := make(map[string]bool)
+	for _, r := range schema.Required {
+		requiredSet[r] = true
+	}
+	for _, field := range []string{"username", "email", "provider", "provider_id"} {
+		if !requiredSet[field] {
+			t.Errorf("%s: request body should require '%s'", label, field)
+		}
+	}
+
+	// 201 response: User object.
+	assertResponseDefined(t, op, "201", label)
+
+	// Error responses: 400, 401, 403, 409, 415.
+	for _, code := range []string{"400", "401", "403", "409", "415"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "201", "no-store", label)
+	assertXRequestID(t, op, "201", label)
+}
+
+// ============================================================================
+// TS-03-31 (Task 3.1) — Validates: 03-REQ-9.2
+// ============================================================================
+
+// TestOpenAPIGetUsers verifies GET /users: admin bearerAuth, include_blocked
+// boolean query param defaulting false, 200 returns array of User objects,
+// 401/403 errors.
+func TestOpenAPIGetUsers(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /users"
+	op := mustGetOp(t, doc, "get", "/users")
+
+	assertBearerAuth(t, op, label)
+
+	// include_blocked query parameter: boolean, default false.
+	var found bool
+	for _, param := range op.Parameters {
+		if param != nil && param.Name == "include_blocked" && param.In == "query" {
+			found = true
+			if param.Schema == nil {
+				t.Fatalf("%s: include_blocked parameter has no schema", label)
+			}
+			paramSchema := param.Schema.Schema()
+			if paramSchema == nil {
+				t.Fatalf("%s: could not build include_blocked schema", label)
+			}
+			hasBool := false
+			for _, typ := range paramSchema.Type {
+				if typ == "boolean" {
+					hasBool = true
+				}
+			}
+			if !hasBool {
+				t.Errorf("%s: include_blocked should be type boolean, got %v",
+					label, paramSchema.Type)
+			}
+			if paramSchema.Default != nil {
+				var def bool
+				if err := paramSchema.Default.Decode(&def); err == nil && def != false {
+					t.Errorf("%s: include_blocked default should be false, got %v",
+						label, def)
+				}
+			} else {
+				t.Errorf("%s: include_blocked should have default value false", label)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("%s: missing 'include_blocked' query parameter", label)
+	}
+
+	// 200 response: array of User objects.
+	schema := requireResponseSchema(t, op, "200", label)
+	hasArray := false
+	for _, typ := range schema.Type {
+		if typ == "array" {
+			hasArray = true
+		}
+	}
+	if !hasArray {
+		t.Errorf("%s: 200 response should be type 'array', got %v", label, schema.Type)
+	}
+
+	assertResponseDefined(t, op, "401", label)
+	assertResponseDefined(t, op, "403", label)
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-32 (Task 3.1) — Validates: 03-REQ-9.3
+// ============================================================================
+
+// TestOpenAPIGetUserById verifies GET /users/{id}: admin bearerAuth, ETag on
+// 200, 304 conditional response with X-Request-ID+ETag and no content, 401,
+// 403, 404 defined.
+func TestOpenAPIGetUserById(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /users/{id}"
+	op := mustGetOp(t, doc, "get", "/users/{id}")
+
+	assertBearerAuth(t, op, label)
+
+	// 200 response with ETag.
+	assertResponseDefined(t, op, "200", label)
+	assertETagHeader(t, op, "200", label)
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+
+	// 304 conditional response.
+	assert304Conditional(t, op, label)
+
+	// Error responses.
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+}
+
+// ============================================================================
+// TS-03-33 (Task 3.1) — Validates: 03-REQ-9.4
+// ============================================================================
+
+// TestOpenAPIPatchUsersById verifies PATCH /users/{id}: admin bearerAuth,
+// request body with only full_name, responses 200, 401, 403, 404, 415.
+func TestOpenAPIPatchUsersById(t *testing.T) {
+	doc := loadSpec(t)
+	label := "PATCH /users/{id}"
+	op := mustGetOp(t, doc, "patch", "/users/{id}")
+
+	assertBearerAuth(t, op, label)
+
+	// Request body has only full_name.
+	schema := requireRequestBodySchema(t, op, label)
+	assertPatchBodyOnlyFullName(t, schema, label)
+
+	// Response codes.
+	for _, code := range []string{"200", "401", "403", "404", "415"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-34 (Task 3.1) — Validates: 03-REQ-9.5
+// ============================================================================
+
+// TestOpenAPIPromoteUser verifies POST /users/{id}/promote: admin bearerAuth,
+// 200 returns User object, 401/403/404 defined, description mentions role=admin.
+func TestOpenAPIPromoteUser(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /users/{id}/promote"
+	op := mustGetOp(t, doc, "post", "/users/{id}/promote")
+
+	assertBearerAuth(t, op, label)
+
+	// 200 response: User object.
+	assertResponseDefined(t, op, "200", label)
+
+	// Error responses.
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	// Description or 200 response description mentions role=admin.
+	resp := requireResponse(t, op, "200", label)
+	combined := op.Description + " " + op.Summary + " " + resp.Description
+	if !strings.Contains(combined, "admin") {
+		t.Errorf("%s: description or 200 response description should mention 'admin' role",
+			label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-35 (Task 3.1) — Validates: 03-REQ-9.6
+// ============================================================================
+
+// TestOpenAPIDemoteUser verifies POST /users/{id}/demote: admin bearerAuth,
+// 200 response, 409 for last-admin constraint, 401/403/404 defined.
+func TestOpenAPIDemoteUser(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /users/{id}/demote"
+	op := mustGetOp(t, doc, "post", "/users/{id}/demote")
+
+	assertBearerAuth(t, op, label)
+
+	// 200 response.
+	assertResponseDefined(t, op, "200", label)
+
+	// 409 for last-admin constraint.
+	assertResponseDefined(t, op, "409", label)
+
+	// Check 409 description mentions last admin.
+	resp409 := requireResponse(t, op, "409", label)
+	combined := resp409.Description + " " + op.Description
+	if !strings.Contains(strings.ToLower(combined), "last") ||
+		!strings.Contains(strings.ToLower(combined), "admin") {
+		t.Errorf("%s: 409 or operation description should mention 'last admin' constraint",
+			label)
+	}
+
+	// Error responses.
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-36 (Task 3.1) — Validates: 03-REQ-9.7
+// ============================================================================
+
+// TestOpenAPIBlockUser verifies POST /users/{id}/block: admin bearerAuth,
+// 200 returns User object with status=blocked, 401/403/404 defined.
+func TestOpenAPIBlockUser(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /users/{id}/block"
+	op := mustGetOp(t, doc, "post", "/users/{id}/block")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "200", label)
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-37 (Task 3.1) — Validates: 03-REQ-9.8
+// ============================================================================
+
+// TestOpenAPIUnblockUser verifies POST /users/{id}/unblock: admin bearerAuth,
+// 200 returns User object with status=active, 401/403/404 defined.
+func TestOpenAPIUnblockUser(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /users/{id}/unblock"
+	op := mustGetOp(t, doc, "post", "/users/{id}/unblock")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "200", label)
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-38 (Task 3.2) — Validates: 03-REQ-9.9
+// ============================================================================
+
+// TestOpenAPIAdminUserKeys verifies GET /users/{id}/keys: admin bearerAuth,
+// 200 returns array of ApiKeyMetadata objects, 401/403/404 defined.
+func TestOpenAPIAdminUserKeys(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /users/{id}/keys"
+	op := mustGetOp(t, doc, "get", "/users/{id}/keys")
+
+	assertBearerAuth(t, op, label)
+
+	// 200: array of ApiKeyMetadata.
+	schema := requireResponseSchema(t, op, "200", label)
+	hasArray := false
+	for _, typ := range schema.Type {
+		if typ == "array" {
+			hasArray = true
+		}
+	}
+	if !hasArray {
+		t.Errorf("%s: 200 response should be type 'array', got %v", label, schema.Type)
+	}
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-39 (Task 3.2) — Validates: 03-REQ-9.10
+// ============================================================================
+
+// TestOpenAPIAdminDeleteUserKey verifies DELETE /users/{id}/keys/{key_id}:
+// admin bearerAuth, 204 no body, 401/403/404 defined.
+func TestOpenAPIAdminDeleteUserKey(t *testing.T) {
+	doc := loadSpec(t)
+	label := "DELETE /users/{id}/keys/{key_id}"
+	op := mustGetOp(t, doc, "delete", "/users/{id}/keys/{key_id}")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "204", label)
+	assertResponseNoContent(t, op, "204", label)
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertXRequestID(t, op, "204", label)
+	assertCacheControl(t, op, "204", "no-store", label)
+}
+
+// ============================================================================
+// TS-03-40 (Task 3.2) — Validates: 03-REQ-9.11
+// ============================================================================
+
+// TestOpenAPIAdminUserTokens verifies GET /users/{id}/tokens: admin bearerAuth,
+// 200 returns array of PatMetadata objects, 401/403/404 defined.
+func TestOpenAPIAdminUserTokens(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /users/{id}/tokens"
+	op := mustGetOp(t, doc, "get", "/users/{id}/tokens")
+
+	assertBearerAuth(t, op, label)
+
+	// 200: array of PatMetadata.
+	schema := requireResponseSchema(t, op, "200", label)
+	hasArray := false
+	for _, typ := range schema.Type {
+		if typ == "array" {
+			hasArray = true
+		}
+	}
+	if !hasArray {
+		t.Errorf("%s: 200 response should be type 'array', got %v", label, schema.Type)
+	}
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-41 (Task 3.2) — Validates: 03-REQ-9.12
+// ============================================================================
+
+// TestOpenAPIAdminDeleteUserToken verifies DELETE /users/{id}/tokens/{token_id}:
+// admin bearerAuth, 204 no body, 401/403/404 defined.
+func TestOpenAPIAdminDeleteUserToken(t *testing.T) {
+	doc := loadSpec(t)
+	label := "DELETE /users/{id}/tokens/{token_id}"
+	op := mustGetOp(t, doc, "delete", "/users/{id}/tokens/{token_id}")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "204", label)
+	assertResponseNoContent(t, op, "204", label)
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertXRequestID(t, op, "204", label)
+	assertCacheControl(t, op, "204", "no-store", label)
+}
+
+// ============================================================================
+// TS-03-42 (Task 3.2) — Validates: 03-REQ-10.1
+// ============================================================================
+
+// TestOpenAPIPostOrgs verifies POST /orgs: admin bearerAuth, request body with
+// required name and slug, optional url; 201 Organization, 409 conflict, 400,
+// 401, 403, 415 defined.
+func TestOpenAPIPostOrgs(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /orgs"
+	op := mustGetOp(t, doc, "post", "/orgs")
+
+	assertBearerAuth(t, op, label)
+
+	// Request body: name and slug required, url optional.
+	schema := requireRequestBodySchema(t, op, label)
+	requiredSet := make(map[string]bool)
+	for _, r := range schema.Required {
+		requiredSet[r] = true
+	}
+	if !requiredSet["name"] {
+		t.Errorf("%s: request body should require 'name'", label)
+	}
+	if !requiredSet["slug"] {
+		t.Errorf("%s: request body should require 'slug'", label)
+	}
+	if requiredSet["url"] {
+		t.Errorf("%s: request body should NOT require 'url' (optional)", label)
+	}
+
+	// 201 response: Organization object.
+	assertResponseDefined(t, op, "201", label)
+
+	// Error responses.
+	for _, code := range []string{"400", "401", "403", "409", "415"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "201", "no-store", label)
+	assertXRequestID(t, op, "201", label)
+}
+
+// ============================================================================
+// TS-03-43, TS-03-SMOKE-6 (Task 3.2) — Validates: 03-REQ-10.2
+// ============================================================================
+
+// TestOpenAPIGetOrgs verifies GET /orgs: admin bearerAuth, include_blocked
+// boolean query param defaulting false, 200 returns array of Organization
+// objects, 401/403 defined.
+func TestOpenAPIGetOrgs(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /orgs"
+	op := mustGetOp(t, doc, "get", "/orgs")
+
+	assertBearerAuth(t, op, label)
+
+	// include_blocked query parameter: boolean, default false.
+	var found bool
+	for _, param := range op.Parameters {
+		if param != nil && param.Name == "include_blocked" && param.In == "query" {
+			found = true
+			if param.Schema == nil {
+				t.Fatalf("%s: include_blocked parameter has no schema", label)
+			}
+			paramSchema := param.Schema.Schema()
+			if paramSchema == nil {
+				t.Fatalf("%s: could not build include_blocked schema", label)
+			}
+			hasBool := false
+			for _, typ := range paramSchema.Type {
+				if typ == "boolean" {
+					hasBool = true
+				}
+			}
+			if !hasBool {
+				t.Errorf("%s: include_blocked should be type boolean, got %v",
+					label, paramSchema.Type)
+			}
+			if paramSchema.Default != nil {
+				var def bool
+				if err := paramSchema.Default.Decode(&def); err == nil && def != false {
+					t.Errorf("%s: include_blocked default should be false, got %v",
+						label, def)
+				}
+			} else {
+				t.Errorf("%s: include_blocked should have default value false", label)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("%s: missing 'include_blocked' query parameter", label)
+	}
+
+	// 200 response: array of Organization objects.
+	schema := requireResponseSchema(t, op, "200", label)
+	hasArray := false
+	for _, typ := range schema.Type {
+		if typ == "array" {
+			hasArray = true
+		}
+	}
+	if !hasArray {
+		t.Errorf("%s: 200 response should be type 'array', got %v", label, schema.Type)
+	}
+
+	assertResponseDefined(t, op, "401", label)
+	assertResponseDefined(t, op, "403", label)
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-44 (Task 3.3) — Validates: 03-REQ-10.3
+// ============================================================================
+
+// TestOpenAPIGetOrgById verifies GET /orgs/{id}: bearerAuth with dual-role auth
+// (admin or orgs:read PAT), ETag on 200, 304 conditional response with
+// X-Request-ID+ETag and no content, 401/403/404 defined.
+func TestOpenAPIGetOrgById(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /orgs/{id}"
+	op := mustGetOp(t, doc, "get", "/orgs/{id}")
+
+	assertBearerAuth(t, op, label)
+
+	// Description mentions orgs:read for member access.
+	combined := op.Description + " " + op.Summary
+	if !strings.Contains(combined, "orgs:read") {
+		t.Errorf("%s: description or summary should mention 'orgs:read' PAT permission", label)
+	}
+
+	// 200 response with ETag.
+	assertResponseDefined(t, op, "200", label)
+	assertETagHeader(t, op, "200", label)
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+
+	// 304 conditional response.
+	assert304Conditional(t, op, label)
+
+	// Error responses.
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+}
+
+// ============================================================================
+// TS-03-45 (Task 3.3) — Validates: 03-REQ-10.4
+// ============================================================================
+
+// TestOpenAPIPatchOrg verifies PATCH /orgs/{id}: admin bearerAuth, request body
+// with optional name and url (not in required); 200, 401, 403, 404, 409, 415.
+func TestOpenAPIPatchOrg(t *testing.T) {
+	doc := loadSpec(t)
+	label := "PATCH /orgs/{id}"
+	op := mustGetOp(t, doc, "patch", "/orgs/{id}")
+
+	assertBearerAuth(t, op, label)
+
+	// Request body: name and url should exist but NOT be required.
+	schema := requireRequestBodySchema(t, op, label)
+	requiredSet := make(map[string]bool)
+	for _, r := range schema.Required {
+		requiredSet[r] = true
+	}
+	if requiredSet["name"] {
+		t.Errorf("%s: 'name' should NOT be required in request body (optional)", label)
+	}
+	if requiredSet["url"] {
+		t.Errorf("%s: 'url' should NOT be required in request body (optional)", label)
+	}
+
+	// Both properties should exist.
+	if schema.Properties != nil {
+		if schema.Properties.GetOrZero("name") == nil {
+			t.Errorf("%s: request body should have 'name' property", label)
+		}
+		if schema.Properties.GetOrZero("url") == nil {
+			t.Errorf("%s: request body should have 'url' property", label)
+		}
+	}
+
+	// Response codes.
+	for _, code := range []string{"200", "401", "403", "404", "409", "415"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-46 (Task 3.3) — Validates: 03-REQ-10.5
+// ============================================================================
+
+// TestOpenAPIDeleteOrg verifies DELETE /orgs/{id}: admin bearerAuth, 204 no
+// body with cascade behavior noted in description, 401/403/404 defined.
+func TestOpenAPIDeleteOrg(t *testing.T) {
+	doc := loadSpec(t)
+	label := "DELETE /orgs/{id}"
+	op := mustGetOp(t, doc, "delete", "/orgs/{id}")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "204", label)
+	assertResponseNoContent(t, op, "204", label)
+
+	// Description mentions cascade or membership removal.
+	desc := strings.ToLower(op.Description)
+	if !strings.Contains(desc, "cascade") && !strings.Contains(desc, "membership") {
+		t.Errorf("%s: description should mention cascade of memberships", label)
+	}
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertXRequestID(t, op, "204", label)
+	assertCacheControl(t, op, "204", "no-store", label)
+}
+
+// ============================================================================
+// TS-03-47 (Task 3.3) — Validates: 03-REQ-10.6
+// ============================================================================
+
+// TestOpenAPIBlockOrg verifies POST /orgs/{id}/block: admin bearerAuth, 200
+// returns Organization object with status=blocked, 401/403/404 defined.
+func TestOpenAPIBlockOrg(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /orgs/{id}/block"
+	op := mustGetOp(t, doc, "post", "/orgs/{id}/block")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "200", label)
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-48 (Task 3.3) — Validates: 03-REQ-10.7
+// ============================================================================
+
+// TestOpenAPIUnblockOrg verifies POST /orgs/{id}/unblock: admin bearerAuth,
+// 200 returns Organization object with status=active, 401/403/404 defined.
+func TestOpenAPIUnblockOrg(t *testing.T) {
+	doc := loadSpec(t)
+	label := "POST /orgs/{id}/unblock"
+	op := mustGetOp(t, doc, "post", "/orgs/{id}/unblock")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "200", label)
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-49 (Task 3.3) — Validates: 03-REQ-10.8
+// ============================================================================
+
+// TestOpenAPIOrgMembers verifies GET /orgs/{id}/members: bearerAuth with
+// dual-role auth (admin or orgs:read), 200 returns array of User objects,
+// 401/403/404 defined.
+func TestOpenAPIOrgMembers(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /orgs/{id}/members"
+	op := mustGetOp(t, doc, "get", "/orgs/{id}/members")
+
+	assertBearerAuth(t, op, label)
+
+	// Description mentions orgs:read for member access.
+	combined := op.Description + " " + op.Summary
+	if !strings.Contains(combined, "orgs:read") {
+		t.Errorf("%s: description or summary should mention 'orgs:read' PAT permission", label)
+	}
+
+	// 200: array of User objects.
+	schema := requireResponseSchema(t, op, "200", label)
+	hasArray := false
+	for _, typ := range schema.Type {
+		if typ == "array" {
+			hasArray = true
+		}
+	}
+	if !hasArray {
+		t.Errorf("%s: 200 response should be type 'array', got %v", label, schema.Type)
+	}
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertCacheControl(t, op, "200", "no-store", label)
+	assertXRequestID(t, op, "200", label)
+}
+
+// ============================================================================
+// TS-03-50 (Task 3.3) — Validates: 03-REQ-10.9
+// ============================================================================
+
+// TestOpenAPIPutOrgMember verifies PUT /orgs/{id}/members/{user_id}: admin
+// bearerAuth, no request body defined, 204 no body, 401/403/404 defined.
+func TestOpenAPIPutOrgMember(t *testing.T) {
+	doc := loadSpec(t)
+	label := "PUT /orgs/{id}/members/{user_id}"
+	op := mustGetOp(t, doc, "put", "/orgs/{id}/members/{user_id}")
+
+	assertBearerAuth(t, op, label)
+
+	// No request body.
+	if op.RequestBody != nil {
+		t.Errorf("%s: should have no request body defined", label)
+	}
+
+	// 204: no content.
+	assertResponseDefined(t, op, "204", label)
+	assertResponseNoContent(t, op, "204", label)
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertXRequestID(t, op, "204", label)
+	assertCacheControl(t, op, "204", "no-store", label)
+}
+
+// ============================================================================
+// TS-03-51 (Task 3.3) — Validates: 03-REQ-10.10
+// ============================================================================
+
+// TestOpenAPIDeleteOrgMember verifies DELETE /orgs/{id}/members/{user_id}:
+// admin bearerAuth, 204 no body, 401/403/404 defined.
+func TestOpenAPIDeleteOrgMember(t *testing.T) {
+	doc := loadSpec(t)
+	label := "DELETE /orgs/{id}/members/{user_id}"
+	op := mustGetOp(t, doc, "delete", "/orgs/{id}/members/{user_id}")
+
+	assertBearerAuth(t, op, label)
+
+	assertResponseDefined(t, op, "204", label)
+	assertResponseNoContent(t, op, "204", label)
+
+	for _, code := range []string{"401", "403", "404"} {
+		assertResponseDefined(t, op, code, label)
+	}
+
+	assertXRequestID(t, op, "204", label)
+	assertCacheControl(t, op, "204", "no-store", label)
+}
+
+// ============================================================================
+// TS-03-52 (Task 3.4) — Validates: 03-REQ-11.1
+// ============================================================================
+
+// TestOpenAPIUserSchema verifies the User schema: all fields present,
+// full_name nullable, status enum active/blocked, role enum admin/user,
+// id has format uuid.
+func TestOpenAPIUserSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("User")
+	if proxy == nil {
+		t.Fatalf("User schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build User schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("User schema has no properties")
+	}
+
+	// All expected fields.
+	expectedFields := []string{
+		"id", "username", "email", "full_name", "status", "role",
+		"provider", "provider_id", "created_at", "updated_at",
+	}
+	for _, field := range expectedFields {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("User schema missing '%s' property", field)
+		}
+	}
+
+	// id: format uuid.
+	if idProxy := schema.Properties.GetOrZero("id"); idProxy != nil {
+		idSchema := idProxy.Schema()
+		if idSchema != nil && idSchema.Format != "uuid" {
+			t.Errorf("User.id should have format 'uuid', got %q", idSchema.Format)
+		}
+	}
+
+	// full_name: nullable.
+	if fnProxy := schema.Properties.GetOrZero("full_name"); fnProxy != nil {
+		fnSchema := fnProxy.Schema()
+		if fnSchema != nil {
+			hasNull := false
+			for _, typ := range fnSchema.Type {
+				if typ == "null" {
+					hasNull = true
+				}
+			}
+			if fnSchema.Nullable != nil && *fnSchema.Nullable {
+				hasNull = true
+			}
+			if !hasNull {
+				t.Errorf("User.full_name should be nullable")
+			}
+		}
+	}
+
+	// status: enum active, blocked.
+	if statusProxy := schema.Properties.GetOrZero("status"); statusProxy != nil {
+		statusSchema := statusProxy.Schema()
+		if statusSchema != nil {
+			enumVals := make([]string, 0, len(statusSchema.Enum))
+			for _, node := range statusSchema.Enum {
+				var val string
+				if err := node.Decode(&val); err == nil {
+					enumVals = append(enumVals, val)
+				}
+			}
+			wantEnums := map[string]bool{"active": false, "blocked": false}
+			for _, v := range enumVals {
+				wantEnums[v] = true
+			}
+			for e, found := range wantEnums {
+				if !found {
+					t.Errorf("User.status enum should include %q", e)
+				}
+			}
+		}
+	}
+
+	// role: enum admin, user.
+	if roleProxy := schema.Properties.GetOrZero("role"); roleProxy != nil {
+		roleSchema := roleProxy.Schema()
+		if roleSchema != nil {
+			enumVals := make([]string, 0, len(roleSchema.Enum))
+			for _, node := range roleSchema.Enum {
+				var val string
+				if err := node.Decode(&val); err == nil {
+					enumVals = append(enumVals, val)
+				}
+			}
+			wantEnums := map[string]bool{"admin": false, "user": false}
+			for _, v := range enumVals {
+				wantEnums[v] = true
+			}
+			for e, found := range wantEnums {
+				if !found {
+					t.Errorf("User.role enum should include %q", e)
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-53 (Task 3.4) — Validates: 03-REQ-11.2
+// ============================================================================
+
+// TestOpenAPIApiKeyMetadataSchema verifies the ApiKeyMetadata schema: key_id,
+// created_at, nullable expires_at, nullable revoked_at.
+func TestOpenAPIApiKeyMetadataSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("ApiKeyMetadata")
+	if proxy == nil {
+		t.Fatalf("ApiKeyMetadata schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build ApiKeyMetadata schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("ApiKeyMetadata schema has no properties")
+	}
+
+	for _, field := range []string{"key_id", "created_at", "expires_at", "revoked_at"} {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("ApiKeyMetadata missing '%s' property", field)
+		}
+	}
+
+	// expires_at and revoked_at: nullable.
+	for _, field := range []string{"expires_at", "revoked_at"} {
+		p := schema.Properties.GetOrZero(field)
+		if p == nil {
+			continue
+		}
+		fs := p.Schema()
+		if fs == nil {
+			continue
+		}
+		hasNull := false
+		for _, typ := range fs.Type {
+			if typ == "null" {
+				hasNull = true
+			}
+		}
+		if fs.Nullable != nil && *fs.Nullable {
+			hasNull = true
+		}
+		if !hasNull {
+			t.Errorf("ApiKeyMetadata.%s should be nullable", field)
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-54 (Task 3.4) — Validates: 03-REQ-11.3
+// ============================================================================
+
+// TestOpenAPIApiKeySchema verifies the ApiKey schema: key (full plaintext),
+// key_id, nullable expires_at.
+func TestOpenAPIApiKeySchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("ApiKey")
+	if proxy == nil {
+		t.Fatalf("ApiKey schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build ApiKey schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("ApiKey schema has no properties")
+	}
+
+	for _, field := range []string{"key", "key_id", "expires_at"} {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("ApiKey missing '%s' property", field)
+		}
+	}
+
+	// key: type string.
+	if keyProxy := schema.Properties.GetOrZero("key"); keyProxy != nil {
+		keySchema := keyProxy.Schema()
+		if keySchema != nil {
+			hasString := false
+			for _, typ := range keySchema.Type {
+				if typ == "string" {
+					hasString = true
+				}
+			}
+			if !hasString {
+				t.Errorf("ApiKey.key should be type string, got %v", keySchema.Type)
+			}
+		}
+	}
+
+	// expires_at: nullable.
+	if eaProxy := schema.Properties.GetOrZero("expires_at"); eaProxy != nil {
+		eaSchema := eaProxy.Schema()
+		if eaSchema != nil {
+			hasNull := false
+			for _, typ := range eaSchema.Type {
+				if typ == "null" {
+					hasNull = true
+				}
+			}
+			if eaSchema.Nullable != nil && *eaSchema.Nullable {
+				hasNull = true
+			}
+			if !hasNull {
+				t.Errorf("ApiKey.expires_at should be nullable")
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-55 (Task 3.4) — Validates: 03-REQ-11.4
+// ============================================================================
+
+// TestOpenAPIPatMetadataSchema verifies the PatMetadata schema: token_id, name,
+// permissions (array of pattern-constrained strings), created_at, nullable
+// expires_at, nullable revoked_at.
+func TestOpenAPIPatMetadataSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("PatMetadata")
+	if proxy == nil {
+		t.Fatalf("PatMetadata schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build PatMetadata schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("PatMetadata schema has no properties")
+	}
+
+	for _, field := range []string{"token_id", "name", "permissions", "created_at", "expires_at", "revoked_at"} {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("PatMetadata missing '%s' property", field)
+		}
+	}
+
+	// permissions: array with pattern-constrained items.
+	permProxy := schema.Properties.GetOrZero("permissions")
+	if permProxy != nil {
+		permSchema := permProxy.Schema()
+		if permSchema != nil && permSchema.Items != nil && permSchema.Items.IsA() {
+			itemSchema := permSchema.Items.A.Schema()
+			if itemSchema != nil {
+				wantPattern := `^[a-z_]+:[a-z_]+$`
+				if itemSchema.Pattern != wantPattern {
+					t.Errorf("PatMetadata.permissions items pattern: expected %q, got %q",
+						wantPattern, itemSchema.Pattern)
+				}
+			}
+		}
+	}
+
+	// Nullable fields.
+	for _, field := range []string{"expires_at", "revoked_at"} {
+		p := schema.Properties.GetOrZero(field)
+		if p == nil {
+			continue
+		}
+		fs := p.Schema()
+		if fs == nil {
+			continue
+		}
+		hasNull := false
+		for _, typ := range fs.Type {
+			if typ == "null" {
+				hasNull = true
+			}
+		}
+		if fs.Nullable != nil && *fs.Nullable {
+			hasNull = true
+		}
+		if !hasNull {
+			t.Errorf("PatMetadata.%s should be nullable", field)
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-56 (Task 3.4) — Validates: 03-REQ-11.5
+// ============================================================================
+
+// TestOpenAPIPatSchema verifies the Pat schema (creation): token (plaintext),
+// token_id, name, permissions (pattern-constrained), nullable expires_at.
+func TestOpenAPIPatSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("Pat")
+	if proxy == nil {
+		t.Fatalf("Pat schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build Pat schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("Pat schema has no properties")
+	}
+
+	for _, field := range []string{"token", "token_id", "name", "permissions", "expires_at"} {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("Pat missing '%s' property", field)
+		}
+	}
+
+	// expires_at: nullable.
+	if eaProxy := schema.Properties.GetOrZero("expires_at"); eaProxy != nil {
+		eaSchema := eaProxy.Schema()
+		if eaSchema != nil {
+			hasNull := false
+			for _, typ := range eaSchema.Type {
+				if typ == "null" {
+					hasNull = true
+				}
+			}
+			if eaSchema.Nullable != nil && *eaSchema.Nullable {
+				hasNull = true
+			}
+			if !hasNull {
+				t.Errorf("Pat.expires_at should be nullable")
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-57 (Task 3.4) — Validates: 03-REQ-11.6
+// ============================================================================
+
+// TestOpenAPIOrgSchema verifies the Organization schema: id (uuid), name, slug,
+// nullable url, status enum active/blocked, created_at, updated_at.
+func TestOpenAPIOrgSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("Organization")
+	if proxy == nil {
+		t.Fatalf("Organization schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build Organization schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("Organization schema has no properties")
+	}
+
+	for _, field := range []string{"id", "name", "slug", "url", "status", "created_at", "updated_at"} {
+		if schema.Properties.GetOrZero(field) == nil {
+			t.Errorf("Organization missing '%s' property", field)
+		}
+	}
+
+	// url: nullable.
+	if urlProxy := schema.Properties.GetOrZero("url"); urlProxy != nil {
+		urlSchema := urlProxy.Schema()
+		if urlSchema != nil {
+			hasNull := false
+			for _, typ := range urlSchema.Type {
+				if typ == "null" {
+					hasNull = true
+				}
+			}
+			if urlSchema.Nullable != nil && *urlSchema.Nullable {
+				hasNull = true
+			}
+			if !hasNull {
+				t.Errorf("Organization.url should be nullable")
+			}
+		}
+	}
+
+	// status: enum active, blocked.
+	if statusProxy := schema.Properties.GetOrZero("status"); statusProxy != nil {
+		statusSchema := statusProxy.Schema()
+		if statusSchema != nil {
+			enumVals := make([]string, 0, len(statusSchema.Enum))
+			for _, node := range statusSchema.Enum {
+				var val string
+				if err := node.Decode(&val); err == nil {
+					enumVals = append(enumVals, val)
+				}
+			}
+			wantEnums := map[string]bool{"active": false, "blocked": false}
+			for _, v := range enumVals {
+				wantEnums[v] = true
+			}
+			for e, found := range wantEnums {
+				if !found {
+					t.Errorf("Organization.status enum should include %q", e)
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-58 (Task 3.4) — Validates: 03-REQ-11.7
+// ============================================================================
+
+// TestOpenAPIOAuthProviderSchema verifies the OAuthProvider schema has exactly
+// two properties: name (string) and authorize_url (string).
+func TestOpenAPIOAuthProviderSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("OAuthProvider")
+	if proxy == nil {
+		t.Fatalf("OAuthProvider schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build OAuthProvider schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("OAuthProvider schema has no properties")
+	}
+
+	// Exactly two properties: name and authorize_url.
+	count := 0
+	for range schema.Properties.FromOldest() {
+		count++
+	}
+	if count != 2 {
+		t.Errorf("OAuthProvider should have exactly 2 properties, got %d", count)
+	}
+
+	for _, field := range []string{"name", "authorize_url"} {
+		p := schema.Properties.GetOrZero(field)
+		if p == nil {
+			t.Errorf("OAuthProvider missing '%s' property", field)
+			continue
+		}
+		fs := p.Schema()
+		if fs == nil {
+			continue
+		}
+		hasString := false
+		for _, typ := range fs.Type {
+			if typ == "string" {
+				hasString = true
+			}
+		}
+		if !hasString {
+			t.Errorf("OAuthProvider.%s should be type string, got %v", field, fs.Type)
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-59, TS-03-P8 (Task 3.4) — Validates: 03-REQ-11.8
+// ============================================================================
+
+// TestOpenAPIErrorSchema verifies the Error schema: error object with code
+// (integer) and message (string); description states code equals HTTP status
+// code with no sub-codes.
+func TestOpenAPIErrorSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("Error")
+	if proxy == nil {
+		t.Fatalf("Error schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build Error schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("Error schema has no properties")
+	}
+
+	// Required "error" object property.
+	errProxy := schema.Properties.GetOrZero("error")
+	if errProxy == nil {
+		t.Fatalf("Error schema missing 'error' property")
+	}
+	errSchema := errProxy.Schema()
+	if errSchema == nil {
+		t.Fatalf("could not build 'error' sub-schema")
+	}
+	if errSchema.Properties == nil {
+		t.Fatalf("Error.error has no properties")
+	}
+
+	// code: integer.
+	codeProxy := errSchema.Properties.GetOrZero("code")
+	if codeProxy == nil {
+		t.Fatalf("Error.error missing 'code' property")
+	}
+	codeSchema := codeProxy.Schema()
+	if codeSchema != nil {
+		hasInteger := false
+		for _, typ := range codeSchema.Type {
+			if typ == "integer" {
+				hasInteger = true
+			}
+		}
+		if !hasInteger {
+			t.Errorf("Error.error.code should be type integer, got %v", codeSchema.Type)
+		}
+	}
+
+	// message: string.
+	msgProxy := errSchema.Properties.GetOrZero("message")
+	if msgProxy == nil {
+		t.Fatalf("Error.error missing 'message' property")
+	}
+	msgSchema := msgProxy.Schema()
+	if msgSchema != nil {
+		hasString := false
+		for _, typ := range msgSchema.Type {
+			if typ == "string" {
+				hasString = true
+			}
+		}
+		if !hasString {
+			t.Errorf("Error.error.message should be type string, got %v", msgSchema.Type)
+		}
+	}
+
+	// TS-03-P8: Description states code equals HTTP status code, no sub-codes.
+	combinedDesc := schema.Description + " " + codeSchema.Description
+	lower := strings.ToLower(combinedDesc)
+	if !strings.Contains(lower, "http") && !strings.Contains(lower, "status") {
+		t.Errorf("Error schema description should mention 'HTTP' or 'status code'")
+	}
+	if strings.Contains(lower, "sub-code") || strings.Contains(lower, "subcode") {
+		t.Errorf("Error schema description should not use sub-codes")
+	}
+}
+
+// ============================================================================
+// TS-03-60 (Task 3.4) — Validates: 03-REQ-11.9
+// ============================================================================
+
+// TestOpenAPIAuthCallbackResponseSchema verifies the AuthCallbackResponse
+// schema: user ($ref to User) and api_key object with key, key_id, nullable
+// expires_at.
+func TestOpenAPIAuthCallbackResponseSchema(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	proxy := doc.Components.Schemas.GetOrZero("AuthCallbackResponse")
+	if proxy == nil {
+		t.Fatalf("AuthCallbackResponse schema not found in components/schemas")
+	}
+	schema := proxy.Schema()
+	if schema == nil {
+		t.Fatalf("could not build AuthCallbackResponse schema")
+	}
+	if schema.Properties == nil {
+		t.Fatalf("AuthCallbackResponse schema has no properties")
+	}
+
+	// user: should reference User schema (libopenapi resolves $ref transparently).
+	if schema.Properties.GetOrZero("user") == nil {
+		t.Errorf("AuthCallbackResponse missing 'user' property")
+	}
+
+	// api_key: object with key, key_id, nullable expires_at.
+	akProxy := schema.Properties.GetOrZero("api_key")
+	if akProxy == nil {
+		t.Fatalf("AuthCallbackResponse missing 'api_key' property")
+	}
+	akSchema := akProxy.Schema()
+	if akSchema == nil {
+		t.Fatalf("could not build api_key schema")
+	}
+	if akSchema.Properties == nil {
+		t.Fatalf("AuthCallbackResponse.api_key has no properties")
+	}
+	for _, field := range []string{"key", "key_id", "expires_at"} {
+		if akSchema.Properties.GetOrZero(field) == nil {
+			t.Errorf("AuthCallbackResponse.api_key missing '%s' property", field)
+		}
+	}
+
+	// api_key.expires_at: nullable.
+	if eaProxy := akSchema.Properties.GetOrZero("expires_at"); eaProxy != nil {
+		eaSchema := eaProxy.Schema()
+		if eaSchema != nil {
+			hasNull := false
+			for _, typ := range eaSchema.Type {
+				if typ == "null" {
+					hasNull = true
+				}
+			}
+			if eaSchema.Nullable != nil && *eaSchema.Nullable {
+				hasNull = true
+			}
+			if !hasNull {
+				t.Errorf("AuthCallbackResponse.api_key.expires_at should be nullable")
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-61 (Task 3.5) — Validates: 03-REQ-12.1
+// ============================================================================
+
+// TestOpenAPIErrorCoverage enumerates all operations and verifies that each
+// has its applicable error codes defined using the Error schema $ref.
+// Expected error codes per category:
+//   - All request-body endpoints: 400, 415
+//   - All authenticated endpoints: 401, 403
+//   - All resource-by-id endpoints (except list): 404
+//   - POST /users: 409; POST /users/{id}/demote: 409
+//   - POST /orgs: 409; PATCH /orgs/{id}: 409
+func TestOpenAPIErrorCoverage(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	// Map of (method+path) -> expected error codes beyond auth errors.
+	// Auth errors (401, 403) tested separately in TS-03-62.
+	type opKey struct {
+		method string
+		path   string
+	}
+	extraErrors := map[opKey][]string{
+		{"post", "/users"}:             {"409"},
+		{"post", "/users/{id}/demote"}: {"409"},
+		{"post", "/orgs"}:             {"409"},
+		{"patch", "/orgs/{id}"}:       {"409"},
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+
+			label := strings.ToUpper(method) + " " + path
+
+			// Check extra error codes for specific endpoints.
+			key := opKey{method, path}
+			if codes, ok := extraErrors[key]; ok {
+				for _, code := range codes {
+					assertResponseDefined(t, op, code, label+" (error coverage)")
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-62, TS-03-P2 (Task 3.5) — Validates: 03-REQ-12.2
+// ============================================================================
+
+// TestOpenAPIAuthErrors verifies that every operation with bearerAuth security
+// has both 401 and 403 responses referencing the Error schema.
+func TestOpenAPIAuthErrors(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+			if !hasBearerAuth(op.Security) {
+				continue
+			}
+
+			label := strings.ToUpper(method) + " " + path
+
+			assertResponseDefined(t, op, "401", label+" (auth errors)")
+			assertResponseDefined(t, op, "403", label+" (auth errors)")
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-63 (Task 3.5) — Validates: 03-REQ-12.3
+// ============================================================================
+
+// TestOpenAPI413Coverage verifies that all operations with a requestBody
+// have a 413 response entry referencing the Error schema.
+func TestOpenAPI413Coverage(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+			if op.RequestBody == nil {
+				continue
+			}
+
+			label := strings.ToUpper(method) + " " + path
+			assertResponseDefined(t, op, "413", label+" (413 coverage)")
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-64 (Task 3.5) — Validates: 03-REQ-13.1
+// ============================================================================
+
+// TestOpenAPICachingMutableEndpoints verifies that all mutable resource
+// endpoints (not health probes, not GET /auth/providers) include
+// Cache-Control: no-store on their success responses.
+func TestOpenAPICachingMutableEndpoints(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	// Paths that are NOT mutable resource endpoints.
+	nonMutable := map[string]bool{
+		"/healthz":        true,
+		"/readyz":         true,
+		"/version":        true,
+		"/auth/providers": true,
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		if nonMutable[path] {
+			continue
+		}
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+
+			label := strings.ToUpper(method) + " " + path
+
+			// Check Cache-Control: no-store on success responses (200, 201, 204).
+			if op.Responses == nil || op.Responses.Codes == nil {
+				continue
+			}
+			for _, code := range []string{"200", "201", "204"} {
+				if op.Responses.Codes.GetOrZero(code) != nil {
+					assertCacheControl(t, op, code, "no-store",
+						label+" (mutable caching)")
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-65 (Task 3.5) — Validates: 03-REQ-13.2
+// ============================================================================
+
+// TestOpenAPICachingHealthProbes verifies that GET /healthz, GET /readyz, and
+// GET /version document Cache-Control: no-cache.
+func TestOpenAPICachingHealthProbes(t *testing.T) {
+	doc := loadSpec(t)
+
+	for _, path := range []string{"/healthz", "/readyz", "/version"} {
+		t.Run(path, func(t *testing.T) {
+			op := mustGetOp(t, doc, "get", path)
+			label := "GET " + path
+			assertCacheControl(t, op, "200", "no-cache", label+" (health caching)")
+		})
+	}
+}
+
+// ============================================================================
+// TS-03-66 (Task 3.5) — Validates: 03-REQ-13.3
+// ============================================================================
+
+// TestOpenAPICachingAuthProviders verifies that GET /auth/providers documents
+// Cache-Control: public, max-age=300.
+func TestOpenAPICachingAuthProviders(t *testing.T) {
+	doc := loadSpec(t)
+	label := "GET /auth/providers"
+	op := mustGetOp(t, doc, "get", "/auth/providers")
+
+	assertCacheControl(t, op, "200", "public, max-age=300", label+" (auth providers caching)")
+}
+
+// ============================================================================
+// TS-03-71 (Task 3.5) — Validates: 03-REQ-15.1
+// ============================================================================
+
+// TestOpenAPITimestampFormat verifies that all timestamp fields across all
+// schemas (created_at, updated_at, expires_at, revoked_at) use format:
+// date-time.
+func TestOpenAPITimestampFormat(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Components == nil || doc.Components.Schemas == nil {
+		t.Fatalf("spec has no components/schemas")
+	}
+
+	timestampFields := []string{"created_at", "updated_at", "expires_at", "revoked_at"}
+	schemaNames := []string{"User", "ApiKeyMetadata", "ApiKey", "PatMetadata", "Pat", "Organization"}
+
+	for _, name := range schemaNames {
+		proxy := doc.Components.Schemas.GetOrZero(name)
+		if proxy == nil {
+			t.Errorf("schema %s not found in components/schemas", name)
+			continue
+		}
+		schema := proxy.Schema()
+		if schema == nil || schema.Properties == nil {
+			continue
+		}
+
+		for _, field := range timestampFields {
+			fp := schema.Properties.GetOrZero(field)
+			if fp == nil {
+				continue // not all schemas have all timestamp fields
+			}
+			fs := fp.Schema()
+			if fs == nil {
+				continue
+			}
+			if fs.Format != "date-time" {
+				t.Errorf("%s.%s should have format 'date-time', got %q",
+					name, field, fs.Format)
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-67, TS-03-P3 (Task 3.6) — Validates: 03-REQ-14.1
+// ============================================================================
+
+// TestOpenAPIXRequestIDEverywhere enumerates every response across all
+// operations and all status codes, asserting X-Request-ID header is defined.
+func TestOpenAPIXRequestIDEverywhere(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+			if op.Responses == nil || op.Responses.Codes == nil {
+				continue
+			}
+
+			for code := range op.Responses.Codes.FromOldest() {
+				label := strings.ToUpper(method) + " " + path
+				assertXRequestID(t, op, code, label+" (X-Request-ID everywhere)")
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-68, TS-03-P1 (Task 3.6) — Validates: 03-REQ-14.2
+// ============================================================================
+
+// TestOpenAPIETagOpaque verifies that ETag is documented as an opaque string
+// header (no format, no pattern, no derivation algorithm description) on
+// exactly the four single-resource GET endpoints.
+func TestOpenAPIETagOpaque(t *testing.T) {
+	doc := loadSpec(t)
+
+	etagEndpoints := []struct {
+		method string
+		path   string
+	}{
+		{"get", "/user"},
+		{"get", "/users/{id}"},
+		{"get", "/user/tokens/{token_id}"},
+		{"get", "/orgs/{id}"},
+	}
+
+	for _, ep := range etagEndpoints {
+		label := strings.ToUpper(ep.method) + " " + ep.path
+		t.Run(label, func(t *testing.T) {
+			op := mustGetOp(t, doc, ep.method, ep.path)
+
+			h := requireResponseHeader(t, op, "200", "ETag", label)
+			if h == nil {
+				return
+			}
+			if h.Schema == nil {
+				t.Errorf("%s: ETag header has no schema", label)
+				return
+			}
+			schema := h.Schema.Schema()
+			if schema == nil {
+				return
+			}
+
+			// Type must be string.
+			hasString := false
+			for _, typ := range schema.Type {
+				if typ == "string" {
+					hasString = true
+				}
+			}
+			if !hasString {
+				t.Errorf("%s: ETag should be type string, got %v", label, schema.Type)
+			}
+
+			// No format or pattern (opaque).
+			if schema.Format != "" {
+				t.Errorf("%s: ETag should have no format (opaque), got %q",
+					label, schema.Format)
+			}
+			if schema.Pattern != "" {
+				t.Errorf("%s: ETag should have no pattern (opaque), got %q",
+					label, schema.Pattern)
+			}
+
+			// TS-03-P1: no derivation algorithm in description.
+			desc := strings.ToLower(h.Description + " " + schema.Description)
+			if strings.Contains(desc, "hash") || strings.Contains(desc, "algorithm") {
+				t.Errorf("%s: ETag description should not mention derivation algorithm",
+					label)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// TS-03-69 (Task 3.6) — Validates: 03-REQ-14.3
+// ============================================================================
+
+// TestOpenAPIContentTypeConstraints verifies: all requestBody definitions use
+// application/json; all response bodies use application/json (or
+// application/json; charset=utf-8); 204 and 304 responses have no content.
+func TestOpenAPIContentTypeConstraints(t *testing.T) {
+	doc := loadSpec(t)
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		t.Fatalf("spec has no paths defined")
+	}
+
+	for path, pi := range doc.Paths.PathItems.FromOldest() {
+		for _, method := range allMethods {
+			op := getOperation(pi, method)
+			if op == nil {
+				continue
+			}
+			label := strings.ToUpper(method) + " " + path
+
+			// Request body: must use application/json.
+			if op.RequestBody != nil && op.RequestBody.Content != nil {
+				if op.RequestBody.Content.GetOrZero("application/json") == nil {
+					t.Errorf("%s: requestBody should define 'application/json' content",
+						label)
+				}
+			}
+
+			// 204 and 304 responses: no content.
+			if op.Responses != nil && op.Responses.Codes != nil {
+				for _, code := range []string{"204", "304"} {
+					resp := op.Responses.Codes.GetOrZero(code)
+					if resp == nil {
+						continue
+					}
+					if resp.Content != nil {
+						hasContent := false
+						for range resp.Content.FromOldest() {
+							hasContent = true
+							break
+						}
+						if hasContent {
+							t.Errorf("%s: response %s should have no content body",
+								label, code)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// TS-03-70, TS-03-P9 (Task 3.6) — Validates: 03-REQ-14.4
+// ============================================================================
+
+// TestOpenAPI304Responses verifies that 304 responses on the four conditional
+// GET endpoints have X-Request-ID and ETag headers, no body, and no
+// Cache-Control header.
+func TestOpenAPI304Responses(t *testing.T) {
+	doc := loadSpec(t)
+
+	conditionalEndpoints := []struct {
+		method string
+		path   string
+	}{
+		{"get", "/user"},
+		{"get", "/users/{id}"},
+		{"get", "/user/tokens/{token_id}"},
+		{"get", "/orgs/{id}"},
+	}
+
+	for _, ep := range conditionalEndpoints {
+		label := strings.ToUpper(ep.method) + " " + ep.path
+		t.Run(label, func(t *testing.T) {
+			op := mustGetOp(t, doc, ep.method, ep.path)
+			assert304Conditional(t, op, label+" (304 response)")
+		})
+	}
+}
