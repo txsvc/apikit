@@ -901,3 +901,240 @@ func TestPersistentPreRunEReadsAuthAnnotationFromLeaf(t *testing.T) {
 		t.Error("captured cmd should be the leaf command, not the root command")
 	}
 }
+
+// =========================================================================
+// TS-13-54: All apikit-owned commands have at minimum the 'auth' annotation
+// key with value 'none', 'api_key', or 'admin'.
+// Requirement: 13-REQ-12.1
+// =========================================================================
+
+// walkLeafCommands recursively collects all leaf commands (those with RunE set)
+// from the command tree.
+func walkLeafCommands(root *cobra.Command) []*cobra.Command {
+	var leaves []*cobra.Command
+	for _, cmd := range root.Commands() {
+		if cmd.RunE != nil {
+			leaves = append(leaves, cmd)
+		}
+		leaves = append(leaves, walkLeafCommands(cmd)...)
+	}
+	return leaves
+}
+
+func TestAllLeafCommandsHaveAuthAnnotation(t *testing.T) {
+	rootCmd := RootCommand()
+
+	leaves := walkLeafCommands(rootCmd)
+	if len(leaves) == 0 {
+		t.Fatal("RootCommand() should have at least one leaf command (with RunE set)")
+	}
+
+	validAuthValues := map[string]bool{
+		"none":    true,
+		"api_key": true,
+		"admin":   true,
+	}
+
+	for _, cmd := range leaves {
+		fullName := cmd.CommandPath()
+		t.Run(fullName, func(t *testing.T) {
+			if cmd.Annotations == nil {
+				t.Errorf("command %q has no Annotations map", fullName)
+				return
+			}
+			authVal, ok := cmd.Annotations["auth"]
+			if !ok {
+				t.Errorf("command %q is missing 'auth' annotation", fullName)
+				return
+			}
+			if !validAuthValues[authVal] {
+				t.Errorf("command %q has invalid auth annotation value %q; want one of 'none', 'api_key', 'admin'", fullName, authVal)
+			}
+		})
+	}
+}
+
+// =========================================================================
+// TS-13-55: Child commands use PreRunE (not PersistentPreRunE); root's
+// PersistentPreRunE runs automatically before child's PreRunE.
+// Requirement: 13-REQ-12.2
+// =========================================================================
+
+func TestPreRunEHookOrdering(t *testing.T) {
+	var order []string
+
+	rootCmd := RootCommand()
+
+	// Root must have PersistentPreRunE for hook chaining to work.
+	if rootCmd.PersistentPreRunE == nil {
+		t.Fatal("RootCommand() must have PersistentPreRunE set")
+	}
+
+	// Wrap root's PersistentPreRunE to record invocation order.
+	originalPreRunE := rootCmd.PersistentPreRunE
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		order = append(order, "root")
+		return originalPreRunE(cmd, args)
+	}
+
+	// Create a child command with PreRunE (not PersistentPreRunE).
+	childCmd := &cobra.Command{
+		Use:   "hookorderchild",
+		Short: "Child command for hook ordering test",
+		Annotations: map[string]string{
+			"auth": "none",
+		},
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			order = append(order, "child")
+			return nil
+		},
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return nil
+		},
+	}
+	rootCmd.AddCommand(childCmd)
+	rootCmd.SetArgs([]string{"hookorderchild"})
+
+	captureStdout(t, func() {
+		err := rootCmd.Execute()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	// Root's PersistentPreRunE must run before child's PreRunE.
+	if len(order) != 2 {
+		t.Fatalf("expected 2 hook invocations, got %d: %v", len(order), order)
+	}
+	if order[0] != "root" {
+		t.Errorf("first hook should be 'root', got %q", order[0])
+	}
+	if order[1] != "child" {
+		t.Errorf("second hook should be 'child', got %q", order[1])
+	}
+
+	// Child must NOT have PersistentPreRunE (forbidden pattern).
+	if childCmd.PersistentPreRunE != nil {
+		t.Error("child command must not define PersistentPreRunE (forbidden pattern per 13-REQ-12.E1)")
+	}
+}
+
+// =========================================================================
+// TS-13-56: PersistentPreRunE reads auth annotation from the cmd argument
+// (leaf command), not the root command.
+// Requirement: 13-REQ-12.3
+// =========================================================================
+
+func TestPersistentPreRunEReceivesLeafCommand(t *testing.T) {
+	rootCmd := RootCommand()
+
+	if rootCmd.PersistentPreRunE == nil {
+		t.Fatal("RootCommand() must have PersistentPreRunE set")
+	}
+
+	// Capture the annotations from the cmd argument inside PersistentPreRunE.
+	var capturedAnnotations map[string]string
+	originalPreRunE := rootCmd.PersistentPreRunE
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		capturedAnnotations = cmd.Annotations
+		return originalPreRunE(cmd, args)
+	}
+
+	// Register a leaf command with auth=none. The root command itself has no
+	// auth annotation — if PersistentPreRunE read from root instead of cmd,
+	// it would see nil or a different value.
+	leafCmd := &cobra.Command{
+		Use:   "leafannotation",
+		Short: "Leaf command for annotation test",
+		Annotations: map[string]string{
+			"auth": "none",
+		},
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return nil
+		},
+	}
+	rootCmd.AddCommand(leafCmd)
+	rootCmd.SetArgs([]string{"leafannotation"})
+
+	captureStdout(t, func() {
+		err := rootCmd.Execute()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	if capturedAnnotations == nil {
+		t.Fatal("PersistentPreRunE was not called or cmd.Annotations was nil")
+	}
+
+	// The captured annotations should be from the LEAF command, not the root.
+	if auth := capturedAnnotations["auth"]; auth != "none" {
+		t.Errorf("capturedAnnotations['auth'] = %q, want %q (should reflect leaf command)", auth, "none")
+	}
+
+	// Root command should NOT have an auth annotation (verifies we're not
+	// accidentally reading from root).
+	if rootCmd.Annotations != nil {
+		if _, hasAuth := rootCmd.Annotations["auth"]; hasAuth {
+			t.Log("Note: root command has 'auth' annotation; this test is less conclusive but still verifies cmd == leaf")
+		}
+	}
+}
+
+// =========================================================================
+// TS-13-E16: A child command defining PersistentPreRunE shadows the root's
+// hook, breaking client initialization for its subcommands.
+// This is a NEGATIVE TEST documenting the forbidden pattern.
+// Requirement: 13-REQ-12.E1
+// =========================================================================
+
+func TestChildPersistentPreRunEShadowsRootHook(t *testing.T) {
+	// This test demonstrates WHY child commands must not define
+	// PersistentPreRunE: it shadows the root's hook, preventing client
+	// initialization from running on grandchild commands.
+	//
+	// The test uses a standalone command tree (not RootCommand()) because
+	// it tests a Cobra framework behavior, not our specific implementation.
+
+	rootCalled := false
+
+	root := &cobra.Command{
+		Use: "testroot",
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			rootCalled = true
+			return nil
+		},
+	}
+
+	// Child command with its own PersistentPreRunE — the FORBIDDEN pattern.
+	badChild := &cobra.Command{
+		Use: "badchild",
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			// This shadows root's PersistentPreRunE for all descendants.
+			return nil
+		},
+	}
+
+	grandchild := &cobra.Command{
+		Use: "grandchild",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return nil
+		},
+	}
+
+	badChild.AddCommand(grandchild)
+	root.AddCommand(badChild)
+	root.SetArgs([]string{"badchild", "grandchild"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Root's PersistentPreRunE should NOT have been called because the
+	// child's PersistentPreRunE shadows it. This demonstrates why the
+	// pattern is forbidden — client initialization never runs.
+	if rootCalled {
+		t.Error("root's PersistentPreRunE should NOT be called when a child defines its own PersistentPreRunE — this demonstrates the shadow problem")
+	}
+}
