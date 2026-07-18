@@ -2805,6 +2805,10 @@ func TestRevocationIdempotency_Property(t *testing.T) {
 //
 // Test Spec: TS-09-P7
 // Requirement: 09-REQ-1.4
+//
+// NOTE: This is the original group-6 cache-control property test.
+// See also TestCacheControl below (group-7, TS-09-4) for the spec-driven
+// integration variant.
 func TestCacheControlHeader_Property(t *testing.T) {
 	const userID = "user-cache-prop"
 	e, database := setupListPATServer(t, userID)
@@ -2866,6 +2870,781 @@ func TestCacheControlHeader_Property(t *testing.T) {
 			if cacheControl != "no-store" {
 				t.Errorf("HTTP %d %s %s: Cache-Control = %q, want %q",
 					rec.Code, req.method, req.path, cacheControl, "no-store")
+			}
+		})
+	}
+}
+
+// ========================================================================
+// Task 7.1: End-to-end integration tests for PAT lifecycle flows
+// Test Spec: TS-09-39, TS-09-40, TS-09-41, TS-09-E16
+// Requirements: 09-REQ-9.1, 09-REQ-9.2, 09-REQ-9.3, 09-REQ-9.E1
+// ========================================================================
+
+// TestCreateAndListPATs verifies the end-to-end flow: create 3 PATs, list them,
+// and verify all 3 are present in created_at DESC order.
+//
+// Requirements: 09-REQ-5.1, 09-REQ-6.1
+func TestCreateAndListPATs(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	// Create 3 PATs with distinct names.
+	names := []string{"first-pat", "second-pat", "third-pat"}
+	var createdTokenIDs []string
+
+	for _, name := range names {
+		body := fmt.Sprintf(`{"name": %q, "permissions": ["tokens:read"], "expires": 30}`, name)
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %q: expected HTTP 201, got %d; body: %s",
+				name, rec.Code, rec.Body.String())
+		}
+
+		var resp createPATResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("create %q: failed to parse response: %v", name, err)
+		}
+		createdTokenIDs = append(createdTokenIDs, resp.TokenID)
+	}
+
+	// List all PATs.
+	rec := sendGET(t, e, "/user/tokens")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("list: failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if len(pats) != 3 {
+		t.Fatalf("expected 3 PATs in list, got %d", len(pats))
+	}
+
+	// Verify created_at DESC order.
+	for i := 0; i < len(pats)-1; i++ {
+		createdI, errI := db.ParseTime(pats[i].CreatedAt)
+		createdJ, errJ := db.ParseTime(pats[i+1].CreatedAt)
+		if errI != nil || errJ != nil {
+			t.Fatalf("failed to parse created_at: %v, %v", errI, errJ)
+		}
+		if createdI.Before(createdJ) {
+			t.Errorf("PATs not in created_at DESC order: pats[%d]=%s < pats[%d]=%s",
+				i, pats[i].CreatedAt, i+1, pats[i+1].CreatedAt)
+		}
+	}
+
+	// Verify all created token_ids are present in the list.
+	listedIDs := make(map[string]bool)
+	for _, p := range pats {
+		listedIDs[p.TokenID] = true
+	}
+	for _, id := range createdTokenIDs {
+		if !listedIDs[id] {
+			t.Errorf("created token_id %q not found in list response", id)
+		}
+	}
+}
+
+// TestCreateAndGetPAT verifies the end-to-end flow: create a PAT, then get it
+// by token_id and verify that the metadata matches the creation response.
+//
+// Requirements: 09-REQ-5.1, 09-REQ-7.1
+func TestCreateAndGetPAT(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	// Create a PAT.
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "get-test-pat", "permissions": ["tokens:read", "users:read"], "expires": 60}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("create: failed to parse response: %v", err)
+	}
+
+	// Get the PAT by token_id.
+	rec = sendGET(t, e, "/user/tokens/"+createResp.TokenID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var getResp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("get: failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify metadata matches creation response.
+	if getResp.TokenID != createResp.TokenID {
+		t.Errorf("token_id: get=%q, create=%q", getResp.TokenID, createResp.TokenID)
+	}
+	if getResp.Name != createResp.Name {
+		t.Errorf("name: get=%q, create=%q", getResp.Name, createResp.Name)
+	}
+	if len(getResp.Permissions) != len(createResp.Permissions) {
+		t.Fatalf("permissions length: get=%d, create=%d",
+			len(getResp.Permissions), len(createResp.Permissions))
+	}
+	for i, perm := range getResp.Permissions {
+		if perm != createResp.Permissions[i] {
+			t.Errorf("permissions[%d]: get=%q, create=%q", i, perm, createResp.Permissions[i])
+		}
+	}
+	if getResp.CreatedAt != createResp.CreatedAt {
+		t.Errorf("created_at: get=%q, create=%q", getResp.CreatedAt, createResp.CreatedAt)
+	}
+
+	// Get response should not contain the plaintext token.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("get: failed to parse raw response: %v", err)
+	}
+	if _, exists := raw["token"]; exists {
+		t.Error("get response should not contain 'token' key")
+	}
+}
+
+// TestCreateAndRevokePAT verifies the end-to-end flow: create a PAT, revoke it,
+// then GET to verify revoked_at is set.
+//
+// Requirements: 09-REQ-5.1, 09-REQ-8.1
+func TestCreateAndRevokePAT(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	// Create a PAT.
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "revoke-test-pat", "permissions": ["tokens:read"], "expires": 30}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("create: failed to parse response: %v", err)
+	}
+
+	// Revoke the PAT.
+	rec = sendDELETE(t, e, "/user/tokens/"+createResp.TokenID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke: expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var revokeResp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &revokeResp); err != nil {
+		t.Fatalf("revoke: failed to parse response: %v", err)
+	}
+
+	if revokeResp.RevokedAt == nil {
+		t.Fatal("revoke: expected non-null revoked_at in revoke response")
+	}
+
+	// Get the revoked PAT and verify revoked_at is set.
+	rec = sendGET(t, e, "/user/tokens/"+createResp.TokenID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get after revoke: expected HTTP 200, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	var getResp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("get after revoke: failed to parse response: %v", err)
+	}
+
+	if getResp.RevokedAt == nil {
+		t.Fatal("get after revoke: expected non-null revoked_at")
+	}
+}
+
+// TestListPATs_IncludesExpiredVisible verifies that GET /user/tokens includes
+// expired PATs (expires_at in the past) without filtering them out. The expired
+// PAT should appear with its original expires_at value.
+//
+// Test Spec: TS-09-39
+// Requirement: 09-REQ-9.1
+func TestListPATs_IncludesExpiredVisible(t *testing.T) {
+	const userID = "user-expired-vis"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert an expired PAT (expires_at in the past).
+	insertTestPAT(t, database.SqlDB, "expvis01", userID, "expired-visible-pat",
+		"hash-ev", `["tokens:read"]`, 30,
+		nullStr("2020-06-01T00:00:00Z"), nullStrEmpty(), "2020-05-01T00:00:00Z")
+
+	// Insert an active PAT for contrast.
+	insertTestPAT(t, database.SqlDB, "actvis01", userID, "active-visible-pat",
+		"hash-av", `["tokens:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-01-01T00:00:00Z")
+
+	// List PATs.
+	listRec := sendGET(t, e, "/user/tokens")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list: expected HTTP 200, got %d; body: %s",
+			listRec.Code, listRec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("list: failed to parse response: %v", err)
+	}
+
+	// Verify the expired PAT is present in the list.
+	found := false
+	for _, p := range pats {
+		if p.TokenID == "expvis01" {
+			found = true
+			if p.ExpiresAt == nil {
+				t.Error("expired PAT should have non-null expires_at")
+			} else {
+				expiresAt, err := db.ParseTime(*p.ExpiresAt)
+				if err != nil {
+					t.Fatalf("failed to parse expires_at: %v", err)
+				}
+				if !expiresAt.Before(time.Now()) {
+					t.Error("expired PAT's expires_at should be in the past")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expired PAT (expvis01) not found in list response")
+	}
+
+	// Also verify via GetPAT.
+	getRec := sendGET(t, e, "/user/tokens/expvis01")
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get expired: expected HTTP 200, got %d; body: %s",
+			getRec.Code, getRec.Body.String())
+	}
+
+	var getResp patResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("get expired: failed to parse response: %v", err)
+	}
+
+	if getResp.ExpiresAt == nil {
+		t.Error("get expired: expected non-null expires_at")
+	} else {
+		expiresAt, err := db.ParseTime(*getResp.ExpiresAt)
+		if err != nil {
+			t.Fatalf("get expired: failed to parse expires_at: %v", err)
+		}
+		if !expiresAt.Before(time.Now()) {
+			t.Error("get expired: expires_at should be in the past")
+		}
+	}
+}
+
+// TestGetPAT_IncludesRevokedVisible verifies that GET /user/tokens/:token_id
+// and GET /user/tokens include revoked PATs (revoked_at is non-null) without
+// filtering them out.
+//
+// Test Spec: TS-09-40
+// Requirement: 09-REQ-9.2
+func TestGetPAT_IncludesRevokedVisible(t *testing.T) {
+	const userID = "user-revoked-vis"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert a revoked PAT.
+	insertTestPAT(t, database.SqlDB, "revvis01", userID, "revoked-visible-pat",
+		"hash-rv", `["tokens:read"]`, 90,
+		nullStr("2025-06-01T00:00:00Z"), nullStr("2024-07-01T00:00:00Z"), "2024-03-01T00:00:00Z")
+
+	// List PATs — revoked PAT should be present.
+	listRec := sendGET(t, e, "/user/tokens")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list: expected HTTP 200, got %d; body: %s",
+			listRec.Code, listRec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("list: failed to parse response: %v", err)
+	}
+
+	revokedFound := false
+	for _, p := range pats {
+		if p.TokenID == "revvis01" {
+			revokedFound = true
+			if p.RevokedAt == nil {
+				t.Error("revoked PAT in list should have non-null revoked_at")
+			}
+		}
+	}
+	if !revokedFound {
+		t.Error("revoked PAT (revvis01) not found in list response")
+	}
+
+	// Get the revoked PAT directly.
+	getRec := sendGET(t, e, "/user/tokens/revvis01")
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get revoked: expected HTTP 200, got %d; body: %s",
+			getRec.Code, getRec.Body.String())
+	}
+
+	var getResp patResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("get revoked: failed to parse response: %v", err)
+	}
+
+	if getResp.RevokedAt == nil {
+		t.Error("get revoked: expected non-null revoked_at")
+	}
+}
+
+// TestGetPAT_ExpiredNotRejectedByHandler verifies that the GetPAT handler
+// itself does not perform token expiry checks. When the auth middleware is
+// stubbed to allow the request through, GetPAT returns the expired PAT
+// metadata normally (HTTP 200). Expiry enforcement is solely the auth
+// middleware's responsibility.
+//
+// Test Spec: TS-09-41
+// Requirement: 09-REQ-9.3
+func TestGetPAT_ExpiredNotRejectedByHandler(t *testing.T) {
+	const userID = "user-expired-handler"
+	// Using API key auth middleware (which stubs through the auth middleware).
+	e, database := setupListPATServer(t, userID)
+
+	// Insert an expired PAT.
+	insertTestPAT(t, database.SqlDB, "exphand01", userID, "expired-handler-test",
+		"hash-eh", `["tokens:read"]`, 30,
+		nullStr("2020-01-01T00:00:00Z"), nullStrEmpty(), "2019-12-01T00:00:00Z")
+
+	// GET the expired PAT — should return 200, not reject at handler level.
+	rec := sendGET(t, e, "/user/tokens/exphand01")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 for expired PAT (handler should not reject), got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.TokenID != "exphand01" {
+		t.Errorf("expected token_id %q, got %q", "exphand01", resp.TokenID)
+	}
+}
+
+// TestBlockedUser_RejectedByMiddleware verifies that blocked user requests are
+// rejected by the auth middleware before any PAT handler code executes. The
+// PAT lifecycle handlers themselves do NOT check blocked status.
+//
+// This test uses the real auth middleware with a blocked user and a real API key
+// credential to verify that the middleware returns HTTP 403 before the
+// handler runs.
+//
+// Test Spec: TS-09-E16
+// Requirement: 09-REQ-9.E1
+func TestBlockedUser_RejectedByMiddleware(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	registry := auth.NewPermissionRegistry()
+
+	// Insert a blocked user.
+	insertTestUserWithStatus(t, database.SqlDB, "blocked-user-1", "blockeduser",
+		"blocked@example.com", "github", "gh-blocked", "blocked")
+
+	// Insert an API key for the blocked user.
+	secretHash := sha256Hex("test-secret-for-blocked")
+	_, err = database.SqlDB.Exec(
+		`INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"blk_key_1", "blocked-user-1", secretHash, 0, "2024-01-01T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("failed to insert API key for blocked user: %v", err)
+	}
+
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Set up with real auth middleware (not the stub).
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(auth.NewAuthMiddleware(database, registry))
+	handler.RegisterRoutes(g)
+
+	// Construct a valid API key token for the blocked user.
+	token := apikit.TokenPrefix + "_" + "blk_key_1" + "_" + "test-secret-for-blocked"
+
+	// Send a GET /user/tokens request as the blocked user.
+	req := httptest.NewRequest(http.MethodGet, "/user/tokens", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	// Auth middleware should reject the blocked user with HTTP 403.
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for blocked user (rejected by middleware), got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// ========================================================================
+// Task 7.2: Authentication and Cache-Control integration tests
+// Test Spec: TS-09-3, TS-09-4
+// Requirements: 09-REQ-1.3, 09-REQ-1.4
+// ========================================================================
+
+// TestAllEndpoints_Unauthenticated verifies that all four PAT endpoints return
+// HTTP 401 when no Authorization header is provided. The auth middleware rejects
+// the request before any handler code executes.
+//
+// Test Spec: TS-09-3
+// Requirement: 09-REQ-1.3
+func TestAllEndpoints_Unauthenticated(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	registry := auth.NewPermissionRegistry()
+
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Set up with real auth middleware (not the stub).
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(auth.NewAuthMiddleware(database, registry))
+	handler.RegisterRoutes(g)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/user/tokens"},
+		{http.MethodGet, "/user/tokens"},
+		{http.MethodGet, "/user/tokens/abc12345"},
+		{http.MethodDelete, "/user/tokens/abc12345"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+"_"+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			// No Authorization header set.
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s: expected HTTP 401, got %d; body: %s",
+					ep.method, ep.path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestCacheControl verifies that all four PAT endpoints return the
+// Cache-Control: no-store header on both success and error responses.
+//
+// Test Spec: TS-09-4
+// Requirement: 09-REQ-1.4
+func TestCacheControl(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	requests := []struct {
+		label  string
+		method string
+		path   string
+		body   string
+	}{
+		// POST /user/tokens — valid body (HTTP 201).
+		{"POST valid", http.MethodPost, "/user/tokens",
+			`{"name":"cache-test","permissions":["tokens:read"],"expires":30}`},
+		// POST /user/tokens — invalid body (HTTP 400).
+		{"POST invalid", http.MethodPost, "/user/tokens",
+			`{"permissions":["tokens:read"]}`},
+		// GET /user/tokens — list (HTTP 200).
+		{"GET list", http.MethodGet, "/user/tokens", ""},
+		// GET /user/tokens/:token_id — nonexistent (HTTP 404).
+		{"GET nonexistent", http.MethodGet, "/user/tokens/nonexistent", ""},
+		// DELETE /user/tokens/:token_id — nonexistent (HTTP 404).
+		{"DELETE nonexistent", http.MethodDelete, "/user/tokens/nonexistent", ""},
+	}
+
+	for _, req := range requests {
+		t.Run(req.label, func(t *testing.T) {
+			var rec *httptest.ResponseRecorder
+			if req.body != "" {
+				rec = sendJSON(t, e, req.method, req.path, req.body)
+			} else {
+				switch req.method {
+				case http.MethodGet:
+					rec = sendGET(t, e, req.path)
+				case http.MethodDelete:
+					rec = sendDELETE(t, e, req.path)
+				default:
+					t.Fatalf("unsupported method %q", req.method)
+				}
+			}
+
+			cacheControl := rec.Header().Get("Cache-Control")
+			if cacheControl != "no-store" {
+				t.Errorf("HTTP %d %s %s: Cache-Control = %q, want %q",
+					rec.Code, req.method, req.path, cacheControl, "no-store")
+			}
+		})
+	}
+}
+
+// TestPATPermissionCheck_Read verifies that GET /user/tokens and
+// GET /user/tokens/:token_id require the tokens:read permission.
+// A PAT credential with tokens:read should succeed (HTTP 200),
+// while one without should receive HTTP 403.
+//
+// Requirements: 09-REQ-6.5, 09-REQ-7.3
+func TestPATPermissionCheck_Read(t *testing.T) {
+	const userID = "user-perm-read"
+
+	// PAT with tokens:read — should succeed.
+	t.Run("with_tokens_read", func(t *testing.T) {
+		e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:read"})
+
+		insertTestPAT(t, database.SqlDB, "permrd01", userID, "perm-read-pat",
+			"hash-pr", `["tokens:read"]`, 90,
+			nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		// List.
+		rec := sendGET(t, e, "/user/tokens")
+		if rec.Code != http.StatusOK {
+			t.Errorf("list: expected HTTP 200, got %d", rec.Code)
+		}
+
+		// Get.
+		rec = sendGET(t, e, "/user/tokens/permrd01")
+		if rec.Code != http.StatusOK {
+			t.Errorf("get: expected HTTP 200, got %d", rec.Code)
+		}
+	})
+
+	// PAT without tokens:read — should get 403.
+	t.Run("without_tokens_read", func(t *testing.T) {
+		e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:manage"})
+
+		insertTestPAT(t, database.SqlDB, "permrd02", userID, "perm-read-pat-2",
+			"hash-pr2", `["tokens:read"]`, 90,
+			nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		// List.
+		rec := sendGET(t, e, "/user/tokens")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("list: expected HTTP 403, got %d", rec.Code)
+		}
+
+		// Get.
+		rec = sendGET(t, e, "/user/tokens/permrd02")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("get: expected HTTP 403, got %d", rec.Code)
+		}
+	})
+}
+
+// TestPATPermissionCheck_Manage verifies that POST /user/tokens and
+// DELETE /user/tokens/:token_id require the tokens:manage permission.
+// A PAT credential with tokens:manage should succeed, while one without
+// should receive HTTP 403.
+//
+// Requirements: 09-REQ-5.6, 09-REQ-8.3
+func TestPATPermissionCheck_Manage(t *testing.T) {
+	const userID = "user-perm-manage"
+
+	// PAT with tokens:manage — POST should succeed.
+	t.Run("create_with_tokens_manage", func(t *testing.T) {
+		e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:manage", "tokens:read"})
+
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+			`{"name":"perm-test","permissions":["tokens:read"],"expires":30}`)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("create: expected HTTP 201, got %d; body: %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+
+	// PAT without tokens:manage — POST should fail.
+	t.Run("create_without_tokens_manage", func(t *testing.T) {
+		e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:read"})
+
+		rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+			`{"name":"perm-test","permissions":["tokens:read"],"expires":30}`)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("create: expected HTTP 403, got %d; body: %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+
+	// PAT with tokens:manage — DELETE should succeed.
+	t.Run("revoke_with_tokens_manage", func(t *testing.T) {
+		e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:manage"})
+
+		insertTestPAT(t, database.SqlDB, "permmg01", userID, "manage-revoke-pat",
+			"hash-mg", `["tokens:read"]`, 90,
+			nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		rec := sendDELETE(t, e, "/user/tokens/permmg01")
+		if rec.Code != http.StatusOK {
+			t.Errorf("revoke: expected HTTP 200, got %d; body: %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+
+	// PAT without tokens:manage — DELETE should fail.
+	t.Run("revoke_without_tokens_manage", func(t *testing.T) {
+		e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:read"})
+
+		insertTestPAT(t, database.SqlDB, "permmg02", userID, "manage-revoke-pat-2",
+			"hash-mg2", `["tokens:read"]`, 90,
+			nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		rec := sendDELETE(t, e, "/user/tokens/permmg02")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("revoke: expected HTTP 403, got %d; body: %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// ========================================================================
+// Task 7.3: Permissions insertion order property test
+// Test Spec: TS-09-P3
+// Requirement: 09-REQ-5.3
+// ========================================================================
+
+// TestPermissionsInsertionOrder_Property is a property-based test that creates
+// PATs with all permutations of ['users:read', 'orgs:read', 'tokens:read'] and
+// verifies that the permissions array order is preserved through the full
+// lifecycle: create response, list response, get response, and revoke response.
+//
+// Test Spec: TS-09-P3
+// Requirements: 09-REQ-5.3, 09-REQ-6.1, 09-REQ-7.1, 09-REQ-8.1
+func TestPermissionsInsertionOrder_Property(t *testing.T) {
+	// All permutations of 3 permissions = 6 orderings.
+	perms := []string{"users:read", "orgs:read", "tokens:read"}
+	permutations := [][]string{
+		{perms[0], perms[1], perms[2]},
+		{perms[0], perms[2], perms[1]},
+		{perms[1], perms[0], perms[2]},
+		{perms[1], perms[2], perms[0]},
+		{perms[2], perms[0], perms[1]},
+		{perms[2], perms[1], perms[0]},
+	}
+
+	e, _ := setupCreatePATServer(t)
+
+	for i, permOrder := range permutations {
+		t.Run(fmt.Sprintf("permutation_%d", i), func(t *testing.T) {
+			// Build the request body with this permission order.
+			permsJSON := mustMarshalJSON(permOrder)
+			body := fmt.Sprintf(`{"name":"order-test-%d","permissions":%s,"expires":30}`,
+				i, permsJSON)
+
+			// Step 1: Create PAT.
+			createRec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+			if createRec.Code != http.StatusCreated {
+				t.Fatalf("create: expected HTTP 201, got %d; body: %s",
+					createRec.Code, createRec.Body.String())
+			}
+
+			var createResp createPATResponse
+			if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+				t.Fatalf("create: failed to parse response: %v", err)
+			}
+
+			// Verify create response permissions order matches input.
+			if len(createResp.Permissions) != len(permOrder) {
+				t.Fatalf("create: expected %d permissions, got %d",
+					len(permOrder), len(createResp.Permissions))
+			}
+			for j, perm := range createResp.Permissions {
+				if perm != permOrder[j] {
+					t.Errorf("create: permissions[%d] = %q, want %q", j, perm, permOrder[j])
+				}
+			}
+
+			// Step 2: List PATs and find this one.
+			listRec := sendGET(t, e, "/user/tokens")
+			if listRec.Code != http.StatusOK {
+				t.Fatalf("list: expected HTTP 200, got %d", listRec.Code)
+			}
+
+			var allPats []patResponse
+			if err := json.Unmarshal(listRec.Body.Bytes(), &allPats); err != nil {
+				t.Fatalf("list: failed to parse response: %v", err)
+			}
+
+			var listPAT *patResponse
+			for idx := range allPats {
+				if allPats[idx].TokenID == createResp.TokenID {
+					listPAT = &allPats[idx]
+					break
+				}
+			}
+			if listPAT == nil {
+				t.Fatalf("list: created token_id %q not found", createResp.TokenID)
+			}
+
+			if len(listPAT.Permissions) != len(permOrder) {
+				t.Fatalf("list: expected %d permissions, got %d",
+					len(permOrder), len(listPAT.Permissions))
+			}
+			for j, perm := range listPAT.Permissions {
+				if perm != permOrder[j] {
+					t.Errorf("list: permissions[%d] = %q, want %q", j, perm, permOrder[j])
+				}
+			}
+
+			// Step 3: Get the PAT by token_id.
+			getRec := sendGET(t, e, "/user/tokens/"+createResp.TokenID)
+			if getRec.Code != http.StatusOK {
+				t.Fatalf("get: expected HTTP 200, got %d", getRec.Code)
+			}
+
+			var getResp patResponse
+			if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+				t.Fatalf("get: failed to parse response: %v", err)
+			}
+
+			if len(getResp.Permissions) != len(permOrder) {
+				t.Fatalf("get: expected %d permissions, got %d",
+					len(permOrder), len(getResp.Permissions))
+			}
+			for j, perm := range getResp.Permissions {
+				if perm != permOrder[j] {
+					t.Errorf("get: permissions[%d] = %q, want %q", j, perm, permOrder[j])
+				}
+			}
+
+			// Step 4: Revoke the PAT and check revoke response permissions.
+			revokeRec := sendDELETE(t, e, "/user/tokens/"+createResp.TokenID)
+			if revokeRec.Code != http.StatusOK {
+				t.Fatalf("revoke: expected HTTP 200, got %d; body: %s",
+					revokeRec.Code, revokeRec.Body.String())
+			}
+
+			var revokeResp patResponse
+			if err := json.Unmarshal(revokeRec.Body.Bytes(), &revokeResp); err != nil {
+				t.Fatalf("revoke: failed to parse response: %v", err)
+			}
+
+			if len(revokeResp.Permissions) != len(permOrder) {
+				t.Fatalf("revoke: expected %d permissions, got %d",
+					len(permOrder), len(revokeResp.Permissions))
+			}
+			for j, perm := range revokeResp.Permissions {
+				if perm != permOrder[j] {
+					t.Errorf("revoke: permissions[%d] = %q, want %q", j, perm, permOrder[j])
+				}
 			}
 		})
 	}
