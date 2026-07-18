@@ -241,9 +241,9 @@ func TestGenerateAPIKey_RandFailureDuringRetry(t *testing.T) {
 	insertTestUser(t, database.SqlDB, "user-E1")
 
 	// Pre-insert a key with a known key_id to force a collision.
-	// The charset maps byte 0 to the first character. Providing 8 zero bytes
-	// should produce a predictable key_id that we can pre-insert.
-	collidingKeyID := "aaaaaaaa"
+	// The charset maps byte 0 to '0' (first character). Providing 8 zero bytes
+	// produces key_id "00000000" which we pre-insert to force collision.
+	collidingKeyID := makeTestKeyID(0)
 	_, err := database.SqlDB.Exec(
 		`INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at)
 		 VALUES (?, 'user-E1', 'fakehash', 90, '2026-01-01T00:00:00Z')`,
