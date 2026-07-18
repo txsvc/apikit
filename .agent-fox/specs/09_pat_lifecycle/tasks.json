@@ -222,7 +222,7 @@
             "09-REQ-4.3",
             "09-REQ-4.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -239,7 +239,7 @@
           "requirement_refs": [
             "09-REQ-5.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -258,7 +258,7 @@
             "09-REQ-4.1",
             "09-REQ-4.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

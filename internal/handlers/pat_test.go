@@ -751,3 +751,286 @@ func TestCreatePAT_InvalidExpiresExtended(t *testing.T) {
 		assertErrorResponse(t, rec, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
 	}
 }
+
+// ========================================================================
+// Task 3: Unit tests for CreatePAT privilege escalation and auth
+// ========================================================================
+
+// setupCreatePATServerWithPATAuth creates an Echo instance with PAT handler
+// routes registered, PAT auth middleware injected (with specified permissions),
+// and CacheMiddleware applied. A test user is inserted into the database.
+// Returns the Echo instance and the db.DB handle.
+func setupCreatePATServerWithPATAuth(t *testing.T, permissions []string) (*echo.Echo, *db.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert a test user so that PAT INSERT satisfies FK constraint.
+	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test CreatePAT privilege escalation")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware("test-user-uuid", permissions))
+	handler.RegisterRoutes(g)
+
+	return e, database
+}
+
+// ========================================================================
+// Task 3.1: Unit tests for privilege escalation checks
+// Test Spec: TS-09-17, TS-09-18, TS-09-19, TS-09-E6
+// Requirements: 09-REQ-4.1, 09-REQ-4.2, 09-REQ-4.3, 09-REQ-4.E1
+// ========================================================================
+
+// TestCreatePAT_PrivilegeEscalation_PAT verifies that POST /user/tokens
+// returns HTTP 403 with message "cannot grant permission: keys:manage" when a
+// PAT credential with permissions [tokens:manage, users:read] attempts to
+// create a new PAT requesting [keys:manage].
+//
+// Test Spec: TS-09-17
+// Requirement: 09-REQ-4.1
+func TestCreatePAT_PrivilegeEscalation_PAT(t *testing.T) {
+	e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:manage", "users:read"})
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["keys:manage"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "cannot grant permission: keys:manage")
+}
+
+// TestCreatePAT_APIKey_AnyRegisteredPermission verifies that POST /user/tokens
+// with an API key credential creates a PAT with any registered permissions
+// without privilege escalation restrictions.
+//
+// Test Spec: TS-09-18
+// Requirement: 09-REQ-4.2
+func TestCreatePAT_APIKey_AnyRegisteredPermission(t *testing.T) {
+	e, _ := setupCreatePATServer(t)
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "ci-deploy", "permissions": ["users:read", "keys:manage", "tokens:manage"], "expires": 30}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.TokenID == "" {
+		t.Fatal("expected non-empty token_id in response")
+	}
+}
+
+// TestCreatePAT_RegistryCheckBeforeEscalation verifies that registry validation
+// (HTTP 400 "unknown permission") fires before privilege escalation checking
+// (HTTP 403). A PAT credential requesting an unregistered permission should get
+// HTTP 400 with "unknown permission", not HTTP 403 with "cannot grant permission".
+//
+// Test Spec: TS-09-19
+// Requirement: 09-REQ-4.3
+func TestCreatePAT_RegistryCheckBeforeEscalation(t *testing.T) {
+	e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:manage"})
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["widgets:delete"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "unknown permission: widgets:delete")
+}
+
+// TestCreatePAT_EscalationSubsetAllowed verifies that a PAT with permissions
+// [tokens:manage, users:read] can create a new PAT requesting a subset
+// [users:read] — privilege escalation check passes for subsets.
+//
+// Test Spec: TS-09-E6
+// Requirement: 09-REQ-4.E1
+func TestCreatePAT_EscalationSubsetAllowed(t *testing.T) {
+	e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:manage", "users:read"})
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "subset", "permissions": ["users:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected HTTP 201 for subset permissions, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	var resp createPATResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse CreatePATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.TokenID == "" {
+		t.Fatal("expected non-empty token_id in response")
+	}
+}
+
+// TestCreatePAT_EscalationSupersetDenied verifies that a PAT with permissions
+// [tokens:manage, users:read] is rejected when requesting [users:read, keys:manage]
+// because keys:manage is not in the creating PAT's permissions.
+//
+// Test Spec: TS-09-E6
+// Requirement: 09-REQ-4.E1
+func TestCreatePAT_EscalationSupersetDenied(t *testing.T) {
+	e, _ := setupCreatePATServerWithPATAuth(t, []string{"tokens:manage", "users:read"})
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "escalated", "permissions": ["users:read", "keys:manage"], "expires": 30}`)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "cannot grant permission: keys:manage")
+}
+
+// ========================================================================
+// Task 3.2: Integration tests for CreatePAT permission requirement
+// Test Spec: TS-09-25
+// Requirements: 09-REQ-5.6
+// ========================================================================
+
+// TestCreatePAT_RequiresTokensManage verifies that a PAT credential with only
+// [tokens:read] (lacking tokens:manage) receives HTTP 403 when calling
+// POST /user/tokens, and no PAT is created in the database.
+//
+// Test Spec: TS-09-25
+// Requirement: 09-REQ-5.6
+func TestCreatePAT_RequiresTokensManage(t *testing.T) {
+	e, database := setupCreatePATServerWithPATAuth(t, []string{"tokens:read"})
+
+	rec := sendJSON(t, e, http.MethodPost, "/user/tokens",
+		`{"name": "test", "permissions": ["tokens:read"], "expires": 30}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify no PAT row was inserted in the database.
+	var count int
+	err := database.SqlDB.QueryRow("SELECT COUNT(*) FROM pats").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 PATs in database after permission denial, got %d", count)
+	}
+}
+
+// ========================================================================
+// Task 3.3: Property test for privilege escalation invariant
+// Test Spec: TS-09-P4
+// Requirements: 09-REQ-4.1, 09-REQ-4.2
+// ========================================================================
+
+// mustMarshalJSON marshals v to a JSON string, panicking on error.
+// Used by property tests to build request bodies dynamically.
+func mustMarshalJSON(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("json.Marshal failed: %v", err))
+	}
+	return string(data)
+}
+
+// TestPATPrivilegeEscalation_Property is a property-based test that iterates
+// over all subsets P and Q of the registered permissions set and verifies the
+// privilege escalation invariant:
+//   - PAT credential with permissions P: Q ⊆ P → HTTP 201; Q ⊄ P → HTTP 403
+//   - API key credential: any valid Q → HTTP 201
+//
+// Test Spec: TS-09-P4
+// Requirements: 09-REQ-4.1, 09-REQ-4.2
+func TestPATPrivilegeEscalation_Property(t *testing.T) {
+	allPerms := []string{
+		"users:read", "orgs:read", "keys:read",
+		"keys:manage", "tokens:read", "tokens:manage",
+	}
+
+	// Generate all non-empty subsets of allPerms using bitmask enumeration.
+	type permSubset struct {
+		mask  int
+		perms []string
+	}
+	var subsets []permSubset
+	for mask := 1; mask < (1 << len(allPerms)); mask++ {
+		var perms []string
+		for i := 0; i < len(allPerms); i++ {
+			if mask&(1<<uint(i)) != 0 {
+				perms = append(perms, allPerms[i])
+			}
+		}
+		subsets = append(subsets, permSubset{mask: mask, perms: perms})
+	}
+
+	// tokensManageBit is the bitmask bit for "tokens:manage" (index 5).
+	const tokensManageBit = 1 << 5
+
+	// Test PAT credentials: for each P containing tokens:manage, verify
+	// the escalation invariant against all Q subsets.
+	t.Run("PAT_credential", func(t *testing.T) {
+		for _, p := range subsets {
+			if p.mask&tokensManageBit == 0 {
+				continue // P must include tokens:manage for RequirePermission to pass.
+			}
+
+			e, _ := setupCreatePATServerWithPATAuth(t, p.perms)
+
+			for _, q := range subsets {
+				body := fmt.Sprintf(
+					`{"name":"prop-test","permissions":%s,"expires":30}`,
+					mustMarshalJSON(q.perms),
+				)
+				rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+
+				// Q ⊆ P iff (q.mask & p.mask) == q.mask (all Q bits are set in P).
+				qSubsetOfP := (q.mask & p.mask) == q.mask
+
+				if qSubsetOfP {
+					if rec.Code != http.StatusCreated {
+						t.Errorf("PAT P=%v, Q=%v (Q⊆P): expected 201, got %d; body: %s",
+							p.perms, q.perms, rec.Code, rec.Body.String())
+					}
+				} else {
+					if rec.Code != http.StatusForbidden {
+						t.Errorf("PAT P=%v, Q=%v (Q⊄P): expected 403, got %d; body: %s",
+							p.perms, q.perms, rec.Code, rec.Body.String())
+					}
+					resp := parseErrorResponse(t, rec)
+					if !strings.HasPrefix(resp.Error.Message, "cannot grant permission:") {
+						t.Errorf("PAT P=%v, Q=%v: expected message prefix "+
+							"'cannot grant permission:', got %q",
+							p.perms, q.perms, resp.Error.Message)
+					}
+				}
+			}
+		}
+	})
+
+	// Test API key credentials: any valid Q should succeed (HTTP 201).
+	t.Run("APIKey_credential", func(t *testing.T) {
+		e, _ := setupCreatePATServer(t)
+
+		for _, q := range subsets {
+			body := fmt.Sprintf(
+				`{"name":"prop-test","permissions":%s,"expires":30}`,
+				mustMarshalJSON(q.perms),
+			)
+			rec := sendJSON(t, e, http.MethodPost, "/user/tokens", body)
+
+			if rec.Code != http.StatusCreated {
+				t.Errorf("APIKey Q=%v: expected 201, got %d; body: %s",
+					q.perms, rec.Code, rec.Body.String())
+			}
+		}
+	})
+}
