@@ -1632,3 +1632,367 @@ func TestDeleteOrg_DBError(t *testing.T) {
 
 	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
 }
+
+// ========================================================================
+// Task 5.1: TestBlockOrg — POST /orgs/:id/block handler
+// Test Spec: TS-08-31, TS-08-32, TS-08-33, TS-08-34, TS-08-35, TS-08-E11
+// Requirements: 08-REQ-7.1, 08-REQ-7.2, 08-REQ-7.3, 08-REQ-7.4,
+//               08-REQ-7.5, 08-REQ-7.E1
+// ========================================================================
+
+// TestBlockOrg_Success verifies that POST /orgs/:id/block on an active
+// organization returns HTTP 200 with status='blocked' and an updated_at
+// value that is >= the original.
+//
+// Test Spec: TS-08-31
+// Requirement: 08-REQ-7.1
+func TestBlockOrg_Success(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "block-success-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Block Corp", "block-corp", "", "active")
+
+	// Retrieve original to compare updated_at.
+	origRec := sendGet(t, e, "/orgs/"+orgID)
+	if origRec.Code != http.StatusOK {
+		t.Fatalf("setup: expected HTTP 200 on GET, got %d; body: %s", origRec.Code, origRec.Body.String())
+	}
+	original := parseOrgResponse(t, origRec)
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseOrgResponse(t, rec)
+
+	if body.Status != "blocked" {
+		t.Errorf("expected status %q, got %q", "blocked", body.Status)
+	}
+
+	origTime, err1 := time.Parse(time.RFC3339, original.UpdatedAt)
+	updTime, err2 := time.Parse(time.RFC3339, body.UpdatedAt)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to parse updated_at timestamps: orig=%v upd=%v", err1, err2)
+	}
+	if updTime.Before(origTime) {
+		t.Errorf("expected updated_at %v >= original %v", updTime, origTime)
+	}
+}
+
+// TestBlockOrg_UpdatesTimestamp verifies that blocking an active organization
+// changes the updated_at field compared to the original created_at.
+//
+// Requirement: 08-REQ-7.1
+func TestBlockOrg_UpdatesTimestamp(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "block-ts-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Timestamp Corp", "timestamp-corp", "", "active")
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseOrgResponse(t, rec)
+
+	createdTime, err1 := time.Parse(time.RFC3339, body.CreatedAt)
+	updatedTime, err2 := time.Parse(time.RFC3339, body.UpdatedAt)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to parse timestamps: created=%v updated=%v", err1, err2)
+	}
+	if !updatedTime.After(createdTime) && !updatedTime.Equal(createdTime) {
+		t.Errorf("expected updated_at (%v) >= created_at (%v)", updatedTime, createdTime)
+	}
+}
+
+// TestBlockOrg_Idempotent verifies that POST /orgs/:id/block on an
+// already-blocked organization is idempotent: returns HTTP 200, status
+// remains 'blocked', and updated_at does not change between the two calls.
+//
+// Test Spec: TS-08-32
+// Requirement: 08-REQ-7.2
+func TestBlockOrg_Idempotent(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "block-idempotent-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Idempotent Corp", "idempotent-corp", "", "active")
+
+	// First block call.
+	firstRec := sendPost(t, e, "/orgs/"+orgID+"/block")
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first block: expected HTTP 200, got %d; body: %s", firstRec.Code, firstRec.Body.String())
+	}
+	firstBody := parseOrgResponse(t, firstRec)
+
+	if firstBody.Status != "blocked" {
+		t.Fatalf("first block: expected status %q, got %q", "blocked", firstBody.Status)
+	}
+
+	// Second block call (already blocked).
+	secondRec := sendPost(t, e, "/orgs/"+orgID+"/block")
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second block: expected HTTP 200, got %d; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	secondBody := parseOrgResponse(t, secondRec)
+
+	if secondBody.Status != "blocked" {
+		t.Errorf("second block: expected status %q, got %q", "blocked", secondBody.Status)
+	}
+	if secondBody.UpdatedAt != firstBody.UpdatedAt {
+		t.Errorf("expected updated_at to be unchanged between calls: first=%q second=%q",
+			firstBody.UpdatedAt, secondBody.UpdatedAt)
+	}
+}
+
+// TestBlockOrg_NotFound verifies that POST /orgs/:id/block for a
+// non-existent organization UUID returns HTTP 404 with error message
+// 'organization not found'.
+//
+// Test Spec: TS-08-33
+// Requirement: 08-REQ-7.3
+func TestBlockOrg_NotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	nonExistentUUID := "00000000-0000-0000-0000-000000000000"
+	rec := sendPost(t, e, "/orgs/"+nonExistentUUID+"/block")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestBlockOrg_InvalidID verifies that POST /orgs/:id/block with an invalid
+// UUID path parameter returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-34
+// Requirement: 08-REQ-7.4
+func TestBlockOrg_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendPost(t, e, "/orgs/not-a-uuid/block")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestBlockOrg_NonAdmin verifies that POST /orgs/:id/block from a non-admin
+// user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-35
+// Requirement: 08-REQ-7.5
+func TestBlockOrg_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-block-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Block Corp", "nonadmin-block-corp", "", "active")
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestBlockOrg_DBError verifies that POST /orgs/:id/block returns HTTP 500
+// with error message 'internal server error' when the DB UPDATE fails
+// with a database error. Uses a SQLite BEFORE UPDATE trigger to simulate
+// the failure while allowing the initial org lookup SELECT to succeed.
+//
+// Test Spec: TS-08-E11
+// Requirement: 08-REQ-7.E1
+func TestBlockOrg_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	orgID := "dberror-block-org-uuid"
+	insertTestOrg(t, database.SqlDB, orgID, "DBError Block Corp", "dberror-block-corp", "", "active")
+
+	// Install a BEFORE UPDATE trigger that raises a generic DB error.
+	// The org lookup (SELECT) succeeds, but the UPDATE statement fails.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_orgs_block_update BEFORE UPDATE ON orgs
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/block")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 5.2: TestUnblockOrg — POST /orgs/:id/unblock handler
+// Test Spec: TS-08-36, TS-08-37, TS-08-38, TS-08-39, TS-08-40, TS-08-E12
+// Requirements: 08-REQ-8.1, 08-REQ-8.2, 08-REQ-8.3, 08-REQ-8.4,
+//               08-REQ-8.5, 08-REQ-8.E1
+// ========================================================================
+
+// TestUnblockOrg_Success verifies that POST /orgs/:id/unblock on a blocked
+// organization returns HTTP 200 with status='active' and an updated_at
+// value that is >= the blocked updated_at.
+//
+// Test Spec: TS-08-36
+// Requirement: 08-REQ-8.1
+func TestUnblockOrg_Success(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "unblock-success-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Unblock Corp", "unblock-corp", "", "blocked")
+
+	// Retrieve the blocked org to compare updated_at.
+	blockedRec := sendGet(t, e, "/orgs/"+orgID)
+	if blockedRec.Code != http.StatusOK {
+		t.Fatalf("setup: expected HTTP 200 on GET, got %d; body: %s", blockedRec.Code, blockedRec.Body.String())
+	}
+	blocked := parseOrgResponse(t, blockedRec)
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseOrgResponse(t, rec)
+
+	if body.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", body.Status)
+	}
+
+	blockedTime, err1 := time.Parse(time.RFC3339, blocked.UpdatedAt)
+	updTime, err2 := time.Parse(time.RFC3339, body.UpdatedAt)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to parse updated_at timestamps: blocked=%v upd=%v", err1, err2)
+	}
+	if updTime.Before(blockedTime) {
+		t.Errorf("expected updated_at %v >= blocked updated_at %v", updTime, blockedTime)
+	}
+}
+
+// TestUnblockOrg_Idempotent verifies that POST /orgs/:id/unblock on an
+// already-active organization is idempotent: returns HTTP 200, status
+// remains 'active', and updated_at is unchanged from before the call.
+//
+// Test Spec: TS-08-37
+// Requirement: 08-REQ-8.2
+func TestUnblockOrg_Idempotent(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "unblock-idempotent-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Idempotent Unblock Corp", "idempotent-unblock-corp", "", "active")
+
+	// Retrieve original active org to capture its updated_at.
+	origRec := sendGet(t, e, "/orgs/"+orgID)
+	if origRec.Code != http.StatusOK {
+		t.Fatalf("setup: expected HTTP 200 on GET, got %d; body: %s", origRec.Code, origRec.Body.String())
+	}
+	original := parseOrgResponse(t, origRec)
+
+	// Unblock an already-active org.
+	rec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseOrgResponse(t, rec)
+
+	if body.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", body.Status)
+	}
+	if body.UpdatedAt != original.UpdatedAt {
+		t.Errorf("expected updated_at to be unchanged: original=%q unblocked=%q",
+			original.UpdatedAt, body.UpdatedAt)
+	}
+}
+
+// TestUnblockOrg_NotFound verifies that POST /orgs/:id/unblock for a
+// non-existent organization UUID returns HTTP 404 with error message
+// 'organization not found'.
+//
+// Test Spec: TS-08-38
+// Requirement: 08-REQ-8.3
+func TestUnblockOrg_NotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	nonExistentUUID := "00000000-0000-0000-0000-000000000000"
+	rec := sendPost(t, e, "/orgs/"+nonExistentUUID+"/unblock")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestUnblockOrg_InvalidID verifies that POST /orgs/:id/unblock with an
+// invalid UUID path parameter returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-39
+// Requirement: 08-REQ-8.4
+func TestUnblockOrg_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendPost(t, e, "/orgs/not-a-uuid/unblock")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestUnblockOrg_NonAdmin verifies that POST /orgs/:id/unblock from a
+// non-admin user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-40
+// Requirement: 08-REQ-8.5
+func TestUnblockOrg_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-unblock-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Unblock Corp", "nonadmin-unblock-corp", "", "blocked")
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestUnblockOrg_DBError verifies that POST /orgs/:id/unblock returns
+// HTTP 500 with error message 'internal server error' when the DB UPDATE
+// fails with a database error. Uses a SQLite BEFORE UPDATE trigger to
+// simulate the failure while allowing the initial org lookup SELECT to succeed.
+//
+// Test Spec: TS-08-E12
+// Requirement: 08-REQ-8.E1
+func TestUnblockOrg_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	orgID := "dberror-unblock-org-uuid"
+	insertTestOrg(t, database.SqlDB, orgID, "DBError Unblock Corp", "dberror-unblock-corp", "", "blocked")
+
+	// Install a BEFORE UPDATE trigger that raises a generic DB error.
+	// The org lookup (SELECT) succeeds, but the UPDATE statement fails.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_orgs_unblock_update BEFORE UPDATE ON orgs
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	rec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
