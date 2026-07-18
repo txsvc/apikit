@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -526,5 +527,377 @@ func TestTokenPrefixEmptySkippedForAuthNone(t *testing.T) {
 	// Should NOT contain TokenPrefix error
 	if strings.Contains(stdout, "TokenPrefix is empty") {
 		t.Error("auth-exempt command should not produce a TokenPrefix error")
+	}
+}
+
+// =========================================================================
+// TS-13-24: PersistentPreRunE resolves endpoint_url and api_key as required,
+// and user_id as optional (empty string stored in context without error).
+// =========================================================================
+
+// TestPersistentPreRunEResolvesCredentials verifies that PersistentPreRunE
+// resolves endpoint_url and api_key as required fields, and user_id as
+// optional. When user_id is unset, it should be stored as empty string
+// in context without error.
+func TestPersistentPreRunEResolvesCredentials(t *testing.T) {
+	// Set up environment: endpoint and api_key provided, user_id unset
+	savedEndpoint, hadEndpoint := os.LookupEnv("ENDPOINT_URL")
+	savedAPIKey, hadAPIKey := os.LookupEnv("API_KEY")
+	savedUserID, hadUserID := os.LookupEnv("USER_ID")
+	os.Setenv("ENDPOINT_URL", "http://localhost")
+	os.Setenv("API_KEY", "testkey")
+	os.Unsetenv("USER_ID")
+	defer func() {
+		if hadEndpoint {
+			os.Setenv("ENDPOINT_URL", savedEndpoint)
+		} else {
+			os.Unsetenv("ENDPOINT_URL")
+		}
+		if hadAPIKey {
+			os.Setenv("API_KEY", savedAPIKey)
+		} else {
+			os.Unsetenv("API_KEY")
+		}
+		if hadUserID {
+			os.Setenv("USER_ID", savedUserID)
+		} else {
+			os.Unsetenv("USER_ID")
+		}
+	}()
+
+	// Set up TokenPrefix and HOME
+	savedPrefix := TokenPrefix
+	TokenPrefix = "testpfx"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	tmpHome := t.TempDir()
+	savedHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", savedHome)
+
+	// Create config directory and empty config file
+	configDir := filepath.Join(tmpHome, ".testpfx")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	configContent := "endpoint_url = \"\"\nuser_id = \"\"\napi_key = \"\"\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0600); err != nil {
+		t.Fatalf("failed to write config.toml: %v", err)
+	}
+
+	var gotClient any
+	var gotUserID string
+	var runECalled bool
+
+	rootCmd := RootCommand()
+	testCmd := &cobra.Command{
+		Use:   "testcmd",
+		Short: "Test command requiring auth",
+		Annotations: map[string]string{
+			"auth": "api_key",
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			runECalled = true
+			gotClient = ClientFromContext(cmd.Context())
+			gotUserID = UserIDFromContext(cmd.Context())
+			return nil
+		},
+	}
+	rootCmd.AddCommand(testCmd)
+	rootCmd.SetArgs([]string{"testcmd"})
+
+	var execErr error
+	captureStdout(t, func() {
+		execErr = rootCmd.Execute()
+		if execErr != nil {
+			PrintError(execErr)
+		}
+	})
+
+	if execErr != nil {
+		t.Fatalf("expected no error, got: %v", execErr)
+	}
+
+	if !runECalled {
+		t.Fatal("RunE was not called; PersistentPreRunE may have blocked execution")
+	}
+
+	// ClientFromContext should return non-nil when endpoint_url and api_key are set
+	if gotClient == nil {
+		t.Error("ClientFromContext should return non-nil client when credentials are resolved")
+	}
+
+	// UserIDFromContext should return empty string (user_id is optional and unset)
+	if gotUserID != "" {
+		t.Errorf("UserIDFromContext should return empty string when USER_ID is unset, got %q", gotUserID)
+	}
+}
+
+// =========================================================================
+// TS-13-25: PersistentPreRunE checks flag presence using cmd.Flags().Changed()
+// on the leaf command, not the root.
+// =========================================================================
+
+// TestPersistentPreRunEChecksLeafCommandFlags verifies that PersistentPreRunE
+// detects flag-level overrides on the leaf command (not the root), consistent
+// with Cobra's behavior of passing the leaf command to PersistentPreRunE.
+func TestPersistentPreRunEChecksLeafCommandFlags(t *testing.T) {
+	// Set ENDPOINT_URL env to a different value than the flag
+	savedEndpoint, hadEndpoint := os.LookupEnv("ENDPOINT_URL")
+	savedAPIKey, hadAPIKey := os.LookupEnv("API_KEY")
+	os.Setenv("ENDPOINT_URL", "http://env-val")
+	os.Setenv("API_KEY", "testkey")
+	defer func() {
+		if hadEndpoint {
+			os.Setenv("ENDPOINT_URL", savedEndpoint)
+		} else {
+			os.Unsetenv("ENDPOINT_URL")
+		}
+		if hadAPIKey {
+			os.Setenv("API_KEY", savedAPIKey)
+		} else {
+			os.Unsetenv("API_KEY")
+		}
+	}()
+
+	savedPrefix := TokenPrefix
+	TokenPrefix = "testpfx"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	tmpHome := t.TempDir()
+	savedHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", savedHome)
+
+	// Create config directory and empty config file
+	configDir := filepath.Join(tmpHome, ".testpfx")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	configContent := "endpoint_url = \"\"\nuser_id = \"\"\napi_key = \"\"\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0600); err != nil {
+		t.Fatalf("failed to write config.toml: %v", err)
+	}
+
+	var gotClient any
+
+	rootCmd := RootCommand()
+
+	// RootCommand must have persistent flags for this test to work
+	if f := rootCmd.PersistentFlags().Lookup("endpoint-url"); f == nil {
+		t.Fatal("RootCommand must have --endpoint-url persistent flag")
+	}
+
+	leafCmd := &cobra.Command{
+		Use:   "leafcmd",
+		Short: "Leaf command requiring auth",
+		Annotations: map[string]string{
+			"auth": "api_key",
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			gotClient = ClientFromContext(cmd.Context())
+			return nil
+		},
+	}
+	rootCmd.AddCommand(leafCmd)
+
+	// Pass --endpoint-url as a flag — should take precedence over env
+	rootCmd.SetArgs([]string{"leafcmd", "--endpoint-url", "http://flag-val", "--api-key", "k"})
+
+	var execErr error
+	captureStdout(t, func() {
+		execErr = rootCmd.Execute()
+		if execErr != nil {
+			PrintError(execErr)
+		}
+	})
+
+	if execErr != nil {
+		t.Fatalf("expected no error, got: %v", execErr)
+	}
+
+	// Client should have been created with the flag value (not the env value)
+	if gotClient == nil {
+		t.Fatal("ClientFromContext should return non-nil client when endpoint_url is set via flag")
+	}
+}
+
+// =========================================================================
+// TS-13-26: ResolveEndpointURL returns empty string (not an error) when
+// no endpoint is configured in any source.
+// =========================================================================
+
+// TestResolveEndpointURLReturnsEmptyWhenNoEndpoint verifies that
+// ResolveEndpointURL returns an empty string (not an error) when
+// endpoint_url is not configured via flag, env, or config.
+func TestResolveEndpointURLReturnsEmptyWhenNoEndpoint(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("ENDPOINT_URL")
+	os.Unsetenv("ENDPOINT_URL")
+	defer func() {
+		if hadEnv {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		}
+	}()
+
+	savedPrefix := TokenPrefix
+	TokenPrefix = "testpfx"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	tmpHome := t.TempDir()
+	savedHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", savedHome)
+
+	// Create config dir with empty endpoint_url
+	configDir := filepath.Join(tmpHome, ".testpfx")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	configContent := "endpoint_url = \"\"\nuser_id = \"\"\napi_key = \"\"\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0600); err != nil {
+		t.Fatalf("failed to write config.toml: %v", err)
+	}
+
+	rootCmd := RootCommand()
+	val := ResolveEndpointURL(rootCmd)
+	if val != "" {
+		t.Errorf("ResolveEndpointURL should return empty string when no endpoint is configured, got %q", val)
+	}
+}
+
+// =========================================================================
+// TS-13-E8: When leaf command has 'auth': 'none', PersistentPreRunE skips
+// all credential resolution and client construction.
+// =========================================================================
+
+// TestPersistentPreRunESkipsCredentialResolutionForAuthNone verifies that
+// auth-exempt commands do not trigger any credential resolution, config
+// loading, or client construction. This is tested by making the environment
+// hostile (unset HOME, empty TokenPrefix) — if PersistentPreRunE tried any
+// credential resolution, it would fail.
+func TestPersistentPreRunESkipsCredentialResolutionForAuthNone(t *testing.T) {
+	// Unset all credentials
+	savedEndpoint, hadEndpoint := os.LookupEnv("ENDPOINT_URL")
+	savedAPIKey, hadAPIKey := os.LookupEnv("API_KEY")
+	savedUserID, hadUserID := os.LookupEnv("USER_ID")
+	os.Unsetenv("ENDPOINT_URL")
+	os.Unsetenv("API_KEY")
+	os.Unsetenv("USER_ID")
+	defer func() {
+		if hadEndpoint {
+			os.Setenv("ENDPOINT_URL", savedEndpoint)
+		}
+		if hadAPIKey {
+			os.Setenv("API_KEY", savedAPIKey)
+		}
+		if hadUserID {
+			os.Setenv("USER_ID", savedUserID)
+		}
+	}()
+
+	// Set HOME to a non-existent path — if PersistentPreRunE tried to
+	// load config, it would fail because the directory doesn't exist.
+	savedHome := os.Getenv("HOME")
+	os.Setenv("HOME", "/nonexistent/path/for/test")
+	defer os.Setenv("HOME", savedHome)
+
+	// Empty TokenPrefix — if PersistentPreRunE checked it, it would fail.
+	savedPrefix := TokenPrefix
+	TokenPrefix = ""
+	defer func() { TokenPrefix = savedPrefix }()
+
+	var runECalled bool
+
+	rootCmd := RootCommand()
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "authnone",
+		Short: "Auth-exempt command",
+		Annotations: map[string]string{
+			"auth": "none",
+		},
+		RunE: func(_ *cobra.Command, _ []string) error {
+			runECalled = true
+			return nil
+		},
+	})
+	rootCmd.SetArgs([]string{"authnone"})
+
+	var execErr error
+	captureStdout(t, func() {
+		execErr = rootCmd.Execute()
+		if execErr != nil {
+			PrintError(execErr)
+		}
+	})
+
+	if execErr != nil {
+		t.Fatalf("auth-exempt command should succeed without credentials, got error: %v", execErr)
+	}
+
+	if !runECalled {
+		t.Error("RunE was not called; auth-exempt command should execute its RunE")
+	}
+}
+
+// =========================================================================
+// TS-13-E9: PersistentPreRunE reads 'auth' annotation from the Cobra leaf
+// command argument (cmd), not from the root command.
+// =========================================================================
+
+// TestPersistentPreRunEReadsAuthAnnotationFromLeaf verifies that
+// PersistentPreRunE reads the "auth" annotation from the cmd argument
+// (which is the leaf command), not from the root command. The root command
+// has no "auth" annotation; only the leaf command does.
+func TestPersistentPreRunEReadsAuthAnnotationFromLeaf(t *testing.T) {
+	rootCmd := RootCommand()
+
+	// Verify RootCommand has PersistentPreRunE set
+	if rootCmd.PersistentPreRunE == nil {
+		t.Fatal("RootCommand() must have PersistentPreRunE set")
+	}
+
+	// Capture the cmd argument passed to PersistentPreRunE
+	var capturedCmd *cobra.Command
+	originalPreRunE := rootCmd.PersistentPreRunE
+
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		capturedCmd = cmd
+		return originalPreRunE(cmd, args)
+	}
+
+	// Register an auth-exempt leaf command
+	leafCmd := &cobra.Command{
+		Use:   "authnoneleaf",
+		Short: "Auth-exempt leaf command",
+		Annotations: map[string]string{
+			"auth": "none",
+		},
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return nil
+		},
+	}
+	rootCmd.AddCommand(leafCmd)
+	rootCmd.SetArgs([]string{"authnoneleaf"})
+
+	captureStdout(t, func() {
+		err := rootCmd.Execute()
+		if err != nil {
+			t.Errorf("auth-exempt command should not error: %v", err)
+		}
+	})
+
+	if capturedCmd == nil {
+		t.Fatal("PersistentPreRunE was never called")
+	}
+
+	// The captured cmd should be the leaf command, not the root
+	if capturedCmd.Annotations == nil {
+		t.Fatal("captured cmd should have Annotations")
+	}
+	if capturedCmd.Annotations["auth"] != "none" {
+		t.Errorf("captured cmd should have auth=none annotation, got %v", capturedCmd.Annotations)
+	}
+	if capturedCmd.Use == rootCmd.Use {
+		t.Error("captured cmd should be the leaf command, not the root command")
 	}
 }

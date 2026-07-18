@@ -241,7 +241,7 @@
             "13-REQ-6.1",
             "13-REQ-6.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -266,7 +266,7 @@
             "13-REQ-6.4",
             "13-REQ-6.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

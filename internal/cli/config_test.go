@@ -159,6 +159,185 @@ func TestCLIConfigTOMLRoundTrip(t *testing.T) {
 }
 
 // =========================================================================
+// TS-13-18: ResolveField returns the flag value when flagChanged is true,
+// regardless of env or config.
+// =========================================================================
+
+func TestResolveFieldFlagTakesPrecedence(t *testing.T) {
+	// Set env var to a different value
+	savedEnv := os.Getenv("ENDPOINT_URL")
+	os.Setenv("ENDPOINT_URL", "envVal")
+	defer func() {
+		if savedEnv != "" {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		} else {
+			os.Unsetenv("ENDPOINT_URL")
+		}
+	}()
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "flagVal", true, "ENDPOINT_URL", "configVal", true)
+	if err != nil {
+		t.Fatalf("ResolveField should not return error when flag is set, got: %v", err)
+	}
+	if val != "flagVal" {
+		t.Errorf("ResolveField should return flag value %q, got %q", "flagVal", val)
+	}
+}
+
+// =========================================================================
+// TS-13-19: ResolveField returns the env var value when flag is not changed
+// and env is non-empty.
+// =========================================================================
+
+func TestResolveFieldEnvTakesPrecedenceOverConfig(t *testing.T) {
+	savedEnv := os.Getenv("ENDPOINT_URL")
+	os.Setenv("ENDPOINT_URL", "envVal")
+	defer func() {
+		if savedEnv != "" {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		} else {
+			os.Unsetenv("ENDPOINT_URL")
+		}
+	}()
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "ENDPOINT_URL", "configVal", true)
+	if err != nil {
+		t.Fatalf("ResolveField should not return error when env is set, got: %v", err)
+	}
+	if val != "envVal" {
+		t.Errorf("ResolveField should return env value %q, got %q", "envVal", val)
+	}
+}
+
+// =========================================================================
+// TS-13-20: ResolveField returns the config value when flag is not changed
+// and env is empty.
+// =========================================================================
+
+func TestResolveFieldConfigUsedWhenFlagAndEnvUnset(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("ENDPOINT_URL")
+	os.Unsetenv("ENDPOINT_URL")
+	defer func() {
+		if hadEnv {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		}
+	}()
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "ENDPOINT_URL", "configVal", true)
+	if err != nil {
+		t.Fatalf("ResolveField should not return error when config is set, got: %v", err)
+	}
+	if val != "configVal" {
+		t.Errorf("ResolveField should return config value %q, got %q", "configVal", val)
+	}
+}
+
+// =========================================================================
+// TS-13-21: ResolveField returns canonical error when required=true and
+// all sources are unset.
+// =========================================================================
+
+func TestResolveFieldRequiredAllUnsetReturnsCanonicalError(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("ENDPOINT_URL")
+	os.Unsetenv("ENDPOINT_URL")
+	defer func() {
+		if hadEnv {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		}
+	}()
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "ENDPOINT_URL", "", true)
+	if val != "" {
+		t.Errorf("ResolveField should return empty string, got %q", val)
+	}
+	if err == nil {
+		t.Fatal("ResolveField should return an error when required=true and all sources are unset")
+	}
+
+	expected := "endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file"
+	if err.Error() != expected {
+		t.Errorf("error message = %q, want %q", err.Error(), expected)
+	}
+}
+
+// =========================================================================
+// TS-13-22: ResolveField returns ("", nil) when required=false and all
+// sources are unset.
+// =========================================================================
+
+func TestResolveFieldOptionalAllUnsetReturnsEmptyNoError(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("USER_ID")
+	os.Unsetenv("USER_ID")
+	defer func() {
+		if hadEnv {
+			os.Setenv("USER_ID", savedEnv)
+		}
+	}()
+
+	val, err := ResolveField("user_id", "--user-id", "", false, "USER_ID", "", false)
+	if val != "" {
+		t.Errorf("ResolveField should return empty string, got %q", val)
+	}
+	if err != nil {
+		t.Errorf("ResolveField should return nil error for optional field, got: %v", err)
+	}
+}
+
+// =========================================================================
+// TS-13-23: ResolveField composes the canonical error message internally
+// from fieldName, flagName, and envVarName parameters.
+// =========================================================================
+
+func TestResolveFieldCanonicalErrorForAPIKey(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("API_KEY")
+	os.Unsetenv("API_KEY")
+	defer func() {
+		if hadEnv {
+			os.Setenv("API_KEY", savedEnv)
+		}
+	}()
+
+	_, err := ResolveField("api_key", "--api-key", "", false, "API_KEY", "", true)
+	if err == nil {
+		t.Fatal("ResolveField should return an error when required=true and all sources are unset")
+	}
+
+	expected := "api_key is not set: provide via --api-key, $API_KEY, or config file"
+	if err.Error() != expected {
+		t.Errorf("error message = %q, want %q", err.Error(), expected)
+	}
+}
+
+// =========================================================================
+// TS-13-E7: ResolveField treats empty string config value as unset,
+// falling through to error (required) or ("", nil) (optional).
+// =========================================================================
+
+func TestResolveFieldEmptyConfigTreatedAsUnset(t *testing.T) {
+	savedEnv, hadEnv := os.LookupEnv("ENDPOINT_URL")
+	os.Unsetenv("ENDPOINT_URL")
+	defer func() {
+		if hadEnv {
+			os.Setenv("ENDPOINT_URL", savedEnv)
+		}
+	}()
+
+	// Empty configValue should be treated as unset, triggering error for required=true
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "ENDPOINT_URL", "", true)
+	if val != "" {
+		t.Errorf("val should be empty string, got %q", val)
+	}
+	if err == nil {
+		t.Fatal("expected error when configValue is empty string (should be treated as unset)")
+	}
+
+	expected := "endpoint_url is not set: provide via --endpoint-url, $ENDPOINT_URL, or config file"
+	if err.Error() != expected {
+		t.Errorf("error message = %q, want %q", err.Error(), expected)
+	}
+}
+
+// =========================================================================
 // TS-13-E4: Unresolvable $HOME → PersistentPreRunE exit-2 error envelope
 // =========================================================================
 

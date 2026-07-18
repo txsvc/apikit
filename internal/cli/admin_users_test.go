@@ -1,4 +1,4 @@
-package cli
+package cli_test
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	apikit "github.com/txsvc/apikit"
+	"github.com/txsvc/apikit/internal/cli"
 )
 
 // ---------------------------------------------------------------------------
@@ -158,7 +159,7 @@ type errorEnvelope struct {
 // sets the provided args, captures stdout into a buffer, and executes.
 // Returns the captured stdout string and the error from Execute.
 func executeAdminCmd(args ...string) (stdout string, err error) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(new(bytes.Buffer))
@@ -620,7 +621,7 @@ func TestAdminUsersListIncludeBlocked(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersListAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	// Find the "users list" subcommand.
 	usersCmd, _, err := cmd.Find([]string{"users", "list"})
@@ -727,7 +728,7 @@ func TestAdminUsersShowMissingID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersShowAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	showCmd, _, err := cmd.Find([]string{"users", "show"})
 	if err != nil {
@@ -816,7 +817,7 @@ func TestAdminUsersCreateCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersCreateAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	createCmd, _, err := cmd.Find([]string{"users", "create"})
 	if err != nil {
