@@ -8,6 +8,20 @@ import (
 	"github.com/txsvc/apikit/internal/db"
 )
 
+// contextKey is an unexported string type used for context keys to avoid
+// collisions with other packages.
+type contextKey string
+
+// authInfoKey is the context key used to store and retrieve AuthInfo.
+const authInfoKey contextKey = "auth_info"
+
+// GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
+// Returns nil if no AuthInfo has been injected.
+func GetAuthInfo(c echo.Context) *AuthInfo {
+	// Stub: not implemented.
+	return nil
+}
+
 // AuthInfo carries authenticated credential information injected into the
 // request context by the auth middleware.
 type AuthInfo struct {
