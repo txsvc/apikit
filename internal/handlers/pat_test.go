@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -1563,5 +1564,600 @@ func TestPATSecretNeverPersisted_Property(t *testing.T) {
 					i, tc.name, secret)
 			}
 		}
+	}
+}
+
+// ========================================================================
+// Task 5: Tests for ListPATs handler
+// ========================================================================
+
+// patResponse represents the JSON response for list, get, and revoke PAT
+// operations — metadata only, never includes the plaintext secret.
+type patResponse struct {
+	TokenID     string   `json:"token_id"`
+	Name        string   `json:"name"`
+	Permissions []string `json:"permissions"`
+	ExpiresAt   *string  `json:"expires_at"`
+	CreatedAt   string   `json:"created_at"`
+	RevokedAt   *string  `json:"revoked_at"`
+}
+
+// setupListPATServer creates an Echo instance with PAT handler routes registered,
+// API key auth middleware injected (which bypasses RequirePermission checks), and
+// CacheMiddleware applied. A test user is inserted into the database.
+// Returns the Echo instance and the db.DB handle.
+func setupListPATServer(t *testing.T, userID string) (*echo.Echo, *db.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert a test user so that PAT INSERT satisfies FK constraint.
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test ListPATs")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(userID))
+	handler.RegisterRoutes(g)
+
+	return e, database
+}
+
+// setupListPATServerWithPATAuth creates an Echo instance with PAT handler routes
+// registered, PAT auth middleware injected (with specified permissions), and
+// CacheMiddleware applied. Returns the Echo instance and the db.DB handle.
+func setupListPATServerWithPATAuth(t *testing.T, userID string, permissions []string) (*echo.Echo, *db.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test ListPATs with PAT auth")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, permissions))
+	handler.RegisterRoutes(g)
+
+	return e, database
+}
+
+// sendGET sends an HTTP GET request with no body to the given Echo instance
+// and returns the response recorder.
+func sendGET(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// sendDELETE sends an HTTP DELETE request with no body to the given Echo
+// instance and returns the response recorder.
+func sendDELETE(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// ========================================================================
+// Task 5.1: Integration tests for ListPATs success cases
+// Test Spec: TS-09-27, TS-09-28, TS-09-29, TS-09-30
+// Requirements: 09-REQ-6.1, 09-REQ-6.2, 09-REQ-6.3, 09-REQ-6.4
+// ========================================================================
+
+// TestListPATs_Success verifies that GET /user/tokens returns HTTP 200 with a
+// JSON array of PATResponse objects ordered by created_at DESC when the
+// authenticated user has multiple PATs.
+//
+// Test Spec: TS-09-27
+// Requirement: 09-REQ-6.1
+func TestListPATs_Success(t *testing.T) {
+	const userID = "user-list-1"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert 3 PATs at different timestamps.
+	insertTestPAT(t, database.SqlDB, "aaaaaaaa", userID, "oldest-token",
+		"hash1", `["tokens:read"]`, 90, nullStr("2024-04-01T00:00:00Z"), nullStrEmpty(), "2024-01-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "bbbbbbbb", userID, "middle-token",
+		"hash2", `["tokens:read","users:read"]`, 60, nullStr("2024-05-01T00:00:00Z"), nullStrEmpty(), "2024-03-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "cccccccc", userID, "newest-token",
+		"hash3", `["users:read"]`, 30, nullStr("2024-07-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if len(pats) != 3 {
+		t.Fatalf("expected 3 PATs, got %d", len(pats))
+	}
+
+	// Verify ordering: newest first (created_at DESC).
+	for i := 0; i < len(pats)-1; i++ {
+		createdI, errI := db.ParseTime(pats[i].CreatedAt)
+		createdJ, errJ := db.ParseTime(pats[i+1].CreatedAt)
+		if errI != nil || errJ != nil {
+			t.Fatalf("failed to parse created_at: %v, %v", errI, errJ)
+		}
+		if createdI.Before(createdJ) {
+			t.Errorf("PATs not in created_at DESC order: pats[%d].created_at=%s < pats[%d].created_at=%s",
+				i, pats[i].CreatedAt, i+1, pats[i+1].CreatedAt)
+		}
+	}
+}
+
+// TestListPATs_IncludesExpiredAndRevoked verifies that GET /user/tokens includes
+// all PATs regardless of status: active, expired, and revoked PATs all appear.
+//
+// Test Spec: TS-09-28
+// Requirement: 09-REQ-6.2
+func TestListPATs_IncludesExpiredAndRevoked(t *testing.T) {
+	const userID = "user-list-2"
+	e, database := setupListPATServer(t, userID)
+
+	// Active PAT: expires in the future, not revoked.
+	insertTestPAT(t, database.SqlDB, "act11111", userID, "active-pat",
+		"hash1", `["tokens:read"]`, 90, nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Expired PAT: expires_at in the past, not revoked.
+	insertTestPAT(t, database.SqlDB, "exp22222", userID, "expired-pat",
+		"hash2", `["tokens:read"]`, 30, nullStr("2020-01-01T00:00:00Z"), nullStrEmpty(), "2019-12-01T00:00:00Z")
+
+	// Revoked PAT: revoked_at is set.
+	insertTestPAT(t, database.SqlDB, "rev33333", userID, "revoked-pat",
+		"hash3", `["tokens:read"]`, 60, nullStr("2025-01-01T00:00:00Z"), nullStr("2024-06-15T00:00:00Z"), "2024-05-01T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if len(pats) != 3 {
+		t.Fatalf("expected 3 PATs (active + expired + revoked), got %d", len(pats))
+	}
+
+	// Count revoked PATs.
+	var revokedCount int
+	for _, p := range pats {
+		if p.RevokedAt != nil {
+			revokedCount++
+		}
+	}
+	if revokedCount != 1 {
+		t.Errorf("expected 1 revoked PAT, got %d", revokedCount)
+	}
+
+	// Count expired PATs (expires_at in the past).
+	now := time.Now()
+	var expiredCount int
+	for _, p := range pats {
+		if p.ExpiresAt != nil {
+			expiresAt, err := db.ParseTime(*p.ExpiresAt)
+			if err != nil {
+				t.Fatalf("failed to parse expires_at %q: %v", *p.ExpiresAt, err)
+			}
+			if expiresAt.Before(now) {
+				expiredCount++
+			}
+		}
+	}
+	if expiredCount < 1 {
+		t.Errorf("expected at least 1 expired PAT, got %d", expiredCount)
+	}
+}
+
+// TestListPATs_NoSecrets verifies that the GET /user/tokens response does not
+// include secret_hash, plaintext token, or expires_days fields in any element.
+//
+// Test Spec: TS-09-29
+// Requirement: 09-REQ-6.3
+func TestListPATs_NoSecrets(t *testing.T) {
+	const userID = "user-list-3"
+	e, database := setupListPATServer(t, userID)
+
+	insertTestPAT(t, database.SqlDB, "nosec111", userID, "secret-check",
+		"hash1", `["tokens:read"]`, 90, nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Parse as raw JSON array of maps to check key presence.
+	var rawPats []map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawPats); err != nil {
+		t.Fatalf("failed to parse response as array of maps: %v\nbody: %s",
+			err, rec.Body.String())
+	}
+
+	if len(rawPats) == 0 {
+		t.Fatal("expected at least 1 PAT in response, got 0")
+	}
+
+	for i, pat := range rawPats {
+		if _, exists := pat["secret_hash"]; exists {
+			t.Errorf("pats[%d]: response should not contain 'secret_hash' key", i)
+		}
+		if _, exists := pat["token"]; exists {
+			t.Errorf("pats[%d]: response should not contain 'token' key", i)
+		}
+		if _, exists := pat["expires_days"]; exists {
+			t.Errorf("pats[%d]: response should not contain 'expires_days' key", i)
+		}
+	}
+}
+
+// TestListPATs_OtherUserTokensExcluded verifies that GET /user/tokens returns
+// only PATs belonging to the authenticated user; PATs from other users are
+// excluded from the result.
+//
+// Test Spec: TS-09-30
+// Requirement: 09-REQ-6.4
+func TestListPATs_OtherUserTokensExcluded(t *testing.T) {
+	const user1ID = "user-list-4a"
+	const user2ID = "user-list-4b"
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert both test users.
+	insertTestUser(t, database.SqlDB, user1ID, "user1", "user1@example.com", "github", "gh-1")
+	insertTestUser(t, database.SqlDB, user2ID, "user2", "user2@example.com", "github", "gh-2")
+
+	// Insert 2 PATs for user-1.
+	insertTestPAT(t, database.SqlDB, "u1pat111", user1ID, "user1-pat-a",
+		"hash1a", `["tokens:read"]`, 90, nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "u1pat222", user1ID, "user1-pat-b",
+		"hash1b", `["users:read"]`, 60, nullStr("2025-02-01T00:00:00Z"), nullStrEmpty(), "2024-07-01T00:00:00Z")
+
+	// Insert 3 PATs for user-2.
+	insertTestPAT(t, database.SqlDB, "u2pat111", user2ID, "user2-pat-a",
+		"hash2a", `["tokens:read"]`, 90, nullStr("2025-03-01T00:00:00Z"), nullStrEmpty(), "2024-08-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "u2pat222", user2ID, "user2-pat-b",
+		"hash2b", `["users:read"]`, 60, nullStr("2025-04-01T00:00:00Z"), nullStrEmpty(), "2024-09-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "u2pat333", user2ID, "user2-pat-c",
+		"hash2c", `["orgs:read"]`, 30, nullStr("2025-05-01T00:00:00Z"), nullStrEmpty(), "2024-10-01T00:00:00Z")
+
+	// Set up server authenticated as user-1.
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test ListPATs user isolation")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(user1ID))
+	handler.RegisterRoutes(g)
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// User-1 should see only their 2 PATs, not user-2's 3.
+	if len(pats) != 2 {
+		t.Fatalf("expected 2 PATs for user-1, got %d", len(pats))
+	}
+
+	// Verify each returned PAT belongs to user-1 by checking token_id.
+	for _, p := range pats {
+		var ownerID string
+		err := database.SqlDB.QueryRow(
+			"SELECT user_id FROM pats WHERE token_id = ?", p.TokenID,
+		).Scan(&ownerID)
+		if err != nil {
+			t.Fatalf("failed to query owner for token_id %q: %v", p.TokenID, err)
+		}
+		if ownerID != user1ID {
+			t.Errorf("PAT %q belongs to %q, expected %q", p.TokenID, ownerID, user1ID)
+		}
+	}
+}
+
+// ========================================================================
+// Task 5.2: Tests for ListPATs edge cases and permissions
+// Test Spec: TS-09-31, TS-09-E9, TS-09-E10
+// Requirements: 09-REQ-6.5, 09-REQ-6.E1, 09-REQ-6.E2
+// ========================================================================
+
+// TestListPATs_RequiresTokensRead verifies that GET /user/tokens returns
+// HTTP 403 when the credential is a PAT lacking the tokens:read permission.
+//
+// Test Spec: TS-09-31
+// Requirement: 09-REQ-6.5
+func TestListPATs_RequiresTokensRead(t *testing.T) {
+	// PAT with only tokens:manage (no tokens:read).
+	e, _ := setupListPATServerWithPATAuth(t, "user-perm-1", []string{"tokens:manage"})
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for PAT lacking tokens:read, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestListPATs_Empty verifies that GET /user/tokens returns HTTP 200 with an
+// empty JSON array [] when the authenticated user has no PATs.
+//
+// Test Spec: TS-09-E9
+// Requirement: 09-REQ-6.E1
+func TestListPATs_Empty(t *testing.T) {
+	e, _ := setupListPATServer(t, "user-empty-1")
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if pats == nil {
+		t.Fatal("expected empty array [], got null")
+	}
+
+	if len(pats) != 0 {
+		t.Fatalf("expected 0 PATs, got %d", len(pats))
+	}
+
+	// Also verify the raw body is exactly "[]" (not "null").
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected body to be %q, got %q", "[]", body)
+	}
+}
+
+// TestListPATs_DBError verifies that GET /user/tokens returns HTTP 500 with
+// message "internal server error" when the database query fails.
+//
+// Test Spec: TS-09-E10
+// Requirement: 09-REQ-6.E2
+func TestListPATs_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	insertTestUser(t, database.SqlDB, "user-dberr-1", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test ListPATs DB error")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("user-dberr-1"))
+	handler.RegisterRoutes(g)
+
+	// Close the database AFTER setup to cause query failures.
+	database.Close()
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// TestListPATs_OrderByCreatedAtDesc verifies that GET /user/tokens returns PATs
+// in descending chronological order by created_at timestamp.
+//
+// Requirement: 09-REQ-6.1
+func TestListPATs_OrderByCreatedAtDesc(t *testing.T) {
+	const userID = "user-order-1"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert PATs with intentionally non-sequential token_ids to ensure
+	// ordering comes from created_at, not from insertion order or token_id.
+	insertTestPAT(t, database.SqlDB, "zzzzzzzz", userID, "first-created",
+		"hash1", `["tokens:read"]`, 90, nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-01-15T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "aaaaaaab", userID, "second-created",
+		"hash2", `["tokens:read"]`, 90, nullStr("2025-06-01T00:00:00Z"), nullStrEmpty(), "2024-03-20T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "mmmmmmmm", userID, "third-created",
+		"hash3", `["tokens:read"]`, 90, nullStr("2025-12-01T00:00:00Z"), nullStrEmpty(), "2024-09-10T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var pats []patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+		t.Fatalf("failed to parse response: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if len(pats) != 3 {
+		t.Fatalf("expected 3 PATs, got %d", len(pats))
+	}
+
+	// Verify descending order: newest first.
+	// third-created (2024-09-10) > second-created (2024-03-20) > first-created (2024-01-15)
+	expectedOrder := []string{"third-created", "second-created", "first-created"}
+	for i, expectedName := range expectedOrder {
+		if pats[i].Name != expectedName {
+			t.Errorf("pats[%d].name = %q, want %q (expected created_at DESC order)",
+				i, pats[i].Name, expectedName)
+		}
+	}
+}
+
+// ========================================================================
+// Task 5.3: Property test for user isolation invariant
+// Test Spec: TS-09-P2
+// Requirements: 09-REQ-6.4, 09-REQ-7.1, 09-REQ-7.2, 09-REQ-7.E1,
+//               09-REQ-8.1, 09-REQ-8.E2
+// ========================================================================
+
+// TestPATUserIsolation_Property is a property-based test that verifies user
+// isolation: for any PAT belonging to user A, requests authenticated as
+// user B (B != A) always return HTTP 404 for GET and DELETE, and the PAT
+// never appears in user B's list response.
+//
+// Test Spec: TS-09-P2
+// Requirements: 09-REQ-6.4, 09-REQ-7.1, 09-REQ-7.2, 09-REQ-7.E1,
+//               09-REQ-8.1, 09-REQ-8.E2
+func TestPATUserIsolation_Property(t *testing.T) {
+	// Generate pairs of distinct users.
+	userPairs := []struct {
+		userA string
+		userB string
+	}{
+		{"iso-user-a1", "iso-user-b1"},
+		{"iso-user-a2", "iso-user-b2"},
+		{"iso-user-a3", "iso-user-b3"},
+	}
+
+	for _, pair := range userPairs {
+		t.Run(fmt.Sprintf("%s_vs_%s", pair.userA, pair.userB), func(t *testing.T) {
+			database, err := db.OpenMemory()
+			if err != nil {
+				t.Fatalf("failed to open in-memory database: %v", err)
+			}
+			t.Cleanup(func() { database.Close() })
+
+			// Insert both users.
+			insertTestUser(t, database.SqlDB, pair.userA, "userA",
+				"a@example.com", "github", "gh-a")
+			insertTestUser(t, database.SqlDB, pair.userB, "userB",
+				"b@example.com", "github", "gh-b")
+
+			// Create PATs for user A with different characteristics.
+			userAPATs := []string{"isopataa", "isopatab", "isopatac"}
+			for i, tokenID := range userAPATs {
+				createdAt := fmt.Sprintf("2024-0%d-01T00:00:00Z", i+1)
+				insertTestPAT(t, database.SqlDB, tokenID, pair.userA,
+					fmt.Sprintf("userA-pat-%d", i),
+					fmt.Sprintf("hash-a-%d", i),
+					`["tokens:read"]`, 90, nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), createdAt)
+			}
+
+			// Set up server authenticated as user B (API key for full permissions).
+			registry := auth.NewPermissionRegistry()
+			handler := handlers.NewPATHandler(database, registry)
+			if handler == nil {
+				t.Fatal("NewPATHandler returned nil; cannot test user isolation")
+			}
+
+			e := echo.New()
+			g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+			g.Use(nonAdminAuthMiddleware(pair.userB))
+			handler.RegisterRoutes(g)
+
+			// Verify GET /user/tokens/:token_id for each of userA's PATs returns 404.
+			for _, tokenID := range userAPATs {
+				rec := sendGET(t, e, "/user/tokens/"+tokenID)
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("GET /user/tokens/%s as userB: expected 404, got %d; body: %s",
+						tokenID, rec.Code, rec.Body.String())
+				}
+				resp := parseErrorResponse(t, rec)
+				if resp.Error.Message != "token not found" {
+					t.Errorf("GET /user/tokens/%s as userB: expected message %q, got %q",
+						tokenID, "token not found", resp.Error.Message)
+				}
+			}
+
+			// Verify DELETE /user/tokens/:token_id for each of userA's PATs returns 404.
+			for _, tokenID := range userAPATs {
+				rec := sendDELETE(t, e, "/user/tokens/"+tokenID)
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("DELETE /user/tokens/%s as userB: expected 404, got %d; body: %s",
+						tokenID, rec.Code, rec.Body.String())
+				}
+				resp := parseErrorResponse(t, rec)
+				if resp.Error.Message != "token not found" {
+					t.Errorf("DELETE /user/tokens/%s as userB: expected message %q, got %q",
+						tokenID, "token not found", resp.Error.Message)
+				}
+			}
+
+			// Verify ListPATs as userB never returns userA's PATs.
+			rec := sendGET(t, e, "/user/tokens")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET /user/tokens as userB: expected 200, got %d; body: %s",
+					rec.Code, rec.Body.String())
+			}
+
+			var pats []patResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &pats); err != nil {
+				t.Fatalf("failed to parse list response: %v\nbody: %s",
+					err, rec.Body.String())
+			}
+
+			// User B has no PATs, so the list should be empty.
+			if len(pats) != 0 {
+				t.Errorf("expected 0 PATs for userB, got %d", len(pats))
+				for _, p := range pats {
+					t.Errorf("  unexpected PAT: token_id=%s name=%s", p.TokenID, p.Name)
+				}
+			}
+
+			// Extra check: none of userA's token_ids appear in userB's list.
+			userATokenSet := make(map[string]bool)
+			for _, id := range userAPATs {
+				userATokenSet[id] = true
+			}
+			for _, p := range pats {
+				if userATokenSet[p.TokenID] {
+					t.Errorf("userA's token_id %q appeared in userB's list response", p.TokenID)
+				}
+			}
+		})
 	}
 }
