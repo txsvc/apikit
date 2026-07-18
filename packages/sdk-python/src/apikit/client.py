@@ -440,7 +440,8 @@ class Client:
 
     def list_org_members(self, org_id: str) -> list[User]:
         """GET /orgs/{org_id}/members - List organization members."""
-        raise NotImplementedError
+        resp = self._request("GET", f"/orgs/{org_id}/members")
+        return [User.from_dict(u) for u in resp.json()]
 
     def add_org_member(
         self, org_id: str, user_id: str

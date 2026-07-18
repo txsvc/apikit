@@ -590,7 +590,7 @@
             "11-REQ-10.E1",
             "11-REQ-10.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -611,7 +611,7 @@
           "requirement_refs": [
             "11-REQ-11.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -638,7 +638,7 @@
             "11-REQ-8.4",
             "11-REQ-8.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

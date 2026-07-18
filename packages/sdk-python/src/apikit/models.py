@@ -7,6 +7,7 @@ Request dataclasses are internal types used for serializing request bodies.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import fields as _dc_fields
 from datetime import datetime
 from typing import Any
 
@@ -67,11 +68,18 @@ class User:
         Raises KeyError if a required field is missing.
         Raises ValueError if a datetime string is malformed.
         """
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            id=data["id"],
+            username=data["username"],
+            email=data["email"],
+            full_name=data.get("full_name"),
+            status=data["status"],
+            role=data["role"],
+            provider=data["provider"],
+            provider_id=data["provider_id"],
+            created_at=_parse_datetime(data["created_at"]),
+            updated_at=_parse_datetime(data["updated_at"]),
+        )
 
 
 @dataclass
@@ -86,11 +94,12 @@ class APIKey:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> APIKey:
         """Construct an APIKey from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            key_id=data["key_id"],
+            created_at=_parse_datetime(data["created_at"]),
+            expires_at=_parse_optional_datetime(data.get("expires_at")),
+            revoked_at=_parse_optional_datetime(data.get("revoked_at")),
+        )
 
 
 @dataclass
@@ -108,11 +117,11 @@ class APIKeyWithSecret:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> APIKeyWithSecret:
         """Construct an APIKeyWithSecret from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            key=data["key"],
+            key_id=data["key_id"],
+            expires_at=_parse_optional_datetime(data.get("expires_at")),
+        )
 
 
 @dataclass
@@ -129,11 +138,14 @@ class PAT:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PAT:
         """Construct a PAT from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            token_id=data["token_id"],
+            name=data["name"],
+            permissions=data["permissions"],
+            created_at=_parse_datetime(data["created_at"]),
+            expires_at=_parse_optional_datetime(data.get("expires_at")),
+            revoked_at=_parse_optional_datetime(data.get("revoked_at")),
+        )
 
 
 @dataclass
@@ -152,11 +164,13 @@ class PATWithSecret:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PATWithSecret:
         """Construct a PATWithSecret from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            token=data["token"],
+            token_id=data["token_id"],
+            name=data["name"],
+            permissions=data["permissions"],
+            expires_at=_parse_optional_datetime(data.get("expires_at")),
+        )
 
 
 @dataclass
@@ -174,11 +188,15 @@ class Organization:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Organization:
         """Construct an Organization from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            slug=data["slug"],
+            url=data.get("url"),
+            status=data["status"],
+            created_at=_parse_datetime(data["created_at"]),
+            updated_at=_parse_datetime(data["updated_at"]),
+        )
 
 
 @dataclass
@@ -191,11 +209,10 @@ class OAuthProvider:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OAuthProvider:
         """Construct an OAuthProvider from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            name=data["name"],
+            authorize_url=data["authorize_url"],
+        )
 
 
 @dataclass
@@ -211,11 +228,10 @@ class AuthCallbackResponse:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AuthCallbackResponse:
         """Construct an AuthCallbackResponse from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            user=User.from_dict(data["user"]),
+            api_key=APIKeyWithSecret.from_dict(data["api_key"]),
+        )
 
 
 @dataclass
@@ -230,11 +246,12 @@ class VersionInfo:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> VersionInfo:
         """Construct a VersionInfo from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            version=data["version"],
+            build_time=data["build_time"],
+            commit=data["commit"],
+            mount_point=data["mount_point"],
+        )
 
 
 @dataclass
@@ -246,11 +263,9 @@ class HealthStatus:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> HealthStatus:
         """Construct a HealthStatus from a plain dict."""
-        raise NotImplementedError
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict."""
-        raise NotImplementedError
+        return cls(
+            status=data["status"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +281,11 @@ class UpdateUserRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
 
 
 @dataclass
@@ -280,7 +299,11 @@ class CreateUserRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
 
 
 @dataclass
@@ -297,7 +320,11 @@ class CreateTokenRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
 
 
 @dataclass
@@ -310,7 +337,11 @@ class CreateOrgRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
 
 
 @dataclass
@@ -322,7 +353,11 @@ class UpdateOrgRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
 
 
 @dataclass
@@ -340,4 +375,8 @@ class AuthCallbackRequest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict, omitting None optional fields."""
-        raise NotImplementedError
+        return {
+            f.name: getattr(self, f.name)
+            for f in _dc_fields(self)
+            if getattr(self, f.name) is not None
+        }
