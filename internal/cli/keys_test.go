@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,14 +18,11 @@ import (
 // Tests use package cli (internal) for access to unexported types
 // like CLIConfig and helper functions like parseKeyID. The pattern
 // follows login_test.go from group 2.
-//
-// Because NewKeysCmd() returns a stub (Use: "placeholder", no subcommands),
-// all tests will compile but FAIL. They pass once group 7 wires up
-// the real list/refresh/revoke subcommands.
 // ---------------------------------------------------------------------------
 
 // executeKeysCmd constructs the keys command tree from NewKeysCmd, sets the
 // provided args, captures stdout and stderr, and executes.
+// Used for tests that do NOT inject a client (e.g., missing-API-key tests).
 func executeKeysCmd(args ...string) (stdout, stderr string, err error) {
 	cmd := NewKeysCmd()
 	stdoutBuf := new(bytes.Buffer)
@@ -32,6 +30,30 @@ func executeKeysCmd(args ...string) (stdout, stderr string, err error) {
 	cmd.SetOut(stdoutBuf)
 	cmd.SetErr(stderrBuf)
 	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	for _, sub := range cmd.Commands() {
+		sub.SilenceUsage = true
+		sub.SilenceErrors = true
+	}
+	err = cmd.Execute()
+	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+// executeKeysCmdWithClient is like executeKeysCmd but injects a *cmdClient
+// into the command's context via ContextWithClient. Used for happy-path,
+// config-mutation, and error-injection tests.
+func executeKeysCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+	cmd := NewKeysCmd()
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+	cmd.SetOut(stdoutBuf)
+	cmd.SetErr(stderrBuf)
+	cmd.SetArgs(args)
+	if client != nil {
+		ctx := ContextWithClient(context.Background(), client)
+		cmd.SetContext(ctx)
+	}
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	for _, sub := range cmd.Commands() {
@@ -69,7 +91,11 @@ func TestKeysList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeKeysCmd("list")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeKeysCmdWithClient(client, "list")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -128,7 +154,16 @@ func TestKeysRefresh_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, stderr, err := executeKeysCmd("refresh")
+	var savedConfig *CLIConfig
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_keyid123_secret",
+		saveConfigFn: func(_ string, cfg *CLIConfig) error {
+			savedConfig = cfg
+			return nil
+		},
+	}
+	stdout, stderr, err := executeKeysCmdWithClient(client, "refresh")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -136,7 +171,6 @@ func TestKeysRefresh_HappyPath(t *testing.T) {
 	}
 
 	// The mock server must have received the refresh request with key_id='keyid123'.
-	// This will fail against stubs because no HTTP request is made.
 	if capturedKeyID != "keyid123" {
 		t.Errorf("captured key_id = %q, want %q", capturedKeyID, "keyid123")
 	}
@@ -157,9 +191,12 @@ func TestKeysRefresh_HappyPath(t *testing.T) {
 	}
 
 	// Config must be updated with new key.
-	// When implemented, the test would load config and check api_key == 'ak_newkeyid_newsecret'.
-	// For now, this assertion captures intent.
-	_ = server
+	if savedConfig == nil {
+		t.Fatal("saveConfigFn was not called; expected config to be saved")
+	}
+	if savedConfig.APIKey != "ak_newkeyid_newsecret" {
+		t.Errorf("saved api_key = %q, want %q", savedConfig.APIKey, "ak_newkeyid_newsecret")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +215,12 @@ func TestKeysRefresh_InvalidKeyFormat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// With api_key='badkey' (no underscores), parseKeyID should fail.
-	// The stub parseKeyID returns ("", nil), so the assertion on the error
-	// message will fail until the implementation is done.
-	stdout, _, err := executeKeysCmd("refresh")
+	// Inject client with api_key='badkey' (no underscores) — parseKeyID should fail.
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "badkey",
+	}
+	stdout, _, err := executeKeysCmdWithClient(client, "refresh")
 
 	// Must exit with code 2.
 	if err == nil {
@@ -240,7 +279,16 @@ func TestKeysRevoke_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, stderr, err := executeKeysCmd("revoke")
+	var savedConfig *CLIConfig
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_keyid123_secret",
+		saveConfigFn: func(_ string, cfg *CLIConfig) error {
+			savedConfig = cfg
+			return nil
+		},
+	}
+	stdout, stderr, err := executeKeysCmdWithClient(client, "revoke")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -269,8 +317,15 @@ func TestKeysRevoke_HappyPath(t *testing.T) {
 	}
 
 	// Config api_key and user_id should be cleared to empty strings.
-	// When implemented, load config and verify.
-	_ = server
+	if savedConfig == nil {
+		t.Fatal("saveConfigFn was not called; expected config to be saved")
+	}
+	if savedConfig.APIKey != "" {
+		t.Errorf("saved api_key = %q, want empty string", savedConfig.APIKey)
+	}
+	if savedConfig.UserID != "" {
+		t.Errorf("saved user_id = %q, want empty string", savedConfig.UserID)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +344,12 @@ func TestKeysRevoke_InvalidKeyFormat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeKeysCmd("revoke")
+	// Inject client with api_key='onlyone' (no underscores).
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "onlyone",
+	}
+	stdout, _, err := executeKeysCmdWithClient(client, "revoke")
 
 	// Must exit with code 2.
 	if err == nil {
@@ -342,23 +402,17 @@ func TestKeysRefresh_ConfigPreservation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// When keys refresh is implemented, it will call saveConfigFn.
-	// This test verifies that existing config fields (like custom_field)
-	// are preserved after the mutation.
-	//
-	// The saveConfigFn pattern (from loginOpts) will be adapted for
-	// keys commands. For now, this test asserts on the command output.
-
 	var savedConfig *CLIConfig
-	saveConfigStub := func(_ string, cfg *CLIConfig) error {
-		savedConfig = cfg
-		return nil
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+		saveConfigFn: func(_ string, cfg *CLIConfig) error {
+			savedConfig = cfg
+			return nil
+		},
 	}
 
-	// Store the stub for when the implementation uses it.
-	_ = saveConfigStub
-
-	stdout, _, err := executeKeysCmd("refresh")
+	stdout, _, err := executeKeysCmdWithClient(client, "refresh")
 
 	// When implemented, exit code is 0 and config is updated.
 	if err != nil {
@@ -381,7 +435,6 @@ func TestKeysRefresh_ConfigPreservation(t *testing.T) {
 	}
 
 	_ = stdout
-	_ = server
 }
 
 // ---------------------------------------------------------------------------
@@ -409,14 +462,14 @@ func TestKeysRefresh_ConfigWriteFailure(t *testing.T) {
 	defer server.Close()
 
 	// Stub config save to fail.
-	saveConfigStub := func(_ string, _ *CLIConfig) error {
-		return errors.New("io error")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_keyid_secret",
+		saveConfigFn: func(_ string, _ *CLIConfig) error {
+			return errors.New("io error")
+		},
 	}
-
-	// When implemented, keys refresh will use this saveConfigFn.
-	_ = saveConfigStub
-
-	stdout, _, err := executeKeysCmd("refresh")
+	stdout, _, err := executeKeysCmdWithClient(client, "refresh")
 
 	// Must exit with code 2.
 	if err == nil {
@@ -467,14 +520,14 @@ func TestKeysRevoke_ConfigWriteFailure(t *testing.T) {
 	defer server.Close()
 
 	// Stub config save to fail.
-	saveConfigStub := func(_ string, _ *CLIConfig) error {
-		return errors.New("permission denied")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_keyid_secret",
+		saveConfigFn: func(_ string, _ *CLIConfig) error {
+			return errors.New("permission denied")
+		},
 	}
-
-	// When implemented, keys revoke will use this saveConfigFn.
-	_ = saveConfigStub
-
-	stdout, _, err := executeKeysCmd("revoke")
+	stdout, _, err := executeKeysCmdWithClient(client, "revoke")
 
 	// Must exit with code 2.
 	if err == nil {

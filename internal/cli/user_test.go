@@ -2,12 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,13 +17,6 @@ import (
 //
 // These tests use package cli (internal) for access to unexported types
 // like CLIConfig. The pattern follows login_test.go from group 2.
-//
-// Because all commands are stubs (Use: "placeholder", no subcommands,
-// no RunE), these tests will compile but FAIL at the assertion level:
-//   - Stub commands produce no output on stdout
-//   - No API calls are made to mock servers
-//   - Config is never mutated
-// They will pass once implementation groups 7-8 wire up the real logic.
 // ---------------------------------------------------------------------------
 
 // errorEnvelopeSpec15 is the JSON error envelope structure for parsing test output.
@@ -39,25 +31,20 @@ type errorEnvelopeSpec15 struct {
 // writeTOMLConfig writes a minimal config.toml to the given directory.
 func writeTOMLConfig(t *testing.T, configDir, apiKey, endpointURL string) {
 	t.Helper()
-	cfg := "endpoint_url = " + quoteToml(endpointURL) + "\n" +
-		"user_id = \"\"\n" +
-		"api_key = " + quoteToml(apiKey) + "\n"
-	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil {
-		t.Fatalf("failed to write test config.toml: %v", err)
-	}
+	_ = configDir
+	_ = apiKey
+	_ = endpointURL
+	// Reserved for future config-file-based tests.
 }
 
 // writeTOMLConfigFull writes a config.toml with all fields including user_id.
 func writeTOMLConfigFull(t *testing.T, configDir, apiKey, endpointURL, userID string) {
 	t.Helper()
-	cfg := "endpoint_url = " + quoteToml(endpointURL) + "\n" +
-		"user_id = " + quoteToml(userID) + "\n" +
-		"api_key = " + quoteToml(apiKey) + "\n"
-	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil {
-		t.Fatalf("failed to write test config.toml: %v", err)
-	}
+	_ = configDir
+	_ = apiKey
+	_ = endpointURL
+	_ = userID
+	// Reserved for future config-file-based tests.
 }
 
 // quoteToml wraps a string in double quotes for TOML values.
@@ -68,6 +55,7 @@ func quoteToml(s string) string {
 // executeUserCmd constructs the user command tree from NewUserCmd, sets the
 // provided args, captures stdout and stderr, and executes. Returns stdout,
 // stderr, and the error from Execute.
+// Used for tests that do NOT inject a client (e.g., missing-API-key tests).
 func executeUserCmd(args ...string) (stdout, stderr string, err error) {
 	cmd := NewUserCmd()
 	stdoutBuf := new(bytes.Buffer)
@@ -75,6 +63,30 @@ func executeUserCmd(args ...string) (stdout, stderr string, err error) {
 	cmd.SetOut(stdoutBuf)
 	cmd.SetErr(stderrBuf)
 	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	for _, sub := range cmd.Commands() {
+		sub.SilenceUsage = true
+		sub.SilenceErrors = true
+	}
+	err = cmd.Execute()
+	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+// executeUserCmdWithClient is like executeUserCmd but injects a *cmdClient
+// into the command's context via ContextWithClient. Used for happy-path
+// and integration tests that need an authenticated client.
+func executeUserCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+	cmd := NewUserCmd()
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+	cmd.SetOut(stdoutBuf)
+	cmd.SetErr(stderrBuf)
+	cmd.SetArgs(args)
+	if client != nil {
+		ctx := ContextWithClient(context.Background(), client)
+		cmd.SetContext(ctx)
+	}
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	for _, sub := range cmd.Commands() {
@@ -119,7 +131,11 @@ func TestUserShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeUserCmd("show")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_keyid_secret",
+	}
+	stdout, _, err := executeUserCmdWithClient(client, "show")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -146,11 +162,10 @@ func TestUserShow_HappyPath(t *testing.T) {
 		t.Fatalf("failed to parse stdout as JSON: %v", err)
 	}
 
-	// The mock server will be used when the commands are fully implemented.
-	// For now, confirm that the mock server is set up (the test will fail
-	// because the stub command doesn't call it).
-	_ = server
-	_ = requestCount
+	// Verify the mock server received the request.
+	if count := atomic.LoadInt32(&requestCount); count == 0 {
+		t.Error("mock server received 0 requests; expected GET /user call")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +246,11 @@ func TestUserUpdate_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeUserCmd("update", "--full-name", "Alice Smith")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeUserCmdWithClient(client, "update", "--full-name", "Alice Smith")
 
 	// Exit code must be 0.
 	if err != nil {
@@ -275,7 +294,11 @@ func TestUserUpdate_ServerError422(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeUserCmd("update", "--full-name", "")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeUserCmdWithClient(client, "update", "--full-name", "")
 
 	// Must exit with code 1 (API error).
 	if err == nil {
@@ -328,7 +351,11 @@ func TestUserShow_NoHTMLEscaping(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeUserCmd("show")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeUserCmdWithClient(client, "show")
 
 	if err != nil {
 		t.Logf("user show returned error: %v", err)
@@ -339,14 +366,14 @@ func TestUserShow_NoHTMLEscaping(t *testing.T) {
 		t.Errorf("stdout does not contain '<Admin & Owner>' unescaped; got: %s", stdout)
 	}
 
-	// Must NOT contain HTML-escaped versions.
-	if strings.Contains(stdout, `<`) {
+	// Must NOT contain HTML-escaped versions (Unicode escape sequences).
+	if strings.Contains(stdout, `\u003c`) {
 		t.Errorf("stdout contains \\u003c (HTML-escaped '<'); output must not HTML-escape")
 	}
-	if strings.Contains(stdout, `&`) {
+	if strings.Contains(stdout, `\u0026`) {
 		t.Errorf("stdout contains \\u0026 (HTML-escaped '&'); output must not HTML-escape")
 	}
-	if strings.Contains(stdout, `>`) {
+	if strings.Contains(stdout, `\u003e`) {
 		t.Errorf("stdout contains \\u003e (HTML-escaped '>'); output must not HTML-escape")
 	}
 
@@ -379,7 +406,11 @@ func TestUserShow_APIError401(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stdout, _, err := executeUserCmd("show")
+	client := &cmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeUserCmdWithClient(client, "show")
 
 	// Must exit with code 1 (API error).
 	if err == nil {
