@@ -36,13 +36,9 @@ func TestAPIGroup_ReturnsSameNonNilGroup(t *testing.T) {
 
 	// Phase 2: During serving
 	startErr := startServerInBackground(srv)
-	t.Cleanup(func() {
-		srv.Shutdown(context.Background())
-		<-startErr
-	})
 
-	// Give Start() time to bind (works with real implementation)
-	time.Sleep(50 * time.Millisecond)
+	addr := waitUntilListening(t, srv, 2*time.Second)
+	_ = addr
 
 	g2 := srv.APIGroup()
 	if g2 == nil {
