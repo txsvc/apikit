@@ -4,32 +4,110 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/txsvc/apikit"
 	"github.com/txsvc/apikit/internal/db"
 )
 
 // NewAuthMiddleware creates the Echo middleware function for authentication
 // and authorization. Panics if database or registry is nil.
 func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.MiddlewareFunc {
-	// Stub: returns a no-op middleware that calls through to the next handler.
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			return next(c)
+			// Step 1: Extract Bearer token from Authorization header.
+			header := c.Request().Header.Get("Authorization")
+			if header == "" {
+				return apikit.APIError(c, http.StatusUnauthorized, "missing authorization header")
+			}
+
+			if !strings.HasPrefix(header, "Bearer ") {
+				return apikit.APIError(c, http.StatusUnauthorized, "invalid authorization header format")
+			}
+
+			token := header[len("Bearer "):]
+			if token == "" {
+				return apikit.APIError(c, http.StatusUnauthorized, "missing token")
+			}
+
+			// Step 2: Detect credential type.
+			credType, _, err := parseToken(token)
+			if err != nil {
+				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
+			}
+
+			// Step 3: Dispatch to credential-type-specific validation.
+			// Validation logic for each credential type is implemented in
+			// later task groups (8, 9, 10). For now, dispatch based on type.
+			switch credType {
+			case "admin_token":
+				// TODO(task-8.1): validateAdminToken
+				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+			case "api_key":
+				// TODO(task-8.2): validateAPIKey
+				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+			case "pat":
+				// TODO(task-9.1): validatePAT
+				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+			default:
+				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
+			}
 		}
 	}
 }
 
 // parseToken extracts the credential type and components from a raw Bearer
 // token string. It checks for the admin pattern first, then PAT, then falls
-// back to the API key pattern.
+// back to the API key pattern, using apikit.TokenPrefix for the prefix value.
 //
 // Returns the credential type ("admin_token", "api_key", or "pat"), the
 // parsed components, and a non-nil error if the token is unrecognized.
+//
+// Note: parseToken classifies admin tokens by prefix alone. Hex suffix
+// validation is deferred to validateAdminToken (05-REQ-4.E2).
 func parseToken(token string) (string, []string, error) {
-	// Stub: not implemented.
-	return "", nil, errors.New("not implemented")
+	prefix := apikit.TokenPrefix
+
+	// Check 1: Admin token — prefix_admin_<anything>
+	adminPrefix := prefix + "_admin_"
+	if strings.HasPrefix(token, adminPrefix) {
+		// Return the full token as the sole component; hex validation
+		// is handled by validateAdminToken.
+		return "admin_token", []string{token}, nil
+	}
+
+	// Check 2: PAT — prefix_pat_<token_id>_<secret>
+	patPrefix := prefix + "_pat_"
+	if strings.HasPrefix(token, patPrefix) {
+		remainder := token[len(patPrefix):]
+		// Split on the first underscore to get token_id and secret.
+		idx := strings.Index(remainder, "_")
+		if idx <= 0 || idx == len(remainder)-1 {
+			return "", nil, errors.New("invalid PAT format: expected <token_id>_<secret>")
+		}
+		tokenID := remainder[:idx]
+		secret := remainder[idx+1:]
+		return "pat", []string{tokenID, secret}, nil
+	}
+
+	// Check 3: API key — prefix_<key_id>_<secret>
+	keyPrefix := prefix + "_"
+	if strings.HasPrefix(token, keyPrefix) {
+		remainder := token[len(keyPrefix):]
+		// Split on the first underscore to get key_id and secret.
+		idx := strings.Index(remainder, "_")
+		if idx <= 0 || idx == len(remainder)-1 {
+			return "", nil, errors.New("invalid API key format: expected <key_id>_<secret>")
+		}
+		keyID := remainder[:idx]
+		secret := remainder[idx+1:]
+		return "api_key", []string{keyID, secret}, nil
+	}
+
+	return "", nil, errors.New("unrecognized token format")
 }
 
 // hashToken computes SHA-256 of the input and returns the result as a
