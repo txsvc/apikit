@@ -18,7 +18,8 @@ type ClientOption func(*Client)
 type RequestOption func(*http.Request)
 
 // Client is the SDK's entry point for making API requests.
-// Safe for concurrent use after construction.
+// Safe for concurrent use after construction — all fields are set once
+// in NewClient and never modified thereafter.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -29,6 +30,7 @@ type Client struct {
 
 // NewClient creates a new Client with the given baseURL and options.
 // Returns a non-nil *Client even for empty baseURL.
+// Trailing slash is stripped from baseURL at construction time.
 func NewClient(baseURL string, opts ...ClientOption) *Client {
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
@@ -63,8 +65,7 @@ func WithRequestID(id string) ClientOption {
 }
 
 // WithMountPoint overrides the default mount point (/api/v1).
-// Normalizes the path: adds leading slash if missing, strips trailing slash,
-// and collapses multiple leading slashes to exactly one.
+// Normalizes the path: adds leading slash if missing, strips trailing slash.
 // Empty string normalizes to "/".
 func WithMountPoint(path string) ClientOption {
 	return func(c *Client) {
@@ -87,11 +88,30 @@ func WithMountPoint(path string) ClientOption {
 	}
 }
 
-// WithIfNoneMatch adds an If-None-Match header to a single request.
+// WithIfNoneMatch adds an If-None-Match header to a single request
+// for conditional GET support.
 func WithIfNoneMatch(etag string) RequestOption {
 	return func(req *http.Request) {
 		req.Header.Set("If-None-Match", etag)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// URL construction helpers
+// ---------------------------------------------------------------------------
+
+// apiURL constructs an API endpoint URL as baseURL + mountPoint + path.
+// Used for all API and auth endpoints. Path parameters are interpolated
+// as-is without url.PathEscape — callers are responsible for providing
+// URL-safe values.
+func (c *Client) apiURL(path string) string {
+	return c.baseURL + c.mountPoint + path
+}
+
+// probeURL constructs a health probe endpoint URL as baseURL + path,
+// bypassing the mount point. Used for /healthz, /readyz, and /version.
+func (c *Client) probeURL(path string) string {
+	return c.baseURL + path
 }
 
 // ---------------------------------------------------------------------------
@@ -102,16 +122,13 @@ func WithIfNoneMatch(etag string) RequestOption {
 // header setting, execution, and response dispatching. All endpoint methods
 // delegate to do for consistent cross-cutting concerns.
 //
-// The path parameter is the full URL path (e.g., "/api/v1/user" or "/healthz").
-// Endpoint methods construct this by combining c.mountPoint + relative path
-// for API endpoints, or using the bare path for health probes.
-//
+// The fullURL parameter is the complete URL (constructed via apiURL or probeURL).
 // The body parameter is marshaled to JSON if non-nil. The result parameter
 // receives the decoded JSON response body on 2xx responses (if non-nil).
 //
 // Returns (statusCode, responseHeaders, error). On error (4xx/5xx, 304,
 // network, marshal, decode), statusCode is 0 and headers are nil.
-func (c *Client) do(ctx context.Context, method, path string, body, result interface{}, opts ...RequestOption) (int, http.Header, error) {
+func (c *Client) do(ctx context.Context, method, fullURL string, body, result any, opts ...RequestOption) (int, http.Header, error) {
 	// Marshal request body if present.
 	var bodyReader io.Reader
 	if body != nil {
@@ -122,11 +139,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, result inter
 		bodyReader = bytes.NewReader(data)
 	}
 
-	// Construct full URL.
-	reqURL := c.baseURL + path
-
 	// Create request with caller-supplied context.
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
 		return 0, nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -204,6 +218,44 @@ func decodeErrorResponse(resp *http.Response) *APIError {
 }
 
 // ---------------------------------------------------------------------------
+// Generic typed wrappers for the do method
+// ---------------------------------------------------------------------------
+
+// doJSON executes a request and decodes the JSON response into a typed
+// Response[T]. Used for single-resource endpoints that return a JSON object
+// and wrap it with response metadata (status code, headers for ETag access).
+func doJSON[T any](c *Client, ctx context.Context, method, fullURL string, body any, opts ...RequestOption) (*Response[T], error) {
+	var result T
+	status, header, err := c.do(ctx, method, fullURL, body, &result, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &Response[T]{Data: result, StatusCode: status, Header: header}, nil
+}
+
+// doList executes a request and decodes the JSON response from a bare JSON
+// array directly into a []*T slice. Returns a non-nil empty slice when the
+// server returns []. Used for all list endpoints.
+func doList[T any](c *Client, ctx context.Context, fullURL string, opts ...RequestOption) ([]*T, error) {
+	var result []*T
+	_, _, err := c.do(ctx, "GET", fullURL, nil, &result, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []*T{}
+	}
+	return result, nil
+}
+
+// doEmpty executes a request and expects no response body (HTTP 204).
+// Used for delete and other void endpoints.
+func (c *Client) doEmpty(ctx context.Context, method, fullURL string, body any, opts ...RequestOption) error {
+	_, _, err := c.do(ctx, method, fullURL, body, nil, opts...)
+	return err
+}
+
+// ---------------------------------------------------------------------------
 // Health and meta endpoints (bypass mount point)
 // ---------------------------------------------------------------------------
 
@@ -211,7 +263,7 @@ func decodeErrorResponse(resp *http.Response) *APIError {
 // Health probes bypass the mount point.
 func (c *Client) Healthz(ctx context.Context) (*HealthResponse, error) {
 	var result HealthResponse
-	_, _, err := c.do(ctx, "GET", "/healthz", nil, &result)
+	_, _, err := c.do(ctx, "GET", c.probeURL("/healthz"), nil, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +274,7 @@ func (c *Client) Healthz(ctx context.Context) (*HealthResponse, error) {
 // Health probes bypass the mount point.
 func (c *Client) Readyz(ctx context.Context) (*HealthResponse, error) {
 	var result HealthResponse
-	_, _, err := c.do(ctx, "GET", "/readyz", nil, &result)
+	_, _, err := c.do(ctx, "GET", c.probeURL("/readyz"), nil, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +285,7 @@ func (c *Client) Readyz(ctx context.Context) (*HealthResponse, error) {
 // Health/meta probes bypass the mount point.
 func (c *Client) Version(ctx context.Context) (*VersionResponse, error) {
 	var result VersionResponse
-	_, _, err := c.do(ctx, "GET", "/version", nil, &result)
+	_, _, err := c.do(ctx, "GET", c.probeURL("/version"), nil, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -246,108 +298,69 @@ func (c *Client) Version(ctx context.Context) (*VersionResponse, error) {
 
 // GetUser calls GET /user to fetch the authenticated user.
 func (c *Client) GetUser(ctx context.Context, opts ...RequestOption) (*Response[User], error) {
-	var result User
-	status, header, err := c.do(ctx, "GET", c.mountPoint+"/user", nil, &result, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &Response[User]{Data: result, StatusCode: status, Header: header}, nil
+	return doJSON[User](c, ctx, "GET", c.apiURL("/user"), nil, opts...)
 }
 
 // UpdateUser calls PATCH /user to update the authenticated user.
 func (c *Client) UpdateUser(ctx context.Context, req *UpdateUserRequest) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/user", req, &result)
+	resp, err := doJSON[User](c, ctx, "PATCH", c.apiURL("/user"), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // ListKeys calls GET /user/keys to list the authenticated user's API keys.
 func (c *Client) ListKeys(ctx context.Context) ([]*APIKeyMeta, error) {
-	var result []*APIKeyMeta
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/user/keys", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*APIKeyMeta{}
-	}
-	return result, nil
+	return doList[APIKeyMeta](c, ctx, c.apiURL("/user/keys"))
 }
 
 // RevokeKey calls DELETE /user/keys/:keyID to revoke an API key.
 // Returns *RevokeKeyResponse on HTTP 200 success.
 func (c *Client) RevokeKey(ctx context.Context, keyID string) (*RevokeKeyResponse, error) {
-	var result RevokeKeyResponse
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/user/keys/"+keyID, nil, &result)
+	resp, err := doJSON[RevokeKeyResponse](c, ctx, "DELETE", c.apiURL("/user/keys/"+keyID), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // RefreshKey calls POST /user/keys/:keyID/refresh to refresh an API key.
 func (c *Client) RefreshKey(ctx context.Context, keyID string) (*APIKeyFull, error) {
-	var result APIKeyFull
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/user/keys/"+keyID+"/refresh", nil, &result)
+	resp, err := doJSON[APIKeyFull](c, ctx, "POST", c.apiURL("/user/keys/"+keyID+"/refresh"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // ListTokens calls GET /user/tokens to list the authenticated user's PATs.
 func (c *Client) ListTokens(ctx context.Context) ([]*PAT, error) {
-	var result []*PAT
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/user/tokens", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*PAT{}
-	}
-	return result, nil
+	return doList[PAT](c, ctx, c.apiURL("/user/tokens"))
 }
 
 // CreateToken calls POST /user/tokens to create a new personal access token.
 func (c *Client) CreateToken(ctx context.Context, req *CreateTokenRequest) (*PATFull, error) {
-	var result PATFull
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/user/tokens", req, &result)
+	resp, err := doJSON[PATFull](c, ctx, "POST", c.apiURL("/user/tokens"), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // GetToken calls GET /user/tokens/:tokenID to fetch a PAT by ID.
 func (c *Client) GetToken(ctx context.Context, tokenID string, opts ...RequestOption) (*Response[PAT], error) {
-	var result PAT
-	status, header, err := c.do(ctx, "GET", c.mountPoint+"/user/tokens/"+tokenID, nil, &result, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &Response[PAT]{Data: result, StatusCode: status, Header: header}, nil
+	return doJSON[PAT](c, ctx, "GET", c.apiURL("/user/tokens/"+tokenID), nil, opts...)
 }
 
 // RevokeToken calls DELETE /user/tokens/:tokenID to revoke a PAT.
 func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/user/tokens/"+tokenID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "DELETE", c.apiURL("/user/tokens/"+tokenID), nil)
 }
 
 // ListUserOrgs calls GET /user/orgs to list the authenticated user's organizations.
 func (c *Client) ListUserOrgs(ctx context.Context) ([]*Organization, error) {
-	var result []*Organization
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/user/orgs", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*Organization{}
-	}
-	return result, nil
+	return doList[Organization](c, ctx, c.apiURL("/user/orgs"))
 }
 
 // ---------------------------------------------------------------------------
@@ -356,25 +369,16 @@ func (c *Client) ListUserOrgs(ctx context.Context) ([]*Organization, error) {
 
 // GetProviders calls GET /auth/providers to discover available OAuth providers.
 func (c *Client) GetProviders(ctx context.Context) ([]*OAuthProvider, error) {
-	var result []*OAuthProvider
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/auth/providers", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*OAuthProvider{}
-	}
-	return result, nil
+	return doList[OAuthProvider](c, ctx, c.apiURL("/auth/providers"))
 }
 
 // ExchangeOAuthCode calls POST /auth/callback to exchange an OAuth code.
 func (c *Client) ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest) (*AuthCallbackResponse, error) {
-	var result AuthCallbackResponse
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/auth/callback", req, &result)
+	resp, err := doJSON[AuthCallbackResponse](c, ctx, "POST", c.apiURL("/auth/callback"), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -383,132 +387,95 @@ func (c *Client) ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest
 
 // GetUserByID calls GET /users/:id to fetch a user by ID.
 func (c *Client) GetUserByID(ctx context.Context, userID string, opts ...RequestOption) (*Response[User], error) {
-	var result User
-	status, header, err := c.do(ctx, "GET", c.mountPoint+"/users/"+userID, nil, &result, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &Response[User]{Data: result, StatusCode: status, Header: header}, nil
+	return doJSON[User](c, ctx, "GET", c.apiURL("/users/"+userID), nil, opts...)
 }
 
 // ListUsers calls GET /users to list all users.
 // Query parameters are constructed using url.Values for forward-compatible extension.
 func (c *Client) ListUsers(ctx context.Context, opts *ListUsersOptions) ([]*User, error) {
-	path := c.mountPoint + "/users"
+	path := "/users"
 	if opts != nil && opts.IncludeBlocked {
 		v := url.Values{}
 		v.Set("include_blocked", "true")
 		path += "?" + v.Encode()
 	}
-	var result []*User
-	_, _, err := c.do(ctx, "GET", path, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*User{}
-	}
-	return result, nil
+	return doList[User](c, ctx, c.apiURL(path))
 }
 
 // CreateUser calls POST /users to create a new user (admin).
 func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users", req, &result)
+	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users"), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // UpdateUserByID calls PATCH /users/:id to update a user by ID (admin).
 func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateUserRequest) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/users/"+userID, req, &result)
+	resp, err := doJSON[User](c, ctx, "PATCH", c.apiURL("/users/"+userID), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // BlockUser calls POST /users/:id/block to block a user (admin).
 func (c *Client) BlockUser(ctx context.Context, userID string) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/block", nil, &result)
+	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/block"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // UnblockUser calls POST /users/:id/unblock to unblock a user (admin).
 func (c *Client) UnblockUser(ctx context.Context, userID string) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/unblock", nil, &result)
+	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/unblock"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // PromoteUser calls POST /users/:id/promote to promote a user to admin (admin).
 func (c *Client) PromoteUser(ctx context.Context, userID string) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/promote", nil, &result)
+	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/promote"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // DemoteUser calls POST /users/:id/demote to demote an admin to user (admin).
 func (c *Client) DemoteUser(ctx context.Context, userID string) (*User, error) {
-	var result User
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/users/"+userID+"/demote", nil, &result)
+	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/demote"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // ListUserKeys calls GET /users/:userID/keys to list a user's API keys (admin).
 func (c *Client) ListUserKeys(ctx context.Context, userID string) ([]*APIKeyMeta, error) {
-	var result []*APIKeyMeta
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/users/"+userID+"/keys", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*APIKeyMeta{}
-	}
-	return result, nil
+	return doList[APIKeyMeta](c, ctx, c.apiURL("/users/"+userID+"/keys"))
 }
 
 // RevokeUserKey calls DELETE /users/:userID/keys/:keyID to revoke a user's
 // API key (admin).
 func (c *Client) RevokeUserKey(ctx context.Context, userID, keyID string) error {
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/users/"+userID+"/keys/"+keyID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "DELETE", c.apiURL("/users/"+userID+"/keys/"+keyID), nil)
 }
 
 // ListUserTokens calls GET /users/:userID/tokens to list a user's PATs (admin).
 func (c *Client) ListUserTokens(ctx context.Context, userID string) ([]*PAT, error) {
-	var result []*PAT
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/users/"+userID+"/tokens", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*PAT{}
-	}
-	return result, nil
+	return doList[PAT](c, ctx, c.apiURL("/users/"+userID+"/tokens"))
 }
 
 // RevokeUserToken calls DELETE /users/:userID/tokens/:tokenID to revoke a
 // user's PAT (admin).
 func (c *Client) RevokeUserToken(ctx context.Context, userID, tokenID string) error {
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/users/"+userID+"/tokens/"+tokenID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "DELETE", c.apiURL("/users/"+userID+"/tokens/"+tokenID), nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -518,101 +485,73 @@ func (c *Client) RevokeUserToken(ctx context.Context, userID, tokenID string) er
 // ListOrgs calls GET /orgs to list all organizations.
 // Query parameters are constructed using url.Values for forward-compatible extension.
 func (c *Client) ListOrgs(ctx context.Context, opts *ListOrgsOptions) ([]*Organization, error) {
-	path := c.mountPoint + "/orgs"
+	path := "/orgs"
 	if opts != nil && opts.IncludeBlocked {
 		v := url.Values{}
 		v.Set("include_blocked", "true")
 		path += "?" + v.Encode()
 	}
-	var result []*Organization
-	_, _, err := c.do(ctx, "GET", path, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*Organization{}
-	}
-	return result, nil
+	return doList[Organization](c, ctx, c.apiURL(path))
 }
 
 // GetOrg calls GET /orgs/:id to fetch an organization by ID.
 func (c *Client) GetOrg(ctx context.Context, orgID string, opts ...RequestOption) (*Response[Organization], error) {
-	var result Organization
-	status, header, err := c.do(ctx, "GET", c.mountPoint+"/orgs/"+orgID, nil, &result, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &Response[Organization]{Data: result, StatusCode: status, Header: header}, nil
+	return doJSON[Organization](c, ctx, "GET", c.apiURL("/orgs/"+orgID), nil, opts...)
 }
 
 // CreateOrg calls POST /orgs to create a new organization (admin).
 func (c *Client) CreateOrg(ctx context.Context, req *CreateOrgRequest) (*Organization, error) {
-	var result Organization
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs", req, &result)
+	resp, err := doJSON[Organization](c, ctx, "POST", c.apiURL("/orgs"), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // UpdateOrg calls PATCH /orgs/:id to update an organization (admin).
 func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequest) (*Organization, error) {
-	var result Organization
-	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/orgs/"+orgID, req, &result)
+	resp, err := doJSON[Organization](c, ctx, "PATCH", c.apiURL("/orgs/"+orgID), req)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // DeleteOrg calls DELETE /orgs/:id to delete an organization (admin).
 func (c *Client) DeleteOrg(ctx context.Context, orgID string) error {
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/orgs/"+orgID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "DELETE", c.apiURL("/orgs/"+orgID), nil)
 }
 
 // BlockOrg calls POST /orgs/:id/block to block an organization (admin).
 func (c *Client) BlockOrg(ctx context.Context, orgID string) (*Organization, error) {
-	var result Organization
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/block", nil, &result)
+	resp, err := doJSON[Organization](c, ctx, "POST", c.apiURL("/orgs/"+orgID+"/block"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // UnblockOrg calls POST /orgs/:id/unblock to unblock an organization (admin).
 func (c *Client) UnblockOrg(ctx context.Context, orgID string) (*Organization, error) {
-	var result Organization
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/unblock", nil, &result)
+	resp, err := doJSON[Organization](c, ctx, "POST", c.apiURL("/orgs/"+orgID+"/unblock"), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return &resp.Data, nil
 }
 
 // ListOrgMembers calls GET /orgs/:id/members to list organization members.
-// Returns []*User directly -- OrgMember is not a distinct Go type.
+// Returns []*User directly — OrgMember is not a distinct Go type.
 func (c *Client) ListOrgMembers(ctx context.Context, orgID string) ([]*User, error) {
-	var result []*User
-	_, _, err := c.do(ctx, "GET", c.mountPoint+"/orgs/"+orgID+"/members", nil, &result)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []*User{}
-	}
-	return result, nil
+	return doList[User](c, ctx, c.apiURL("/orgs/"+orgID+"/members"))
 }
 
 // AddOrgMember calls PUT /orgs/:orgID/members/:userID to add a member.
 func (c *Client) AddOrgMember(ctx context.Context, orgID, userID string) error {
-	_, _, err := c.do(ctx, "PUT", c.mountPoint+"/orgs/"+orgID+"/members/"+userID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "PUT", c.apiURL("/orgs/"+orgID+"/members/"+userID), nil)
 }
 
 // RemoveOrgMember calls DELETE /orgs/:orgID/members/:userID to remove a member.
 func (c *Client) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
-	_, _, err := c.do(ctx, "DELETE", c.mountPoint+"/orgs/"+orgID+"/members/"+userID, nil, nil)
-	return err
+	return c.doEmpty(ctx, "DELETE", c.apiURL("/orgs/"+orgID+"/members/"+userID), nil)
 }

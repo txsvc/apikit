@@ -995,7 +995,7 @@
             "12-REQ-1.9",
             "12-REQ-1.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1011,7 +1011,7 @@
           "requirement_refs": [
             "12-REQ-5.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1056,7 +1056,7 @@
             "12-REQ-3.12",
             "12-REQ-3.13"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1084,7 +1084,7 @@
             "12-REQ-4.5",
             "12-REQ-4.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1105,7 +1105,7 @@
             "12-REQ-13.1",
             "12-REQ-13.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
