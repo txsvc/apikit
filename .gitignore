@@ -4,7 +4,7 @@
 # Build, test, internal stuff
 /hack/
 bin/
-apikit
+/apikit
 .venv/
 stuff.md
 lint.txt
@@ -16,6 +16,11 @@ prompts.md
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
 
 # Other unwanted files
 .DS_Store
