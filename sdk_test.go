@@ -1231,3 +1231,434 @@ func TestNoDoubleSlashesInURL(t *testing.T) {
 		t.Errorf("request URL = %q, want %q", capturedURL, "/api/v1/user")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 3.1: WithIfNoneMatch and ETag response capture
+// Test Specs: TS-12-34, TS-12-36, TS-12-37, TS-12-39
+// Requirements: 12-REQ-5.1, 12-REQ-5.3, 12-REQ-5.4, 12-REQ-5.6
+// ---------------------------------------------------------------------------
+
+// TestWithIfNoneMatchAddsHeader verifies that WithIfNoneMatch sets the
+// If-None-Match header on the request with the provided etag value (TS-12-34).
+func TestWithIfNoneMatchAddsHeader(t *testing.T) {
+	var capturedINM string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedINM = r.Header.Get("If-None-Match")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, _ = client.GetUser(context.Background(), WithIfNoneMatch(`"abc123"`))
+
+	if capturedINM != `"abc123"` {
+		t.Errorf("If-None-Match header = %q, want %q", capturedINM, `"abc123"`)
+	}
+}
+
+// TestGetUserReturnsETagOn200 verifies that GetUser returns a non-nil
+// *Response[User] with Data populated, StatusCode 200, and the ETag header
+// value accessible via resp.ETag() (TS-12-36).
+func TestGetUserReturnsETagOn200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v42"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetUser returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetUser returned nil response")
+	}
+	if resp.Data.ID != "u1" {
+		t.Errorf("resp.Data.ID = %q, want %q", resp.Data.ID, "u1")
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("resp.StatusCode = %d, want 200", resp.StatusCode)
+	}
+	if resp.ETag() != `"v42"` {
+		t.Errorf("resp.ETag() = %q, want %q", resp.ETag(), `"v42"`)
+	}
+}
+
+// TestResponseETagAbsent verifies that Response[T].ETag() returns an empty
+// string when the server does not include an ETag header (TS-12-37).
+func TestResponseETagAbsent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetUser returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetUser returned nil response")
+	}
+	if resp.ETag() != "" {
+		t.Errorf("resp.ETag() = %q, want empty string", resp.ETag())
+	}
+}
+
+// TestResponseStatusCodeReflectsActual verifies that Response[T].StatusCode
+// reflects the actual HTTP status code returned by the server (e.g., 201 for
+// creation endpoints) (TS-12-39).
+func TestResponseStatusCodeReflectsActual(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(testUserJSON))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUserByID(context.Background(), "id1")
+	if err != nil {
+		t.Fatalf("GetUserByID returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetUserByID returned nil response")
+	}
+	if resp.StatusCode != 201 {
+		t.Errorf("resp.StatusCode = %d, want 201", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3.2: 304 handling and ETag-capable method signatures
+// Test Specs: TS-12-35, TS-12-38, TS-12-E9
+// Requirements: 12-REQ-5.2, 12-REQ-5.5, 12-REQ-5.E1
+// ---------------------------------------------------------------------------
+
+// TestGetUserReturns304ErrNotModified verifies that GetUser returns nil
+// *Response[User] and ErrNotModified when the server returns HTTP 304 (TS-12-35).
+func TestGetUserReturns304ErrNotModified(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(304)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetUser(context.Background(), WithIfNoneMatch(`"abc"`))
+	if resp != nil {
+		t.Errorf("expected nil *Response[User] on 304, got %+v", resp)
+	}
+	if !errors.Is(err, ErrNotModified) {
+		t.Errorf("expected ErrNotModified, got %v", err)
+	}
+}
+
+// TestETagMethodSignatures verifies that GetUser, GetUserByID, GetToken,
+// and GetOrg all accept ...RequestOption as a variadic parameter (TS-12-38).
+// This is a compile-time check — if any of these methods did not accept
+// RequestOption, this test would fail to compile. Other methods
+// (UpdateUser, ListKeys, etc.) do NOT accept RequestOption; this is verified
+// by `go build ./...` — adding RequestOption to their call would produce
+// a compile error.
+func TestETagMethodSignatures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		switch r.URL.Path {
+		case "/api/v1/user/tokens/tid":
+			_, _ = w.Write([]byte(`{"token_id":"tid","name":"t","permissions":["read"],"created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}`))
+		case "/api/v1/orgs/oid":
+			_, _ = w.Write([]byte(`{"id":"oid","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+		default:
+			_, _ = w.Write([]byte(testUserJSON))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	ctx := context.Background()
+	opt := WithIfNoneMatch(`"e"`)
+
+	// All four of these MUST compile with ...RequestOption:
+	_, _ = client.GetUser(ctx, opt)
+	_, _ = client.GetUserByID(ctx, "id", opt)
+	_, _ = client.GetToken(ctx, "tid", opt)
+	_, _ = client.GetOrg(ctx, "oid", opt)
+
+	// NOTE: The following MUST NOT compile (verified by go build ./...):
+	// client.UpdateUser(ctx, &UpdateUserRequest{}, opt) — compile error
+	// client.ListKeys(ctx, opt) — compile error
+	// client.ListTokens(ctx, opt) — compile error
+}
+
+// TestResponseNilOn304 verifies that on HTTP 304, the *Response[T] is nil
+// and ErrNotModified is returned, using GetOrg as the target method (TS-12-E9).
+func TestResponseNilOn304(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(304)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetOrg(context.Background(), "org-1", WithIfNoneMatch(`"v1"`))
+	if resp != nil {
+		t.Errorf("expected nil *Response[Organization] on 304, got %+v", resp)
+	}
+	if !errors.Is(err, ErrNotModified) {
+		t.Errorf("expected ErrNotModified, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3.3: ListUsers query parameter construction
+// Test Specs: TS-12-55, TS-12-56, TS-12-84
+// Requirements: 12-REQ-8.1, 12-REQ-8.2, 12-REQ-12.1
+// ---------------------------------------------------------------------------
+
+// TestListUsersWithIncludeBlocked verifies that ListUsers appends
+// include_blocked=true when IncludeBlocked is true (TS-12-55, TS-12-84).
+func TestListUsersWithIncludeBlocked(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListUsers(context.Background(), &ListUsersOptions{IncludeBlocked: true})
+	if err != nil {
+		t.Fatalf("ListUsers returned error: %v", err)
+	}
+	if capturedQuery != "include_blocked=true" {
+		t.Errorf("RawQuery = %q, want %q", capturedQuery, "include_blocked=true")
+	}
+}
+
+// TestListUsersNilOptions verifies that ListUsers sends no include_blocked
+// query parameter when options is nil (TS-12-56 part 1).
+func TestListUsersNilOptions(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListUsers(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListUsers returned error: %v", err)
+	}
+	if strings.Contains(capturedQuery, "include_blocked") {
+		t.Errorf("RawQuery = %q, should not contain include_blocked", capturedQuery)
+	}
+}
+
+// TestListUsersFalseOptions verifies that ListUsers sends no include_blocked
+// query parameter when IncludeBlocked is false (TS-12-56 part 2).
+func TestListUsersFalseOptions(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListUsers(context.Background(), &ListUsersOptions{IncludeBlocked: false})
+	if err != nil {
+		t.Fatalf("ListUsers returned error: %v", err)
+	}
+	if strings.Contains(capturedQuery, "include_blocked") {
+		t.Errorf("RawQuery = %q, should not contain include_blocked", capturedQuery)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3.4: ListOrgs query parameter construction
+// Test Specs: TS-12-69, TS-12-70, TS-12-85
+// Requirements: 12-REQ-9.2, 12-REQ-9.3, 12-REQ-12.2
+// ---------------------------------------------------------------------------
+
+// TestListOrgsWithIncludeBlocked verifies that ListOrgs appends
+// include_blocked=true when IncludeBlocked is true (TS-12-69, TS-12-85).
+func TestListOrgsWithIncludeBlocked(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: true})
+	if err != nil {
+		t.Fatalf("ListOrgs returned error: %v", err)
+	}
+	if capturedQuery != "include_blocked=true" {
+		t.Errorf("RawQuery = %q, want %q", capturedQuery, "include_blocked=true")
+	}
+}
+
+// TestListOrgsNilOptions verifies that ListOrgs sends no include_blocked
+// query parameter when options is nil (TS-12-70 part 1).
+func TestListOrgsNilOptions(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListOrgs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListOrgs returned error: %v", err)
+	}
+	if strings.Contains(capturedQuery, "include_blocked") {
+		t.Errorf("RawQuery = %q, should not contain include_blocked", capturedQuery)
+	}
+}
+
+// TestListOrgsFalseOptions verifies that ListOrgs sends no include_blocked
+// query parameter when IncludeBlocked is false (TS-12-70 part 2).
+func TestListOrgsFalseOptions(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.ListOrgs(context.Background(), &ListOrgsOptions{IncludeBlocked: false})
+	if err != nil {
+		t.Fatalf("ListOrgs returned error: %v", err)
+	}
+	if strings.Contains(capturedQuery, "include_blocked") {
+		t.Errorf("RawQuery = %q, should not contain include_blocked", capturedQuery)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3.5: List endpoint bare JSON array decoding
+// Test Specs: TS-12-88, TS-12-89, TS-12-E13, TS-12-E15, TS-12-E19
+// Requirements: 12-REQ-13.1, 12-REQ-13.2, 12-REQ-7.E1, 12-REQ-8.E1
+// ---------------------------------------------------------------------------
+
+// TestBareArrayDecoding verifies that list endpoint responses are decoded
+// directly from bare JSON arrays into Go slices (TS-12-88).
+func TestBareArrayDecoding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"key_id":"k1","created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null},{"key_id":"k2","created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keys, err := client.ListKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListKeys returned error: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("len(keys) = %d, want 2", len(keys))
+	}
+	if keys[0].KeyID != "k1" {
+		t.Errorf("keys[0].KeyID = %q, want %q", keys[0].KeyID, "k1")
+	}
+	if keys[1].KeyID != "k2" {
+		t.Errorf("keys[1].KeyID = %q, want %q", keys[1].KeyID, "k2")
+	}
+}
+
+// TestEmptyArrayReturnsNonNilSlice verifies that list endpoints return a
+// non-nil empty slice when the server returns an empty JSON array [] (TS-12-89, TS-12-E13).
+func TestEmptyArrayReturnsNonNilSlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keys, err := client.ListKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListKeys returned error: %v", err)
+	}
+	if keys == nil {
+		t.Fatal("ListKeys returned nil slice, want non-nil empty slice")
+	}
+	if len(keys) != 0 {
+		t.Errorf("len(keys) = %d, want 0", len(keys))
+	}
+}
+
+// TestEmptyArrayListUsers verifies that ListUsers returns a non-nil empty
+// []*User slice when the server returns an empty JSON array [] (TS-12-E15).
+func TestEmptyArrayListUsers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	users, err := client.ListUsers(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListUsers returned error: %v", err)
+	}
+	if users == nil {
+		t.Fatal("ListUsers returned nil slice, want non-nil empty slice")
+	}
+	if len(users) != 0 {
+		t.Errorf("len(users) = %d, want 0", len(users))
+	}
+}
+
+// TestWrappedObjectFails verifies that do returns a plain error (not *APIError)
+// when a list endpoint server returns a wrapped JSON object instead of a bare
+// array (TS-12-E19).
+func TestWrappedObjectFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"keys":[{"key_id":"k1","created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	keys, err := client.ListKeys(context.Background())
+	if err == nil {
+		t.Fatal("expected error from wrapped JSON object, got nil")
+	}
+	if keys != nil {
+		t.Errorf("expected nil slice on decode failure, got %v", keys)
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		t.Errorf("expected plain error, not *APIError; got %v", apiErr)
+	}
+}

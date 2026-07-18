@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -377,8 +378,14 @@ func (c *Client) GetUserByID(ctx context.Context, userID string, opts ...Request
 }
 
 // ListUsers calls GET /users to list all users.
+// Query parameters are constructed using url.Values for forward-compatible extension.
 func (c *Client) ListUsers(ctx context.Context, opts *ListUsersOptions) ([]*User, error) {
 	path := c.mountPoint + "/users"
+	if opts != nil && opts.IncludeBlocked {
+		v := url.Values{}
+		v.Set("include_blocked", "true")
+		path += "?" + v.Encode()
+	}
 	var result []*User
 	_, _, err := c.do(ctx, "GET", path, nil, &result)
 	if err != nil {
@@ -446,8 +453,14 @@ func (c *Client) RevokeUserKey(ctx context.Context, userID, keyID string) error 
 // ---------------------------------------------------------------------------
 
 // ListOrgs calls GET /orgs to list all organizations.
+// Query parameters are constructed using url.Values for forward-compatible extension.
 func (c *Client) ListOrgs(ctx context.Context, opts *ListOrgsOptions) ([]*Organization, error) {
 	path := c.mountPoint + "/orgs"
+	if opts != nil && opts.IncludeBlocked {
+		v := url.Values{}
+		v.Set("include_blocked", "true")
+		path += "?" + v.Encode()
+	}
 	var result []*Organization
 	_, _, err := c.do(ctx, "GET", path, nil, &result)
 	if err != nil {
