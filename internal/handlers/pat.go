@@ -274,9 +274,65 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 	return c.JSON(http.StatusOK, results)
 }
 
-// getPAT handles GET /user/tokens/:token_id.
+// getPAT handles GET /user/tokens/:token_id — retrieves the metadata of a
+// specific PAT by its token_id. Queries using both token_id and user_id to
+// enforce user isolation: tokens belonging to other users return 404 (not 403)
+// to avoid leaking existence information.
 func (h *PATHandler) getPAT(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: require tokens:read permission (09-REQ-7.3).
+	if err := auth.RequirePermission(c, "tokens", "read"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	// Extract path parameter and authenticated user ID (09-REQ-7.1).
+	tokenID := c.Param("token_id")
+	userID := auth.GetUserID(c)
+
+	// Query pats table by dual-column filter for user isolation (09-REQ-7.1, 09-REQ-7.E1).
+	var (
+		name      string
+		permsJSON string
+		createdAt string
+		expiresAt sql.NullString
+		revokedAt sql.NullString
+	)
+
+	err := h.database.SqlDB.QueryRowContext(c.Request().Context(),
+		`SELECT name, permissions, created_at, expires_at, revoked_at
+		 FROM pats WHERE token_id = ? AND user_id = ?`, tokenID, userID,
+	).Scan(&name, &permsJSON, &createdAt, &expiresAt, &revokedAt)
+
+	if err != nil {
+		// Both nonexistent and other-user tokens return 404 (09-REQ-7.2, 09-REQ-7.E1).
+		if err == sql.ErrNoRows {
+			return apikit.WriteAPIError(c, http.StatusNotFound, "token not found")
+		}
+		// Any other DB error returns 500 (09-REQ-7.E2).
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Parse permissions JSON array — preserves insertion order (09-PROP-3).
+	var permissions []string
+	if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Build PATResponse (09-REQ-7.1).
+	resp := PATResponse{
+		TokenID:     tokenID,
+		Name:        name,
+		Permissions: permissions,
+		CreatedAt:   createdAt,
+	}
+
+	if expiresAt.Valid {
+		resp.ExpiresAt = &expiresAt.String
+	}
+	if revokedAt.Valid {
+		resp.RevokedAt = &revokedAt.String
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 // revokePAT handles DELETE /user/tokens/:token_id.
