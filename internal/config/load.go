@@ -67,6 +67,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// Validate OAuth provider entries.
+	if err := validateOAuthProviders(cfg.OAuth.Providers); err != nil {
+		return nil, err
+	}
+
 	// Parse and store max_body_size.
 	bytes, err := parseBodySize(cfg.Server.MaxBodySize)
 	if err != nil {
@@ -209,4 +214,27 @@ func resolveDataPath(dbPath string) string {
 		return filepath.Join(xdg, "apikit", "apikit.db")
 	}
 	return "./data/apikit.db"
+}
+
+// validateOAuthProviders validates the [[oauth.providers]] entries.
+// Returns an error if any entry is missing required fields or if
+// duplicate provider names are found.
+func validateOAuthProviders(providers []ProviderConfig) error {
+	seen := make(map[string]bool)
+	for i, p := range providers {
+		if p.Name == "" {
+			return fmt.Errorf("oauth.providers[%d]: name is required", i)
+		}
+		if p.ClientID == "" {
+			return fmt.Errorf("oauth.providers[%d] (%s): client_id is required", i, p.Name)
+		}
+		if p.ClientSecret == "" {
+			return fmt.Errorf("oauth.providers[%d] (%s): client_secret is required", i, p.Name)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("oauth.providers: duplicate provider name %q", p.Name)
+		}
+		seen[p.Name] = true
+	}
+	return nil
 }

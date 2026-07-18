@@ -6,6 +6,23 @@ type Config struct {
 	Server   ServerConfig   `toml:"server"`
 	Database DatabaseConfig `toml:"database"`
 	Logging  LoggingConfig  `toml:"logging"`
+	OAuth    OAuthConfig    `toml:"oauth"`
+}
+
+// OAuthConfig holds the parsed [oauth] TOML configuration section.
+type OAuthConfig struct {
+	Providers []ProviderConfig `toml:"providers"`
+}
+
+// ProviderConfig represents a single provider entry in the
+// [[oauth.providers]] TOML configuration array.
+type ProviderConfig struct {
+	Name         string `toml:"name"`
+	ClientID     string `toml:"client_id"`
+	ClientSecret string `toml:"client_secret"`
+	AuthorizeURL string `toml:"authorize_url"`
+	TokenURL     string `toml:"token_url"`
+	UserinfoURL  string `toml:"userinfo_url"`
 }
 
 // ServerConfig holds HTTP server settings.
