@@ -188,7 +188,7 @@
             "15-REQ-2.16",
             "15-REQ-22.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -210,7 +210,7 @@
             "15-REQ-2.10",
             "15-REQ-2.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -230,7 +230,7 @@
             "15-REQ-2.14",
             "15-REQ-2.7"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -251,7 +251,7 @@
             "15-REQ-2.3",
             "15-REQ-2.11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -270,7 +270,7 @@
             "15-REQ-2.12",
             "15-REQ-2.13"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -290,7 +290,7 @@
             "15-REQ-2.E1",
             "15-REQ-2.E5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
