@@ -4,6 +4,7 @@
 # Build, test, internal stuff
 /hack/
 bin/
+apikit
 .venv/
 stuff.md
 lint.txt
