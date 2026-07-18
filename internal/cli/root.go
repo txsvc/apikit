@@ -38,6 +38,9 @@ func RootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().String("api-key", "", "API key")
 	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format (for help commands)")
 
+	// Register subcommands.
+	rootCmd.AddCommand(newVersionCmd())
+
 	// PersistentPreRunE is called by Cobra with the leaf command as cmd.
 	// Only the root command defines PersistentPreRunE; child commands
 	// use PreRunE only (13-REQ-12.E1).

@@ -1048,7 +1048,7 @@
           "requirement_refs": [
             "13-REQ-10.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1074,7 +1074,7 @@
             "13-REQ-10.4",
             "13-REQ-10.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
