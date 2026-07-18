@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -603,4 +604,492 @@ func TestCreateUser_FreeFormProvider(t *testing.T) {
 	if dbProvider != "future-provider-xyz" {
 		t.Errorf("expected provider in database to be %q, got %q", "future-provider-xyz", dbProvider)
 	}
+}
+
+// ========================================================================
+// Additional Test Helpers (for task group 2)
+// ========================================================================
+
+// setupNonAdminTestServer creates an Echo instance with RegisterUserHandlers
+// registered on a root-level group with a middleware that injects non-admin
+// (regular user) AuthInfo into the Echo context.
+// Returns the Echo instance and the raw *sql.DB handle.
+func setupNonAdminTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("")
+	g.Use(nonAdminAuthMiddleware("non-admin-user-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB)
+
+	return e, database.SqlDB
+}
+
+// insertTestUserWithStatus inserts a user into the users table with a specific
+// status (e.g. "active" or "blocked"). Uses role="user" and full_name="".
+func insertTestUserWithStatus(t *testing.T, sqlDB *sql.DB, id, username, email, provider, providerID, status string) {
+	t.Helper()
+
+	now := "2024-01-01T00:00:00Z"
+	_, err := sqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, '', 'user', ?, ?, ?, ?, ?)`,
+		id, username, email, status, provider, providerID, now, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test user with status %q: %v", status, err)
+	}
+}
+
+// insertTestUserFull inserts a user into the users table with all fields
+// specified, providing maximum control for test setup.
+func insertTestUserFull(t *testing.T, sqlDB *sql.DB, id, username, email, fullName, role, status, provider, providerID, createdAt, updatedAt string) {
+	t.Helper()
+
+	_, err := sqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, username, email, fullName, role, status, provider, providerID, createdAt, updatedAt,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+}
+
+// parseUsersResponse parses the response body as a JSON array of User objects.
+func parseUsersResponse(t *testing.T, rec *httptest.ResponseRecorder) []handlers.User {
+	t.Helper()
+
+	var users []handlers.User
+	if err := json.Unmarshal(rec.Body.Bytes(), &users); err != nil {
+		t.Fatalf("failed to parse users list response: %v\nbody: %s", err, rec.Body.String())
+	}
+	return users
+}
+
+// sendGet sends an HTTP GET request (with no body) to the given Echo instance
+// and returns the response recorder.
+func sendGet(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// sendGetWithHeaders sends an HTTP GET request with custom headers to the
+// given Echo instance and returns the response recorder.
+func sendGetWithHeaders(t *testing.T, e *echo.Echo, path string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// ========================================================================
+// Task 2.1: GET /users list behavior
+// Test Spec: TS-07-9, TS-07-10, TS-07-11, TS-07-E3, TS-07-E4
+// Requirements: 07-REQ-3.1, 07-REQ-3.2, 07-REQ-3.3, 07-REQ-3.E1, 07-REQ-3.E2
+// ========================================================================
+
+// TestListUsers_ExcludesBlocked verifies that GET /users without the
+// include_blocked parameter returns only active users (HTTP 200, array
+// excludes blocked).
+//
+// Test Spec: TS-07-9
+// Requirement: 07-REQ-3.1
+func TestListUsers_ExcludesBlocked(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Seed 2 active users and 1 blocked user.
+	insertTestUser(t, sqlDB, "active-uuid-1", "alice", "alice@example.com", "github", "gh-001")
+	insertTestUser(t, sqlDB, "active-uuid-2", "bob", "bob@example.com", "github", "gh-002")
+	insertTestUserWithStatus(t, sqlDB, "blocked-uuid-1", "charlie", "charlie@example.com", "github", "gh-003", "blocked")
+
+	rec := sendGet(t, e, "/users")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	users := parseUsersResponse(t, rec)
+	if len(users) != 2 {
+		t.Fatalf("expected 2 active users, got %d", len(users))
+	}
+
+	for _, u := range users {
+		if u.Status != "active" {
+			t.Errorf("expected all returned users to have status 'active', got %q for user %q", u.Status, u.Username)
+		}
+	}
+}
+
+// TestListUsers_IncludeBlocked verifies that GET /users?include_blocked=true
+// returns all users including blocked ones (HTTP 200).
+//
+// Test Spec: TS-07-10
+// Requirement: 07-REQ-3.2
+func TestListUsers_IncludeBlocked(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Seed 2 active users and 1 blocked user.
+	insertTestUser(t, sqlDB, "active-uuid-1", "alice", "alice@example.com", "github", "gh-001")
+	insertTestUser(t, sqlDB, "active-uuid-2", "bob", "bob@example.com", "github", "gh-002")
+	insertTestUserWithStatus(t, sqlDB, "blocked-uuid-1", "charlie", "charlie@example.com", "github", "gh-003", "blocked")
+
+	rec := sendGet(t, e, "/users?include_blocked=true")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	users := parseUsersResponse(t, rec)
+	if len(users) != 3 {
+		t.Fatalf("expected 3 total users, got %d", len(users))
+	}
+
+	hasBlocked := false
+	for _, u := range users {
+		if u.Status == "blocked" {
+			hasBlocked = true
+		}
+	}
+	if !hasBlocked {
+		t.Error("expected at least one blocked user in the response")
+	}
+}
+
+// TestListUsers_NonAdmin verifies that GET /users returns HTTP 403 when
+// called by a non-admin user.
+//
+// Test Spec: TS-07-11
+// Requirement: 07-REQ-3.3
+func TestListUsers_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestListUsers_Empty verifies that GET /users returns an empty JSON array
+// (not null) when no users match the filter.
+//
+// Test Spec: TS-07-E3
+// Requirement: 07-REQ-3.E1
+func TestListUsers_Empty(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	// No users in the database — empty result expected.
+	rec := sendGet(t, e, "/users")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The response must be exactly "[]", not "null" or empty.
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected response body to be '[]', got %q", body)
+	}
+}
+
+// TestListUsers_DBError verifies that an unexpected database error during the
+// list users query returns HTTP 500 with message 'internal server error'.
+//
+// Test Spec: TS-07-E4
+// Requirement: 07-REQ-3.E2
+func TestListUsers_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("")
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB)
+
+	// Close the database AFTER registering handlers to simulate a DB failure.
+	database.Close()
+
+	rec := sendGet(t, e, "/users")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 2.2: GET /users/:id get single user
+// Test Spec: TS-07-12, TS-07-13, TS-07-14, TS-07-E5
+// Requirements: 07-REQ-4.1, 07-REQ-4.2, 07-REQ-4.3, 07-REQ-4.E1
+// ========================================================================
+
+// TestGetUser_Success verifies that GET /users/:id returns HTTP 200 with the
+// correct User JSON object and sets the ETag response header.
+//
+// Test Spec: TS-07-12
+// Requirement: 07-REQ-4.1
+func TestGetUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "get-user-uuid-1"
+	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
+
+	rec := sendGet(t, e, "/users/"+userID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.ID != userID {
+		t.Errorf("expected id %q, got %q", userID, user.ID)
+	}
+	if user.Username != "alice" {
+		t.Errorf("expected username %q, got %q", "alice", user.Username)
+	}
+	if user.Email != "alice@example.com" {
+		t.Errorf("expected email %q, got %q", "alice@example.com", user.Email)
+	}
+	if user.FullName != "Alice Smith" {
+		t.Errorf("expected full_name %q, got %q", "Alice Smith", user.FullName)
+	}
+	if user.Role != "user" {
+		t.Errorf("expected role %q, got %q", "user", user.Role)
+	}
+	if user.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", user.Status)
+	}
+
+	// ETag header must be set to a value derived from user.UpdatedAt.
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Error("expected ETag response header to be set, but it was empty")
+	}
+}
+
+// TestGetUser_NotFound verifies that GET /users/:id returns HTTP 404 with
+// message 'user not found' for a non-existent user UUID.
+//
+// Test Spec: TS-07-13
+// Requirement: 07-REQ-4.2
+func TestGetUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/00000000-0000-0000-0000-000000000000")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestGetUser_NonAdmin verifies that GET /users/:id returns HTTP 403 when
+// called by a non-admin user.
+//
+// Test Spec: TS-07-14
+// Requirement: 07-REQ-4.3
+func TestGetUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendGet(t, e, "/users/some-user-id")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestGetUser_ETag verifies that GET /users/:id returns HTTP 304 with no body
+// when the If-None-Match header matches the current ETag derived from
+// user.UpdatedAt.
+//
+// Test Spec: TS-07-E5
+// Requirement: 07-REQ-4.E1
+func TestGetUser_ETag(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "etag-user-uuid"
+	insertTestUser(t, sqlDB, userID, "etaguser", "etag@example.com", "github", "gh-etag")
+
+	// First request: get the ETag from the response.
+	rec1 := sendGet(t, e, "/users/"+userID)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 on first request, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	etag := rec1.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected ETag header to be set on first request")
+	}
+
+	// Second request: send the ETag as If-None-Match; expect 304.
+	rec2 := sendGetWithHeaders(t, e, "/users/"+userID, map[string]string{
+		"If-None-Match": etag,
+	})
+
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("expected HTTP 304, got %d", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("expected empty body for 304 response, got %q", rec2.Body.String())
+	}
+}
+
+// ========================================================================
+// Task 2.3: PATCH /users/:id update full_name
+// Test Spec: TS-07-15, TS-07-16, TS-07-17, TS-07-18, TS-07-E6, TS-07-E7
+// Requirements: 07-REQ-5.1, 07-REQ-5.2, 07-REQ-5.3, 07-REQ-5.4,
+//               07-REQ-5.E1, 07-REQ-5.E2
+// ========================================================================
+
+// TestUpdateUser_Success verifies that PATCH /users/:id with a valid full_name
+// field updates the user and returns HTTP 200 with the updated User object.
+//
+// Test Spec: TS-07-15
+// Requirement: 07-REQ-5.1
+func TestUpdateUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "update-user-uuid-1"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Capture the original updated_at.
+	var originalUpdatedAt string
+	err := sqlDB.QueryRow("SELECT updated_at FROM users WHERE id = ?", userID).Scan(&originalUpdatedAt)
+	if err != nil {
+		t.Fatalf("failed to query original updated_at: %v", err)
+	}
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{"full_name":"Alice Smith"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+	if user.FullName != "Alice Smith" {
+		t.Errorf("expected full_name %q, got %q", "Alice Smith", user.FullName)
+	}
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// TestUpdateUser_MissingField verifies that PATCH /users/:id returns HTTP 400
+// with message 'missing required field: full_name' when the full_name field is
+// absent from the request body.
+//
+// Test Spec: TS-07-16
+// Requirement: 07-REQ-5.2
+func TestUpdateUser_MissingField(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "update-missing-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "missing required field: full_name")
+}
+
+// TestUpdateUser_NotFound verifies that PATCH /users/:id returns HTTP 404 with
+// message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-17
+// Requirement: 07-REQ-5.3
+func TestUpdateUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/00000000-0000-0000-0000-000000000000", `{"full_name":"Alice"}`)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestUpdateUser_NonAdmin verifies that PATCH /users/:id returns HTTP 403 when
+// called by a non-admin user.
+//
+// Test Spec: TS-07-18
+// Requirement: 07-REQ-5.4
+func TestUpdateUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/some-user-id", `{"full_name":"Alice"}`)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestUpdateUser_ClearFullName verifies that PATCH /users/:id with full_name
+// set to an empty string clears the field and returns HTTP 200 with the
+// updated User object.
+//
+// Test Spec: TS-07-E6
+// Requirement: 07-REQ-5.E1
+func TestUpdateUser_ClearFullName(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "clear-name-uuid"
+	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{"full_name":""}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+	if user.FullName != "" {
+		t.Errorf("expected full_name to be empty string, got %q", user.FullName)
+	}
+
+	// Verify the change is persisted in the database.
+	var dbFullName sql.NullString
+	err := sqlDB.QueryRow("SELECT full_name FROM users WHERE id = ?", userID).Scan(&dbFullName)
+	if err != nil {
+		t.Fatalf("failed to query full_name from database: %v", err)
+	}
+	if dbFullName.Valid && dbFullName.String != "" {
+		t.Errorf("expected full_name in database to be empty string, got %q", dbFullName.String)
+	}
+}
+
+// TestUpdateUser_PointerDistinction verifies that UpdateUserRequest uses a
+// pointer for FullName (*string) so that a missing field (nil pointer) is
+// distinguished from an empty string value. Also verifies that a request with
+// no full_name key triggers HTTP 400.
+//
+// Test Spec: TS-07-E7
+// Requirement: 07-REQ-5.E2
+func TestUpdateUser_PointerDistinction(t *testing.T) {
+	// Part 1: Verify UpdateUserRequest.FullName is declared as *string.
+	var req handlers.UpdateUserRequest
+	typ := reflect.TypeOf(req)
+	field, ok := typ.FieldByName("FullName")
+	if !ok {
+		t.Fatal("UpdateUserRequest does not have a FullName field")
+	}
+	if field.Type.Kind() != reflect.Pointer || field.Type.Elem().Kind() != reflect.String {
+		t.Errorf("expected FullName to be *string, got %s", field.Type)
+	}
+
+	// Part 2: Verify that a PATCH request with body {} (no full_name key)
+	// results in a nil pointer and triggers HTTP 400.
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "pointer-test-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "missing required field: full_name")
 }

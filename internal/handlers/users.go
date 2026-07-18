@@ -28,6 +28,13 @@ type CreateUserRequest struct {
 	ProviderID string `json:"provider_id"`
 }
 
+// UpdateUserRequest represents the JSON request body for PATCH /users/:id
+// and PATCH /user. FullName is a pointer to distinguish a missing field (nil)
+// from an explicitly empty string value.
+type UpdateUserRequest struct {
+	FullName *string `json:"full_name"`
+}
+
 // RegisterUserHandlers registers all user management routes on the provided
 // Echo group and stores the *sql.DB handle for use by all handler functions.
 func RegisterUserHandlers(g *echo.Group, db *sql.DB) {
