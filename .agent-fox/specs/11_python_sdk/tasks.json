@@ -196,7 +196,7 @@
             "11-REQ-8.5",
             "11-REQ-8.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -226,7 +226,7 @@
             "11-REQ-9.5",
             "11-REQ-9.6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -251,7 +251,7 @@
             "11-REQ-10.E1",
             "11-REQ-10.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -273,7 +273,7 @@
             "11-REQ-12.1",
             "11-REQ-12.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
