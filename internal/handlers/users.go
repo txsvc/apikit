@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -634,13 +635,102 @@ func (h *userHandlers) revokeUserKey(c echo.Context) error {
 }
 
 // listUserTokens handles GET /users/:id/tokens — lists PAT metadata for a user.
+// Requires admin access. Returns only metadata fields (token_id, name,
+// permissions, user_id, created_at, expires_at, revoked_at); secret values
+// are never included. Returns an empty JSON array (not null) when no tokens
+// exist for the user.
 func (h *userHandlers) listUserTokens(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-12.3, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Verify the user exists before querying pats (07-REQ-12.2).
+	var exists int
+	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Query only metadata columns — never include secret_hash (07-REQ-12.E1, 07-PROP-4).
+	rows, err := h.db.Query(
+		`SELECT token_id, name, permissions, user_id, created_at, expires_at, revoked_at
+		 FROM pats WHERE user_id = ?`, id,
+	)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Scan into a non-nil slice so JSON encodes as [] not null (07-PROP-6).
+	tokens := make([]PATMeta, 0)
+	for rows.Next() {
+		var t PATMeta
+		var permsJSON string
+		if err := rows.Scan(&t.TokenID, &t.Name, &permsJSON, &t.UserID,
+			&t.CreatedAt, &t.ExpiresAt, &t.RevokedAt); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		// Parse permissions JSON array into []string.
+		if err := json.Unmarshal([]byte(permsJSON), &t.Permissions); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		tokens = append(tokens, t)
+	}
+	if err := rows.Err(); err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, tokens)
 }
 
 // revokeUserToken handles DELETE /users/:id/tokens/:token_id — revokes a PAT.
+// Requires admin access. Sets revoked_at to the current UTC timestamp. If the
+// token is already revoked (revoked_at != NULL), returns 204 without modifying
+// the record (idempotent, 07-REQ-13.2, 07-PROP-3).
 func (h *userHandlers) revokeUserToken(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-13.4, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+	tokenID := c.Param("token_id")
+
+	// Fetch the token matching both token_id and user_id (07-REQ-13.3).
+	var revokedAt sql.NullString
+	err := h.db.QueryRow(
+		`SELECT revoked_at FROM pats WHERE token_id = ? AND user_id = ?`,
+		tokenID, id,
+	).Scan(&revokedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.WriteAPIError(c, http.StatusNotFound, "token not found")
+		}
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already revoked → return 204 without a write (07-REQ-13.2, 07-PROP-3).
+	if revokedAt.Valid {
+		return c.NoContent(http.StatusNoContent)
+	}
+
+	// Set revoked_at to the current UTC timestamp (07-REQ-13.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE pats SET revoked_at = ? WHERE token_id = ? AND user_id = ?`,
+		now, tokenID, id,
+	)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // getOwnProfile handles GET /user — retrieves the authenticated user's profile.
