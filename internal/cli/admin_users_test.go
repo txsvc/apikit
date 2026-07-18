@@ -22,6 +22,13 @@ import (
 // NOTE: Some methods (CreateUser, UpdateUserByID, PromoteUser, etc.) are
 // not yet defined on apikit.Client (spec 12 stubs pending). The test
 // interface defines them based on the spec's intended signatures.
+//
+// DIVERGENCE: The SDK's PromoteUser/DemoteUser/BlockUser/UnblockUser
+// currently return only error, but the spec (14-REQ-8.1, 14-REQ-9.1,
+// 14-REQ-10.1, 14-REQ-11.1) says these commands "print the returned
+// apikit.User as JSON." The mock uses (*apikit.User, error) to match
+// the spec's intended behavior. The production code may call the SDK
+// action method followed by GetUserByID, or the SDK may be updated.
 // ---------------------------------------------------------------------------
 
 type adminUsersClient interface {
@@ -29,10 +36,10 @@ type adminUsersClient interface {
 	GetUserByID(ctx context.Context, userID string, opts ...apikit.RequestOption) (*apikit.Response[apikit.User], error)
 	CreateUser(ctx context.Context, req *apikit.CreateUserRequest) (*apikit.User, error)
 	UpdateUserByID(ctx context.Context, id string, req *apikit.UpdateUserRequest) (*apikit.User, error)
-	PromoteUser(ctx context.Context, id string) error
-	DemoteUser(ctx context.Context, id string) error
-	BlockUser(ctx context.Context, id string) error
-	UnblockUser(ctx context.Context, id string) error
+	PromoteUser(ctx context.Context, id string) (*apikit.User, error)
+	DemoteUser(ctx context.Context, id string) (*apikit.User, error)
+	BlockUser(ctx context.Context, id string) (*apikit.User, error)
+	UnblockUser(ctx context.Context, id string) (*apikit.User, error)
 }
 
 // mockAdminUsersClient implements adminUsersClient for testing.
@@ -46,10 +53,14 @@ type mockAdminUsersClient struct {
 	createUserErr     error
 	updateUserResult  *apikit.User
 	updateUserErr     error
-	promoteUserErr    error
-	demoteUserErr     error
-	blockUserErr      error
-	unblockUserErr    error
+	promoteUserResult  *apikit.User
+	promoteUserErr     error
+	demoteUserResult   *apikit.User
+	demoteUserErr      error
+	blockUserResult    *apikit.User
+	blockUserErr       error
+	unblockUserResult  *apikit.User
+	unblockUserErr     error
 
 	// Call tracking
 	listUsersCalled bool
@@ -103,32 +114,32 @@ func (m *mockAdminUsersClient) UpdateUserByID(ctx context.Context, id string, re
 	return m.updateUserResult, m.updateUserErr
 }
 
-func (m *mockAdminUsersClient) PromoteUser(ctx context.Context, id string) error {
+func (m *mockAdminUsersClient) PromoteUser(ctx context.Context, id string) (*apikit.User, error) {
 	m.capturedCtx = ctx
 	m.promoteUserCalled = true
 	m.promoteUserID = id
-	return m.promoteUserErr
+	return m.promoteUserResult, m.promoteUserErr
 }
 
-func (m *mockAdminUsersClient) DemoteUser(ctx context.Context, id string) error {
+func (m *mockAdminUsersClient) DemoteUser(ctx context.Context, id string) (*apikit.User, error) {
 	m.capturedCtx = ctx
 	m.demoteUserCalled = true
 	m.demoteUserID = id
-	return m.demoteUserErr
+	return m.demoteUserResult, m.demoteUserErr
 }
 
-func (m *mockAdminUsersClient) BlockUser(ctx context.Context, id string) error {
+func (m *mockAdminUsersClient) BlockUser(ctx context.Context, id string) (*apikit.User, error) {
 	m.capturedCtx = ctx
 	m.blockUserCalled = true
 	m.blockUserID = id
-	return m.blockUserErr
+	return m.blockUserResult, m.blockUserErr
 }
 
-func (m *mockAdminUsersClient) UnblockUser(ctx context.Context, id string) error {
+func (m *mockAdminUsersClient) UnblockUser(ctx context.Context, id string) (*apikit.User, error) {
 	m.capturedCtx = ctx
 	m.unblockUserCalled = true
 	m.unblockUserID = id
-	return m.unblockUserErr
+	return m.unblockUserResult, m.unblockUserErr
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +973,732 @@ func TestAdminUsersCreateMissingProviderID(t *testing.T) {
 	}
 	if env.Error.Message != "missing required flag: --provider-id" {
 		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required flag: --provider-id")
+	}
+}
+
+// ===========================================================================
+// Task Group 2: admin users update/promote/demote/block/unblock tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// TS-14-25: akc admin users update <id> --full-name 'Alice B' calls
+// UpdateUserByID with the correct id and FullName, prints user JSON.
+// Requirement: 14-REQ-7.1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUpdateCommand(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		updateUserResult: &apikit.User{ID: "u1", FullName: "Alice B"},
+	}
+
+	stdout, err := executeAdminCmd("users", "update", "u1", "--full-name", "Alice B")
+
+	// Expect success (exit code 0).
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	// Verify UpdateUserByID was called with correct args.
+	if !mock.updateUserCalled {
+		t.Fatal("UpdateUserByID was not called")
+	}
+	if mock.updateUserID != "u1" {
+		t.Errorf("captured ID = %q, want %q", mock.updateUserID, "u1")
+	}
+	if mock.updateUserReq == nil {
+		t.Fatal("UpdateUserByID request is nil")
+	}
+	if mock.updateUserReq.FullName != "Alice B" {
+		t.Errorf("req.FullName = %q, want %q", mock.updateUserReq.FullName, "Alice B")
+	}
+
+	// stdout should be a JSON user object.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+
+	var user map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &user); err != nil {
+		t.Fatalf("failed to parse stdout as JSON object: %v", err)
+	}
+	if id, _ := user["id"].(string); id != "u1" {
+		t.Errorf("user.id = %q, want %q", id, "u1")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-26: akc admin users update with --full-name '' treats empty string
+// as valid, calls SDK with FullName='' and exits 0.
+// Requirement: 14-REQ-7.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUpdateEmptyFullName(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		updateUserResult: &apikit.User{ID: "u1", FullName: ""},
+	}
+
+	stdout, err := executeAdminCmd("users", "update", "u1", "--full-name", "")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.updateUserCalled {
+		t.Fatal("UpdateUserByID was not called")
+	}
+	if mock.updateUserReq == nil {
+		t.Fatal("UpdateUserByID request is nil")
+	}
+	if mock.updateUserReq.FullName != "" {
+		t.Errorf("req.FullName = %q, want empty string", mock.updateUserReq.FullName)
+	}
+
+	// stdout should be valid JSON.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-27: akc admin users update is registered in the agent interface
+// with method PATCH, path /users/:id, auth admin, positional arg id,
+// required flag --full-name.
+// Requirement: 14-REQ-7.3
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUpdateAgentInterface(t *testing.T) {
+	cmd := NewAdminCmd()
+
+	updateCmd, _, err := cmd.Find([]string{"users", "update"})
+	if err != nil {
+		t.Fatalf("failed to find 'users update' command: %v", err)
+	}
+	if updateCmd.Name() != "update" {
+		t.Fatalf("found command %q, want %q", updateCmd.Name(), "update")
+	}
+
+	// Verify annotations contain the expected metadata.
+	annotations := updateCmd.Annotations
+	if annotations == nil {
+		t.Fatal("users update command has no Annotations")
+	}
+	if annotations["method"] != "PATCH" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "PATCH")
+	}
+	if annotations["path"] != "/users/:id" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/users/:id")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+
+	// Verify the --full-name flag is registered.
+	flag := updateCmd.Flags().Lookup("full-name")
+	if flag == nil {
+		t.Error("--full-name flag not registered on users update command")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E9: akc admin users update without the <id> positional argument
+// exits with code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-7.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUpdateMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("users", "update", "--full-name", "Alice")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E10: akc admin users update without --full-name exits with code 2
+// and prints the missing-flag error envelope; SDK is not called.
+// Requirement: 14-REQ-7.E2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUpdateMissingFullName(t *testing.T) {
+	mock := &mockAdminUsersClient{}
+
+	stdout, err := executeAdminCmd("users", "update", "u1")
+
+	if err == nil {
+		t.Error("expected error when --full-name flag is missing")
+	}
+
+	// SDK should NOT have been called.
+	if mock.updateUserCalled {
+		t.Error("UpdateUserByID was called despite missing --full-name flag")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required flag: --full-name" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required flag: --full-name")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-28: akc admin users promote <id> calls PromoteUser with the given
+// id and prints the returned user as JSON.
+// Requirement: 14-REQ-8.1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersPromoteCommand(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		promoteUserResult: &apikit.User{ID: "u1", Role: "admin"},
+	}
+
+	stdout, err := executeAdminCmd("users", "promote", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.promoteUserCalled {
+		t.Fatal("PromoteUser was not called")
+	}
+	if mock.promoteUserID != "u1" {
+		t.Errorf("captured ID = %q, want %q", mock.promoteUserID, "u1")
+	}
+
+	// stdout should be valid JSON.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-29: akc admin users promote is registered in the agent interface
+// with method POST, path /users/:id/promote, auth admin.
+// Requirement: 14-REQ-8.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersPromoteAgentInterface(t *testing.T) {
+	cmd := NewAdminCmd()
+
+	promoteCmd, _, err := cmd.Find([]string{"users", "promote"})
+	if err != nil {
+		t.Fatalf("failed to find 'users promote' command: %v", err)
+	}
+	if promoteCmd.Name() != "promote" {
+		t.Fatalf("found command %q, want %q", promoteCmd.Name(), "promote")
+	}
+
+	annotations := promoteCmd.Annotations
+	if annotations == nil {
+		t.Fatal("users promote command has no Annotations")
+	}
+	if annotations["method"] != "POST" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "POST")
+	}
+	if annotations["path"] != "/users/:id/promote" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/users/:id/promote")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E11: akc admin users promote without the <id> argument exits with
+// code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-8.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersPromoteMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("users", "promote")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-30: akc admin users demote <id> calls DemoteUser with the given id
+// and prints the returned user as JSON without performing the last-admin
+// check.
+// Requirement: 14-REQ-9.1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersDemoteCommand(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		demoteUserResult: &apikit.User{ID: "u1", Role: "user"},
+	}
+
+	stdout, err := executeAdminCmd("users", "demote", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.demoteUserCalled {
+		t.Fatal("DemoteUser was not called")
+	}
+	if mock.demoteUserID != "u1" {
+		t.Errorf("captured ID = %q, want %q", mock.demoteUserID, "u1")
+	}
+
+	// stdout should be valid JSON (no client-side last-admin validation).
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-31: akc admin users demote is registered in the agent interface
+// with method POST, path /users/:id/demote, auth admin.
+// Requirement: 14-REQ-9.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersDemoteAgentInterface(t *testing.T) {
+	cmd := NewAdminCmd()
+
+	demoteCmd, _, err := cmd.Find([]string{"users", "demote"})
+	if err != nil {
+		t.Fatalf("failed to find 'users demote' command: %v", err)
+	}
+	if demoteCmd.Name() != "demote" {
+		t.Fatalf("found command %q, want %q", demoteCmd.Name(), "demote")
+	}
+
+	annotations := demoteCmd.Annotations
+	if annotations == nil {
+		t.Fatal("users demote command has no Annotations")
+	}
+	if annotations["method"] != "POST" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "POST")
+	}
+	if annotations["path"] != "/users/:id/demote" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/users/:id/demote")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E12: akc admin users demote without the <id> argument exits with
+// code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-9.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersDemoteMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("users", "demote")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E13: akc admin users demote when the server returns 409 last-admin
+// conflict prints the 409 error envelope and exits with code 1.
+// Requirement: 14-REQ-9.E2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersDemoteLastAdmin(t *testing.T) {
+	_ = &mockAdminUsersClient{
+		demoteUserErr: &apikit.APIError{Code: 409, Message: "cannot demote the last admin"},
+	}
+
+	stdout, err := executeAdminCmd("users", "demote", "u1")
+
+	// Expect an error (exit code 1 for API errors).
+	if err == nil {
+		t.Error("expected non-nil error for 409 conflict")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 409 {
+		t.Errorf("error.code = %d, want 409", env.Error.Code)
+	}
+	if env.Error.Message != "cannot demote the last admin" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "cannot demote the last admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-32: akc admin users block <id> calls BlockUser with the given id
+// and prints the returned user as JSON.
+// Requirement: 14-REQ-10.1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersBlockCommand(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		blockUserResult: &apikit.User{ID: "u1", Status: "blocked"},
+	}
+
+	stdout, err := executeAdminCmd("users", "block", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.blockUserCalled {
+		t.Fatal("BlockUser was not called")
+	}
+	if mock.blockUserID != "u1" {
+		t.Errorf("captured ID = %q, want %q", mock.blockUserID, "u1")
+	}
+
+	// stdout should be valid JSON.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-33: akc admin users block is registered in the agent interface
+// with method POST, path /users/:id/block, auth admin.
+// Requirement: 14-REQ-10.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersBlockAgentInterface(t *testing.T) {
+	cmd := NewAdminCmd()
+
+	blockCmd, _, err := cmd.Find([]string{"users", "block"})
+	if err != nil {
+		t.Fatalf("failed to find 'users block' command: %v", err)
+	}
+	if blockCmd.Name() != "block" {
+		t.Fatalf("found command %q, want %q", blockCmd.Name(), "block")
+	}
+
+	annotations := blockCmd.Annotations
+	if annotations == nil {
+		t.Fatal("users block command has no Annotations")
+	}
+	if annotations["method"] != "POST" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "POST")
+	}
+	if annotations["path"] != "/users/:id/block" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/users/:id/block")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E14: akc admin users block without the <id> argument exits with
+// code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-10.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersBlockMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("users", "block")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-34: akc admin users unblock <id> calls UnblockUser with the given
+// id and prints the returned user as JSON.
+// Requirement: 14-REQ-11.1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUnblockCommand(t *testing.T) {
+	mock := &mockAdminUsersClient{
+		unblockUserResult: &apikit.User{ID: "u1", Status: "active"},
+	}
+
+	stdout, err := executeAdminCmd("users", "unblock", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.unblockUserCalled {
+		t.Fatal("UnblockUser was not called")
+	}
+	if mock.unblockUserID != "u1" {
+		t.Errorf("captured ID = %q, want %q", mock.unblockUserID, "u1")
+	}
+
+	// stdout should be valid JSON.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-35: akc admin users unblock is registered in the agent interface
+// with method POST, path /users/:id/unblock, auth admin.
+// Requirement: 14-REQ-11.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUnblockAgentInterface(t *testing.T) {
+	cmd := NewAdminCmd()
+
+	unblockCmd, _, err := cmd.Find([]string{"users", "unblock"})
+	if err != nil {
+		t.Fatalf("failed to find 'users unblock' command: %v", err)
+	}
+	if unblockCmd.Name() != "unblock" {
+		t.Fatalf("found command %q, want %q", unblockCmd.Name(), "unblock")
+	}
+
+	annotations := unblockCmd.Annotations
+	if annotations == nil {
+		t.Fatal("users unblock command has no Annotations")
+	}
+	if annotations["method"] != "POST" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "POST")
+	}
+	if annotations["path"] != "/users/:id/unblock" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/users/:id/unblock")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E15: akc admin users unblock without the <id> argument exits with
+// code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-11.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersUnblockMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("users", "unblock")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ===========================================================================
+// Task Group 2.4: Error forwarding tests (REQ-26)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// TS-14-70: When the server returns HTTP 403, the CLI prints the 403 error
+// envelope to stdout and exits with code 1.
+// Requirement: 14-REQ-26.3
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersAPIError403(t *testing.T) {
+	_ = &mockAdminUsersClient{
+		listUsersErr: &apikit.APIError{Code: 403, Message: "forbidden"},
+	}
+
+	stdout, err := executeAdminCmd("users", "list")
+
+	// Expect an error (exit code 1 for API errors).
+	if err == nil {
+		t.Error("expected non-nil error for 403 API error")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 403 {
+		t.Errorf("error.code = %d, want 403", env.Error.Code)
+	}
+	if env.Error.Message != "forbidden" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "forbidden")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-71: When the server returns HTTP 404, the CLI prints the 404 error
+// envelope to stdout and exits with code 1.
+// Requirement: 14-REQ-26.4
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersAPIError404(t *testing.T) {
+	_ = &mockAdminUsersClient{
+		getUserErr: &apikit.APIError{Code: 404, Message: "user not found"},
+	}
+
+	stdout, err := executeAdminCmd("users", "show", "u999")
+
+	// Expect an error (exit code 1 for API errors).
+	if err == nil {
+		t.Error("expected non-nil error for 404 API error")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 404 {
+		t.Errorf("error.code = %d, want 404", env.Error.Code)
+	}
+	if env.Error.Message != "user not found" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "user not found")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-69: All error output paths produce a valid JSON error envelope on
+// stdout with code N for API errors and 0 for client errors.
+// Requirement: 14-REQ-26.2
+// ---------------------------------------------------------------------------
+
+func TestAdminUsersNetworkError(t *testing.T) {
+	_ = &mockAdminUsersClient{
+		listUsersErr: errors.New("dial tcp: connection refused"),
+	}
+
+	stdout, err := executeAdminCmd("users", "list")
+
+	// Expect an error (exit code 2 for client/network errors).
+	if err == nil {
+		t.Error("expected non-nil error for network failure")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0 for client error", env.Error.Code)
+	}
+	if env.Error.Message == "" {
+		t.Error("error.message should not be empty for network error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-68: Exit codes are exactly 0 on success, 1 on APIError, and 2 on
+// client error, with no other codes produced.
+// Requirement: 14-REQ-26.1
+// ---------------------------------------------------------------------------
+
+func TestExitCodeInvariants(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         []string
+		mockSetup    func() *mockAdminUsersClient
+		wantErr      bool
+		wantExitCode int // 0=success, 1=APIError, 2=client error
+	}{
+		{
+			name: "success returns exit code 0",
+			args: []string{"users", "list"},
+			mockSetup: func() *mockAdminUsersClient {
+				return &mockAdminUsersClient{
+					listUsersResult: []*apikit.User{{ID: "u1"}},
+				}
+			},
+			wantErr:      false,
+			wantExitCode: 0,
+		},
+		{
+			name: "APIError returns exit code 1",
+			args: []string{"users", "show", "u1"},
+			mockSetup: func() *mockAdminUsersClient {
+				return &mockAdminUsersClient{
+					getUserErr: &apikit.APIError{Code: 404, Message: "not found"},
+				}
+			},
+			wantErr:      true,
+			wantExitCode: 1,
+		},
+		{
+			name: "network error returns exit code 2",
+			args: []string{"users", "list"},
+			mockSetup: func() *mockAdminUsersClient {
+				return &mockAdminUsersClient{
+					listUsersErr: errors.New("network unreachable"),
+				}
+			},
+			wantErr:      true,
+			wantExitCode: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = tt.mockSetup()
+
+			_, err := executeAdminCmd(tt.args...)
+
+			if tt.wantErr && err == nil {
+				t.Error("expected non-nil error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("expected nil error, got: %v", err)
+			}
+
+			// NOTE: Exit code verification requires the ExitCode() helper
+			// from spec 13. Once implemented, verify:
+			//   exitCode := ExitCode(err)
+			//   if exitCode != tt.wantExitCode {
+			//       t.Errorf("exit code = %d, want %d", exitCode, tt.wantExitCode)
+			//   }
+			// For now, we verify the error/no-error invariant.
+		})
 	}
 }
 
