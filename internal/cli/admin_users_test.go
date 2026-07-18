@@ -1068,7 +1068,7 @@ func TestAdminUsersUpdateEmptyFullName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersUpdateAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	updateCmd, _, err := cmd.Find([]string{"users", "update"})
 	if err != nil {
@@ -1194,7 +1194,7 @@ func TestAdminUsersPromoteCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersPromoteAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	promoteCmd, _, err := cmd.Find([]string{"users", "promote"})
 	if err != nil {
@@ -1282,7 +1282,7 @@ func TestAdminUsersDemoteCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersDemoteAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	demoteCmd, _, err := cmd.Find([]string{"users", "demote"})
 	if err != nil {
@@ -1399,7 +1399,7 @@ func TestAdminUsersBlockCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersBlockAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	blockCmd, _, err := cmd.Find([]string{"users", "block"})
 	if err != nil {
@@ -1486,7 +1486,7 @@ func TestAdminUsersUnblockCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdminUsersUnblockAgentInterface(t *testing.T) {
-	cmd := NewAdminCmd()
+	cmd := cli.NewAdminCmd()
 
 	unblockCmd, _, err := cmd.Find([]string{"users", "unblock"})
 	if err != nil {
