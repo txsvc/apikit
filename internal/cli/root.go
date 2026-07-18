@@ -2,37 +2,11 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 )
-
-// Context key types — unexported struct types prevent collision with
-// consuming project code (see 13-REQ-7.E1).
-type clientContextKey struct{}
-type userIDContextKey struct{}
-
-// ContextWithClient stores an API client in the context.
-// The client is stored as any to avoid import cycles between
-// internal/cli and the root apikit package.
-func ContextWithClient(ctx context.Context, client any) context.Context {
-	return context.WithValue(ctx, clientContextKey{}, client)
-}
-
-// ClientFromContext retrieves the API client from a context.
-// Returns nil if no client was stored (e.g., auth-exempt commands).
-func ClientFromContext(ctx context.Context) any {
-	return ctx.Value(clientContextKey{})
-}
-
-// UserIDFromContext retrieves the user_id string from a context.
-// Returns "" if no user_id was stored.
-func UserIDFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(userIDContextKey{}).(string)
-	return v
-}
 
 // rootCmd is the package-level root Cobra command. RootCommand() always
 // builds a fresh instance and stores it here so that Execute() can run it.
@@ -187,98 +161,3 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
-// apiErrorer is an interface that matches the ErrorCode/ErrorMessage methods
-// on *apikit.APIError, allowing internal/cli to detect API errors without
-// importing the root apikit package (avoiding import cycle).
-type apiErrorer interface {
-	error
-	ErrorCode() int
-	ErrorMessage() string
-}
-
-// ExitCode maps an error to an integer exit code:
-//   - nil → 0
-//   - error implementing apiErrorer (i.e., *apikit.APIError) → 1
-//   - all other non-nil errors → 2
-func ExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	// Check if the error (or a wrapped error) implements apiErrorer.
-	var ae apiErrorer
-	if asAPIError(err, &ae) {
-		return 1
-	}
-	return 2
-}
-
-// asAPIError checks if err implements apiErrorer, traversing the error chain.
-// This is equivalent to errors.As but uses interface matching rather than
-// concrete type assertion, avoiding the import cycle.
-func asAPIError(err error, target *apiErrorer) bool {
-	for err != nil {
-		if ae, ok := err.(apiErrorer); ok {
-			*target = ae
-			return true
-		}
-		// Unwrap: support both Unwrap() error and Unwrap() []error
-		switch x := err.(type) {
-		case interface{ Unwrap() error }:
-			err = x.Unwrap()
-		case interface{ Unwrap() []error }:
-			for _, e := range x.Unwrap() {
-				if asAPIError(e, target) {
-					return true
-				}
-			}
-			return false
-		default:
-			return false
-		}
-	}
-	return false
-}
-
-// PrintError writes a JSON error envelope to stdout.
-// For errors implementing apiErrorer (*apikit.APIError), the envelope
-// uses the HTTP status code and server message.
-// For all other errors, the envelope uses code: 0 (client sentinel)
-// and err.Error() as the message.
-// Nothing is written to stderr.
-func PrintError(err error) {
-	if err == nil {
-		return
-	}
-
-	code := 0
-	message := err.Error()
-
-	var ae apiErrorer
-	if asAPIError(err, &ae) {
-		code = ae.ErrorCode()
-		message = ae.ErrorMessage()
-	}
-
-	envelope := struct {
-		Error struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}{}
-	envelope.Error.Code = code
-	envelope.Error.Message = message
-
-	data, _ := json.MarshalIndent(envelope, "", "  ")
-	fmt.Fprintln(os.Stdout, string(data))
-}
-
-// PrintJSON marshals a value to indented JSON (two-space indent) and
-// writes it to stdout followed by a newline.
-func PrintJSON(v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stdout, string(data))
-	return nil
-}
