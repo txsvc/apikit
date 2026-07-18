@@ -30,6 +30,9 @@ func RootCommand() *cobra.Command {
 		Long:          "akc is the CLI client for the apikit API server.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
 	}
 
 	// Register persistent flags available to all subcommands.
