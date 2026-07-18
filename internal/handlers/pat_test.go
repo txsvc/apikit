@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -2157,6 +2158,714 @@ func TestPATUserIsolation_Property(t *testing.T) {
 				if userATokenSet[p.TokenID] {
 					t.Errorf("userA's token_id %q appeared in userB's list response", p.TokenID)
 				}
+			}
+		})
+	}
+}
+
+// ========================================================================
+// Task 6.1: Integration and unit tests for GetPAT
+// Test Spec: TS-09-32, TS-09-33, TS-09-34, TS-09-E11, TS-09-E12
+// Requirements: 09-REQ-7.1, 09-REQ-7.2, 09-REQ-7.3, 09-REQ-7.E1, 09-REQ-7.E2
+// ========================================================================
+
+// TestGetPAT_Success verifies that GET /user/tokens/:token_id returns HTTP 200
+// with a PATResponse containing the correct metadata for a token belonging to
+// the authenticated user. The response must NOT include the plaintext token
+// or secret_hash fields.
+//
+// Test Spec: TS-09-32
+// Requirement: 09-REQ-7.1
+func TestGetPAT_Success(t *testing.T) {
+	const userID = "user-get-1"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert a PAT with known attributes.
+	insertTestPAT(t, database.SqlDB, "abc12345", userID, "ci-deploy",
+		"hash-abc", `["tokens:read","users:read"]`, 90,
+		nullStr("2025-04-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens/abc12345")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify token_id matches.
+	if resp.TokenID != "abc12345" {
+		t.Errorf("expected token_id %q, got %q", "abc12345", resp.TokenID)
+	}
+
+	// Verify name matches.
+	if resp.Name != "ci-deploy" {
+		t.Errorf("expected name %q, got %q", "ci-deploy", resp.Name)
+	}
+
+	// Verify permissions match and preserve order.
+	expectedPerms := []string{"tokens:read", "users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d", len(expectedPerms), len(resp.Permissions))
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+
+	// Verify created_at is non-empty.
+	if resp.CreatedAt == "" {
+		t.Error("expected non-empty created_at")
+	}
+
+	// Verify expires_at is non-null.
+	if resp.ExpiresAt == nil {
+		t.Error("expected non-null expires_at")
+	}
+
+	// Verify response does NOT contain 'token' or 'secret_hash' keys.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse response as map: %v", err)
+	}
+	if _, exists := raw["token"]; exists {
+		t.Error("response should not contain 'token' key — only CreatePATResponse includes the plaintext token")
+	}
+	if _, exists := raw["secret_hash"]; exists {
+		t.Error("response should not contain 'secret_hash' key")
+	}
+}
+
+// TestGetPAT_NotFound verifies that GET /user/tokens/:token_id returns
+// HTTP 404 with message "token not found" when the token_id does not exist
+// for the authenticated user.
+//
+// Test Spec: TS-09-33
+// Requirement: 09-REQ-7.2
+func TestGetPAT_NotFound(t *testing.T) {
+	e, _ := setupListPATServer(t, "user-get-nf")
+
+	rec := sendGET(t, e, "/user/tokens/nonexistent")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "token not found")
+}
+
+// TestGetPAT_RequiresTokensRead verifies that GET /user/tokens/:token_id
+// returns HTTP 403 when the authenticated credential is a PAT lacking
+// the tokens:read permission.
+//
+// Test Spec: TS-09-34
+// Requirement: 09-REQ-7.3
+func TestGetPAT_RequiresTokensRead(t *testing.T) {
+	const userID = "user-get-perm"
+	// PAT with only tokens:manage — no tokens:read.
+	e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:manage"})
+
+	insertTestPAT(t, database.SqlDB, "abc12345", userID, "test-pat",
+		"hash-abc", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendGET(t, e, "/user/tokens/abc12345")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for PAT lacking tokens:read, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetPAT_OtherUserToken verifies that GET /user/tokens/:token_id returns
+// HTTP 404 (not 403) when the token_id exists in the pats table but belongs
+// to a different user, to avoid leaking token existence information.
+//
+// Test Spec: TS-09-E11
+// Requirement: 09-REQ-7.E1
+func TestGetPAT_OtherUserToken(t *testing.T) {
+	const user1ID = "user-get-a"
+	const user2ID = "user-get-b"
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert both users.
+	insertTestUser(t, database.SqlDB, user1ID, "user1", "user1@example.com", "github", "gh-1")
+	insertTestUser(t, database.SqlDB, user2ID, "user2", "user2@example.com", "github", "gh-2")
+
+	// Insert a PAT belonging to user-2.
+	insertTestPAT(t, database.SqlDB, "user2pat1", user2ID, "user2-pat",
+		"hash-u2", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Set up server authenticated as user-1.
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test GetPAT cross-user isolation")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(user1ID))
+	handler.RegisterRoutes(g)
+
+	// User-1 requests user-2's PAT — should get 404, not 403.
+	rec := sendGET(t, e, "/user/tokens/user2pat1")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected HTTP 404, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseErrorResponse(t, rec)
+	if resp.Error.Message != "token not found" {
+		t.Errorf("expected message %q, got %q", "token not found", resp.Error.Message)
+	}
+}
+
+// TestGetPAT_DBError verifies that GET /user/tokens/:token_id returns
+// HTTP 500 with message "internal server error" when the database query
+// fails with an error other than db.ErrNotFound.
+//
+// Test Spec: TS-09-E12
+// Requirement: 09-REQ-7.E2
+func TestGetPAT_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	insertTestUser(t, database.SqlDB, "user-get-dberr", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test GetPAT DB error")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("user-get-dberr"))
+	handler.RegisterRoutes(g)
+
+	// Close the database AFTER setup to cause query failures.
+	database.Close()
+
+	rec := sendGET(t, e, "/user/tokens/abc12345")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 6.2: Integration tests for RevokePAT success and permission
+// Test Spec: TS-09-35, TS-09-37, TS-09-38
+// Requirements: 09-REQ-8.1, 09-REQ-8.3, 09-REQ-8.4
+// ========================================================================
+
+// TestRevokePAT_Success verifies that DELETE /user/tokens/:token_id issues
+// a conditional UPDATE setting revoked_at and returns HTTP 200 with the
+// updated PATResponse including a non-null revoked_at timestamp. The row
+// must persist in the pats table with revoked_at set.
+//
+// Test Spec: TS-09-35
+// Requirement: 09-REQ-8.1
+func TestRevokePAT_Success(t *testing.T) {
+	const userID = "user-revoke-1"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert an active (non-revoked) PAT.
+	insertTestPAT(t, database.SqlDB, "abc12345", userID, "active-pat",
+		"hash-abc", `["tokens:read","users:read"]`, 90,
+		nullStr("2025-04-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendDELETE(t, e, "/user/tokens/abc12345")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify revoked_at is set in the response.
+	if resp.RevokedAt == nil {
+		t.Fatal("expected revoked_at to be non-null in response")
+	}
+
+	// Verify the token_id matches.
+	if resp.TokenID != "abc12345" {
+		t.Errorf("expected token_id %q, got %q", "abc12345", resp.TokenID)
+	}
+
+	// Verify the pats table row still exists with revoked_at set.
+	var revokedAt sql.NullString
+	err := database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "abc12345",
+	).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to be set in database, but it was NULL")
+	}
+}
+
+// TestRevokePAT_RequiresTokensManage verifies that DELETE /user/tokens/:token_id
+// returns HTTP 403 when the authenticated credential is a PAT lacking the
+// tokens:manage permission. The token must remain unrevoked in the database.
+//
+// Test Spec: TS-09-37
+// Requirement: 09-REQ-8.3
+func TestRevokePAT_RequiresTokensManage(t *testing.T) {
+	const userID = "user-revoke-perm"
+	// PAT with only tokens:read — no tokens:manage.
+	e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:read"})
+
+	insertTestPAT(t, database.SqlDB, "abc12345", userID, "test-pat",
+		"hash-abc", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendDELETE(t, e, "/user/tokens/abc12345")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for PAT lacking tokens:manage, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	// Verify the PAT was NOT revoked in the database.
+	var revokedAt sql.NullString
+	err := database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "abc12345",
+	).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if revokedAt.Valid {
+		t.Fatal("expected revoked_at to remain NULL after permission denial, but it was set")
+	}
+}
+
+// TestRevokePAT_DoesNotDelete verifies that DELETE /user/tokens/:token_id
+// does not remove the PAT row from the pats table; it only sets revoked_at.
+// The record is preserved for audit purposes.
+//
+// Test Spec: TS-09-38
+// Requirement: 09-REQ-8.4
+func TestRevokePAT_DoesNotDelete(t *testing.T) {
+	const userID = "user-revoke-nodelete"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert an active PAT.
+	insertTestPAT(t, database.SqlDB, "abc12345", userID, "audit-trail-pat",
+		"hash-abc", `["tokens:read"]`, 90,
+		nullStr("2025-04-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendDELETE(t, e, "/user/tokens/abc12345")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify the row still exists in the pats table.
+	var tokenID string
+	var revokedAt sql.NullString
+	err := database.SqlDB.QueryRow(
+		"SELECT token_id, revoked_at FROM pats WHERE token_id = ?", "abc12345",
+	).Scan(&tokenID, &revokedAt)
+	if err != nil {
+		t.Fatalf("PAT row should still exist after revocation, but query failed: %v", err)
+	}
+	if tokenID != "abc12345" {
+		t.Errorf("expected token_id %q, got %q", "abc12345", tokenID)
+	}
+	if !revokedAt.Valid {
+		t.Error("expected revoked_at to be set after revocation, but it was NULL")
+	}
+
+	// Verify the total row count hasn't decreased.
+	var count int
+	err = database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM pats WHERE token_id = ?", "abc12345",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to count pats rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row for token_id 'abc12345' after revocation, got %d", count)
+	}
+}
+
+// ========================================================================
+// Task 6.3: Unit and integration tests for RevokePAT error cases and concurrency
+// Test Spec: TS-09-36, TS-09-E13, TS-09-E14, TS-09-E15
+// Requirements: 09-REQ-8.2, 09-REQ-8.E1, 09-REQ-8.E2, 09-REQ-8.E3
+// ========================================================================
+
+// TestRevokePAT_NotFound verifies that DELETE /user/tokens/:token_id returns
+// HTTP 404 with message "token not found" when the token_id does not exist
+// in the pats table for the authenticated user.
+//
+// Test Spec: TS-09-36
+// Requirement: 09-REQ-8.2
+func TestRevokePAT_NotFound(t *testing.T) {
+	e, _ := setupListPATServer(t, "user-revoke-nf")
+
+	rec := sendDELETE(t, e, "/user/tokens/missing00")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "token not found")
+}
+
+// TestRevokePAT_AlreadyRevoked verifies that DELETE /user/tokens/:token_id
+// returns HTTP 400 with message "token already revoked" when the token exists
+// but its revoked_at is already set.
+//
+// Test Spec: TS-09-36
+// Requirement: 09-REQ-8.2
+func TestRevokePAT_AlreadyRevoked(t *testing.T) {
+	const userID = "user-revoke-already"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert a revoked PAT.
+	insertTestPAT(t, database.SqlDB, "revoked01", userID, "old-revoked-pat",
+		"hash-rev", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStr("2024-08-01T00:00:00Z"), "2024-06-01T00:00:00Z")
+
+	rec := sendDELETE(t, e, "/user/tokens/revoked01")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "token already revoked")
+}
+
+// TestRevokePAT_OtherUserToken verifies that DELETE /user/tokens/:token_id
+// returns HTTP 404 (not 403) when the token_id exists but belongs to a
+// different user, to avoid information leakage.
+//
+// Test Spec: TS-09-E14
+// Requirement: 09-REQ-8.E2
+func TestRevokePAT_OtherUserToken(t *testing.T) {
+	const user1ID = "user-revoke-a"
+	const user2ID = "user-revoke-b"
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Insert both users.
+	insertTestUser(t, database.SqlDB, user1ID, "user1", "user1@example.com", "github", "gh-1")
+	insertTestUser(t, database.SqlDB, user2ID, "user2", "user2@example.com", "github", "gh-2")
+
+	// Insert an active PAT belonging to user-2.
+	insertTestPAT(t, database.SqlDB, "user2pat1", user2ID, "user2-pat",
+		"hash-u2", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Set up server authenticated as user-1.
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test RevokePAT cross-user isolation")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(user1ID))
+	handler.RegisterRoutes(g)
+
+	// User-1 attempts to revoke user-2's PAT — should get 404, not 403.
+	rec := sendDELETE(t, e, "/user/tokens/user2pat1")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected HTTP 404, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseErrorResponse(t, rec)
+	if resp.Error.Message != "token not found" {
+		t.Errorf("expected message %q, got %q", "token not found", resp.Error.Message)
+	}
+
+	// Verify user-2's PAT was NOT revoked.
+	var revokedAt sql.NullString
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "user2pat1",
+	).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if revokedAt.Valid {
+		t.Error("user-2's PAT should not be revoked by user-1's request")
+	}
+}
+
+// TestRevokePAT_Concurrent verifies that when two concurrent DELETE requests
+// arrive for the same token, exactly one receives HTTP 200 with revoked_at set,
+// and the other receives HTTP 400 with "token already revoked". The revoked_at
+// timestamp is set exactly once in the database.
+//
+// Test Spec: TS-09-E13
+// Requirement: 09-REQ-8.E1
+func TestRevokePAT_Concurrent(t *testing.T) {
+	const userID = "user-revoke-concurrent"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert an active PAT.
+	insertTestPAT(t, database.SqlDB, "concurpat", userID, "concurrent-test-pat",
+		"hash-conc", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	const goroutines = 2
+	results := make([]*httptest.ResponseRecorder, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodDelete, "/user/tokens/concurpat", nil)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			results[idx] = rec
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Count success (200) and already-revoked (400) responses.
+	successCount := 0
+	alreadyRevokedCount := 0
+	for _, rec := range results {
+		switch rec.Code {
+		case http.StatusOK:
+			successCount++
+			var resp patResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("failed to parse 200 response: %v", err)
+			}
+			if resp.RevokedAt == nil {
+				t.Error("HTTP 200 response should have revoked_at set")
+			}
+		case http.StatusBadRequest:
+			alreadyRevokedCount++
+			resp := parseErrorResponse(t, rec)
+			if resp.Error.Message != "token already revoked" {
+				t.Errorf("expected message %q, got %q", "token already revoked", resp.Error.Message)
+			}
+		default:
+			t.Errorf("unexpected HTTP status %d; body: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 HTTP 200 response, got %d", successCount)
+	}
+	if alreadyRevokedCount != 1 {
+		t.Errorf("expected exactly 1 HTTP 400 response, got %d", alreadyRevokedCount)
+	}
+
+	// Verify revoked_at is set exactly once in the database.
+	var count int
+	err := database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM pats WHERE token_id = ? AND revoked_at IS NOT NULL", "concurpat",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 row with revoked_at set, got %d", count)
+	}
+}
+
+// TestRevokePAT_DBError verifies that DELETE /user/tokens/:token_id returns
+// HTTP 500 with message "internal server error" when the UPDATE or follow-up
+// SELECT query fails with a database error.
+//
+// Test Spec: TS-09-E15
+// Requirement: 09-REQ-8.E3
+func TestRevokePAT_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	insertTestUser(t, database.SqlDB, "user-revoke-dberr", "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test RevokePAT DB error")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware("user-revoke-dberr"))
+	handler.RegisterRoutes(g)
+
+	// Close the database AFTER setup to cause UPDATE failures.
+	database.Close()
+
+	rec := sendDELETE(t, e, "/user/tokens/abc12345")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 6.4: Property tests for revocation idempotency and Cache-Control
+// Test Spec: TS-09-P5, TS-09-P7
+// Requirements: 09-REQ-8.E1, 09-REQ-1.4
+// ========================================================================
+
+// TestRevocationIdempotency_Property is a property-based test that dispatches
+// N concurrent DELETE /user/tokens/:token_id requests for the same active PAT
+// and verifies: exactly 1 receives HTTP 200, N-1 receive HTTP 400 with
+// message "token already revoked", and revoked_at is set exactly once in
+// the database.
+//
+// Test Spec: TS-09-P5
+// Requirements: 09-REQ-8.1, 09-REQ-8.2, 09-REQ-8.E1
+func TestRevocationIdempotency_Property(t *testing.T) {
+	// Test with varying concurrency levels.
+	for _, n := range []int{2, 5, 10} {
+		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
+			const userID = "user-idem-prop"
+			tokenID := fmt.Sprintf("idem%04d", n)
+
+			e, database := setupListPATServer(t, userID)
+
+			// Insert an active PAT.
+			insertTestPAT(t, database.SqlDB, tokenID, userID, "idempotency-test",
+				"hash-idem", `["tokens:read"]`, 90,
+				nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+			results := make([]*httptest.ResponseRecorder, n)
+			var wg sync.WaitGroup
+			wg.Add(n)
+
+			for i := 0; i < n; i++ {
+				go func(idx int) {
+					defer wg.Done()
+					req := httptest.NewRequest(http.MethodDelete, "/user/tokens/"+tokenID, nil)
+					rec := httptest.NewRecorder()
+					e.ServeHTTP(rec, req)
+					results[idx] = rec
+				}(i)
+			}
+
+			wg.Wait()
+
+			successCount := 0
+			alreadyRevokedCount := 0
+			for _, rec := range results {
+				switch rec.Code {
+				case http.StatusOK:
+					successCount++
+				case http.StatusBadRequest:
+					alreadyRevokedCount++
+					resp := parseErrorResponse(t, rec)
+					if resp.Error.Message != "token already revoked" {
+						t.Errorf("expected message %q, got %q",
+							"token already revoked", resp.Error.Message)
+					}
+				default:
+					t.Errorf("unexpected HTTP status %d; body: %s", rec.Code, rec.Body.String())
+				}
+			}
+
+			if successCount != 1 {
+				t.Errorf("expected exactly 1 HTTP 200, got %d", successCount)
+			}
+			if alreadyRevokedCount != n-1 {
+				t.Errorf("expected %d HTTP 400 responses, got %d", n-1, alreadyRevokedCount)
+			}
+
+			// Verify revoked_at is set exactly once.
+			var count int
+			err := database.SqlDB.QueryRow(
+				"SELECT COUNT(*) FROM pats WHERE token_id = ? AND revoked_at IS NOT NULL", tokenID,
+			).Scan(&count)
+			if err != nil {
+				t.Fatalf("failed to query pats table: %v", err)
+			}
+			if count != 1 {
+				t.Errorf("expected 1 row with revoked_at set, got %d", count)
+			}
+		})
+	}
+}
+
+// TestCacheControlHeader_Property is a property-based test that sends a
+// variety of valid and invalid requests to all four PAT endpoints and verifies
+// that every response includes the Cache-Control: no-store header, regardless
+// of HTTP status code (2xx, 4xx, or 5xx).
+//
+// Test Spec: TS-09-P7
+// Requirement: 09-REQ-1.4
+func TestCacheControlHeader_Property(t *testing.T) {
+	const userID = "user-cache-prop"
+	e, database := setupListPATServer(t, userID)
+
+	// Insert PATs for various test scenarios.
+	insertTestPAT(t, database.SqlDB, "cacheact1", userID, "active-cache-test",
+		"hash-cc1", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+	insertTestPAT(t, database.SqlDB, "cacherev1", userID, "revoked-cache-test",
+		"hash-cc2", `["tokens:read"]`, 90,
+		nullStr("2025-01-01T00:00:00Z"), nullStr("2024-08-01T00:00:00Z"), "2024-06-01T00:00:00Z")
+
+	// Define a set of requests covering various status codes across all endpoints.
+	requests := []struct {
+		label  string
+		method string
+		path   string
+		body   string
+	}{
+		// POST /user/tokens — valid request (should be 201)
+		{"POST valid", http.MethodPost, "/user/tokens",
+			`{"name":"cache-test","permissions":["tokens:read"],"expires":30}`},
+		// POST /user/tokens — invalid request body (should be 400)
+		{"POST invalid-json", http.MethodPost, "/user/tokens", "not json"},
+		// POST /user/tokens — missing name (should be 400)
+		{"POST missing-name", http.MethodPost, "/user/tokens",
+			`{"permissions":["tokens:read"]}`},
+		// GET /user/tokens — list (should be 200)
+		{"GET list", http.MethodGet, "/user/tokens", ""},
+		// GET /user/tokens/:token_id — existing (should be 200)
+		{"GET existing", http.MethodGet, "/user/tokens/cacheact1", ""},
+		// GET /user/tokens/:token_id — not found (should be 404)
+		{"GET notfound", http.MethodGet, "/user/tokens/nonexistent", ""},
+		// DELETE /user/tokens/:token_id — active token (should be 200)
+		{"DELETE active", http.MethodDelete, "/user/tokens/cacheact1", ""},
+		// DELETE /user/tokens/:token_id — already revoked (should be 400)
+		{"DELETE already-revoked", http.MethodDelete, "/user/tokens/cacherev1", ""},
+		// DELETE /user/tokens/:token_id — not found (should be 404)
+		{"DELETE notfound", http.MethodDelete, "/user/tokens/nonexistent", ""},
+	}
+
+	for _, req := range requests {
+		t.Run(req.label, func(t *testing.T) {
+			var rec *httptest.ResponseRecorder
+			if req.body != "" {
+				rec = sendJSON(t, e, req.method, req.path, req.body)
+			} else {
+				switch req.method {
+				case http.MethodGet:
+					rec = sendGET(t, e, req.path)
+				case http.MethodDelete:
+					rec = sendDELETE(t, e, req.path)
+				default:
+					t.Fatalf("unsupported method %q for no-body request", req.method)
+				}
+			}
+
+			cacheControl := rec.Header().Get("Cache-Control")
+			if cacheControl != "no-store" {
+				t.Errorf("HTTP %d %s %s: Cache-Control = %q, want %q",
+					rec.Code, req.method, req.path, cacheControl, "no-store")
 			}
 		})
 	}

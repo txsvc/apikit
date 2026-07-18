@@ -958,7 +958,7 @@ func TestListOrgs_DBError(t *testing.T) {
 func TestGetOrg_AsAdmin(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "get-org-uuid-1"
+	orgID := "a0000001-0000-4000-8000-000000000001"
 	insertTestOrg(t, sqlDB, orgID, "Admin Org", "admin-org", "https://admin.example.com", "active")
 
 	rec := sendGet(t, e, "/orgs/"+orgID)
@@ -998,7 +998,7 @@ func TestGetOrg_AsMember(t *testing.T) {
 	memberUserID := "member-user-uuid-1"
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, memberUserID)
 
-	orgID := "member-org-uuid-1"
+	orgID := "a0000002-0000-4000-8000-000000000002"
 
 	// Insert the user, org, and membership records (FK constraints require all).
 	insertTestUser(t, sqlDB, memberUserID, "member", "member@example.com", "github", "gh-member")
@@ -1031,7 +1031,7 @@ func TestGetOrg_NotMember(t *testing.T) {
 	nonMemberUserID := "non-member-user-uuid-1"
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, nonMemberUserID)
 
-	orgID := "forbidden-org-uuid-1"
+	orgID := "a0000003-0000-4000-8000-000000000003"
 
 	// Insert the user and org but NO membership row.
 	insertTestUser(t, sqlDB, nonMemberUserID, "outsider", "outsider@example.com", "github", "gh-outsider")
@@ -1078,7 +1078,7 @@ func TestGetOrg_InvalidID(t *testing.T) {
 func TestGetOrg_ETag(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "etag-org-uuid-1"
+	orgID := "a0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, sqlDB, orgID, "ETag Org", "etag-org", "", "active")
 
 	// First request: get the ETag from the response.
@@ -1122,7 +1122,7 @@ func TestGetOrg_MembershipDBError(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	orgID := "dberr-org-uuid-1"
+	orgID := "a0000005-0000-4000-8000-000000000005"
 
 	// Insert user and org while the database is intact.
 	insertTestUser(t, database.SqlDB, nonAdminUserID, "dberr-user", "dberr@example.com", "github", "gh-dberr")
@@ -1162,7 +1162,7 @@ func TestGetOrg_MembershipDBError(t *testing.T) {
 func TestUpdateOrg_Name(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "update-name-org-uuid"
+	orgID := "b0000001-0000-4000-8000-000000000001"
 	insertTestOrg(t, sqlDB, orgID, "Acme Corp", "acme-corp", "https://acme.example.com", "active")
 
 	// Retrieve original to compare updated_at and slug.
@@ -1205,7 +1205,7 @@ func TestUpdateOrg_Name(t *testing.T) {
 func TestUpdateOrg_URL(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "update-url-org-uuid"
+	orgID := "b0000002-0000-4000-8000-000000000002"
 	insertTestOrg(t, sqlDB, orgID, "URL Corp", "url-corp", "https://old.example.com", "active")
 
 	body := `{"url":"https://new.example.com"}`
@@ -1233,7 +1233,7 @@ func TestUpdateOrg_URL(t *testing.T) {
 func TestUpdateOrg_BothFields(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "update-both-org-uuid"
+	orgID := "b0000003-0000-4000-8000-000000000003"
 	insertTestOrg(t, sqlDB, orgID, "Both Corp", "both-corp", "https://both.example.com", "active")
 
 	body := `{"name":"Both Updated","url":"https://updated.example.com"}`
@@ -1261,7 +1261,7 @@ func TestUpdateOrg_BothFields(t *testing.T) {
 func TestUpdateOrg_SlugIgnored(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "slug-ignore-org-uuid"
+	orgID := "b0000004-0000-4000-8000-000000000004"
 	insertTestOrg(t, sqlDB, orgID, "Slug Corp", "original-slug", "", "active")
 
 	body := `{"name":"New Name","slug":"new-slug"}`
@@ -1290,7 +1290,7 @@ func TestUpdateOrg_SlugIgnored(t *testing.T) {
 func TestUpdateOrg_EmptyBody(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "empty-body-org-uuid"
+	orgID := "b0000005-0000-4000-8000-000000000005"
 	insertTestOrg(t, sqlDB, orgID, "EmptyBody Corp", "emptybody-corp", "", "active")
 
 	body := `{}`
@@ -1308,9 +1308,9 @@ func TestUpdateOrg_EmptyBody(t *testing.T) {
 func TestUpdateOrg_DuplicateName(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	targetOrgID := "dup-name-target-uuid"
+	targetOrgID := "b0000006-0000-4000-8000-000000000006"
 	insertTestOrg(t, sqlDB, targetOrgID, "Target Corp", "target-corp", "", "active")
-	insertTestOrg(t, sqlDB, "dup-name-taken-uuid", "Taken Name Corp", "taken-name-corp", "", "active")
+	insertTestOrg(t, sqlDB, "b0000007-0000-4000-8000-000000000007", "Taken Name Corp", "taken-name-corp", "", "active")
 
 	body := `{"name":"Taken Name Corp"}`
 	rec := sendJSON(t, e, http.MethodPatch, "/orgs/"+targetOrgID, body)
@@ -1356,7 +1356,7 @@ func TestUpdateOrg_InvalidID(t *testing.T) {
 func TestUpdateOrg_NonAdmin(t *testing.T) {
 	e, sqlDB := setupOrgNonAdminTestServer(t)
 
-	orgID := "nonadmin-update-org-uuid"
+	orgID := "b0000008-0000-4000-8000-000000000008"
 	insertTestOrg(t, sqlDB, orgID, "NonAdmin Corp", "nonadmin-corp", "", "active")
 
 	body := `{"name":"New Name"}`
@@ -1374,7 +1374,7 @@ func TestUpdateOrg_NonAdmin(t *testing.T) {
 func TestUpdateOrg_EmptyName(t *testing.T) {
 	e, sqlDB := setupOrgAdminTestServer(t)
 
-	orgID := "emptyname-update-org-uuid"
+	orgID := "b0000009-0000-4000-8000-000000000009"
 	insertTestOrg(t, sqlDB, orgID, "EmptyName Corp", "emptyname-corp", "", "active")
 
 	body := `{"name":"   "}`
@@ -1403,7 +1403,7 @@ func TestUpdateOrg_DBError(t *testing.T) {
 	g.Use(adminAuthMiddleware("test-admin-uuid"))
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
-	orgID := "dberror-update-org-uuid"
+	orgID := "b000000a-0000-4000-8000-00000000000a"
 	insertTestOrg(t, database.SqlDB, orgID, "DBError Corp", "dberror-corp", "", "active")
 
 	// Install a BEFORE UPDATE trigger that raises a generic DB error.

@@ -206,13 +206,152 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 }
 
 // getOrg handles GET /orgs/:id — retrieves a single organization by ID.
+// Admin users can view any organization. Non-admin users can only view
+// organizations they are a member of (checked via isOrgMember). Sets an
+// ETag header from updated_at and supports conditional GET via If-None-Match.
 func (h *orgHandlers) getOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Validate :id path parameter (08-REQ-4.5).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Query the org from the database (08-REQ-4.4).
+	var org OrgResponse
+	err := h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Access control: admin or org member (08-REQ-4.1, 08-REQ-4.2, 08-REQ-4.3).
+	if !auth.IsAdmin(c) {
+		userID := auth.GetUserID(c)
+		isMember, err := isOrgMember(h.db, org.ID, userID)
+		if err != nil {
+			// DB error on membership check (08-REQ-4.E1).
+			return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		if !isMember {
+			return apikit.APIError(c, http.StatusForbidden, "forbidden")
+		}
+	}
+
+	// Parse UpdatedAt string to time.Time for ETag helpers (08-REQ-4.1, 08-REQ-4.6).
+	// SetETag/CheckETag accept time.Time, not string.
+	updatedAt, err := db.ParseTime(org.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	apikit.SetETag(c, updatedAt)
+
+	// Check If-None-Match for conditional GET (08-REQ-4.6).
+	if apikit.CheckETag(c, updatedAt) {
+		return c.NoContent(http.StatusNotModified)
+	}
+
+	return c.JSON(http.StatusOK, org)
 }
 
 // updateOrg handles PATCH /orgs/:id — updates an organization's name and/or URL.
+// Requires admin access. Silently ignores any slug field in the request body
+// (slug is immutable after creation). Returns HTTP 400 if no recognized fields
+// are provided. Detects UNIQUE constraint violations on name and returns 409.
 func (h *orgHandlers) updateOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-5.7).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Validate :id path parameter (08-REQ-5.6).
+	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid organization id")
+	}
+
+	// Bind request body (08-REQ-5.3).
+	var req UpdateOrgRequest
+	if err := c.Bind(&req); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Check if there are any recognized fields to update (08-REQ-5.3).
+	if req.Name == nil && req.URL == nil {
+		return apikit.APIError(c, http.StatusBadRequest, "no fields to update")
+	}
+
+	// If name is provided, validate it after trimming (08-REQ-5.E1).
+	if req.Name != nil {
+		trimmed := strings.TrimSpace(*req.Name)
+		if trimmed == "" {
+			return apikit.APIError(c, http.StatusBadRequest, "name is required")
+		}
+		req.Name = &trimmed
+	}
+
+	// Verify the org exists (08-REQ-5.5).
+	var org OrgResponse
+	err := h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Build dynamic UPDATE — slug is never in the SET clause (08-REQ-5.2, 08-PROP-1).
+	now := db.FormatTime(time.Now().UTC())
+	setClauses := []string{"updated_at = ?"}
+	args := []interface{}{now}
+
+	if req.Name != nil {
+		setClauses = append(setClauses, "name = ?")
+		args = append(args, *req.Name)
+	}
+	if req.URL != nil {
+		setClauses = append(setClauses, "url = ?")
+		args = append(args, *req.URL)
+	}
+
+	args = append(args, id)
+	query := "UPDATE orgs SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
+
+	_, err = h.db.Exec(query, args...)
+	if err != nil {
+		// Detect UNIQUE constraint violation on name (08-REQ-5.4).
+		errStr := err.Error()
+		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.name") {
+			return apikit.APIError(c, http.StatusConflict, "organization name already exists")
+		}
+		// Any other DB error (08-REQ-5.E2).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Re-fetch the updated org to return (08-REQ-5.1).
+	err = h.db.QueryRow(
+		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		        status, created_at, updated_at
+		 FROM orgs WHERE id = ?`, id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+		&org.Status, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, org)
 }
 
 // deleteOrg handles DELETE /orgs/:id — deletes an organization.
