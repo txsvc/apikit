@@ -734,16 +734,145 @@ func (h *userHandlers) revokeUserToken(c echo.Context) error {
 }
 
 // getOwnProfile handles GET /user — retrieves the authenticated user's profile.
+// Requires users:read permission via PAT or session. Sets the ETag header from
+// user.UpdatedAt and supports conditional requests via If-None-Match (returns
+// 304 on cache hit). (07-REQ-14.1, 07-REQ-14.2, 07-REQ-14.E1)
 func (h *userHandlers) getOwnProfile(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Permission check: users:read (07-REQ-14.2).
+	if err := auth.RequirePermission(c, "users", "read"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	userID := auth.GetUserID(c)
+
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, userID,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Parse UpdatedAt string to time.Time for ETag helpers (07-REQ-14.1).
+	updatedAt, err := db.ParseTime(user.UpdatedAt)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	apikit.SetETag(c, updatedAt)
+
+	// Check If-None-Match for conditional GET (07-REQ-14.E1).
+	if apikit.CheckETag(c, updatedAt) {
+		return c.NoContent(http.StatusNotModified)
+	}
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // updateOwnProfile handles PATCH /user — updates the authenticated user's full_name.
+// Requires users:read permission (not users:write, which does not exist in the
+// PAT permission set). Uses UpdateUserRequest with FullName *string to distinguish
+// a missing field (nil pointer → 400) from an empty string.
+// (07-REQ-15.1, 07-REQ-15.2, 07-REQ-15.3, 07-REQ-15.E1)
 func (h *userHandlers) updateOwnProfile(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Permission check: users:read (07-REQ-15.3, 07-REQ-15.E1).
+	if err := auth.RequirePermission(c, "users", "read"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	userID := auth.GetUserID(c)
+
+	// Bind request body into UpdateUserRequest (07-REQ-15.2).
+	var req UpdateUserRequest
+	if err := c.Bind(&req); err != nil {
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Check pointer: nil means field was absent → 400 (07-REQ-15.2).
+	if req.FullName == nil {
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "missing required field: full_name")
+	}
+
+	// Verify the user exists.
+	var exists int
+	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", userID).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Update full_name and updated_at (07-REQ-15.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET full_name = ?, updated_at = ? WHERE id = ?`,
+		*req.FullName, now, userID,
+	)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Fetch the updated user to return in the response.
+	var user User
+	err = h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, userID,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, user)
 }
 
-// listOwnOrgs handles GET /user/orgs — lists the authenticated user's organizations.
+// listOwnOrgs handles GET /user/orgs — lists the authenticated user's active
+// organization memberships. Requires orgs:read permission. Blocked organizations
+// are excluded by the WHERE clause. Returns an empty JSON array [] when no
+// active memberships exist. (07-REQ-16.1, 07-REQ-16.2, 07-REQ-16.E1, 07-REQ-16.E2)
 func (h *userHandlers) listOwnOrgs(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Permission check: orgs:read (07-REQ-16.2).
+	if err := auth.RequirePermission(c, "orgs", "read"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	userID := auth.GetUserID(c)
+
+	rows, err := h.db.Query(
+		`SELECT o.id, o.name, o.slug, COALESCE(o.url, '') AS url,
+		        o.status, o.created_at, o.updated_at
+		 FROM orgs o
+		 JOIN org_members m ON o.id = m.org_id
+		 WHERE m.user_id = ? AND o.status = 'active'`, userID,
+	)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Use make to ensure JSON encodes as [] not null (07-REQ-16.E2, 07-PROP-6).
+	orgs := make([]OrgResponse, 0)
+	for rows.Next() {
+		var org OrgResponse
+		if err := rows.Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+			&org.Status, &org.CreatedAt, &org.UpdatedAt); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		orgs = append(orgs, org)
+	}
+	if err := rows.Err(); err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, orgs)
 }

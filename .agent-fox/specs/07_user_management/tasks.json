@@ -1197,7 +1197,7 @@
             "07-REQ-14.2",
             "07-REQ-14.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1223,7 +1223,7 @@
             "07-REQ-15.3",
             "07-REQ-15.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1248,7 +1248,7 @@
             "07-REQ-16.E1",
             "07-REQ-16.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
