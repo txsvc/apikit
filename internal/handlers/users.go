@@ -446,13 +446,99 @@ func (h *userHandlers) demoteUser(c echo.Context) error {
 }
 
 // blockUser handles POST /users/:id/block — sets user status to blocked.
+// Requires admin access. Idempotent: if the user already has status='blocked',
+// returns 200 with the existing user object without modifying the database.
 func (h *userHandlers) blockUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-8.4, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Fetch the target user (07-REQ-8.3).
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already blocked → return unchanged (07-REQ-8.2, 07-PROP-2).
+	if user.Status == "blocked" {
+		return c.JSON(http.StatusOK, user)
+	}
+
+	// Update status to blocked (07-REQ-8.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET status = 'blocked', updated_at = ? WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	user.Status = "blocked"
+	user.UpdatedAt = now
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // unblockUser handles POST /users/:id/unblock — sets user status to active.
+// Requires admin access. Idempotent: if the user already has status='active',
+// returns 200 with the existing user object without modifying the database.
 func (h *userHandlers) unblockUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-9.4, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Fetch the target user (07-REQ-9.3).
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already active → return unchanged (07-REQ-9.2, 07-PROP-2).
+	if user.Status == "active" {
+		return c.JSON(http.StatusOK, user)
+	}
+
+	// Update status to active (07-REQ-9.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET status = 'active', updated_at = ? WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	user.Status = "active"
+	user.UpdatedAt = now
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // listUserKeys handles GET /users/:id/keys — lists API key metadata for a user.
