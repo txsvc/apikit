@@ -55,6 +55,20 @@ func (m *mockAdminTokensClient) RevokeUserToken(ctx context.Context, userID, tok
 	return m.revokeTokenErr
 }
 
+// makeTokensRunner creates a TokensRunner that wraps a mockAdminTokensClient,
+// bridging the typed mock interface to the any-typed function values used
+// by the production code (which cannot import apikit due to import cycles).
+func makeTokensRunner(mock *mockAdminTokensClient) *cli.TokensRunner {
+	return &cli.TokensRunner{
+		ListUserTokens: func(ctx context.Context, userID string) (any, error) {
+			return mock.ListUserTokens(ctx, userID)
+		},
+		RevokeUserToken: func(ctx context.Context, userID, tokenID string) error {
+			return mock.RevokeUserToken(ctx, userID, tokenID)
+		},
+	}
+}
+
 // ===========================================================================
 // Task Group 4.2: admin tokens tests (REQ-23, REQ-24)
 // ===========================================================================
@@ -70,7 +84,7 @@ func TestAdminTokensListCommand(t *testing.T) {
 		listTokensResult: []*apikit.PAT{{TokenID: "t1", Name: "mytoken"}},
 	}
 
-	stdout, err := executeAdminCmd("tokens", "list", "u1")
+	stdout, err := executeAdminCmdWithClient(makeTokensRunner(mock), "tokens", "list", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -173,7 +187,7 @@ func TestAdminTokensRevokeCommand(t *testing.T) {
 		revokeTokenErr: nil,
 	}
 
-	stdout, err := executeAdminCmd("tokens", "revoke", "u1", "t1")
+	stdout, err := executeAdminCmdWithClient(makeTokensRunner(mock), "tokens", "revoke", "u1", "t1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)

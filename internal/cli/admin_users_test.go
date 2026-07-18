@@ -1821,6 +1821,8 @@ func TestJSONOutputFormatting(t *testing.T) {
 
 func TestVoidResponseCommands(t *testing.T) {
 	orgsMock := &mockAdminOrgsClient{}
+	keysMock := &mockAdminKeysClient{}
+	tokensMock := &mockAdminTokensClient{}
 
 	tests := []struct {
 		name   string
@@ -1830,8 +1832,8 @@ func TestVoidResponseCommands(t *testing.T) {
 		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
-		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}},
-		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}},
+		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}, client: makeKeysRunner(keysMock)},
+		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}, client: makeTokensRunner(tokensMock)},
 	}
 
 	for _, tt := range tests {
@@ -2273,6 +2275,8 @@ func TestSDKNotCalledOnValidationFailure(t *testing.T) {
 
 func TestVoidCommandsAlwaysPrintEmpty(t *testing.T) {
 	orgsMock := &mockAdminOrgsClient{}
+	keysMock := &mockAdminKeysClient{}
+	tokensMock := &mockAdminTokensClient{}
 
 	voidCmds := []struct {
 		name   string
@@ -2282,8 +2286,8 @@ func TestVoidCommandsAlwaysPrintEmpty(t *testing.T) {
 		{name: "orgs delete", args: []string{"orgs", "delete", "o1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "orgs members add", args: []string{"orgs", "members", "add", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
 		{name: "orgs members remove", args: []string{"orgs", "members", "remove", "o1", "u1"}, client: makeOrgsRunner(orgsMock)},
-		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}},
-		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}},
+		{name: "keys revoke", args: []string{"keys", "revoke", "u1", "k1"}, client: makeKeysRunner(keysMock)},
+		{name: "tokens revoke", args: []string{"tokens", "revoke", "u1", "t1"}, client: makeTokensRunner(tokensMock)},
 	}
 
 	for _, vc := range voidCmds {

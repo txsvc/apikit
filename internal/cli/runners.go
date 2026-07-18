@@ -34,3 +34,19 @@ type OrgsRunner struct {
 	AddOrgMember    func(ctx context.Context, orgID, userID string) error
 	RemoveOrgMember func(ctx context.Context, orgID, userID string) error
 }
+
+// KeysRunner holds function values for admin API key operations.
+// Same DI pattern as UsersRunner — primitive types and any to avoid
+// importing the root apikit package.
+type KeysRunner struct {
+	ListUserKeys  func(ctx context.Context, userID string) (any, error)
+	RevokeUserKey func(ctx context.Context, userID, keyID string) error
+}
+
+// TokensRunner holds function values for admin token operations.
+// Same DI pattern as UsersRunner — primitive types and any to avoid
+// importing the root apikit package.
+type TokensRunner struct {
+	ListUserTokens  func(ctx context.Context, userID string) (any, error)
+	RevokeUserToken func(ctx context.Context, userID, tokenID string) error
+}

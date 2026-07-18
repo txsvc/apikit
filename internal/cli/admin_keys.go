@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -26,7 +27,24 @@ func newAdminKeysCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*KeysRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			userID := args[0]
+			result, err := runner.ListUserKeys(context.Background(), userID)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 
@@ -34,14 +52,31 @@ func newAdminKeysCmd() *cobra.Command {
 	revokeCmd := &cobra.Command{
 		Use:   "revoke",
 		Short: "Revoke a user's API key",
-		Args:  cobra.ExactArgs(2),
+		Args:  adminCheckTwoArgs("user_id", "key_id"),
 		Annotations: map[string]string{
 			"method": "DELETE",
 			"path":   "/users/:id/keys/:key_id",
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*KeysRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			userID := args[0]
+			keyID := args[1]
+			if err := runner.RevokeUserKey(context.Background(), userID, keyID); err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, struct{}{}); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 

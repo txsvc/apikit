@@ -55,6 +55,20 @@ func (m *mockAdminKeysClient) RevokeUserKey(ctx context.Context, userID, keyID s
 	return m.revokeKeyErr
 }
 
+// makeKeysRunner creates a KeysRunner that wraps a mockAdminKeysClient,
+// bridging the typed mock interface to the any-typed function values used
+// by the production code (which cannot import apikit due to import cycles).
+func makeKeysRunner(mock *mockAdminKeysClient) *cli.KeysRunner {
+	return &cli.KeysRunner{
+		ListUserKeys: func(ctx context.Context, userID string) (any, error) {
+			return mock.ListUserKeys(ctx, userID)
+		},
+		RevokeUserKey: func(ctx context.Context, userID, keyID string) error {
+			return mock.RevokeUserKey(ctx, userID, keyID)
+		},
+	}
+}
+
 // ===========================================================================
 // Task Group 4.2: admin keys tests (REQ-21, REQ-22)
 // ===========================================================================
@@ -70,7 +84,7 @@ func TestAdminKeysListCommand(t *testing.T) {
 		listKeysResult: []*apikit.APIKeyMeta{{KeyID: "k1"}},
 	}
 
-	stdout, err := executeAdminCmd("keys", "list", "u1")
+	stdout, err := executeAdminCmdWithClient(makeKeysRunner(mock), "keys", "list", "u1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
@@ -173,7 +187,7 @@ func TestAdminKeysRevokeCommand(t *testing.T) {
 		revokeKeyErr: nil,
 	}
 
-	stdout, err := executeAdminCmd("keys", "revoke", "u1", "k1")
+	stdout, err := executeAdminCmdWithClient(makeKeysRunner(mock), "keys", "revoke", "u1", "k1")
 
 	if err != nil {
 		t.Errorf("expected nil error (exit 0), got: %v", err)
