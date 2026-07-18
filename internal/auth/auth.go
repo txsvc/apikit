@@ -34,27 +34,41 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 			}
 
 			// Step 2: Detect credential type.
-			credType, _, err := parseToken(token)
+			credType, components, err := parseToken(token)
 			if err != nil {
 				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
 
 			// Step 3: Dispatch to credential-type-specific validation.
-			// Validation logic for each credential type is implemented in
-			// later task groups (8, 9, 10). For now, dispatch based on type.
+			var authInfo *AuthInfo
+			var validationErr error
+
 			switch credType {
 			case "admin_token":
-				// TODO(task-8.1): validateAdminToken
-				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+				// Extract hex suffix after '<prefix>_admin_'.
+				adminPrefix := apikit.TokenPrefix + "_admin_"
+				hexSuffix := token[len(adminPrefix):]
+				authInfo, validationErr = validateAdminToken(database, token, hexSuffix)
 			case "api_key":
-				// TODO(task-8.2): validateAPIKey
-				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+				// components[0] = key_id, components[1] = secret.
+				authInfo, validationErr = validateAPIKey(database, components[0], components[1])
 			case "pat":
 				// TODO(task-9.1): validatePAT
 				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
 			default:
 				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
+
+			if validationErr != nil {
+				if ae, ok := validationErr.(*authError); ok {
+					return apikit.APIError(c, ae.Code, ae.Message)
+				}
+				return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+			}
+
+			// Step 4: Inject AuthInfo into request context and call next handler.
+			setAuthInfoContext(c, authInfo)
+			return next(c)
 		}
 	}
 }
