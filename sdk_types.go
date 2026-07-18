@@ -140,11 +140,15 @@ type RevokeKeyResponse struct {
 }
 
 // ListUsersOptions configures the ListUsers request.
+// Designed to accommodate additional filter fields (e.g., pagination,
+// search) in future iterations without breaking existing callers.
 type ListUsersOptions struct {
 	IncludeBlocked bool
 }
 
 // ListOrgsOptions configures the ListOrgs request.
+// Designed to accommodate additional filter fields (e.g., pagination,
+// search) in future iterations without breaking existing callers.
 type ListOrgsOptions struct {
 	IncludeBlocked bool
 }
