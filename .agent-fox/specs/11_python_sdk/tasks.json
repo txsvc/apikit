@@ -1119,7 +1119,7 @@
             "11-REQ-16.1",
             "11-REQ-17.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1145,7 +1145,7 @@
             "11-REQ-18.2",
             "11-REQ-18.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1176,7 +1176,7 @@
             "11-PATH-5",
             "11-PATH-6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1195,7 +1195,7 @@
             "11-REQ-1.2",
             "11-REQ-2.1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1220,7 +1220,7 @@
             "11-REQ-9.2",
             "11-REQ-9.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
