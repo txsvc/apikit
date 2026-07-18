@@ -85,34 +85,34 @@ func (h *PATHandler) RegisterRoutes(g *echo.Group) {
 func (h *PATHandler) createPAT(c echo.Context) error {
 	// Auth check: require tokens:manage permission (09-REQ-1.2).
 	if err := auth.RequirePermission(c, "tokens", "manage"); err != nil {
-		return apikit.APIError(c, http.StatusForbidden, "insufficient permissions")
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
 	}
 
 	// Decode JSON request body (09-REQ-3.7).
 	var req CreatePATRequest
 	if err := c.Bind(&req); err != nil {
-		return apikit.APIError(c, http.StatusBadRequest, "invalid request body")
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
 	}
 
 	// Validate name (09-REQ-3.1, 09-REQ-3.2).
 	if req.Name == "" {
-		return apikit.APIError(c, http.StatusBadRequest, "name is required")
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "name is required")
 	}
 	if len(req.Name) > 255 {
-		return apikit.APIError(c, http.StatusBadRequest, "name must be 255 characters or fewer")
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "name must be 255 characters or fewer")
 	}
 
 	// Validate permissions (09-REQ-3.3, 09-REQ-3.4, 09-REQ-3.5, 09-REQ-3.E3).
 	if len(req.Permissions) == 0 {
-		return apikit.APIError(c, http.StatusBadRequest, "permissions are required")
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
 	}
 	for _, p := range req.Permissions {
 		if strings.Count(p, ":") != 1 {
-			return apikit.APIError(c, http.StatusBadRequest, fmt.Sprintf("invalid permission format: %s", p))
+			return apikit.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("invalid permission format: %s", p))
 		}
 		parts := strings.SplitN(p, ":", 2)
 		if !h.registry.IsValid(parts[0], parts[1]) {
-			return apikit.APIError(c, http.StatusBadRequest, fmt.Sprintf("unknown permission: %s", p))
+			return apikit.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("unknown permission: %s", p))
 		}
 	}
 
@@ -122,7 +122,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		expiresDays = *req.Expires
 	}
 	if expiresDays != 0 && expiresDays != 30 && expiresDays != 60 && expiresDays != 90 {
-		return apikit.APIError(c, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
+		return apikit.WriteAPIError(c, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
 	}
 
 	// Privilege escalation check (09-REQ-4.1, 09-REQ-4.2, 09-REQ-4.3).
@@ -134,7 +134,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		}
 		for _, p := range req.Permissions {
 			if !authPerms[p] {
-				return apikit.APIError(c, http.StatusForbidden, fmt.Sprintf("cannot grant permission: %s", p))
+				return apikit.WriteAPIError(c, http.StatusForbidden, fmt.Sprintf("cannot grant permission: %s", p))
 			}
 		}
 	}
@@ -142,11 +142,11 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 	// Generate token_id and secret (09-REQ-2.1, 09-REQ-2.2, 09-REQ-2.E1).
 	tokenID, err := generateTokenID()
 	if err != nil {
-		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	secret, err := generateSecret()
 	if err != nil {
-		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Hash secret and build full token string (09-REQ-2.3, 09-REQ-2.4).
@@ -165,7 +165,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 	// Serialize permissions to JSON for storage (09-REQ-5.3).
 	permsJSON, err := json.Marshal(req.Permissions)
 	if err != nil {
-		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Store in database via transaction (09-REQ-5.1, 09-REQ-5.5, 09-REQ-5.E1).
@@ -179,7 +179,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		return execErr
 	})
 	if err != nil {
-		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Return HTTP 201 with the one-time response (09-REQ-5.1, 09-REQ-5.2).
@@ -195,17 +195,17 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 
 // listPATs handles GET /user/tokens.
 func (h *PATHandler) listPATs(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
 }
 
 // getPAT handles GET /user/tokens/:token_id.
 func (h *PATHandler) getPAT(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
 }
 
 // revokePAT handles DELETE /user/tokens/:token_id.
 func (h *PATHandler) revokePAT(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
 }
 
 // generateTokenID generates a cryptographically random 8-character string

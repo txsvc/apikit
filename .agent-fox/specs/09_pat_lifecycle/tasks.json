@@ -807,7 +807,7 @@
             "09-REQ-5.2",
             "09-REQ-5.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -827,7 +827,7 @@
             "09-REQ-5.5",
             "09-REQ-5.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -853,7 +853,7 @@
             "09-REQ-5.7",
             "09-REQ-1.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
