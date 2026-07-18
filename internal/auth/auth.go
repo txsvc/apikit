@@ -53,8 +53,8 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 				// components[0] = key_id, components[1] = secret.
 				authInfo, validationErr = validateAPIKey(database, components[0], components[1])
 			case "pat":
-				// TODO(task-9.1): validatePAT
-				return apikit.APIError(c, http.StatusUnauthorized, "invalid credentials")
+				// components[0] = token_id, components[1] = secret.
+				authInfo, validationErr = validatePAT(database, components[0], components[1])
 			default:
 				return apikit.APIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
@@ -134,25 +134,58 @@ func hashToken(input string) string {
 }
 
 // RequireAdmin returns HTTP 403 with "forbidden" if the authenticated credential
-// does not have admin-level access. Returns nil if the credential is admin-level.
+// does not have admin-level access. Returns nil if the credential is admin-level
+// (admin token or admin-role API key).
+//
+// When no AuthInfo is present in the context (GetAuthInfo returns nil), treats
+// the request as unauthenticated and returns HTTP 403 "forbidden" (05-REQ-7.E1).
 func RequireAdmin(c echo.Context) error {
-	// Stub: not implemented — returns nil for all cases.
+	if !IsAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
+	}
 	return nil
 }
 
 // RequireOwnerOrAdmin returns HTTP 403 with "forbidden" if the authenticated
 // user is neither the resource owner (matching resourceOwnerID) nor an admin.
 // Returns nil if the user is the owner or has admin-level access.
+//
+// An empty resourceOwnerID is treated as non-matching (it does not equal any
+// valid UUID), so the check falls through to the admin test (05-REQ-7.E2).
 func RequireOwnerOrAdmin(c echo.Context, resourceOwnerID string) error {
-	// Stub: not implemented — returns nil for all cases.
-	return nil
+	if resourceOwnerID != "" && GetUserID(c) == resourceOwnerID {
+		return nil
+	}
+	return RequireAdmin(c)
 }
 
 // RequirePermission returns HTTP 403 with "insufficient permissions" if a PAT
 // credential lacks the specified resource_type:action permission. For admin
 // tokens and API keys, returns nil without checking permissions (implicit full
-// access). Returns nil if the PAT has the required permission.
+// access for their access level). Returns nil if the PAT has the required
+// permission (05-REQ-7.5, 05-REQ-7.6).
+//
+// When no AuthInfo is present in the context, returns HTTP 403 "forbidden"
+// to prevent fail-open behavior on unprotected routes (addresses major
+// reviewer finding about nil AuthInfo).
 func RequirePermission(c echo.Context, resourceType, action string) error {
-	// Stub: not implemented — returns nil for all cases.
-	return nil
+	auth := GetAuthInfo(c)
+	if auth == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
+	}
+
+	// Admin tokens and API keys carry implicit full permissions for their
+	// access level — bypass PAT permission check (05-REQ-7.5).
+	if auth.CredentialType == "admin_token" || auth.CredentialType == "api_key" {
+		return nil
+	}
+
+	// PAT credentials must have the specific permission (05-REQ-7.6, 05-REQ-7.7).
+	required := resourceType + ":" + action
+	for _, p := range auth.Permissions {
+		if p == required {
+			return nil
+		}
+	}
+	return echo.NewHTTPError(http.StatusForbidden, "insufficient permissions")
 }
