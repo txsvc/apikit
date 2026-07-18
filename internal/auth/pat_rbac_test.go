@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,13 +52,10 @@ func newEchoContext() (echo.Context, *httptest.ResponseRecorder) {
 }
 
 // setAuthInfo injects an AuthInfo struct into the Echo request's
-// context.Context using the unexported authInfoKey. This mirrors what
-// the auth middleware does after successful authentication via
-// setAuthInfoContext. Using context.WithValue ensures the AuthInfo is
-// stored under the typed key, not accessible via plain string keys.
+// context.Context. This mirrors what the auth middleware does after
+// successful authentication via setAuthInfoContext.
 func setAuthInfo(c echo.Context, info *AuthInfo) {
-	ctx := context.WithValue(c.Request().Context(), authInfoKey, info)
-	c.SetRequest(c.Request().WithContext(ctx))
+	SetAuthInfo(c, info)
 }
 
 // assertHTTPError checks that err is a non-nil *echo.HTTPError with the

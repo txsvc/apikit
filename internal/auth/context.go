@@ -1,38 +1,21 @@
 package auth
 
 import (
-	"context"
-
 	"github.com/labstack/echo/v4"
+
+	"github.com/txsvc/apikit/internal/authctx"
 )
 
-// contextKey is an unexported string type used for context keys to avoid
-// collisions with other packages. External packages cannot construct values
-// of this type, preventing accidental overwrites or reads of AuthInfo.
-type contextKey string
-
-// authInfoKey is the context key used to store and retrieve AuthInfo in the
-// request's context.Context. Because contextKey is unexported, only code in
-// this package can construct the matching key.
-const authInfoKey contextKey = "auth_info"
-
-// AuthInfo carries authenticated credential information injected into the
-// request context by the auth middleware.
-type AuthInfo struct {
-	CredentialType string
-	UserID         string
-	Role           string
-	KeyID          string
-	TokenID        string
-	Permissions    []string
-}
+// AuthInfo is a type alias for authctx.AuthInfo. The AuthInfo struct and
+// context helpers are defined in internal/authctx to break the import cycle
+// between internal/keys and internal/auth.
+type AuthInfo = authctx.AuthInfo
 
 // setAuthInfoContext stores the AuthInfo in the request's context.Context
 // using the unexported typed key. This ensures external packages cannot
 // access the AuthInfo via a plain string key.
 func setAuthInfoContext(c echo.Context, info *AuthInfo) {
-	ctx := context.WithValue(c.Request().Context(), authInfoKey, info)
-	c.SetRequest(c.Request().WithContext(ctx))
+	authctx.SetAuthInfo(c, info)
 }
 
 // SetAuthInfo stores the AuthInfo in the request's context.Context, making it
@@ -41,33 +24,21 @@ func setAuthInfoContext(c echo.Context, info *AuthInfo) {
 // internally, and test code can call it to inject auth state without running
 // the full middleware stack.
 func SetAuthInfo(c echo.Context, info *AuthInfo) {
-	setAuthInfoContext(c, info)
+	authctx.SetAuthInfo(c, info)
 }
 
 // GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
 // Returns nil if no AuthInfo has been injected (e.g. in tests without
 // the middleware).
 func GetAuthInfo(c echo.Context) *AuthInfo {
-	val := c.Request().Context().Value(authInfoKey)
-	if val == nil {
-		return nil
-	}
-	auth, ok := val.(*AuthInfo)
-	if !ok {
-		return nil
-	}
-	return auth
+	return authctx.GetAuthInfo(c)
 }
 
 // GetUserID returns the authenticated user's UUID string from the context
 // AuthInfo, or an empty string if AuthInfo is nil or UserID is empty
 // (admin token case).
 func GetUserID(c echo.Context) string {
-	auth := GetAuthInfo(c)
-	if auth == nil {
-		return ""
-	}
-	return auth.UserID
+	return authctx.GetUserID(c)
 }
 
 // IsAdmin returns true if the authenticated credential has admin-level access.
@@ -77,10 +48,10 @@ func GetUserID(c echo.Context) string {
 // Per PRD intent (and critical reviewer finding): PATs with admin role must
 // NOT be treated as admin-level to preserve PAT scoping.
 func IsAdmin(c echo.Context) bool {
-	auth := GetAuthInfo(c)
-	if auth == nil {
+	info := GetAuthInfo(c)
+	if info == nil {
 		return false
 	}
-	return auth.CredentialType == "admin_token" ||
-		(auth.CredentialType == "api_key" && auth.Role == "admin")
+	return info.CredentialType == "admin_token" ||
+		(info.CredentialType == "api_key" && info.Role == "admin")
 }
