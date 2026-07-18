@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -247,9 +248,15 @@ func TestServer_BinaryHealthzEndpoint(t *testing.T) {
 		t.Fatalf("make build failed: %v\nOutput: %s", err, out)
 	}
 
-	// Start the binary (use a temp dir with no config.toml for defaults)
+	// Start the binary (use a temp dir with no config.toml for defaults).
+	// Use absolute path because Go 1.19+ resolves relative paths containing
+	// a separator against Cmd.Dir, not the process working directory.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
 	dir := t.TempDir()
-	proc := exec.Command("./bin/apikit")
+	proc := exec.Command(filepath.Join(wd, "bin", "apikit"))
 	proc.Dir = dir
 	if err := proc.Start(); err != nil {
 		t.Fatalf("failed to start bin/apikit: %v", err)

@@ -1145,7 +1145,7 @@
             "01-REQ-2.2",
             "01-REQ-2.3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -1165,7 +1165,7 @@
             "01-REQ-2.1",
             "01-REQ-20.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
