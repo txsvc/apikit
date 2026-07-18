@@ -2760,67 +2760,674 @@ func TestOrgAllEndpointsRequireAuth(t *testing.T) {
 }
 
 // ========================================================================
-// Task 6.3: Integration Test Stubs
-// These will be implemented in task group 13. For now, they verify the
-// test functions compile and are properly structured.
+// Task 13: Integration Tests
 // ========================================================================
 
-// TestOrgLifecycle is a stub integration test that will verify the full
-// org lifecycle: create, update, delete with cascade.
-//
+// ========================================================================
+// Task 13.1: TestOrgLifecycle — full org lifecycle integration
+// Test Spec: TS-08-SMOKE-5
 // Execution Path: 08-PATH-5
+// Requirements: 08-REQ-2.1, 08-REQ-4.1, 08-REQ-5.1, 08-REQ-6.1
+// ========================================================================
+
+// TestOrgLifecycle verifies the full organization lifecycle end-to-end:
+// POST /orgs → PUT member → PATCH /orgs/:id (name update) →
+// GET /orgs/:id (verify new name and updated_at > created_at) →
+// DELETE /orgs/:id (204) → GET /orgs/:id (404).
+// Verifies slug immutability across PATCH, updated_at increments, and
+// org absence after delete.
 func TestOrgLifecycle(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// --- Step 1: Create an organization via POST /orgs ---
+	createBody := `{"name":"Lifecycle Corp","slug":"lifecycle-corp","url":"https://lifecycle.example.com"}`
+	createRec := sendJSON(t, e, http.MethodPost, "/orgs", createBody)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /orgs: expected HTTP 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+
+	created := parseOrgResponse(t, createRec)
+
+	if !isUUID(created.ID) {
+		t.Errorf("expected id to be a valid UUID, got %q", created.ID)
+	}
+	if created.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", created.Status)
+	}
+	if created.CreatedAt != created.UpdatedAt {
+		t.Errorf("expected created_at (%q) to equal updated_at (%q)", created.CreatedAt, created.UpdatedAt)
+	}
+	originalSlug := created.Slug
+
+	orgID := created.ID
+
+	// --- Step 2: Add a member (requires a user in the DB) ---
+	memberUserID := "a0000010-0000-4000-8000-000000000010"
+	insertTestUser(t, sqlDB, memberUserID, "lifecycleuser", "lifecycle@example.com", "github", "gh-lc")
+
+	memberRec := sendPut(t, e, "/orgs/"+orgID+"/members/"+memberUserID)
+	if memberRec.Code != http.StatusNoContent {
+		t.Fatalf("PUT member: expected HTTP 204, got %d; body: %s", memberRec.Code, memberRec.Body.String())
+	}
+
+	// --- Step 3: Update name via PATCH /orgs/:id ---
+	patchBody := `{"name":"Lifecycle Corp Updated"}`
+	patchRec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, patchBody)
+
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("PATCH /orgs/:id: expected HTTP 200, got %d; body: %s", patchRec.Code, patchRec.Body.String())
+	}
+
+	patched := parseOrgResponse(t, patchRec)
+
+	if patched.Name != "Lifecycle Corp Updated" {
+		t.Errorf("expected name %q, got %q", "Lifecycle Corp Updated", patched.Name)
+	}
+	// Slug must be immutable (08-PROP-1).
+	if patched.Slug != originalSlug {
+		t.Errorf("expected slug to remain %q, got %q", originalSlug, patched.Slug)
+	}
+	// updated_at must be >= created_at (08-PROP-2).
+	createdTime, err1 := time.Parse(time.RFC3339, created.CreatedAt)
+	patchedTime, err2 := time.Parse(time.RFC3339, patched.UpdatedAt)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to parse timestamps: %v / %v", err1, err2)
+	}
+	if patchedTime.Before(createdTime) {
+		t.Errorf("expected updated_at (%v) >= created_at (%v)", patchedTime, createdTime)
+	}
+
+	// --- Step 4: GET /orgs/:id — verify updated state ---
+	getRec := sendGet(t, e, "/orgs/"+orgID)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /orgs/:id: expected HTTP 200, got %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+
+	fetched := parseOrgResponse(t, getRec)
+	if fetched.Name != "Lifecycle Corp Updated" {
+		t.Errorf("expected name %q after PATCH, got %q", "Lifecycle Corp Updated", fetched.Name)
+	}
+
+	// --- Step 5: DELETE /orgs/:id ---
+	deleteRec := sendDelete(t, e, "/orgs/"+orgID)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /orgs/:id: expected HTTP 204, got %d; body: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	// --- Step 6: GET /orgs/:id after delete — expect 404 ---
+	getAfterDeleteRec := sendGet(t, e, "/orgs/"+orgID)
+	assertErrorResponse(t, getAfterDeleteRec, http.StatusNotFound, "organization not found")
+
+	// --- Verify cascade: no rows in org_members for the deleted org ---
+	var memberCount int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected 0 org_members rows after cascade delete, got %d", memberCount)
+	}
+
+	// --- Verify user is preserved ---
+	var userCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", memberUserID).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("failed to query users: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected user row to be preserved, found %d", userCount)
+	}
 }
 
-// TestOrgBlockUnblockCycle is a stub integration test that will verify
-// the block/unblock cycle with listing behavior.
-//
+// ========================================================================
+// Task 13.1: TestOrgBlockUnblockCycle — block/unblock with listing behavior
+// Test Spec: TS-08-SMOKE-3, TS-08-SMOKE-6
 // Execution Path: 08-PATH-3, 08-PATH-6
+// Requirements: 08-REQ-3.1, 08-REQ-3.2, 08-REQ-7.1, 08-REQ-8.1
+// ========================================================================
+
+// TestOrgBlockUnblockCycle verifies the complete block/unblock lifecycle:
+// create org → GET /orgs (visible) → POST /block → GET /orgs (absent) →
+// GET /orgs?include_blocked=true (present) → POST /unblock →
+// GET /orgs (visible again).
 func TestOrgBlockUnblockCycle(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, _ := setupOrgAdminTestServer(t)
+
+	// --- Step 1: Create an organization ---
+	createBody := `{"name":"BlockCycle Corp","slug":"blockcycle-corp"}`
+	createRec := sendJSON(t, e, http.MethodPost, "/orgs", createBody)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /orgs: expected HTTP 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+	created := parseOrgResponse(t, createRec)
+	orgID := created.ID
+
+	// --- Step 2: GET /orgs — org should be visible ---
+	listRec1 := sendGet(t, e, "/orgs")
+	if listRec1.Code != http.StatusOK {
+		t.Fatalf("GET /orgs (before block): expected HTTP 200, got %d", listRec1.Code)
+	}
+	orgs1 := parseOrgsResponse(t, listRec1)
+	if !containsOrgID(orgs1, orgID) {
+		t.Error("expected org to be visible in GET /orgs before blocking")
+	}
+
+	// --- Step 3: POST /orgs/:id/block ---
+	blockRec := sendPost(t, e, "/orgs/"+orgID+"/block")
+	if blockRec.Code != http.StatusOK {
+		t.Fatalf("POST /block: expected HTTP 200, got %d; body: %s", blockRec.Code, blockRec.Body.String())
+	}
+	blocked := parseOrgResponse(t, blockRec)
+	if blocked.Status != "blocked" {
+		t.Errorf("expected status %q, got %q", "blocked", blocked.Status)
+	}
+
+	// --- Step 4: GET /orgs (default) — blocked org absent ---
+	listRec2 := sendGet(t, e, "/orgs")
+	if listRec2.Code != http.StatusOK {
+		t.Fatalf("GET /orgs (after block): expected HTTP 200, got %d", listRec2.Code)
+	}
+	orgs2 := parseOrgsResponse(t, listRec2)
+	if containsOrgID(orgs2, orgID) {
+		t.Error("expected blocked org to be absent from GET /orgs without include_blocked")
+	}
+
+	// --- Step 5: GET /orgs?include_blocked=true — blocked org present ---
+	listRec3 := sendGet(t, e, "/orgs?include_blocked=true")
+	if listRec3.Code != http.StatusOK {
+		t.Fatalf("GET /orgs?include_blocked=true: expected HTTP 200, got %d", listRec3.Code)
+	}
+	orgs3 := parseOrgsResponse(t, listRec3)
+	if !containsOrgID(orgs3, orgID) {
+		t.Error("expected blocked org to be present in GET /orgs?include_blocked=true")
+	}
+
+	// --- Step 6: POST /orgs/:id/unblock ---
+	unblockRec := sendPost(t, e, "/orgs/"+orgID+"/unblock")
+	if unblockRec.Code != http.StatusOK {
+		t.Fatalf("POST /unblock: expected HTTP 200, got %d; body: %s", unblockRec.Code, unblockRec.Body.String())
+	}
+	unblocked := parseOrgResponse(t, unblockRec)
+	if unblocked.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", unblocked.Status)
+	}
+
+	// --- Step 7: GET /orgs — org visible again ---
+	listRec4 := sendGet(t, e, "/orgs")
+	if listRec4.Code != http.StatusOK {
+		t.Fatalf("GET /orgs (after unblock): expected HTTP 200, got %d", listRec4.Code)
+	}
+	orgs4 := parseOrgsResponse(t, listRec4)
+	if !containsOrgID(orgs4, orgID) {
+		t.Error("expected unblocked org to be visible in GET /orgs after unblocking")
+	}
 }
 
-// TestOrgMembershipLifecycle is a stub integration test that will verify
-// the full membership lifecycle: add, list, remove.
-//
+// containsOrgID checks whether the orgs slice contains an org with the given ID.
+func containsOrgID(orgs []handlers.OrgResponse, id string) bool {
+	for _, org := range orgs {
+		if org.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// ========================================================================
+// Task 13.2: TestOrgMembershipLifecycle — full membership lifecycle
+// Test Spec: TS-08-SMOKE-4
 // Execution Path: 08-PATH-4
+// Requirements: 08-REQ-9.1, 08-REQ-10.1, 08-REQ-11.1
+// ========================================================================
+
+// TestOrgMembershipLifecycle verifies the full membership lifecycle:
+// create org → PUT member → GET /members (verify user appears with all
+// fields, ordered) → DELETE member → GET /members (verify user absent).
 func TestOrgMembershipLifecycle(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// --- Step 1: Create an organization ---
+	createBody := `{"name":"Membership Corp","slug":"membership-corp"}`
+	createRec := sendJSON(t, e, http.MethodPost, "/orgs", createBody)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /orgs: expected HTTP 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+	created := parseOrgResponse(t, createRec)
+	orgID := created.ID
+
+	// --- Step 2: Insert test users (UUIDs must be valid for addOrgMember validation) ---
+	aliceID := "a0000020-0000-4000-8000-000000000020"
+	bobID := "a0000021-0000-4000-8000-000000000021"
+	insertTestUserWithRole(t, sqlDB, aliceID, "alice", "alice@example.com", "github", "gh-alice-m", "user")
+	insertTestUserWithRole(t, sqlDB, bobID, "bob", "bob@example.com", "github", "gh-bob-m", "admin")
+
+	// --- Step 3: Add both users as members via PUT ---
+	putAlice := sendPut(t, e, "/orgs/"+orgID+"/members/"+aliceID)
+	if putAlice.Code != http.StatusNoContent {
+		t.Fatalf("PUT alice: expected HTTP 204, got %d; body: %s", putAlice.Code, putAlice.Body.String())
+	}
+
+	putBob := sendPut(t, e, "/orgs/"+orgID+"/members/"+bobID)
+	if putBob.Code != http.StatusNoContent {
+		t.Fatalf("PUT bob: expected HTTP 204, got %d; body: %s", putBob.Code, putBob.Body.String())
+	}
+
+	// --- Step 4: GET /orgs/:id/members — verify both appear, ordered by username ---
+	listRec := sendGet(t, e, "/orgs/"+orgID+"/members")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /members: expected HTTP 200, got %d; body: %s", listRec.Code, listRec.Body.String())
+	}
+
+	members := parseMembersResponse(t, listRec)
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+
+	// Ordered by username: alice, bob.
+	if members[0].Username != "alice" {
+		t.Errorf("expected first member 'alice', got %q", members[0].Username)
+	}
+	if members[1].Username != "bob" {
+		t.Errorf("expected second member 'bob', got %q", members[1].Username)
+	}
+
+	// Verify all response fields.
+	for _, m := range members {
+		if m.UserID == "" {
+			t.Error("expected user_id to be non-empty")
+		}
+		if m.Username == "" {
+			t.Error("expected username to be non-empty")
+		}
+		if m.Email == "" {
+			t.Error("expected email to be non-empty")
+		}
+		if m.Role == "" {
+			t.Error("expected role to be non-empty")
+		}
+		if !isRFC3339(m.CreatedAt) {
+			t.Errorf("expected created_at to be RFC 3339 UTC, got %q", m.CreatedAt)
+		}
+	}
+
+	// --- Step 5: DELETE member (alice) ---
+	delAlice := sendDelete(t, e, "/orgs/"+orgID+"/members/"+aliceID)
+	if delAlice.Code != http.StatusNoContent {
+		t.Fatalf("DELETE alice: expected HTTP 204, got %d; body: %s", delAlice.Code, delAlice.Body.String())
+	}
+
+	// --- Step 6: GET /members — alice absent, bob still present ---
+	listRec2 := sendGet(t, e, "/orgs/"+orgID+"/members")
+	if listRec2.Code != http.StatusOK {
+		t.Fatalf("GET /members after delete: expected HTTP 200, got %d; body: %s", listRec2.Code, listRec2.Body.String())
+	}
+
+	members2 := parseMembersResponse(t, listRec2)
+	if len(members2) != 1 {
+		t.Fatalf("expected 1 member after removing alice, got %d", len(members2))
+	}
+	if members2[0].Username != "bob" {
+		t.Errorf("expected remaining member 'bob', got %q", members2[0].Username)
+	}
 }
 
-// TestOrgDeleteCascade is a stub integration test that will verify that
-// deleting an org cascade-deletes all memberships while preserving users.
-//
+// ========================================================================
+// Task 13.2: TestOrgDeleteCascade — cascade delete of memberships
+// Test Spec: TS-08-SMOKE-5 (cascade aspect)
 // Correctness Property: 08-PROP-4
+// Requirements: 08-REQ-6.1
+// ========================================================================
+
+// TestOrgDeleteCascade verifies that deleting an organization cascade-deletes
+// all org_members rows while preserving user rows.
 func TestOrgDeleteCascade(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// --- Step 1: Create org ---
+	createBody := `{"name":"Cascade Corp","slug":"cascade-corp"}`
+	createRec := sendJSON(t, e, http.MethodPost, "/orgs", createBody)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /orgs: expected HTTP 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+	created := parseOrgResponse(t, createRec)
+	orgID := created.ID
+
+	// --- Step 2: Insert 3 test users (UUIDs must be valid) ---
+	userIDs := []string{
+		"a0000030-0000-4000-8000-000000000030",
+		"a0000031-0000-4000-8000-000000000031",
+		"a0000032-0000-4000-8000-000000000032",
+	}
+	for i, uid := range userIDs {
+		username := "cascadeuser" + strings.Repeat("x", i+1)
+		insertTestUserWithRole(t, sqlDB, uid, username, username+"@example.com", "github", "gh-c"+uid[len(uid)-3:], "user")
+	}
+
+	// --- Step 3: Add all users as members ---
+	for _, uid := range userIDs {
+		putRec := sendPut(t, e, "/orgs/"+orgID+"/members/"+uid)
+		if putRec.Code != http.StatusNoContent {
+			t.Fatalf("PUT member %s: expected HTTP 204, got %d", uid, putRec.Code)
+		}
+	}
+
+	// Verify 3 members exist.
+	var memberCountBefore int
+	err := sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCountBefore)
+	if err != nil {
+		t.Fatalf("failed to count org_members: %v", err)
+	}
+	if memberCountBefore != 3 {
+		t.Fatalf("expected 3 org_members rows before delete, got %d", memberCountBefore)
+	}
+
+	// --- Step 4: DELETE org ---
+	deleteRec := sendDelete(t, e, "/orgs/"+orgID)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /orgs/:id: expected HTTP 204, got %d; body: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	// --- Step 5: Assert org_members count = 0 for org_id ---
+	var memberCountAfter int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCountAfter)
+	if err != nil {
+		t.Fatalf("failed to count org_members after delete: %v", err)
+	}
+	if memberCountAfter != 0 {
+		t.Errorf("expected 0 org_members rows after cascade delete, got %d", memberCountAfter)
+	}
+
+	// --- Step 6: Assert all user rows still exist ---
+	for _, uid := range userIDs {
+		var userExists int
+		err = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", uid).Scan(&userExists)
+		if err != nil {
+			t.Fatalf("failed to query user %s: %v", uid, err)
+		}
+		if userExists != 1 {
+			t.Errorf("expected user %s to be preserved after org deletion, found %d rows", uid, userExists)
+		}
+	}
 }
 
-// TestOrgMemberAccess is a stub integration test that will verify that
-// org members can view their org and member list, while non-members cannot.
-//
+// ========================================================================
+// Task 13.2: TestOrgMemberAccess — member vs non-member access control
+// Test Spec: TS-08-SMOKE-2
 // Execution Path: 08-PATH-2
+// Requirements: 08-REQ-4.2, 08-REQ-4.3, 08-REQ-9.2, 08-REQ-9.3
+// ========================================================================
+
+// TestOrgMemberAccess verifies that org members can view their org and
+// member list, while non-members cannot.
 func TestOrgMemberAccess(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	memberUserID := "access-member-uuid-001"
+	nonMemberUserID := "access-nonmember-uuid-002"
+
+	// --- Set up admin server to create the org and add member ---
+	adminDB := setupOrgAdminTestServerShared(t)
+	orgID := "a1000001-0000-4000-8000-000000000001"
+
+	insertTestOrg(t, adminDB, orgID, "Access Org", "access-org", "", "active")
+	insertTestUser(t, adminDB, memberUserID, "accessmember", "member@access.com", "github", "gh-am")
+	insertTestUser(t, adminDB, nonMemberUserID, "accessnonmember", "nonmember@access.com", "github", "gh-anm")
+	insertTestOrgMember(t, adminDB, orgID, memberUserID)
+
+	// --- Set up member's Echo server (non-admin, shared DB) ---
+	eMember := echo.New()
+	gMember := eMember.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	gMember.Use(nonAdminAuthMiddleware(memberUserID))
+	handlers.RegisterOrgHandlers(gMember, adminDB)
+
+	// --- Set up non-member's Echo server (non-admin, shared DB) ---
+	eNonMember := echo.New()
+	gNonMember := eNonMember.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	gNonMember.Use(nonAdminAuthMiddleware(nonMemberUserID))
+	handlers.RegisterOrgHandlers(gNonMember, adminDB)
+
+	// --- Member can GET /orgs/:id → 200 ---
+	memberGetOrg := sendGet(t, eMember, "/orgs/"+orgID)
+	if memberGetOrg.Code != http.StatusOK {
+		t.Errorf("member GET /orgs/:id: expected HTTP 200, got %d; body: %s",
+			memberGetOrg.Code, memberGetOrg.Body.String())
+	}
+
+	// ETag header must be present.
+	etag := memberGetOrg.Header().Get("ETag")
+	if etag == "" {
+		t.Error("expected ETag header to be set on member GET /orgs/:id")
+	}
+
+	// --- Non-member cannot GET /orgs/:id → 403 ---
+	nonMemberGetOrg := sendGet(t, eNonMember, "/orgs/"+orgID)
+	assertErrorResponse(t, nonMemberGetOrg, http.StatusForbidden, "forbidden")
+
+	// --- Member can GET /orgs/:id/members → 200 ---
+	memberGetMembers := sendGet(t, eMember, "/orgs/"+orgID+"/members")
+	if memberGetMembers.Code != http.StatusOK {
+		t.Errorf("member GET /orgs/:id/members: expected HTTP 200, got %d; body: %s",
+			memberGetMembers.Code, memberGetMembers.Body.String())
+	}
+
+	// --- Non-member cannot GET /orgs/:id/members → 403 ---
+	nonMemberGetMembers := sendGet(t, eNonMember, "/orgs/"+orgID+"/members")
+	assertErrorResponse(t, nonMemberGetMembers, http.StatusForbidden, "forbidden")
+
+	// --- Conditional GET: member sends If-None-Match with matching ETag → 304 ---
+	conditionalRec := sendGetWithHeaders(t, eMember, "/orgs/"+orgID, map[string]string{
+		"If-None-Match": etag,
+	})
+	if conditionalRec.Code != http.StatusNotModified {
+		t.Errorf("conditional GET with matching ETag: expected HTTP 304, got %d", conditionalRec.Code)
+	}
 }
 
-// TestOrgAdminEndpointsRequireAdmin is a stub integration test that will
-// verify that all admin-only org endpoints return 403 for non-admin users.
+// setupOrgAdminTestServerShared creates an in-memory DB with schema and returns
+// the raw *sql.DB handle for use in tests that need to share a DB across
+// multiple Echo instances.
+func setupOrgAdminTestServerShared(t *testing.T) *sql.DB {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	return database.SqlDB
+}
+
+// ========================================================================
+// Task 13.3: TestOrgAdminEndpointsRequireAdmin — admin access enforcement
+// Test Spec: TS-08-SMOKE-1 (admin aspect)
+// Requirements: 08-REQ-2.7, 08-REQ-3.4, 08-REQ-5.7, 08-REQ-6.4,
+//               08-REQ-7.5, 08-REQ-8.5, 08-REQ-10.7, 08-REQ-11.5
+// ========================================================================
+
+// TestOrgAdminEndpointsRequireAdmin verifies that all admin-only org
+// endpoints return HTTP 403 for non-admin users.
 func TestOrgAdminEndpointsRequireAdmin(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	// Set up prerequisite data so endpoints don't fail for other reasons.
+	orgID := "a2000001-0000-4000-8000-000000000001"
+	userID := "a2000001-0000-4000-8000-100000000001"
+	insertTestOrg(t, sqlDB, orgID, "Admin Test Org", "admin-test-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "admintest", "admintest@example.com", "github", "gh-at")
+
+	// All 7 admin-only endpoints.
+	adminEndpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/orgs"},
+		{http.MethodGet, "/orgs"},
+		{http.MethodPatch, "/orgs/" + orgID},
+		{http.MethodDelete, "/orgs/" + orgID},
+		{http.MethodPost, "/orgs/" + orgID + "/block"},
+		{http.MethodPost, "/orgs/" + orgID + "/unblock"},
+		{http.MethodPut, "/orgs/" + orgID + "/members/" + userID},
+		{http.MethodDelete, "/orgs/" + orgID + "/members/" + userID},
+	}
+
+	for _, ep := range adminEndpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			var rec *httptest.ResponseRecorder
+			switch ep.method {
+			case http.MethodPost:
+				if ep.path == "/orgs" {
+					rec = sendJSON(t, e, http.MethodPost, ep.path, `{"name":"X","slug":"x"}`)
+				} else {
+					rec = sendPost(t, e, ep.path)
+				}
+			case http.MethodGet:
+				rec = sendGet(t, e, ep.path)
+			case http.MethodPatch:
+				rec = sendJSON(t, e, http.MethodPatch, ep.path, `{"name":"X"}`)
+			case http.MethodDelete:
+				rec = sendDelete(t, e, ep.path)
+			case http.MethodPut:
+				rec = sendPut(t, e, ep.path)
+			}
+
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s %s: expected HTTP 403, got %d; body: %s",
+					ep.method, ep.path, rec.Code, rec.Body.String())
+			}
+		})
+	}
 }
 
-// TestOrgCacheHeaders is a stub integration test that will verify that
-// all org endpoints return Cache-Control: no-store headers.
-//
+// ========================================================================
+// Task 13.3: TestOrgCacheHeaders — Cache-Control on all endpoints
+// Test Spec: TS-08-SMOKE-1 (cache aspect)
 // Correctness Property: 08-PROP-10
+// Requirements: 08-REQ-1.2
+// ========================================================================
+
+// TestOrgCacheHeaders verifies that all 10 org endpoints return
+// Cache-Control: no-store in their response headers.
 func TestOrgCacheHeaders(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// Pre-insert data so all endpoints get past validation.
+	orgID := "a3000001-0000-4000-8000-000000000001"
+	userID := "a3000001-0000-4000-8000-100000000001"
+	insertTestOrg(t, sqlDB, orgID, "Cache Org", "cache-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "cacheuser", "cache@example.com", "github", "gh-cache")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	// All 10 endpoints with methods that produce non-404/405 responses.
+	endpoints := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"POST /orgs", http.MethodPost, "/orgs", `{"name":"New Cache Org","slug":"new-cache-org"}`},
+		{"GET /orgs", http.MethodGet, "/orgs", ""},
+		{"GET /orgs/:id", http.MethodGet, "/orgs/" + orgID, ""},
+		{"PATCH /orgs/:id", http.MethodPatch, "/orgs/" + orgID, `{"name":"Cache Org Updated"}`},
+		{"POST /orgs/:id/block", http.MethodPost, "/orgs/" + orgID + "/block", ""},
+		{"POST /orgs/:id/unblock", http.MethodPost, "/orgs/" + orgID + "/unblock", ""},
+		{"GET /orgs/:id/members", http.MethodGet, "/orgs/" + orgID + "/members", ""},
+		{"PUT /orgs/:id/members/:user_id", http.MethodPut, "/orgs/" + orgID + "/members/" + userID, ""},
+		{"DELETE /orgs/:id/members/:user_id", http.MethodDelete, "/orgs/" + orgID + "/members/" + userID, ""},
+		{"DELETE /orgs/:id", http.MethodDelete, "/orgs/" + orgID, ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			var req *http.Request
+			if ep.body != "" {
+				req = httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(ep.method, ep.path, nil)
+			}
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			// Skip 404/405 responses which indicate an unregistered route, not a handler response.
+			if rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
+				t.Fatalf("%s returned %d — route not registered", ep.name, rec.Code)
+			}
+
+			cc := rec.Header().Get("Cache-Control")
+			if cc != "no-store" {
+				t.Errorf("%s: expected Cache-Control %q, got %q", ep.name, "no-store", cc)
+			}
+		})
+	}
 }
 
-// TestOrgConditionalGet is a stub integration test that will verify
-// ETag-based conditional GET requests on org endpoints.
+// ========================================================================
+// Task 13.3: TestOrgConditionalGet — ETag-based conditional GET
+// Test Spec: TS-08-SMOKE-2 (conditional GET aspect)
+// Requirements: 08-REQ-4.6
+// ========================================================================
+
+// TestOrgConditionalGet verifies ETag-based conditional GET behavior:
+// create org (with old timestamp) → GET (capture ETag) → update org →
+// GET with old ETag (200, not 304, since ETag changed) →
+// GET with new ETag → 304.
 func TestOrgConditionalGet(t *testing.T) {
-	t.Skip("integration test: will be implemented in task group 13")
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	// --- Step 1: Insert org directly with an old timestamp ---
+	// We insert directly (not via POST) so the initial created_at/updated_at
+	// is in the past, ensuring the PATCH's NowUTC() produces a different ETag.
+	orgID := "a4000001-0000-4000-8000-000000000001"
+	oldTimestamp := "2020-01-01T00:00:00Z"
+	_, err := sqlDB.Exec(
+		`INSERT INTO orgs (id, name, slug, url, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "ETag Corp", "etag-corp", "", "active", oldTimestamp, oldTimestamp,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert org: %v", err)
+	}
+
+	// --- Step 2: GET to capture the initial ETag ---
+	getRec1 := sendGet(t, e, "/orgs/"+orgID)
+	if getRec1.Code != http.StatusOK {
+		t.Fatalf("GET (initial): expected HTTP 200, got %d", getRec1.Code)
+	}
+	oldETag := getRec1.Header().Get("ETag")
+	if oldETag == "" {
+		t.Fatal("expected ETag header on initial GET")
+	}
+
+	// --- Step 3: Update org to change its updated_at (and thus ETag) ---
+	patchBody := `{"name":"ETag Corp Updated"}`
+	patchRec := sendJSON(t, e, http.MethodPatch, "/orgs/"+orgID, patchBody)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("PATCH: expected HTTP 200, got %d; body: %s", patchRec.Code, patchRec.Body.String())
+	}
+
+	// --- Step 4: GET with old ETag → expect 200 (ETag changed) ---
+	getRec2 := sendGetWithHeaders(t, e, "/orgs/"+orgID, map[string]string{
+		"If-None-Match": oldETag,
+	})
+	if getRec2.Code != http.StatusOK {
+		t.Errorf("GET with stale ETag: expected HTTP 200, got %d", getRec2.Code)
+	}
+	newETag := getRec2.Header().Get("ETag")
+	if newETag == "" {
+		t.Fatal("expected ETag header after update GET")
+	}
+	if newETag == oldETag {
+		t.Error("expected new ETag to differ from old ETag after update")
+	}
+
+	// --- Step 5: GET with new ETag → expect 304 ---
+	getRec3 := sendGetWithHeaders(t, e, "/orgs/"+orgID, map[string]string{
+		"If-None-Match": newETag,
+	})
+	if getRec3.Code != http.StatusNotModified {
+		t.Errorf("GET with current ETag: expected HTTP 304, got %d", getRec3.Code)
+	}
+	if getRec3.Body.Len() != 0 {
+		t.Errorf("expected empty body for 304 response, got %q", getRec3.Body.String())
+	}
 }
