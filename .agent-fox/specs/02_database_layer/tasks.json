@@ -198,7 +198,7 @@
             "02-REQ-8.4",
             "02-REQ-8.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -230,7 +230,7 @@
             "02-REQ-9.3",
             "02-REQ-9.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -260,7 +260,7 @@
             "02-REQ-10.3",
             "02-REQ-10.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -290,7 +290,7 @@
             "02-REQ-7.3",
             "02-REQ-7.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
