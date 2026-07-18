@@ -335,9 +335,96 @@ func (h *PATHandler) getPAT(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
-// revokePAT handles DELETE /user/tokens/:token_id.
+// revokePAT handles DELETE /user/tokens/:token_id — permanently revokes a PAT
+// by setting its revoked_at timestamp via a conditional UPDATE. The row is never
+// deleted, preserving the audit trail. When the UPDATE affects zero rows, a
+// follow-up SELECT disambiguates between "token not found" (404) and "token
+// already revoked" (400).
 func (h *PATHandler) revokePAT(c echo.Context) error {
-	return apikit.WriteAPIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: require tokens:manage permission (09-REQ-8.3).
+	if err := auth.RequirePermission(c, "tokens", "manage"); err != nil {
+		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
+	// Extract path parameter and authenticated user ID (09-REQ-8.1).
+	tokenID := c.Param("token_id")
+	userID := auth.GetUserID(c)
+
+	// Set revocation timestamp.
+	now := time.Now().UTC()
+	revokedAtStr := db.FormatTime(now)
+
+	// Conditional UPDATE: only revoke if not already revoked (09-REQ-8.1, 09-REQ-8.E1).
+	result, err := h.database.SqlDB.ExecContext(c.Request().Context(),
+		`UPDATE pats SET revoked_at = ? WHERE token_id = ? AND user_id = ? AND revoked_at IS NULL`,
+		revokedAtStr, tokenID, userID,
+	)
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	if rowsAffected == 1 {
+		// Revocation succeeded — query the updated row to build the response.
+		var (
+			name      string
+			permsJSON string
+			createdAt string
+			expiresAt sql.NullString
+			revokedAt sql.NullString
+		)
+
+		err := h.database.SqlDB.QueryRowContext(c.Request().Context(),
+			`SELECT name, permissions, created_at, expires_at, revoked_at
+			 FROM pats WHERE token_id = ? AND user_id = ?`, tokenID, userID,
+		).Scan(&name, &permsJSON, &createdAt, &expiresAt, &revokedAt)
+		if err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+
+		var permissions []string
+		if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
+			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+
+		resp := PATResponse{
+			TokenID:     tokenID,
+			Name:        name,
+			Permissions: permissions,
+			CreatedAt:   createdAt,
+		}
+
+		if expiresAt.Valid {
+			resp.ExpiresAt = &expiresAt.String
+		}
+		if revokedAt.Valid {
+			resp.RevokedAt = &revokedAt.String
+		}
+
+		return c.JSON(http.StatusOK, resp)
+	}
+
+	// Zero rows affected — disambiguate: not found vs already revoked (09-REQ-8.2).
+	var revokedAt sql.NullString
+	err = h.database.SqlDB.QueryRowContext(c.Request().Context(),
+		`SELECT revoked_at FROM pats WHERE token_id = ? AND user_id = ?`, tokenID, userID,
+	).Scan(&revokedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// No row matches token_id AND user_id — token not found (09-REQ-8.E2).
+			return apikit.WriteAPIError(c, http.StatusNotFound, "token not found")
+		}
+		// Database error (09-REQ-8.E3).
+		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Row exists but revoked_at is already set (09-REQ-8.2).
+	return apikit.WriteAPIError(c, http.StatusBadRequest, "token already revoked")
 }
 
 // generateTokenID generates a cryptographically random 8-character string
