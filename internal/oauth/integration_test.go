@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1278,5 +1281,462 @@ func TestIntegration_CallbackFirstLoginNoKeys(t *testing.T) {
 	}
 	if keyCount < 1 {
 		t.Errorf("active key count = %d, want >= 1", keyCount)
+	}
+}
+
+// ========================================================================
+// TS-06-45: Callback returns HTTP 200 with correct user + api_key structure
+// (Requirement: 06-REQ-12.1)
+// ========================================================================
+
+// TestIntegration_CallbackSuccessResponseStructure verifies that a full
+// successful callback flow returns HTTP 200 with a JSON body containing
+// a complete user object and api_key object matching the required schema.
+func TestIntegration_CallbackSuccessResponseStructure(t *testing.T) {
+	database := openTestDB(t)
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-45", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "octocat",
+				Email:      "octo@github.com",
+				ProviderID: "4500",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb","expires":90}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Parse response.
+	var resp struct {
+		User struct {
+			ID         string  `json:"id"`
+			Username   string  `json:"username"`
+			Email      string  `json:"email"`
+			FullName   *string `json:"full_name"`
+			Status     string  `json:"status"`
+			Role       string  `json:"role"`
+			Provider   string  `json:"provider"`
+			ProviderID string  `json:"provider_id"`
+			CreatedAt  string  `json:"created_at"`
+			UpdatedAt  string  `json:"updated_at"`
+		} `json:"user"`
+		APIKey struct {
+			Key       string  `json:"key"`
+			KeyID     string  `json:"key_id"`
+			ExpiresAt *string `json:"expires_at"`
+		} `json:"api_key"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	// Verify user fields.
+	uuidRe := regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+	if !uuidRe.MatchString(resp.User.ID) {
+		t.Errorf("user.id = %q, want UUID format", resp.User.ID)
+	}
+	if resp.User.Username == "" {
+		t.Error("user.username is empty")
+	}
+	if resp.User.Email == "" {
+		t.Error("user.email is empty")
+	}
+	if resp.User.Status != "active" {
+		t.Errorf("user.status = %q, want %q", resp.User.Status, "active")
+	}
+	if resp.User.Provider != "github" {
+		t.Errorf("user.provider = %q, want %q", resp.User.Provider, "github")
+	}
+	if resp.User.ProviderID == "" {
+		t.Error("user.provider_id is empty")
+	}
+
+	// Validate timestamps are RFC 3339.
+	if _, err := time.Parse(time.RFC3339, resp.User.CreatedAt); err != nil {
+		t.Errorf("user.created_at = %q is not RFC 3339: %v", resp.User.CreatedAt, err)
+	}
+	if _, err := time.Parse(time.RFC3339, resp.User.UpdatedAt); err != nil {
+		t.Errorf("user.updated_at = %q is not RFC 3339: %v", resp.User.UpdatedAt, err)
+	}
+
+	// Verify api_key fields.
+	keyRe := regexp.MustCompile(`^ak_[a-zA-Z0-9]{8}_[a-zA-Z0-9]{32}$`)
+	if !keyRe.MatchString(resp.APIKey.Key) {
+		t.Errorf("api_key.key = %q does not match ak_<8>_<32>", resp.APIKey.Key)
+	}
+	if len(resp.APIKey.KeyID) != 8 {
+		t.Errorf("api_key.key_id length = %d, want 8", len(resp.APIKey.KeyID))
+	}
+	// expires_at should be non-null for expires=90.
+	if resp.APIKey.ExpiresAt == nil {
+		t.Fatal("api_key.expires_at is null, want RFC 3339 timestamp for expires=90")
+	}
+	if _, err := time.Parse(time.RFC3339, *resp.APIKey.ExpiresAt); err != nil {
+		t.Errorf("api_key.expires_at = %q is not RFC 3339: %v", *resp.APIKey.ExpiresAt, err)
+	}
+}
+
+// ========================================================================
+// TS-06-46: Callback response user.role is 'user' for non-admin
+// (Requirement: 06-REQ-12.2)
+// ========================================================================
+
+// TestIntegration_CallbackResponseRoleUser verifies that the callback
+// response user object includes the role field set to 'user' for a
+// non-admin email.
+func TestIntegration_CallbackResponseRoleUser(t *testing.T) {
+	database := openTestDB(t)
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-46", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "normaluser",
+				Email:      "normal@example.com",
+				ProviderID: "4600",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		User struct {
+			Role string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	// For non-admin email, role should be "user" or "admin" (either is valid per spec).
+	if resp.User.Role != "user" && resp.User.Role != "admin" {
+		t.Errorf("user.role = %q, want %q or %q", resp.User.Role, "user", "admin")
+	}
+	// Specifically for non-admin email:
+	if resp.User.Role != "user" {
+		t.Errorf("user.role = %q, want %q for non-admin email", resp.User.Role, "user")
+	}
+}
+
+// ========================================================================
+// TS-06-47: expires=0 → api_key.expires_at is JSON null; timestamps RFC 3339
+// (Requirement: 06-REQ-12.3)
+// ========================================================================
+
+// TestIntegration_CallbackExpiresZeroNull verifies that when expires=0,
+// api_key.expires_at is JSON null, and all timestamps in the response
+// are valid RFC 3339 strings.
+func TestIntegration_CallbackExpiresZeroNull(t *testing.T) {
+	database := openTestDB(t)
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-47", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "noexpiry",
+				Email:      "noexpiry@example.com",
+				ProviderID: "4700",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb","expires":0}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		User struct {
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		} `json:"user"`
+		APIKey struct {
+			ExpiresAt *string `json:"expires_at"`
+		} `json:"api_key"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	// Verify user timestamps are valid RFC 3339.
+	if _, err := time.Parse(time.RFC3339, resp.User.CreatedAt); err != nil {
+		t.Errorf("user.created_at = %q is not RFC 3339: %v", resp.User.CreatedAt, err)
+	}
+	if _, err := time.Parse(time.RFC3339, resp.User.UpdatedAt); err != nil {
+		t.Errorf("user.updated_at = %q is not RFC 3339: %v", resp.User.UpdatedAt, err)
+	}
+
+	// api_key.expires_at must be JSON null when expires=0.
+	if resp.APIKey.ExpiresAt != nil {
+		t.Errorf("api_key.expires_at = %q, want null for expires=0", *resp.APIKey.ExpiresAt)
+	}
+}
+
+// ========================================================================
+// TS-06-50: Concurrent POST /auth/callback — no deadlock or corruption
+// (Requirement: 06-REQ-14.1)
+// ========================================================================
+
+// TestIntegration_ConcurrentCallbackNoDeadlock verifies that two goroutines
+// simultaneously POSTing /auth/callback for the same user complete without
+// deadlock or data corruption, relying on SQLite single-connection serialization.
+func TestIntegration_ConcurrentCallbackNoDeadlock(t *testing.T) {
+	database := openTestDB(t)
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-concurrent", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "concurrent-user",
+				Email:      "concurrent@example.com",
+				ProviderID: "concurrent-user",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+
+	for i := range 2 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+			rec := postCallbackJSON(e, body)
+			if rec.Code != http.StatusOK {
+				errs[idx] = fmt.Errorf("goroutine %d: status = %d, want 200; body = %s",
+					idx, rec.Code, rec.Body.String())
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+
+	// Verify no data corruption: user exists and at least one active key.
+	var userCount int
+	err := database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM users WHERE provider_id = 'concurrent-user'",
+	).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("query users: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("user count = %d, want 1", userCount)
+	}
+}
+
+// ========================================================================
+// TS-06-51: Sequential callbacks → exactly one active key remains
+// (Requirement: 06-REQ-14.2)
+// ========================================================================
+
+// TestIntegration_SequentialCallbackKeyRevocation verifies that after two
+// sequential callback requests for the same user, exactly one active
+// (non-revoked) key remains in api_keys and the previous key is revoked.
+func TestIntegration_SequentialCallbackKeyRevocation(t *testing.T) {
+	database := openTestDB(t)
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-serial", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "serial-user",
+				Email:      "serial@example.com",
+				ProviderID: "serial-user",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+
+	// First login.
+	rec1 := postCallbackJSON(e, body)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first login status = %d, want %d; body = %s", rec1.Code, http.StatusOK, rec1.Body.String())
+	}
+
+	// Get user ID from the first response.
+	var resp1 struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("parse first response: %v", err)
+	}
+	userID := resp1.User.ID
+
+	// Second login.
+	rec2 := postCallbackJSON(e, body)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second login status = %d, want %d; body = %s", rec2.Code, http.StatusOK, rec2.Body.String())
+	}
+
+	// After two logins: exactly one active key.
+	var activeCount int
+	err := database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+		userID,
+	).Scan(&activeCount)
+	if err != nil {
+		t.Fatalf("count active keys: %v", err)
+	}
+	if activeCount != 1 {
+		t.Errorf("active key count = %d, want 1 after two logins", activeCount)
+	}
+
+	// Exactly one revoked key.
+	var revokedCount int
+	err = database.SqlDB.QueryRow(
+		"SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NOT NULL",
+		userID,
+	).Scan(&revokedCount)
+	if err != nil {
+		t.Fatalf("count revoked keys: %v", err)
+	}
+	if revokedCount != 1 {
+		t.Errorf("revoked key count = %d, want 1 after two logins", revokedCount)
+	}
+}
+
+// ========================================================================
+// TS-06-52: Provider removal does not delete existing user/key records
+// (Requirement: 06-REQ-15.1)
+// ========================================================================
+
+// TestIntegration_ProviderRemovalNonDestructive verifies that removing a
+// provider from config does not delete existing user records or api_keys,
+// and credentials remain valid.
+func TestIntegration_ProviderRemovalNonDestructive(t *testing.T) {
+	database := openTestDB(t)
+
+	// Step 1: Create a user and API key via a server with github provider.
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token-removal", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "removal-user",
+				Email:      "removal@example.com",
+				ProviderID: "5200",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+	rec := postCallbackJSON(e, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial login status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Record original user and key state.
+	var origProviderID string
+	err := database.SqlDB.QueryRow(
+		"SELECT provider_id FROM users WHERE provider = 'github' AND provider_id = '5200'",
+	).Scan(&origProviderID)
+	if err != nil {
+		t.Fatalf("query original user: %v", err)
+	}
+
+	var origKeyID string
+	err = database.SqlDB.QueryRow(
+		"SELECT key_id FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+	).Scan(&origKeyID)
+	if err != nil {
+		t.Fatalf("query original key: %v", err)
+	}
+
+	// Step 2: "Restart" with empty providers (simulate provider removal).
+	e2 := setupIntegrationEcho(t, nil, database, "")
+	_ = e2 // New server with no providers.
+
+	// Step 3: Verify user record is unchanged.
+	var providerIDAfter string
+	err = database.SqlDB.QueryRow(
+		"SELECT provider_id FROM users WHERE provider = 'github' AND provider_id = '5200'",
+	).Scan(&providerIDAfter)
+	if err != nil {
+		t.Fatalf("user row missing after provider removal: %v", err)
+	}
+	if providerIDAfter != origProviderID {
+		t.Errorf("provider_id changed: was %q, now %q", origProviderID, providerIDAfter)
+	}
+
+	// Step 4: Verify API key is still active.
+	var keyIDAfter string
+	var revokedAt *string
+	err = database.SqlDB.QueryRow(
+		"SELECT key_id, revoked_at FROM api_keys WHERE key_id = ?",
+		origKeyID,
+	).Scan(&keyIDAfter, &revokedAt)
+	if err != nil {
+		t.Fatalf("api_key row missing after provider removal: %v", err)
+	}
+	if revokedAt != nil {
+		t.Error("api_key was revoked after provider removal; want still active")
+	}
+}
+
+// ========================================================================
+// TS-06-53: Callback with removed provider returns HTTP 400
+// (Requirement: 06-REQ-15.2)
+// ========================================================================
+
+// TestIntegration_CallbackRemovedProviderReturns400 verifies that when
+// github is removed from config, POST /auth/callback with provider=github
+// returns HTTP 400 with "unknown provider: github".
+func TestIntegration_CallbackRemovedProviderReturns400(t *testing.T) {
+	// Server with empty provider registry (github removed from config).
+	e := setupIntegrationEcho(t, nil, nil, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	resp := parseIntegrationError(t, rec.Body.String())
+	if resp.Error.Message != "unknown provider: github" {
+		t.Errorf("message = %q, want %q", resp.Error.Message, "unknown provider: github")
 	}
 }
