@@ -31,17 +31,28 @@ import (
 var randReader io.Reader = crypto_rand.Reader
 
 // BootstrapParams bundles all inputs for the admin bootstrap sequence.
+//
+// Cross-spec integration: DB should be the *sql.DB from db.Open()
+// (02_database_layer) with schema already applied (users and admin_config
+// tables must exist). ConfigDir should be the directory returned by
+// LoadConfig() (01_server_core). TokenPrefix should be populated from
+// apikit.TokenPrefix.
 type BootstrapParams struct {
-	// DB is the opened SQLite database connection.
+	// DB is the opened SQLite database connection from db.Open()
+	// (02_database_layer). The users and admin_config tables must
+	// exist before Run is called.
 	DB *sql.DB
 	// AdminEmail is the value of the --admin-email flag.
+	// Required on first boot; silently ignored on subsequent boots.
 	AdminEmail string
-	// ResetToken triggers token rotation when true.
+	// ResetToken triggers token rotation when true (--reset-admin-token).
 	ResetToken bool
 	// ConfigDir is the directory containing config.toml,
 	// used to resolve the admin_token file path via filepath.Join.
+	// Typically derived from LoadConfig() in 01_server_core.
 	ConfigDir string
-	// TokenPrefix is the build-time configurable prefix for tokens.
+	// TokenPrefix is the build-time configurable prefix for tokens
+	// (apikit.TokenPrefix, default "ak").
 	TokenPrefix string
 	// Logger is the structured logger instance.
 	Logger *logrus.Logger
@@ -87,9 +98,13 @@ func writeTokenFile(path, token string) error {
 	return nil
 }
 
-// Run executes the full admin bootstrap sequence. It returns a non-nil error
-// on any failure and never terminates the process. All errors are returned
-// to the caller so that the server binary's main() function controls process
+// Run executes the full admin bootstrap sequence. It must be called after
+// LoadConfig completes and after the database is opened with schema applied,
+// but before the HTTP server begins accepting requests.
+//
+// The caller (server binary main) must treat a non-nil return value as fatal
+// and not start the HTTP server. Run never terminates the process internally;
+// all errors are returned to the caller so that main() controls process
 // termination.
 func Run(_ context.Context, params BootstrapParams) error {
 	// Token rotation takes priority over first-boot/subsequent-boot logic.
@@ -236,7 +251,18 @@ func runTokenRotation(params BootstrapParams) error {
 // match or no admin_email is configured, and (false, error) on database errors.
 //
 // This function is intended for new user creation only (first OAuth login).
-// Callers must not invoke it on updates to existing users.
+// Callers (the OAuth callback handler) must not invoke it on updates to
+// existing users. When it returns true, the caller should grant the admin
+// role to the new user and log the auto-promotion event at info level.
+//
+// Expected call site in the OAuth callback handler:
+//
+//	promote, err := bootstrap.ShouldAutoPromote(ctx, sqlDB, userEmail)
+//	if err != nil { return err }
+//	if promote {
+//	    // set role = "admin" on the new user record
+//	    logger.Infof("auto-promoted user %s to admin", userEmail)
+//	}
 func ShouldAutoPromote(_ context.Context, sqlDB *sql.DB, email string) (bool, error) {
 	var storedEmail string
 	err := sqlDB.QueryRow(
