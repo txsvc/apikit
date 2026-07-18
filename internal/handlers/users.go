@@ -334,13 +334,115 @@ func (h *userHandlers) updateUser(c echo.Context) error {
 }
 
 // promoteUser handles POST /users/:id/promote — sets user role to admin.
+// Requires admin access. Idempotent: if the user already has role='admin',
+// returns 200 with the existing user object without modifying the database.
 func (h *userHandlers) promoteUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-6.4, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Fetch the target user (07-REQ-6.3).
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already admin → return unchanged (07-REQ-6.2).
+	if user.Role == "admin" {
+		return c.JSON(http.StatusOK, user)
+	}
+
+	// Update role to admin (07-REQ-6.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	user.Role = "admin"
+	user.UpdatedAt = now
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // demoteUser handles POST /users/:id/demote — sets user role to user.
+// Requires admin access. Idempotent: if the user already has role='user',
+// returns 200 with the existing user object without modifying the database.
+// Enforces the last-admin safeguard (07-PROP-1): refuses to demote the only
+// remaining active admin, returning 409.
 func (h *userHandlers) demoteUser(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (07-REQ-7.5, 07-PROP-5).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id := c.Param("id")
+
+	// Fetch the target user (07-REQ-7.4).
+	var user User
+	err := h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apikit.APIError(c, http.StatusNotFound, "user not found")
+		}
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Idempotent: already a regular user → return unchanged (07-REQ-7.2).
+	if user.Role == "user" {
+		return c.JSON(http.StatusOK, user)
+	}
+
+	// Count active admins for the last-admin safeguard (07-REQ-7.3, 07-PROP-1).
+	var adminCount int
+	err = h.db.QueryRow(
+		`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`,
+	).Scan(&adminCount)
+	if err != nil {
+		// Unexpected DB error on COUNT query (07-REQ-7.E1).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	if adminCount <= 1 {
+		return apikit.APIError(c, http.StatusConflict, "cannot demote the last admin")
+	}
+
+	// Update role to user (07-REQ-7.1).
+	now := db.FormatTime(time.Now().UTC())
+	_, err = h.db.Exec(
+		`UPDATE users SET role = 'user', updated_at = ? WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	user.Role = "user"
+	user.UpdatedAt = now
+
+	return c.JSON(http.StatusOK, user)
 }
 
 // blockUser handles POST /users/:id/block — sets user status to blocked.

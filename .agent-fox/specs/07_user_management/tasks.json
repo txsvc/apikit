@@ -853,7 +853,7 @@
             "07-REQ-6.3",
             "07-REQ-6.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -883,7 +883,7 @@
             "07-REQ-7.5",
             "07-REQ-7.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
