@@ -1996,3 +1996,831 @@ func TestUnblockOrg_DBError(t *testing.T) {
 
 	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
 }
+
+// ========================================================================
+// Task 6 Helpers
+// ========================================================================
+
+// sendPut sends an HTTP PUT request with no body to the given Echo instance
+// and returns the response recorder.
+func sendPut(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPut, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// parseMembersResponse parses the response body as a JSON array of
+// OrgMemberResponse objects.
+func parseMembersResponse(t *testing.T, rec *httptest.ResponseRecorder) []handlers.OrgMemberResponse {
+	t.Helper()
+
+	var members []handlers.OrgMemberResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &members); err != nil {
+		t.Fatalf("failed to parse members list response: %v\nbody: %s", err, rec.Body.String())
+	}
+	return members
+}
+
+// insertTestUserWithRole inserts a user directly into the users table with
+// the specified role for test setup.
+func insertTestUserWithRole(t *testing.T, sqlDB *sql.DB, id, username, email, provider, providerID, role string) {
+	t.Helper()
+
+	now := "2024-01-01T00:00:00Z"
+	_, err := sqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, '', ?, 'active', ?, ?, ?, ?)`,
+		id, username, email, role, provider, providerID, now, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test user with role: %v", err)
+	}
+}
+
+// setupOrgAuthTestServer creates an Echo instance with RegisterOrgHandlers
+// registered on a group with a middleware that returns HTTP 401 when no
+// Authorization header is provided. This simulates the real auth middleware
+// behavior for testing that all org endpoints require authentication.
+func setupOrgAuthTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	// Simulate auth middleware that rejects unauthenticated requests with 401.
+	g.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			authHeader := c.Request().Header.Get("Authorization")
+			if authHeader == "" {
+				return apikit.APIError(c, http.StatusUnauthorized, "missing authorization header")
+			}
+			return next(c)
+		}
+	})
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	return e, database.SqlDB
+}
+
+// ========================================================================
+// Task 6.1: TestListMembers — GET /orgs/:id/members handler
+// Test Spec: TS-08-41, TS-08-42, TS-08-43, TS-08-44, TS-08-45, TS-08-46,
+//            TS-08-E13
+// Requirements: 08-REQ-9.1, 08-REQ-9.2, 08-REQ-9.3, 08-REQ-9.4,
+//               08-REQ-9.5, 08-REQ-9.6, 08-REQ-9.E1
+// ========================================================================
+
+// TestListMembers_AsAdmin verifies that GET /orgs/:id/members from an admin
+// with a valid org UUID returns HTTP 200 with all member details ordered
+// alphabetically by username. First element is 'alice', second is 'bob'.
+// Each member includes user_id, username, email, role, and joined_at fields.
+//
+// Test Spec: TS-08-41
+// Requirement: 08-REQ-9.1
+func TestListMembers_AsAdmin(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "list-members-org-uuid"
+	aliceID := "list-members-alice-uuid"
+	bobID := "list-members-bob-uuid"
+
+	// Insert org and two users (alice and bob).
+	insertTestOrg(t, sqlDB, orgID, "Members Org", "members-org", "", "active")
+	insertTestUserWithRole(t, sqlDB, aliceID, "alice", "alice@example.com", "github", "gh-alice", "user")
+	insertTestUserWithRole(t, sqlDB, bobID, "bob", "bob@example.com", "github", "gh-bob", "admin")
+
+	// Add both as members.
+	insertTestOrgMember(t, sqlDB, orgID, aliceID)
+	insertTestOrgMember(t, sqlDB, orgID, bobID)
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	members := parseMembersResponse(t, rec)
+
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+
+	// Verify ordering: alice first, bob second (alphabetical by username).
+	if members[0].Username != "alice" {
+		t.Errorf("expected first member username %q, got %q", "alice", members[0].Username)
+	}
+	if members[1].Username != "bob" {
+		t.Errorf("expected second member username %q, got %q", "bob", members[1].Username)
+	}
+
+	// Verify all required fields are present for each member.
+	for _, m := range members {
+		if m.UserID == "" {
+			t.Error("expected user_id to be non-empty")
+		}
+		if m.Username == "" {
+			t.Error("expected username to be non-empty")
+		}
+		if m.Email == "" {
+			t.Error("expected email to be non-empty")
+		}
+		if m.Role != "admin" && m.Role != "user" {
+			t.Errorf("expected role to be 'admin' or 'user', got %q", m.Role)
+		}
+		if !isRFC3339(m.CreatedAt) {
+			t.Errorf("expected created_at (joined_at) to be RFC 3339 UTC, got %q", m.CreatedAt)
+		}
+	}
+}
+
+// TestListMembers_AsMember verifies that GET /orgs/:id/members from a
+// non-admin user who is a member of the org returns HTTP 200 with a JSON
+// array of OrgMemberResponse objects.
+//
+// Test Spec: TS-08-42
+// Requirement: 08-REQ-9.2
+func TestListMembers_AsMember(t *testing.T) {
+	memberUserID := "list-member-user-uuid"
+	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, memberUserID)
+
+	orgID := "list-member-org-uuid"
+
+	// Insert user, org, and membership.
+	insertTestUser(t, sqlDB, memberUserID, "member", "member@example.com", "github", "gh-member")
+	insertTestOrg(t, sqlDB, orgID, "Member List Org", "member-list-org", "", "active")
+	insertTestOrgMember(t, sqlDB, orgID, memberUserID)
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	members := parseMembersResponse(t, rec)
+
+	if len(members) == 0 {
+		t.Error("expected at least one member in response")
+	}
+}
+
+// TestListMembers_NotMember verifies that GET /orgs/:id/members from a
+// non-admin user who is NOT a member of the org returns HTTP 403 with
+// error message 'forbidden'.
+//
+// Test Spec: TS-08-43
+// Requirement: 08-REQ-9.3
+func TestListMembers_NotMember(t *testing.T) {
+	nonMemberUserID := "list-nonmember-user-uuid"
+	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, nonMemberUserID)
+
+	orgID := "list-nonmember-org-uuid"
+
+	// Insert user and org but NO membership row.
+	insertTestUser(t, sqlDB, nonMemberUserID, "outsider", "outsider@example.com", "github", "gh-outsider")
+	insertTestOrg(t, sqlDB, orgID, "NonMember List Org", "nonmember-list-org", "", "active")
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestListMembers_OrgNotFound verifies that GET /orgs/:id/members for a
+// non-existent organization UUID returns HTTP 404 with error message
+// 'organization not found'.
+//
+// Test Spec: TS-08-44
+// Requirement: 08-REQ-9.4
+func TestListMembers_OrgNotFound(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	nonExistentUUID := "00000000-0000-0000-0000-000000000000"
+	rec := sendGet(t, e, "/orgs/"+nonExistentUUID+"/members")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestListMembers_Empty verifies that GET /orgs/:id/members for an org
+// with no members returns HTTP 200 with an empty JSON array [].
+//
+// Test Spec: TS-08-45
+// Requirement: 08-REQ-9.5
+func TestListMembers_Empty(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "empty-members-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "Empty Members Org", "empty-members-org", "", "active")
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The response must be exactly "[]", not "null" or empty.
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected response body to be '[]', got %q", body)
+	}
+}
+
+// TestListMembers_InvalidID verifies that GET /orgs/:id/members with an
+// invalid UUID path parameter returns HTTP 400 with error message
+// 'invalid organization id'.
+//
+// Test Spec: TS-08-46
+// Requirement: 08-REQ-9.6
+func TestListMembers_InvalidID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	rec := sendGet(t, e, "/orgs/not-a-uuid/members")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestListMembers_IncludesUserDetails verifies that each member in the
+// GET /orgs/:id/members response includes the user_id, username, email,
+// role, and joined_at (created_at) fields with correct values.
+//
+// Test Spec: TS-08-41 (detail aspect)
+// Requirement: 08-REQ-9.1
+func TestListMembers_IncludesUserDetails(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "details-members-org-uuid"
+	userID := "details-member-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "Details Org", "details-org", "", "active")
+	insertTestUserWithRole(t, sqlDB, userID, "detailuser", "detail@example.com", "github", "gh-detail", "admin")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	members := parseMembersResponse(t, rec)
+
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+
+	m := members[0]
+	if m.UserID != userID {
+		t.Errorf("expected user_id %q, got %q", userID, m.UserID)
+	}
+	if m.Username != "detailuser" {
+		t.Errorf("expected username %q, got %q", "detailuser", m.Username)
+	}
+	if m.Email != "detail@example.com" {
+		t.Errorf("expected email %q, got %q", "detail@example.com", m.Email)
+	}
+	if m.Role != "admin" {
+		t.Errorf("expected role %q, got %q", "admin", m.Role)
+	}
+	if !isRFC3339(m.CreatedAt) {
+		t.Errorf("expected created_at to be RFC 3339 UTC, got %q", m.CreatedAt)
+	}
+}
+
+// TestListMembers_DBError verifies that GET /orgs/:id/members returns
+// HTTP 500 with error message 'internal server error' when the org
+// lookup succeeds but the org_members JOIN users query fails.
+//
+// Test Spec: TS-08-E13
+// Requirement: 08-REQ-9.E1
+func TestListMembers_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	orgID := "dberr-members-org-uuid"
+
+	// Insert org while database is intact.
+	insertTestOrg(t, database.SqlDB, orgID, "DBErr Members Org", "dberr-members-org", "", "active")
+
+	// Drop the org_members table so the join query fails while org lookup succeeds.
+	_, err = database.SqlDB.Exec("DROP TABLE org_members")
+	if err != nil {
+		t.Fatalf("failed to drop org_members table: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	rec := sendGet(t, e, "/orgs/"+orgID+"/members")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 6.2: TestAddMember — PUT /orgs/:id/members/:user_id handler
+// Test Spec: TS-08-47, TS-08-48, TS-08-49, TS-08-50, TS-08-51, TS-08-52,
+//            TS-08-53, TS-08-E14
+// Requirements: 08-REQ-10.1, 08-REQ-10.2, 08-REQ-10.3, 08-REQ-10.4,
+//               08-REQ-10.5, 08-REQ-10.6, 08-REQ-10.7, 08-REQ-10.E1
+// ========================================================================
+
+// TestAddMember_Success verifies that PUT /orgs/:id/members/:user_id from
+// an admin adds the user to the org and returns HTTP 204 with no body.
+// A row with (org_id, user_id) must exist in org_members with a valid
+// created_at timestamp.
+//
+// Test Spec: TS-08-47
+// Requirement: 08-REQ-10.1
+func TestAddMember_Success(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "add-member-org-uuid"
+	userID := "add-member-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "Add Member Org", "add-member-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "newmember", "new@example.com", "github", "gh-new")
+
+	rec := sendPut(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Body must be empty.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for 204 response, got %q", rec.Body.String())
+	}
+
+	// Verify row exists in org_members.
+	var count int
+	err := sqlDB.QueryRow(
+		"SELECT COUNT(*) FROM org_members WHERE org_id = ? AND user_id = ?",
+		orgID, userID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row in org_members for (%s, %s), got %d", orgID, userID, count)
+	}
+}
+
+// TestAddMember_Idempotent verifies that PUT /orgs/:id/members/:user_id
+// for an already-existing member is idempotent: returns HTTP 204 both times,
+// and exactly one row exists in org_members.
+//
+// Test Spec: TS-08-48
+// Requirement: 08-REQ-10.2
+func TestAddMember_Idempotent(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "idem-member-org-uuid"
+	userID := "idem-member-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "Idempotent Org", "idem-member-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "idemuser", "idem@example.com", "github", "gh-idem")
+
+	// First PUT: add the member.
+	firstRec := sendPut(t, e, "/orgs/"+orgID+"/members/"+userID)
+	if firstRec.Code != http.StatusNoContent {
+		t.Fatalf("first PUT: expected HTTP 204, got %d; body: %s", firstRec.Code, firstRec.Body.String())
+	}
+
+	// Second PUT: same member, should be idempotent.
+	secondRec := sendPut(t, e, "/orgs/"+orgID+"/members/"+userID)
+	if secondRec.Code != http.StatusNoContent {
+		t.Fatalf("second PUT: expected HTTP 204, got %d; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+
+	// Verify exactly one row in org_members.
+	var count int
+	err := sqlDB.QueryRow(
+		"SELECT COUNT(*) FROM org_members WHERE org_id = ? AND user_id = ?",
+		orgID, userID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 row in org_members after two PUTs, got %d", count)
+	}
+}
+
+// TestAddMember_OrgNotFound verifies that PUT /orgs/:id/members/:user_id
+// with a non-existent org UUID returns HTTP 404 with error message
+// 'organization not found'.
+//
+// Test Spec: TS-08-49
+// Requirement: 08-REQ-10.3
+func TestAddMember_OrgNotFound(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	userID := "orgnotfound-user-uuid"
+	insertTestUser(t, sqlDB, userID, "existinguser", "exist@example.com", "github", "gh-exist")
+
+	nonExistentOrgUUID := "00000000-0000-0000-0000-000000000000"
+	rec := sendPut(t, e, "/orgs/"+nonExistentOrgUUID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
+}
+
+// TestAddMember_UserNotFound verifies that PUT /orgs/:id/members/:user_id
+// with a non-existent user UUID returns HTTP 404 with error message
+// 'user not found'.
+//
+// Test Spec: TS-08-50
+// Requirement: 08-REQ-10.4
+func TestAddMember_UserNotFound(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "usernotfound-org-uuid"
+	insertTestOrg(t, sqlDB, orgID, "UserNotFound Org", "usernotfound-org", "", "active")
+
+	nonExistentUserUUID := "00000000-0000-0000-0000-000000000001"
+	rec := sendPut(t, e, "/orgs/"+orgID+"/members/"+nonExistentUserUUID)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestAddMember_InvalidOrgID verifies that PUT /orgs/:id/members/:user_id
+// with an invalid UUID for the org path parameter returns HTTP 400 with
+// error message 'invalid organization id'.
+//
+// Test Spec: TS-08-51
+// Requirement: 08-REQ-10.5
+func TestAddMember_InvalidOrgID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	validUserUUID := "00000000-0000-0000-0000-000000000001"
+	rec := sendPut(t, e, "/orgs/not-a-uuid/members/"+validUserUUID)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestAddMember_InvalidUserID verifies that PUT /orgs/:id/members/:user_id
+// with an invalid UUID for the user_id path parameter returns HTTP 400 with
+// error message 'invalid user id'.
+//
+// Test Spec: TS-08-52
+// Requirement: 08-REQ-10.6
+func TestAddMember_InvalidUserID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	validOrgUUID := "00000000-0000-0000-0000-000000000001"
+	rec := sendPut(t, e, "/orgs/"+validOrgUUID+"/members/not-a-uuid")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid user id")
+}
+
+// TestAddMember_NonAdmin verifies that PUT /orgs/:id/members/:user_id from
+// a non-admin user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-53
+// Requirement: 08-REQ-10.7
+func TestAddMember_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-add-org-uuid"
+	userID := "nonadmin-add-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Add Org", "nonadmin-add-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "nonadminadd", "nonadminadd@example.com", "github", "gh-naa")
+
+	rec := sendPut(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestAddMember_DBError verifies that PUT /orgs/:id/members/:user_id
+// returns HTTP 500 with error message 'internal server error' when the
+// org and user lookups succeed but the INSERT into org_members fails with
+// a generic database error.
+//
+// Test Spec: TS-08-E14
+// Requirement: 08-REQ-10.E1
+func TestAddMember_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	orgID := "dberr-add-org-uuid"
+	userID := "dberr-add-user-uuid"
+
+	// Insert org and user while database is intact.
+	insertTestOrg(t, database.SqlDB, orgID, "DBErr Add Org", "dberr-add-org", "", "active")
+	insertTestUser(t, database.SqlDB, userID, "dberradder", "dberr@example.com", "github", "gh-dba")
+
+	// Install a BEFORE INSERT trigger on org_members that raises a generic error.
+	// The org and user lookups (SELECTs) succeed, but the INSERT fails.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_org_members_insert BEFORE INSERT ON org_members
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	rec := sendPut(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 6.3: TestRemoveMember — DELETE /orgs/:id/members/:user_id handler
+// Test Spec: TS-08-54, TS-08-55, TS-08-56, TS-08-57, TS-08-58, TS-08-E15
+// Requirements: 08-REQ-11.1, 08-REQ-11.2, 08-REQ-11.3, 08-REQ-11.4,
+//               08-REQ-11.5, 08-REQ-11.E1
+// ========================================================================
+
+// TestRemoveMember_Success verifies that DELETE /orgs/:id/members/:user_id
+// from an admin removes the membership and returns HTTP 204 with no body.
+// The org_members row is removed but the user row in users remains.
+//
+// Test Spec: TS-08-54
+// Requirement: 08-REQ-11.1
+func TestRemoveMember_Success(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "remove-member-org-uuid"
+	userID := "remove-member-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "Remove Member Org", "remove-member-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "removable", "removable@example.com", "github", "gh-rem")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Body must be empty.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for 204 response, got %q", rec.Body.String())
+	}
+
+	// Verify org_members row is removed.
+	var memberCount int
+	err := sqlDB.QueryRow(
+		"SELECT COUNT(*) FROM org_members WHERE org_id = ? AND user_id = ?",
+		orgID, userID,
+	).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected org_members row to be removed, found %d rows", memberCount)
+	}
+
+	// Verify user row still exists.
+	var userCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("failed to query users: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected user row to be preserved, found %d rows", userCount)
+	}
+}
+
+// TestRemoveMember_NotFound verifies that DELETE /orgs/:id/members/:user_id
+// when no matching org_members row exists returns HTTP 404 with error
+// message 'membership not found'.
+//
+// Test Spec: TS-08-55
+// Requirement: 08-REQ-11.2
+func TestRemoveMember_NotFound(t *testing.T) {
+	e, sqlDB := setupOrgAdminTestServer(t)
+
+	orgID := "remove-notfound-org-uuid"
+	userID := "remove-notfound-user-uuid"
+
+	// Insert org and user but NO membership row.
+	insertTestOrg(t, sqlDB, orgID, "NoMember Org", "nomember-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "nomember", "nomember@example.com", "github", "gh-nm")
+
+	rec := sendDelete(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "membership not found")
+}
+
+// TestRemoveMember_InvalidOrgID verifies that DELETE /orgs/:id/members/:user_id
+// with an invalid UUID for the org path parameter returns HTTP 400 with
+// error message 'invalid organization id'.
+//
+// Test Spec: TS-08-56
+// Requirement: 08-REQ-11.3
+func TestRemoveMember_InvalidOrgID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	validUserUUID := "00000000-0000-0000-0000-000000000001"
+	rec := sendDelete(t, e, "/orgs/not-a-uuid/members/"+validUserUUID)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+}
+
+// TestRemoveMember_InvalidUserID verifies that DELETE /orgs/:id/members/:user_id
+// with an invalid UUID for the user_id path parameter returns HTTP 400 with
+// error message 'invalid user id'.
+//
+// Test Spec: TS-08-57
+// Requirement: 08-REQ-11.4
+func TestRemoveMember_InvalidUserID(t *testing.T) {
+	e, _ := setupOrgAdminTestServer(t)
+
+	validOrgUUID := "00000000-0000-0000-0000-000000000001"
+	rec := sendDelete(t, e, "/orgs/"+validOrgUUID+"/members/not-a-uuid")
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid user id")
+}
+
+// TestRemoveMember_NonAdmin verifies that DELETE /orgs/:id/members/:user_id
+// from a non-admin user returns HTTP 403 with error message 'forbidden'.
+//
+// Test Spec: TS-08-58
+// Requirement: 08-REQ-11.5
+func TestRemoveMember_NonAdmin(t *testing.T) {
+	e, sqlDB := setupOrgNonAdminTestServer(t)
+
+	orgID := "nonadmin-remove-org-uuid"
+	userID := "nonadmin-remove-user-uuid"
+
+	insertTestOrg(t, sqlDB, orgID, "NonAdmin Remove Org", "nonadmin-remove-org", "", "active")
+	insertTestUser(t, sqlDB, userID, "nonadminrem", "nonadminrem@example.com", "github", "gh-nar")
+	insertTestOrgMember(t, sqlDB, orgID, userID)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestRemoveMember_DBError verifies that DELETE /orgs/:id/members/:user_id
+// returns HTTP 500 with error message 'internal server error' when the
+// DELETE on org_members fails with a database error.
+//
+// Test Spec: TS-08-E15
+// Requirement: 08-REQ-11.E1
+func TestRemoveMember_DBError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	orgID := "dberr-remove-org-uuid"
+	userID := "dberr-remove-user-uuid"
+
+	// Insert org, user, and membership while database is intact.
+	insertTestOrg(t, database.SqlDB, orgID, "DBErr Remove Org", "dberr-remove-org", "", "active")
+	insertTestUser(t, database.SqlDB, userID, "dberrremove", "dberrremove@example.com", "github", "gh-dbr")
+	insertTestOrgMember(t, database.SqlDB, orgID, userID)
+
+	// Install a BEFORE DELETE trigger on org_members that raises a generic error.
+	_, err = database.SqlDB.Exec(`
+		CREATE TRIGGER fail_org_members_delete BEFORE DELETE ON org_members
+		BEGIN SELECT RAISE(FAIL, 'simulated db error'); END
+	`)
+	if err != nil {
+		t.Fatalf("failed to create trigger: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB)
+
+	rec := sendDelete(t, e, "/orgs/"+orgID+"/members/"+userID)
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 6.3: TestOrgAllEndpointsRequireAuth — auth requirement
+// Test Spec: TS-08-66
+// Requirement: 08-REQ-14.1
+// ========================================================================
+
+// TestOrgAllEndpointsRequireAuth verifies that all 10 org endpoint routes
+// return HTTP 401 when accessed without a valid authentication credential.
+//
+// Test Spec: TS-08-66
+// Requirement: 08-REQ-14.1
+func TestOrgAllEndpointsRequireAuth(t *testing.T) {
+	e, _ := setupOrgAuthTestServer(t)
+
+	validUUID := "00000000-0000-0000-0000-000000000001"
+
+	// All 10 org endpoints.
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/orgs"},
+		{http.MethodGet, "/orgs"},
+		{http.MethodGet, "/orgs/" + validUUID},
+		{http.MethodPatch, "/orgs/" + validUUID},
+		{http.MethodDelete, "/orgs/" + validUUID},
+		{http.MethodPost, "/orgs/" + validUUID + "/block"},
+		{http.MethodPost, "/orgs/" + validUUID + "/unblock"},
+		{http.MethodGet, "/orgs/" + validUUID + "/members"},
+		{http.MethodPut, "/orgs/" + validUUID + "/members/" + validUUID},
+		{http.MethodDelete, "/orgs/" + validUUID + "/members/" + validUUID},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+"_"+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			// No Authorization header — this is the key condition.
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s: expected HTTP 401, got %d; body: %s",
+					ep.method, ep.path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// ========================================================================
+// Task 6.3: Integration Test Stubs
+// These will be implemented in task group 13. For now, they verify the
+// test functions compile and are properly structured.
+// ========================================================================
+
+// TestOrgLifecycle is a stub integration test that will verify the full
+// org lifecycle: create, update, delete with cascade.
+//
+// Execution Path: 08-PATH-5
+func TestOrgLifecycle(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgBlockUnblockCycle is a stub integration test that will verify
+// the block/unblock cycle with listing behavior.
+//
+// Execution Path: 08-PATH-3, 08-PATH-6
+func TestOrgBlockUnblockCycle(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgMembershipLifecycle is a stub integration test that will verify
+// the full membership lifecycle: add, list, remove.
+//
+// Execution Path: 08-PATH-4
+func TestOrgMembershipLifecycle(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgDeleteCascade is a stub integration test that will verify that
+// deleting an org cascade-deletes all memberships while preserving users.
+//
+// Correctness Property: 08-PROP-4
+func TestOrgDeleteCascade(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgMemberAccess is a stub integration test that will verify that
+// org members can view their org and member list, while non-members cannot.
+//
+// Execution Path: 08-PATH-2
+func TestOrgMemberAccess(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgAdminEndpointsRequireAdmin is a stub integration test that will
+// verify that all admin-only org endpoints return 403 for non-admin users.
+func TestOrgAdminEndpointsRequireAdmin(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgCacheHeaders is a stub integration test that will verify that
+// all org endpoints return Cache-Control: no-store headers.
+//
+// Correctness Property: 08-PROP-10
+func TestOrgCacheHeaders(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
+
+// TestOrgConditionalGet is a stub integration test that will verify
+// ETag-based conditional GET requests on org endpoints.
+func TestOrgConditionalGet(t *testing.T) {
+	t.Skip("integration test: will be implemented in task group 13")
+}
