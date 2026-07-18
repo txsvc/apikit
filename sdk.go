@@ -63,7 +63,8 @@ func WithRequestID(id string) ClientOption {
 }
 
 // WithMountPoint overrides the default mount point (/api/v1).
-// Normalizes the path: adds leading slash if missing, strips trailing slash.
+// Normalizes the path: adds leading slash if missing, strips trailing slash,
+// and collapses multiple leading slashes to exactly one.
 // Empty string normalizes to "/".
 func WithMountPoint(path string) ClientOption {
 	return func(c *Client) {
@@ -73,6 +74,10 @@ func WithMountPoint(path string) ClientOption {
 		}
 		if !strings.HasPrefix(path, "/") {
 			path = "/" + path
+		}
+		// Collapse multiple leading slashes to exactly one.
+		for strings.HasPrefix(path, "//") {
+			path = path[1:]
 		}
 		path = strings.TrimRight(path, "/")
 		if path == "" {
@@ -209,35 +214,35 @@ func decodeErrorResponse(resp *http.Response) *APIError {
 
 // Healthz calls GET /healthz (liveness probe).
 // Health probes bypass the mount point.
-func (c *Client) Healthz(ctx context.Context, opts ...RequestOption) (*Response[HealthResponse], error) {
+func (c *Client) Healthz(ctx context.Context) (*HealthResponse, error) {
 	var result HealthResponse
-	status, header, err := c.do(ctx, "GET", "/healthz", nil, &result, opts...)
+	_, _, err := c.do(ctx, "GET", "/healthz", nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[HealthResponse]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // Readyz calls GET /readyz (readiness probe).
 // Health probes bypass the mount point.
-func (c *Client) Readyz(ctx context.Context, opts ...RequestOption) (*Response[HealthResponse], error) {
+func (c *Client) Readyz(ctx context.Context) (*HealthResponse, error) {
 	var result HealthResponse
-	status, header, err := c.do(ctx, "GET", "/readyz", nil, &result, opts...)
+	_, _, err := c.do(ctx, "GET", "/readyz", nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[HealthResponse]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // Version calls GET /version.
 // Health/meta probes bypass the mount point.
-func (c *Client) Version(ctx context.Context, opts ...RequestOption) (*Response[VersionResponse], error) {
+func (c *Client) Version(ctx context.Context) (*VersionResponse, error) {
 	var result VersionResponse
-	status, header, err := c.do(ctx, "GET", "/version", nil, &result, opts...)
+	_, _, err := c.do(ctx, "GET", "/version", nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[VersionResponse]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -368,13 +373,13 @@ func (c *Client) GetProviders(ctx context.Context) ([]*OAuthProvider, error) {
 }
 
 // ExchangeOAuthCode calls POST /auth/callback to exchange an OAuth code.
-func (c *Client) ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest) (*Response[AuthCallbackResponse], error) {
+func (c *Client) ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest) (*AuthCallbackResponse, error) {
 	var result AuthCallbackResponse
-	status, header, err := c.do(ctx, "POST", c.mountPoint+"/auth/callback", req, &result)
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/auth/callback", req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[AuthCallbackResponse]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -546,23 +551,23 @@ func (c *Client) GetOrg(ctx context.Context, orgID string, opts ...RequestOption
 }
 
 // CreateOrg calls POST /orgs to create a new organization (admin).
-func (c *Client) CreateOrg(ctx context.Context, req *CreateOrgRequest) (*Response[Organization], error) {
+func (c *Client) CreateOrg(ctx context.Context, req *CreateOrgRequest) (*Organization, error) {
 	var result Organization
-	status, header, err := c.do(ctx, "POST", c.mountPoint+"/orgs", req, &result)
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs", req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[Organization]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // UpdateOrg calls PATCH /orgs/:id to update an organization (admin).
-func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequest) (*Response[Organization], error) {
+func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequest) (*Organization, error) {
 	var result Organization
-	status, header, err := c.do(ctx, "PATCH", c.mountPoint+"/orgs/"+orgID, req, &result)
+	_, _, err := c.do(ctx, "PATCH", c.mountPoint+"/orgs/"+orgID, req, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &Response[Organization]{Data: result, StatusCode: status, Header: header}, nil
+	return &result, nil
 }
 
 // DeleteOrg calls DELETE /orgs/:id to delete an organization (admin).
@@ -572,15 +577,23 @@ func (c *Client) DeleteOrg(ctx context.Context, orgID string) error {
 }
 
 // BlockOrg calls POST /orgs/:id/block to block an organization (admin).
-func (c *Client) BlockOrg(ctx context.Context, orgID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/block", nil, nil)
-	return err
+func (c *Client) BlockOrg(ctx context.Context, orgID string) (*Organization, error) {
+	var result Organization
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/block", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // UnblockOrg calls POST /orgs/:id/unblock to unblock an organization (admin).
-func (c *Client) UnblockOrg(ctx context.Context, orgID string) error {
-	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/unblock", nil, nil)
-	return err
+func (c *Client) UnblockOrg(ctx context.Context, orgID string) (*Organization, error) {
+	var result Organization
+	_, _, err := c.do(ctx, "POST", c.mountPoint+"/orgs/"+orgID+"/unblock", nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // ListOrgMembers calls GET /orgs/:id/members to list organization members.

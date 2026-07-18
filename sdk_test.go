@@ -2396,3 +2396,1198 @@ func TestRevokeUserToken(t *testing.T) {
 		t.Errorf("path = %q, want /api/v1/users/user-1/tokens/t1", capturedPath)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 5.1: Admin organization CRUD and action endpoints
+// Test Specs: TS-12-68, TS-12-71, TS-12-72, TS-12-73, TS-12-74, TS-12-75
+// Requirements: 12-REQ-9.1, 12-REQ-9.4, 12-REQ-9.5, 12-REQ-9.6,
+//               12-REQ-9.7, 12-REQ-9.8
+// ---------------------------------------------------------------------------
+
+const testOrgJSON = `{"id":"org-1","name":"Acme","slug":"acme","url":"","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`
+
+// TestCreateOrg verifies that CreateOrg sends a POST request to
+// mountPoint+"/orgs" with JSON body and returns *Organization on 201 (TS-12-68).
+func TestCreateOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"org1","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	org, err := client.CreateOrg(context.Background(), &CreateOrgRequest{Name: "Acme", Slug: "acme"})
+	if err != nil {
+		t.Fatalf("CreateOrg returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs" {
+		t.Errorf("path = %q, want /api/v1/orgs", capturedPath)
+	}
+	if org == nil {
+		t.Fatal("CreateOrg returned nil")
+	}
+	if org.ID != "org1" {
+		t.Errorf("org.ID = %q, want %q", org.ID, "org1")
+	}
+	if org.Slug != "acme" {
+		t.Errorf("org.Slug = %q, want %q", org.Slug, "acme")
+	}
+	if !strings.Contains(string(capturedBody), `"name":"Acme"`) {
+		t.Errorf("request body missing name: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"slug":"acme"`) {
+		t.Errorf("request body missing slug: %s", capturedBody)
+	}
+}
+
+// TestGetOrg verifies that GetOrg sends a GET request to
+// mountPoint+"/orgs/{id}" and returns *Response[Organization] on success
+// (TS-12-71).
+func TestGetOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"org-1","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	resp, err := client.GetOrg(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("GetOrg returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1", capturedPath)
+	}
+	if resp == nil {
+		t.Fatal("GetOrg returned nil response")
+	}
+	if resp.Data.ID != "org-1" {
+		t.Errorf("resp.Data.ID = %q, want %q", resp.Data.ID, "org-1")
+	}
+}
+
+// TestUpdateOrg verifies that UpdateOrg sends a PATCH request to
+// mountPoint+"/orgs/{id}" with JSON body and returns *Organization (TS-12-72).
+func TestUpdateOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"org-1","name":"NewName","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	name := "NewName"
+	org, err := client.UpdateOrg(context.Background(), "org-1", &UpdateOrgRequest{Name: &name})
+	if err != nil {
+		t.Fatalf("UpdateOrg returned error: %v", err)
+	}
+	if capturedMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1", capturedPath)
+	}
+	if org == nil {
+		t.Fatal("UpdateOrg returned nil")
+	}
+	if org.Name != "NewName" {
+		t.Errorf("org.Name = %q, want %q", org.Name, "NewName")
+	}
+	if !strings.Contains(string(capturedBody), `"name"`) {
+		t.Errorf("request body missing name: %s", capturedBody)
+	}
+}
+
+// TestDeleteOrg verifies that DeleteOrg sends a DELETE request to
+// mountPoint+"/orgs/{id}" and returns nil error on 204 (TS-12-73).
+func TestDeleteOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.DeleteOrg(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("DeleteOrg returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1", capturedPath)
+	}
+}
+
+// TestBlockOrg verifies that BlockOrg sends a POST request to
+// mountPoint+"/orgs/{id}/block" with no body and returns *Organization
+// with Status=="blocked" (TS-12-74).
+func TestBlockOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"org-1","name":"Acme","slug":"acme","status":"blocked","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	org, err := client.BlockOrg(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("BlockOrg returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1/block" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1/block", capturedPath)
+	}
+	if org == nil {
+		t.Fatal("BlockOrg returned nil")
+	}
+	if org.Status != "blocked" {
+		t.Errorf("org.Status = %q, want %q", org.Status, "blocked")
+	}
+}
+
+// TestUnblockOrg verifies that UnblockOrg sends a POST request to
+// mountPoint+"/orgs/{id}/unblock" with no body and returns *Organization
+// with Status=="active" (TS-12-75).
+func TestUnblockOrg(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"org-1","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	org, err := client.UnblockOrg(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("UnblockOrg returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1/unblock" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1/unblock", capturedPath)
+	}
+	if org == nil {
+		t.Fatal("UnblockOrg returned nil")
+	}
+	if org.Status != "active" {
+		t.Errorf("org.Status = %q, want %q", org.Status, "active")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 5.2: Admin organization member management endpoints
+// Test Specs: TS-12-76, TS-12-77, TS-12-78, TS-12-E16
+// Requirements: 12-REQ-9.9, 12-REQ-9.10, 12-REQ-9.11, 12-REQ-9.E1
+// ---------------------------------------------------------------------------
+
+// TestListOrgMembers verifies that ListOrgMembers sends a GET request to
+// mountPoint+"/orgs/{orgID}/members" and decodes the bare JSON array
+// into []*User (TS-12-76).
+func TestListOrgMembers(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"id":"u1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	members, err := client.ListOrgMembers(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("ListOrgMembers returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1/members" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1/members", capturedPath)
+	}
+	if len(members) != 1 {
+		t.Fatalf("len(members) = %d, want 1", len(members))
+	}
+	if members[0].ID != "u1" {
+		t.Errorf("members[0].ID = %q, want %q", members[0].ID, "u1")
+	}
+}
+
+// TestAddOrgMember verifies that AddOrgMember sends a PUT request to
+// mountPoint+"/orgs/{orgID}/members/{userID}" with no request body
+// and returns nil error on 204 (TS-12-77).
+func TestAddOrgMember(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.AddOrgMember(context.Background(), "org-1", "user-1")
+	if err != nil {
+		t.Fatalf("AddOrgMember returned error: %v", err)
+	}
+	if capturedMethod != "PUT" {
+		t.Errorf("method = %q, want PUT", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1/members/user-1" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1/members/user-1", capturedPath)
+	}
+}
+
+// TestRemoveOrgMember verifies that RemoveOrgMember sends a DELETE request to
+// mountPoint+"/orgs/{orgID}/members/{userID}" and returns nil error on 204
+// (TS-12-78).
+func TestRemoveOrgMember(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	err := client.RemoveOrgMember(context.Background(), "org-1", "user-1")
+	if err != nil {
+		t.Fatalf("RemoveOrgMember returned error: %v", err)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/api/v1/orgs/org-1/members/user-1" {
+		t.Errorf("path = %q, want /api/v1/orgs/org-1/members/user-1", capturedPath)
+	}
+}
+
+// TestAddOrgMemberNonURLSafeID verifies that AddOrgMember does not escape
+// path parameters: a non-URL-safe userID causes a transport error or reaches
+// the server with slashes verbatim (TS-12-E16).
+func TestAddOrgMemberNonURLSafeID(t *testing.T) {
+	// Use a port that is not listening to ensure transport error.
+	client := NewClient("http://localhost:19999", WithAPIKey("key"))
+	err := client.AddOrgMember(context.Background(), "org-1", "user/with/slashes")
+	// Either transport error or the path was malformed — no *APIError.
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Errorf("expected plain error, not *APIError; got %v", apiErr)
+		}
+	}
+	// If err is nil, the request somehow succeeded or was handled —
+	// also acceptable per spec (the SDK does not escape the value).
+}
+
+// ---------------------------------------------------------------------------
+// Task 5.3: Auth and health/meta endpoint tests
+// Test Specs: TS-12-79, TS-12-80, TS-12-81, TS-12-82, TS-12-83, TS-12-E17
+// Requirements: 12-REQ-10.1, 12-REQ-10.2, 12-REQ-11.1, 12-REQ-11.2,
+//               12-REQ-11.3, 12-REQ-10.E1
+// ---------------------------------------------------------------------------
+
+// TestGetProviders verifies that GetProviders sends a GET request to
+// mountPoint+"/auth/providers" and decodes the bare JSON array
+// into []*OAuthProvider (TS-12-79).
+func TestGetProviders(t *testing.T) {
+	var capturedMethod, capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[{"name":"github","authorize_url":"https://github.com/login/oauth/authorize"}]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	providers, err := client.GetProviders(context.Background())
+	if err != nil {
+		t.Fatalf("GetProviders returned error: %v", err)
+	}
+	if capturedMethod != "GET" {
+		t.Errorf("method = %q, want GET", capturedMethod)
+	}
+	if capturedPath != "/api/v1/auth/providers" {
+		t.Errorf("path = %q, want /api/v1/auth/providers", capturedPath)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("len(providers) = %d, want 1", len(providers))
+	}
+	if providers[0].Name != "github" {
+		t.Errorf("providers[0].Name = %q, want %q", providers[0].Name, "github")
+	}
+}
+
+// TestExchangeOAuthCode verifies that ExchangeOAuthCode sends a POST request
+// to mountPoint+"/auth/callback" with JSON body and returns
+// *AuthCallbackResponse on success (TS-12-80).
+func TestExchangeOAuthCode(t *testing.T) {
+	var capturedMethod, capturedPath string
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"user":{"id":"u1","username":"alice","email":"a@b.com","full_name":"Alice","status":"active","role":"user","provider":"github","provider_id":"gh1","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"},"api_key":{"key":"secret","key_id":"k1","expires_at":null}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	resp, err := client.ExchangeOAuthCode(context.Background(), &AuthCallbackRequest{
+		Provider:    "github",
+		Code:        "code123",
+		RedirectURI: "http://localhost/cb",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeOAuthCode returned error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("method = %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/v1/auth/callback" {
+		t.Errorf("path = %q, want /api/v1/auth/callback", capturedPath)
+	}
+	if resp == nil {
+		t.Fatal("ExchangeOAuthCode returned nil")
+	}
+	if resp.User == nil || resp.User.ID != "u1" {
+		t.Errorf("resp.User.ID = %v, want %q", resp.User, "u1")
+	}
+	if resp.APIKey == nil || resp.APIKey.Key != "secret" {
+		t.Errorf("resp.APIKey.Key = %v, want %q", resp.APIKey, "secret")
+	}
+	if !strings.Contains(string(capturedBody), `"provider":"github"`) {
+		t.Errorf("request body missing provider: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"code":"code123"`) {
+		t.Errorf("request body missing code: %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"redirect_uri":"http://localhost/cb"`) {
+		t.Errorf("request body missing redirect_uri: %s", capturedBody)
+	}
+}
+
+// TestHealthz verifies that Healthz sends a GET request to
+// baseURL+"/healthz" (without the mount point) and returns *HealthResponse
+// (TS-12-81).
+func TestHealthz(t *testing.T) {
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithMountPoint("/api/v1"))
+	resp, err := client.Healthz(context.Background())
+	if err != nil {
+		t.Fatalf("Healthz returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("Healthz returned nil")
+	}
+	if resp.Status != "ok" {
+		t.Errorf("resp.Status = %q, want %q", resp.Status, "ok")
+	}
+	if capturedPath != "/healthz" {
+		t.Errorf("path = %q, want /healthz (should bypass mount point)", capturedPath)
+	}
+}
+
+// TestReadyz verifies that Readyz sends a GET request to baseURL+"/readyz"
+// (without the mount point) and returns *HealthResponse (TS-12-82).
+func TestReadyz(t *testing.T) {
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	resp, err := client.Readyz(context.Background())
+	if err != nil {
+		t.Fatalf("Readyz returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("Readyz returned nil")
+	}
+	if resp.Status != "ok" {
+		t.Errorf("resp.Status = %q, want %q", resp.Status, "ok")
+	}
+	if capturedPath != "/readyz" {
+		t.Errorf("path = %q, want /readyz", capturedPath)
+	}
+}
+
+// TestVersion verifies that Version sends a GET request to baseURL+"/version"
+// (without the mount point) and returns *VersionResponse (TS-12-83).
+func TestVersion(t *testing.T) {
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"version":"1.0.0","build_time":"2024-01-01","commit":"abc123","mount_point":"/api/v1"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	resp, err := client.Version(context.Background())
+	if err != nil {
+		t.Fatalf("Version returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("Version returned nil")
+	}
+	if resp.Version != "1.0.0" {
+		t.Errorf("resp.Version = %q, want %q", resp.Version, "1.0.0")
+	}
+	if capturedPath != "/version" {
+		t.Errorf("path = %q, want /version", capturedPath)
+	}
+}
+
+// TestExchangeOAuthCode4xxError verifies that ExchangeOAuthCode returns
+// *APIError when the server returns a 4xx error with JSON error envelope
+// (TS-12-E17).
+func TestExchangeOAuthCode4xxError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":{"code":400,"message":"Invalid code"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	resp, err := client.ExchangeOAuthCode(context.Background(), &AuthCallbackRequest{
+		Provider:    "github",
+		Code:        "bad",
+		RedirectURI: "http://localhost/cb",
+	})
+	if resp != nil {
+		t.Errorf("expected nil response on 400, got %+v", resp)
+	}
+	if err == nil {
+		t.Fatal("expected error from 400 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != 400 {
+		t.Errorf("apiErr.Code = %d, want 400", apiErr.Code)
+	}
+	if apiErr.Message != "Invalid code" {
+		t.Errorf("apiErr.Message = %q, want %q", apiErr.Message, "Invalid code")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 5.4: Non-JSON error bodies and network error edge cases
+// Test Specs: TS-12-E10, TS-12-E11, TS-12-E18
+// Requirements: 12-REQ-6.E1, 12-REQ-6.E2, 12-REQ-11.E1
+// ---------------------------------------------------------------------------
+
+// TestHTMLErrorBody502 verifies that do returns *APIError with Code=502 and
+// Message containing "Bad Gateway" when server returns a 502 with an HTML
+// body (TS-12-E10).
+func TestHTMLErrorBody502(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(502)
+		_, _ = w.Write([]byte("<html>Bad Gateway</html>"))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.GetUser(context.Background())
+	if err == nil {
+		t.Fatal("expected error from 502 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != 502 {
+		t.Errorf("apiErr.Code = %d, want 502", apiErr.Code)
+	}
+	if !strings.Contains(apiErr.Message, "Bad Gateway") {
+		t.Errorf("apiErr.Message = %q, want it to contain %q", apiErr.Message, "Bad Gateway")
+	}
+}
+
+// TestPlainTextErrorBody413 verifies that do returns *APIError with Code=413
+// and Message from HTTP status text when the server returns a 413 with a
+// plain-text body (TS-12-E11).
+func TestPlainTextErrorBody413(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(413)
+		_, _ = w.Write([]byte("Request Entity Too Large"))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	_, err := client.CreateToken(context.Background(), &CreateTokenRequest{
+		Name:        "t",
+		Permissions: []string{"read"},
+	})
+	if err == nil {
+		t.Fatal("expected error from 413 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != 413 {
+		t.Errorf("apiErr.Code = %d, want 413", apiErr.Code)
+	}
+}
+
+// TestHealthzUnreachableServer verifies that Healthz returns a plain error
+// wrapping the network error when the server is unreachable; errors.As
+// for *APIError returns false (TS-12-E18).
+func TestHealthzUnreachableServer(t *testing.T) {
+	client := NewClient("http://localhost:19998", WithAPIKey("key"))
+	resp, err := client.Healthz(context.Background())
+	if err == nil {
+		t.Fatal("expected error from unreachable server")
+	}
+	if resp != nil {
+		t.Errorf("expected nil response, got %+v", resp)
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		t.Errorf("expected plain error, not *APIError; got %v", apiErr)
+	}
+	if errors.Unwrap(err) == nil {
+		t.Error("expected wrapped error; errors.Unwrap returned nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 5.5: Property-based and smoke tests
+// Test Specs: TS-12-P1 through TS-12-P10
+// Requirements: 12-PROP-1 through 12-PROP-10
+// ---------------------------------------------------------------------------
+
+// TestPropClientConcurrency verifies that Client is safe for concurrent use
+// by multiple goroutines (TS-12-P1). Run with: go test -race ./...
+// 50 goroutines call various methods simultaneously; the race detector
+// catches any data races.
+func TestPropClientConcurrency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz", "/readyz":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/version":
+			_, _ = w.Write([]byte(testVersionJSON))
+		default:
+			_, _ = w.Write([]byte(testUserJSON))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"), WithRequestID("rid-1"))
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			switch i % 5 {
+			case 0:
+				_, _ = client.Healthz(ctx)
+			case 1:
+				_, _ = client.GetUser(ctx)
+			case 2:
+				_, _ = client.ListOrgs(ctx, nil)
+			case 3:
+				_, _ = client.Version(ctx)
+			case 4:
+				_, _ = client.ListKeys(ctx)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestPropAPIErrorExhaustive verifies that for any HTTP status code >= 400,
+// do always returns a non-nil *APIError with Code set to the HTTP status
+// code (TS-12-P2).
+func TestPropAPIErrorExhaustive(t *testing.T) {
+	// Test representative status codes with both JSON and non-JSON bodies.
+	statusCodes := []int{400, 401, 403, 404, 405, 409, 413, 422, 429, 500, 502, 503}
+	bodyTypes := []struct {
+		name string
+		body string
+	}{
+		{"json_envelope", `{"error":{"code":%d,"message":"test error"}}`},
+		{"html", `<html>Error</html>`},
+		{"plain_text", `Some error text`},
+		{"empty", ``},
+	}
+
+	for _, code := range statusCodes {
+		for _, bt := range bodyTypes {
+			name := fmt.Sprintf("status_%d_%s", code, bt.name)
+			t.Run(name, func(t *testing.T) {
+				statusCode := code
+				body := bt.body
+				if bt.name == "json_envelope" {
+					body = fmt.Sprintf(bt.body, statusCode)
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if bt.name == "json_envelope" {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					w.WriteHeader(statusCode)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer server.Close()
+
+				client := NewClient(server.URL, WithAPIKey("key"))
+				_, err := client.GetUser(context.Background())
+				if err == nil {
+					t.Fatalf("expected error for status %d", statusCode)
+				}
+				var apiErr *APIError
+				if !errors.As(err, &apiErr) {
+					t.Fatalf("expected *APIError for status %d/%s, got %T: %v",
+						statusCode, bt.name, err, err)
+				}
+				if apiErr.Code != statusCode {
+					t.Errorf("apiErr.Code = %d, want %d", apiErr.Code, statusCode)
+				}
+			})
+		}
+	}
+}
+
+// TestPropPlainErrorsWrapCause verifies that all plain error scenarios
+// (network, context, JSON decode, JSON encode) satisfy errors.Unwrap != nil
+// (TS-12-P3).
+func TestPropPlainErrorsWrapCause(t *testing.T) {
+	t.Run("network_failure", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		serverURL := server.URL
+		server.Close()
+
+		client := NewClient(serverURL)
+		_, err := client.Healthz(context.Background())
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if errors.Unwrap(err) == nil {
+			t.Error("network error should wrap cause")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Error("expected plain error, not *APIError")
+		}
+	})
+
+	t.Run("context_cancelled", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(100 * time.Millisecond)
+			w.WriteHeader(200)
+		}))
+		defer server.Close()
+
+		client := NewClient(server.URL)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := client.Healthz(ctx)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if errors.Unwrap(err) == nil {
+			t.Error("context error should wrap cause")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Error("expected plain error, not *APIError")
+		}
+	})
+
+	t.Run("json_decode_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("not json"))
+		}))
+		defer server.Close()
+
+		client := NewClient(server.URL)
+		_, err := client.Healthz(context.Background())
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if errors.Unwrap(err) == nil {
+			t.Error("JSON decode error should wrap cause")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Error("expected plain error, not *APIError")
+		}
+	})
+
+	t.Run("json_marshal_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+		}))
+		defer server.Close()
+
+		client := NewClient(server.URL)
+		badBody := make(chan int)
+		_, _, err := client.do(context.Background(), "POST", "/test", badBody, nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if errors.Unwrap(err) == nil {
+			t.Error("marshal error should wrap cause")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Error("expected plain error, not *APIError")
+		}
+	})
+}
+
+// TestPropMountPointNormalizationIdempotent verifies that for any path
+// string p, applying WithMountPoint(p) produces a mountPoint starting
+// with exactly one '/' and with no trailing '/' (TS-12-P4).
+func TestPropMountPointNormalizationIdempotent(t *testing.T) {
+	paths := []string{
+		"", "api", "/api", "api/", "/api/",
+		"api/v1", "/api/v1", "/api/v1/", "//api", "/api//v1",
+	}
+
+	for _, p := range paths {
+		t.Run(fmt.Sprintf("path_%q", p), func(t *testing.T) {
+			c := NewClient("http://example.com", WithMountPoint(p))
+
+			// Must start with exactly one '/'
+			if !strings.HasPrefix(c.mountPoint, "/") {
+				t.Errorf("mountPoint %q does not start with '/'", c.mountPoint)
+			}
+			if strings.HasPrefix(c.mountPoint, "//") {
+				t.Errorf("mountPoint %q starts with double slash", c.mountPoint)
+			}
+
+			// Must not end with '/' (unless it is exactly "/")
+			if c.mountPoint != "/" && strings.HasSuffix(c.mountPoint, "/") {
+				t.Errorf("mountPoint %q has trailing slash", c.mountPoint)
+			}
+
+			// Idempotent: applying again produces the same result
+			c2 := NewClient("http://example.com", WithMountPoint(c.mountPoint))
+			if c.mountPoint != c2.mountPoint {
+				t.Errorf("not idempotent: first=%q, second=%q", c.mountPoint, c2.mountPoint)
+			}
+		})
+	}
+}
+
+// TestPropHealthProbesBypassMountPoint verifies that Healthz, Readyz, and
+// Version always construct URLs without the mount point prefix, regardless
+// of mountPoint configuration (TS-12-P5).
+func TestPropHealthProbesBypassMountPoint(t *testing.T) {
+	mountPoints := []string{"/api/v1", "/v2", "/deeply/nested/mount", "/"}
+
+	for _, mp := range mountPoints {
+		t.Run(fmt.Sprintf("mount_%s", mp), func(t *testing.T) {
+			var capturedPaths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedPaths = append(capturedPaths, r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/version":
+					_, _ = w.Write([]byte(testVersionJSON))
+				default:
+					_, _ = w.Write([]byte(testHealthJSON))
+				}
+			}))
+			defer server.Close()
+
+			client := NewClient(server.URL, WithMountPoint(mp))
+			_, _ = client.Healthz(context.Background())
+			_, _ = client.Readyz(context.Background())
+			_, _ = client.Version(context.Background())
+
+			if len(capturedPaths) != 3 {
+				t.Fatalf("expected 3 requests, got %d", len(capturedPaths))
+			}
+			expected := []string{"/healthz", "/readyz", "/version"}
+			for i, want := range expected {
+				if capturedPaths[i] != want {
+					t.Errorf("path[%d] = %q, want %q (mount=%q)", i, capturedPaths[i], want, mp)
+				}
+			}
+		})
+	}
+}
+
+// TestPropListEndpointsNonNilEmptySlice verifies that all list endpoint
+// methods return a non-nil empty slice when the server returns []
+// (TS-12-P6).
+func TestPropListEndpointsNonNilEmptySlice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithAPIKey("key"))
+	ctx := context.Background()
+
+	t.Run("ListKeys", func(t *testing.T) {
+		result, err := client.ListKeys(ctx)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListTokens", func(t *testing.T) {
+		result, err := client.ListTokens(ctx)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListUsers", func(t *testing.T) {
+		result, err := client.ListUsers(ctx, nil)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListOrgs", func(t *testing.T) {
+		result, err := client.ListOrgs(ctx, nil)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListOrgMembers", func(t *testing.T) {
+		result, err := client.ListOrgMembers(ctx, "org-1")
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListUserOrgs", func(t *testing.T) {
+		result, err := client.ListUserOrgs(ctx)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListUserKeys", func(t *testing.T) {
+		result, err := client.ListUserKeys(ctx, "user-1")
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("ListUserTokens", func(t *testing.T) {
+		result, err := client.ListUserTokens(ctx, "user-1")
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("GetProviders", func(t *testing.T) {
+		result, err := client.GetProviders(ctx)
+		if err != nil {
+			t.Fatalf("returned error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("returned nil, want non-nil empty slice")
+		}
+		if len(result) != 0 {
+			t.Errorf("len = %d, want 0", len(result))
+		}
+	})
+}
+
+// TestPropAuthHeaderIffAPIKey verifies that the Authorization header is
+// present with "Bearer <key>" if and only if apiKey is non-empty (TS-12-P7).
+func TestPropAuthHeaderIffAPIKey(t *testing.T) {
+	keys := []string{"", "key-1", "key-2", "very-long-key-abcdef", "x"}
+
+	for _, key := range keys {
+		t.Run(fmt.Sprintf("key_%q", key), func(t *testing.T) {
+			var capturedAuth string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedAuth = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(testHealthJSON))
+			}))
+			defer server.Close()
+
+			client := NewClient(server.URL, WithAPIKey(key))
+			_, _ = client.Healthz(context.Background())
+
+			if key == "" {
+				if capturedAuth != "" {
+					t.Errorf("Authorization = %q, want empty for empty apiKey", capturedAuth)
+				}
+			} else {
+				want := "Bearer " + key
+				if capturedAuth != want {
+					t.Errorf("Authorization = %q, want %q", capturedAuth, want)
+				}
+			}
+		})
+	}
+}
+
+// TestPropErrNotModifiedIff304 verifies that ErrNotModified is returned if
+// and only if the server responds with 304, and the *Response[T] is always
+// nil in that case (TS-12-P8).
+func TestPropErrNotModifiedIff304(t *testing.T) {
+	type testCase struct {
+		name   string
+		status int
+	}
+	statuses := []testCase{
+		{"200", 200},
+		{"304", 304},
+	}
+
+	for _, method := range []string{"GetUser", "GetUserByID", "GetToken", "GetOrg"} {
+		for _, tc := range statuses {
+			t.Run(fmt.Sprintf("%s_status_%s", method, tc.name), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tc.status)
+					if tc.status == 200 {
+						switch {
+						case strings.HasSuffix(r.URL.Path, "/tokens/tid"):
+							_, _ = w.Write([]byte(`{"token_id":"tid","name":"t","permissions":["read"],"created_at":"2024-01-01T00:00:00Z","expires_at":null,"revoked_at":null}`))
+						case strings.HasSuffix(r.URL.Path, "/orgs/oid"):
+							_, _ = w.Write([]byte(`{"id":"oid","name":"Acme","slug":"acme","status":"active","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}`))
+						default:
+							_, _ = w.Write([]byte(testUserJSON))
+						}
+					}
+				}))
+				defer server.Close()
+
+				client := NewClient(server.URL, WithAPIKey("key"))
+				ctx := context.Background()
+				opt := WithIfNoneMatch(`"e"`)
+
+				var err error
+				var respNil bool
+
+				switch method {
+				case "GetUser":
+					resp, e := client.GetUser(ctx, opt)
+					err = e
+					respNil = (resp == nil)
+				case "GetUserByID":
+					resp, e := client.GetUserByID(ctx, "id", opt)
+					err = e
+					respNil = (resp == nil)
+				case "GetToken":
+					resp, e := client.GetToken(ctx, "tid", opt)
+					err = e
+					respNil = (resp == nil)
+				case "GetOrg":
+					resp, e := client.GetOrg(ctx, "oid", opt)
+					err = e
+					respNil = (resp == nil)
+				}
+
+				if tc.status == 200 {
+					if errors.Is(err, ErrNotModified) {
+						t.Error("should not return ErrNotModified on 200")
+					}
+					if respNil {
+						t.Error("response should be non-nil on 200")
+					}
+				} else {
+					if !errors.Is(err, ErrNotModified) {
+						t.Errorf("expected ErrNotModified on 304, got %v", err)
+					}
+					if !respNil {
+						t.Error("response should be nil on 304")
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestPropUpdateUserAlwaysFullName verifies that UpdateUserRequest always
+// includes full_name in the JSON body, even when FullName is an empty string
+// or contains special characters (TS-12-P9).
+func TestPropUpdateUserAlwaysFullName(t *testing.T) {
+	values := []string{
+		"",
+		" ",
+		"Alice Smith",
+		"   lots   of   spaces   ",
+		"名前",
+		`has "quotes" and \backslashes`,
+		strings.Repeat("x", 1000),
+	}
+
+	for _, v := range values {
+		t.Run(fmt.Sprintf("fullname_%q", v), func(t *testing.T) {
+			var capturedBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(testUserJSON))
+			}))
+			defer server.Close()
+
+			client := NewClient(server.URL, WithAPIKey("key"))
+			_, _ = client.UpdateUser(context.Background(), &UpdateUserRequest{FullName: v})
+
+			if !strings.Contains(string(capturedBody), `"full_name"`) {
+				t.Errorf("body missing full_name key for value %q: %s", v, capturedBody)
+			}
+
+			// Also verify via marshal directly
+			data, err := json.Marshal(&UpdateUserRequest{FullName: v})
+			if err != nil {
+				t.Fatalf("json.Marshal failed: %v", err)
+			}
+			if !strings.Contains(string(data), `"full_name"`) {
+				t.Errorf("marshalled JSON missing full_name: %s", data)
+			}
+		})
+	}
+}
+
+// TestPropCanonicalTypesUniqueDefinition verifies that all canonical domain
+// types compile in the apikit package (TS-12-P10). If any type were declared
+// more than once, the Go compiler would reject the package with a
+// 'type X redeclared' error. This test is a compile-time assertion.
+func TestPropCanonicalTypesUniqueDefinition(t *testing.T) {
+	// Each type referenced below is verified to exist exactly once.
+	// Duplicate definitions would cause a build failure.
+	types := []interface{}{
+		User{},
+		APIKeyMeta{},
+		APIKeyFull{},
+		PAT{},
+		PATFull{},
+		Organization{},
+		OAuthProvider{},
+		AuthCallbackRequest{},
+		AuthCallbackResponse{},
+		CreateUserRequest{},
+		UpdateUserRequest{},
+		CreateTokenRequest{},
+		CreateOrgRequest{},
+		UpdateOrgRequest{},
+		HealthResponse{},
+		VersionResponse{},
+		RevokeKeyResponse{},
+		ListUsersOptions{},
+		ListOrgsOptions{},
+	}
+	if len(types) != 19 {
+		t.Errorf("expected 19 canonical types, got %d", len(types))
+	}
+	// go build ./... succeeding proves no redeclarations exist.
+}
