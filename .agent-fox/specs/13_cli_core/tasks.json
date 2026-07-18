@@ -834,7 +834,7 @@
             "13-REQ-5.1",
             "13-REQ-5.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -862,7 +862,7 @@
             "13-REQ-6.1",
             "13-REQ-6.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -880,7 +880,7 @@
           "requirement_refs": [
             "13-REQ-6.5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
