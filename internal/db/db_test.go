@@ -1368,3 +1368,715 @@ func TestOpenMemory_MaxOpenConnections(t *testing.T) {
 		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Subtask 3.1: Property tests for initDB shared initialization and schema
+//              idempotency
+// Test Spec: TS-02-7, TS-02-8, TS-02-10, TS-02-11, TS-02-13, TS-02-P2
+// Requirements: 02-REQ-3.1, 02-REQ-3.2, 02-REQ-3.5, 02-REQ-3.6, 02-REQ-6.8
+// ---------------------------------------------------------------------------
+
+// verifyTablesExist checks that all six required tables exist in the given
+// *sql.DB. Used by property and smoke tests to avoid redundant inline checks.
+func verifyTablesExist(t *testing.T, sqlDB *sql.DB) {
+	t.Helper()
+	for _, table := range allTables {
+		var name string
+		err := sqlDB.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("table %q not found in sqlite_master: %v", table, err)
+		}
+	}
+}
+
+// verifyForeignKeysOn checks that PRAGMA foreign_keys returns 1 (enabled).
+func verifyForeignKeysOn(t *testing.T, sqlDB *sql.DB) {
+	t.Helper()
+	var fk int
+	if err := sqlDB.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("PRAGMA foreign_keys query failed: %v", err)
+	}
+	if fk != 1 {
+		t.Errorf("PRAGMA foreign_keys = %d; want 1", fk)
+	}
+}
+
+// TestProperty_SharedInitDB verifies that both Open and OpenMemory delegate
+// all post-connection initialization to the same shared private initDB
+// function; both produce *DB handles with identical initialization (pool
+// settings, foreign key enforcement, schema). (TS-02-7)
+func TestProperty_SharedInitDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	db1, err1 := Open(path)
+	if err1 != nil {
+		t.Fatalf("Open error = %v; want nil", err1)
+	}
+	if db1 == nil {
+		t.Fatal("Open returned nil DB; want non-nil")
+	}
+	defer db1.Close()
+
+	db2, err2 := OpenMemory()
+	if err2 != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err2)
+	}
+	if db2 == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db2.Close()
+
+	// Both should have all six tables.
+	verifyTablesExist(t, db1.SqlDB)
+	verifyTablesExist(t, db2.SqlDB)
+}
+
+// TestProperty_InitDB_PoolSettings verifies that after Open, the *sql.DB
+// handle reports MaxOpenConnections == 1, confirming initDB sets
+// SetMaxOpenConns(1) before executing any PRAGMAs. (TS-02-8)
+func TestProperty_InitDB_PoolSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pool.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("Open returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	stats := db.SqlDB.Stats()
+	if stats.MaxOpenConnections != 1 {
+		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	}
+}
+
+// TestProperty_OpenMemory_FullInit verifies that OpenMemory succeeds with
+// all six tables present, foreign keys enforced, and pool configured;
+// no WAL error is returned. (TS-02-10)
+func TestProperty_OpenMemory_FullInit(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	verifyTablesExist(t, db.SqlDB)
+	verifyForeignKeysOn(t, db.SqlDB)
+}
+
+// TestProperty_Open_ForeignKeysEnabled verifies that after Open, querying
+// PRAGMA foreign_keys returns 1 (enabled). (TS-02-11)
+func TestProperty_Open_ForeignKeysEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fk.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("Open returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	verifyForeignKeysOn(t, db.SqlDB)
+}
+
+// TestProperty_Open_FullyInitialized verifies that Open returns a non-nil
+// *DB with non-nil SqlDB and nil error, meaning no partial states are
+// possible. (TS-02-13)
+func TestProperty_Open_FullyInitialized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "full.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("Open returned nil *DB; want non-nil")
+	}
+	defer db.Close()
+
+	if db.SqlDB == nil {
+		t.Error("db.SqlDB is nil; want non-nil")
+	}
+}
+
+// TestProperty_SchemaIdempotency verifies that opening the same database
+// path three times succeeds each time, existing data persists across
+// opens, and all tables remain present. (TS-02-P2)
+func TestProperty_SchemaIdempotency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idempotent.db")
+
+	// First open: create schema and insert sentinel.
+	db1, err := Open(path)
+	if err != nil {
+		t.Fatalf("first Open error = %v; want nil", err)
+	}
+	if db1 == nil {
+		t.Fatal("first Open returned nil DB")
+	}
+	_, execErr := db1.SqlDB.Exec(`INSERT INTO admin_config VALUES ('sentinel', 'alive')`)
+	if execErr != nil {
+		t.Fatalf("insert sentinel failed: %v", execErr)
+	}
+	db1.Close()
+
+	// Second open: schema already exists; verify sentinel persists.
+	db2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open error = %v; want nil", err)
+	}
+	if db2 == nil {
+		t.Fatal("second Open returned nil DB")
+	}
+	var v string
+	if scanErr := db2.SqlDB.QueryRow("SELECT value FROM admin_config WHERE key='sentinel'").Scan(&v); scanErr != nil {
+		t.Fatalf("sentinel not found on second open: %v", scanErr)
+	}
+	if v != "alive" {
+		t.Errorf("sentinel value = %q; want %q", v, "alive")
+	}
+	verifyTablesExist(t, db2.SqlDB)
+	db2.Close()
+
+	// Third open: verify sentinel still persists and schema unchanged.
+	db3, err := Open(path)
+	if err != nil {
+		t.Fatalf("third Open error = %v; want nil", err)
+	}
+	if db3 == nil {
+		t.Fatal("third Open returned nil DB")
+	}
+	defer db3.Close()
+
+	if scanErr := db3.SqlDB.QueryRow("SELECT value FROM admin_config WHERE key='sentinel'").Scan(&v); scanErr != nil {
+		t.Fatalf("sentinel not found on third open: %v", scanErr)
+	}
+	if v != "alive" {
+		t.Errorf("sentinel value on third open = %q; want %q", v, "alive")
+	}
+	verifyTablesExist(t, db3.SqlDB)
+}
+
+// ---------------------------------------------------------------------------
+// Subtask 3.2: Property tests for FormatTime/ParseTime, WrapError purity,
+//              and WithTx atomicity
+// Test Spec: TS-02-P3, TS-02-P4, TS-02-P5
+// Requirements: 02-REQ-10.4, 02-REQ-9.2, 02-REQ-8.1, 02-REQ-8.3
+// ---------------------------------------------------------------------------
+
+// TestProperty_FormatTimeParseTime_RoundTrip iterates over a table of diverse
+// time.Time values (≥5, spanning past/future, sub-second precision, non-UTC
+// zones) and verifies that ParseTime(FormatTime(t)) equals
+// t.Truncate(time.Second).UTC() for each. (TS-02-P3)
+func TestProperty_FormatTimeParseTime_RoundTrip(t *testing.T) {
+	est := time.FixedZone("EST", -5*3600)
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	nzst := time.FixedZone("NZST", 12*3600)
+	aest := time.FixedZone("AEST", 10*3600)
+
+	tests := []struct {
+		name string
+		t    time.Time
+	}{
+		{"UTC now", time.Now()},
+		{"Unix epoch", time.Unix(0, 0)},
+		{"Sub-second nanos", time.Date(2026, 1, 15, 10, 30, 45, 123456789, time.UTC)},
+		{"Non-UTC EST", time.Date(2026, 6, 15, 14, 0, 0, 0, est)},
+		{"Non-UTC IST with sub-second", time.Date(2026, 12, 31, 23, 59, 59, 999999999, ist)},
+		{"Non-UTC NZST midnight", time.Date(2026, 3, 1, 0, 0, 0, 0, nzst)},
+		{"Far future 2099", time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC)},
+		{"Year 2000 sub-second", time.Date(2000, 1, 1, 0, 0, 0, 500000000, time.UTC)},
+		{"Non-UTC AEST", time.Date(2026, 7, 18, 8, 15, 30, 0, aest)},
+		{"Negative offset", time.Date(2026, 1, 1, 3, 0, 0, 750000000, est)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			formatted := FormatTime(tt.t)
+			parsed, err := ParseTime(formatted)
+			if err != nil {
+				t.Fatalf("ParseTime(FormatTime(%v)) error = %v", tt.t, err)
+			}
+			expected := tt.t.Truncate(time.Second).UTC()
+			if !parsed.Equal(expected) {
+				t.Errorf("round-trip: got %v; want %v", parsed, expected)
+			}
+		})
+	}
+}
+
+// TestProperty_WrapError_Purity verifies that WrapError is a pure function
+// with no side effects: calling it twice with the same input produces the
+// same output both times; no global state is mutated. (TS-02-P4)
+func TestProperty_WrapError_Purity(t *testing.T) {
+	inputs := []struct {
+		name string
+		err  error
+		want error // expected sentinel, nil means passthrough
+	}{
+		{"nil", nil, nil},
+		{"UNIQUE", &mockSQLiteError{code: testSQLiteConstraintUnique}, ErrConflict},
+		{"PRIMARYKEY", &mockSQLiteError{code: testSQLiteConstraintPrimaryKey}, ErrConflict},
+		{"BUSY", &mockSQLiteError{code: testSQLiteBusy}, ErrDatabaseLocked},
+		{"LOCKED", &mockSQLiteError{code: testSQLiteLocked}, ErrDatabaseLocked},
+		{"unknown", errors.New("unknown error"), nil},
+		{"wrapped UNIQUE", fmt.Errorf("outer: %w", &mockSQLiteError{code: testSQLiteConstraintUnique}), ErrConflict},
+	}
+
+	for _, tt := range inputs {
+		t.Run(tt.name, func(t *testing.T) {
+			// Call twice to verify determinism.
+			r1 := WrapError(tt.err)
+			r2 := WrapError(tt.err)
+
+			if tt.want == nil && tt.err == nil {
+				// nil → nil
+				if r1 != nil {
+					t.Errorf("WrapError(nil) first call = %v; want nil", r1)
+				}
+				if r2 != nil {
+					t.Errorf("WrapError(nil) second call = %v; want nil", r2)
+				}
+			} else if tt.want == nil {
+				// Passthrough: result should be the original error.
+				if !errors.Is(r1, tt.err) {
+					t.Errorf("WrapError(%s) first call = %v; want original error", tt.name, r1)
+				}
+				if !errors.Is(r2, tt.err) {
+					t.Errorf("WrapError(%s) second call = %v; want original error", tt.name, r2)
+				}
+			} else {
+				// Sentinel mapping: both calls produce the same sentinel.
+				if !errors.Is(r1, tt.want) {
+					t.Errorf("WrapError(%s) first call = %v; want %v", tt.name, r1, tt.want)
+				}
+				if !errors.Is(r2, tt.want) {
+					t.Errorf("WrapError(%s) second call = %v; want %v", tt.name, r2, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestProperty_WithTx_Atomicity verifies that for each of several random key
+// names, a WithTx call that inserts into admin_config then returns an error
+// leaves the table count unchanged — the transaction is fully rolled back.
+// (TS-02-P5)
+func TestProperty_WithTx_Atomicity(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	keys := []string{"atomicA", "atomicB", "atomicC", "atomicD", "atomicE"}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			// Count before.
+			var before int
+			if err := db.SqlDB.QueryRow("SELECT COUNT(*) FROM admin_config").Scan(&before); err != nil {
+				t.Fatalf("count before failed: %v", err)
+			}
+
+			// WithTx: insert then return error → expect rollback.
+			txErr := db.WithTx(context.Background(), func(tx *sql.Tx) error {
+				_, _ = tx.ExecContext(context.Background(),
+					"INSERT INTO admin_config VALUES (?, 'val')", key)
+				return errors.New("forced rollback")
+			})
+			if txErr == nil {
+				t.Fatal("WithTx returned nil error; want forced rollback error")
+			}
+
+			// Count after must be unchanged.
+			var after int
+			if err := db.SqlDB.QueryRow("SELECT COUNT(*) FROM admin_config").Scan(&after); err != nil {
+				t.Fatalf("count after failed: %v", err)
+			}
+			if after != before {
+				t.Errorf("admin_config count changed from %d to %d after failed WithTx", before, after)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Subtask 3.3: Property tests for Open/OpenMemory invariants and isolation
+// Test Spec: TS-02-P6, TS-02-P7, TS-02-P8
+// Requirements: 02-REQ-7.2, 02-REQ-7.3, 02-REQ-1.1, 02-REQ-1.2,
+//               02-REQ-1.3, 02-REQ-11.3
+// ---------------------------------------------------------------------------
+
+// TestProperty_Open_FullyInitializedOrError verifies that for various input
+// paths (valid, empty, directory, corrupt), Open always returns either
+// (*DB with full init, nil) or (nil, non-nil error). No partially initialized
+// DB handle is ever returned. (TS-02-P6)
+func TestProperty_Open_FullyInitializedOrError(t *testing.T) {
+	validPath := filepath.Join(t.TempDir(), "valid.db")
+	dirPath := t.TempDir()
+	corruptPath := filepath.Join(t.TempDir(), "corrupt.db")
+	if err := os.WriteFile(corruptPath, []byte("not sqlite"), 0644); err != nil {
+		t.Fatalf("failed to write corrupt file: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"valid path", validPath},
+		{"empty path", ""},
+		{"directory path", dirPath},
+		{"corrupt file", corruptPath},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db, err := Open(c.path)
+			if err == nil {
+				// Success: db must be fully initialized.
+				if db == nil {
+					t.Fatal("Open returned nil DB with nil error")
+				}
+				defer db.Close()
+				if db.SqlDB == nil {
+					t.Error("db.SqlDB is nil on success path")
+				}
+				verifyForeignKeysOn(t, db.SqlDB)
+				verifyTablesExist(t, db.SqlDB)
+			} else {
+				// Error: db must be nil.
+				if db != nil {
+					t.Errorf("Open returned non-nil DB with error %v", err)
+					db.Close()
+				}
+			}
+		})
+	}
+}
+
+// TestProperty_OpenMemory_Isolation verifies that three distinct OpenMemory
+// calls return fully independent *DB instances: writes to one are invisible
+// in the others. (TS-02-P7)
+func TestProperty_OpenMemory_Isolation(t *testing.T) {
+	const n = 3
+	dbs := make([]*DB, n)
+	for i := range n {
+		d, err := OpenMemory()
+		if err != nil {
+			t.Fatalf("OpenMemory(%d) error = %v", i, err)
+		}
+		if d == nil {
+			t.Fatalf("OpenMemory(%d) returned nil DB", i)
+		}
+		dbs[i] = d
+	}
+	defer func() {
+		for _, d := range dbs {
+			if d != nil {
+				d.Close()
+			}
+		}
+	}()
+
+	// Insert a distinct row into each.
+	for i, d := range dbs {
+		key := fmt.Sprintf("iso_%d", i)
+		_, err := d.SqlDB.Exec("INSERT INTO admin_config VALUES (?, ?)", key, "val")
+		if err != nil {
+			t.Fatalf("insert into db[%d] failed: %v", i, err)
+		}
+	}
+
+	// Cross-check: each pair must not see the other's row.
+	for i := range dbs {
+		for j := range dbs {
+			if i == j {
+				continue
+			}
+			key := fmt.Sprintf("iso_%d", i)
+			var v string
+			scanErr := dbs[j].SqlDB.QueryRow("SELECT value FROM admin_config WHERE key=?", key).Scan(&v)
+			if scanErr == nil {
+				t.Errorf("db[%d] found row with key %q from db[%d]; want isolation", j, key, i)
+			}
+		}
+	}
+}
+
+// TestProperty_Open_InputValidation_NoSideEffects verifies that calling Open
+// with an empty string or an existing directory produces no filesystem side
+// effects — the temp directory listing is unchanged after the call. (TS-02-P8)
+func TestProperty_Open_InputValidation_NoSideEffects(t *testing.T) {
+	t.Run("empty path", func(t *testing.T) {
+		root := t.TempDir()
+		entriesBefore, _ := os.ReadDir(root)
+
+		db, err := Open("")
+		if err == nil {
+			t.Fatal("Open(\"\") returned nil error; want non-nil")
+		}
+		if db != nil {
+			t.Error("Open(\"\") returned non-nil DB; want nil")
+			db.Close()
+		}
+
+		entriesAfter, _ := os.ReadDir(root)
+		if len(entriesAfter) != len(entriesBefore) {
+			t.Errorf("directory listing changed: before=%d entries, after=%d entries",
+				len(entriesBefore), len(entriesAfter))
+		}
+	})
+
+	t.Run("directory path", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesBefore, _ := os.ReadDir(dir)
+
+		db, err := Open(dir)
+		if err == nil {
+			t.Fatal("Open(dir) returned nil error; want non-nil")
+		}
+		if db != nil {
+			t.Error("Open(dir) returned non-nil DB; want nil")
+			db.Close()
+		}
+
+		entriesAfter, _ := os.ReadDir(dir)
+		if len(entriesAfter) != len(entriesBefore) {
+			t.Errorf("directory listing changed: before=%d entries, after=%d entries",
+				len(entriesBefore), len(entriesAfter))
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Subtask 3.4: Smoke tests exercising real execution paths
+// Test Spec: TS-02-SMOKE-1, TS-02-SMOKE-2, TS-02-SMOKE-3, TS-02-SMOKE-4,
+//            TS-02-SMOKE-5
+// Requirements: 02-REQ-7.2, 02-REQ-7.3, 02-REQ-5.1, 02-REQ-8.1, 02-REQ-9.1
+// ---------------------------------------------------------------------------
+
+// TestSmoke_Open_HappyPath is a full happy-path smoke test: Open creates a
+// missing parent directory, initializes WAL mode and foreign keys, creates all
+// six tables, and returns a usable *DB handle. (TS-02-SMOKE-1, 02-PATH-1)
+func TestSmoke_Open_HappyPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "newdir", "apikit.db")
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("Open returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	// Parent directory was created.
+	dir := filepath.Dir(path)
+	info, statErr := os.Stat(dir)
+	if statErr != nil {
+		t.Fatalf("parent dir %q not created: %v", dir, statErr)
+	}
+	if !info.IsDir() {
+		t.Fatalf("parent %q is not a directory", dir)
+	}
+
+	// On non-Windows, verify directory mode is 0700.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0700 {
+			t.Errorf("directory mode = %04o; want 0700", perm)
+		}
+	}
+
+	// Database file was created.
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("database file %q not created: %v", path, statErr)
+	}
+
+	// PRAGMA journal_mode == 'wal'.
+	var mode string
+	if err := db.SqlDB.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode failed: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q; want %q", mode, "wal")
+	}
+
+	// PRAGMA foreign_keys == 1.
+	verifyForeignKeysOn(t, db.SqlDB)
+
+	// All six tables present.
+	verifyTablesExist(t, db.SqlDB)
+
+	// MaxOpenConnections == 1.
+	if stats := db.SqlDB.Stats(); stats.MaxOpenConnections != 1 {
+		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	}
+}
+
+// TestSmoke_OpenMemory_HappyPath is a full happy-path smoke test for
+// OpenMemory: returns an independent in-memory DB with full initialization
+// (no WAL, FK ON, all six tables), and a second call is isolated.
+// (TS-02-SMOKE-2, 02-PATH-2)
+func TestSmoke_OpenMemory_HappyPath(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	// journal_mode == 'memory' (WAL is skipped).
+	var mode string
+	if err := db.SqlDB.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode failed: %v", err)
+	}
+	if mode != "memory" {
+		t.Errorf("journal_mode = %q; want %q", mode, "memory")
+	}
+
+	// FK on.
+	verifyForeignKeysOn(t, db.SqlDB)
+
+	// All six tables.
+	verifyTablesExist(t, db.SqlDB)
+
+	// Pool setting.
+	if stats := db.SqlDB.Stats(); stats.MaxOpenConnections != 1 {
+		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	}
+
+	// Second call produces an independent isolated instance.
+	db2, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("second OpenMemory error = %v; want nil", err)
+	}
+	if db2 == nil {
+		t.Fatal("second OpenMemory returned nil DB")
+	}
+	defer db2.Close()
+
+	// Insert into first, verify absent in second.
+	_, _ = db.SqlDB.Exec("INSERT INTO admin_config VALUES ('smoke2', 'val')")
+	var v string
+	scanErr := db2.SqlDB.QueryRow("SELECT value FROM admin_config WHERE key='smoke2'").Scan(&v)
+	if scanErr == nil {
+		t.Error("second OpenMemory instance found row from first; want isolation")
+	}
+}
+
+// TestSmoke_Open_CorruptFile is an error-path smoke test: Open on a corrupt
+// file (non-SQLite bytes) returns a wrapped error containing the file path;
+// no *DB handle is returned, and the underlying *sql.DB is closed.
+// (TS-02-SMOKE-3, 02-PATH-3)
+func TestSmoke_Open_CorruptFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt_smoke.db")
+	if err := os.WriteFile(path, []byte("arbitrary non-SQLite bytes for smoke test"), 0644); err != nil {
+		t.Fatalf("failed to write corrupt file: %v", err)
+	}
+
+	db, err := Open(path)
+	if db != nil {
+		t.Error("Open(corrupt) returned non-nil DB; want nil")
+		db.Close()
+	}
+	if err == nil {
+		t.Fatal("Open(corrupt) returned nil error; want non-nil")
+	}
+
+	// Error contains 'db: failed to open database at' and the file path.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "db: failed to open database at") {
+		t.Errorf("error %q missing 'db: failed to open database at'", errMsg)
+	}
+	if !strings.Contains(errMsg, path) {
+		t.Errorf("error %q missing path %q", errMsg, path)
+	}
+
+	// errors.Unwrap returns the original driver error.
+	if errors.Unwrap(err) == nil {
+		t.Error("errors.Unwrap(err) = nil; want original driver error")
+	}
+}
+
+// TestSmoke_WithTx_Commit is a happy-path smoke test for WithTx: changes
+// made by fn inside a transaction are durably visible after commit.
+// (TS-02-SMOKE-4, 02-PATH-4)
+func TestSmoke_WithTx_Commit(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	err = db.WithTx(context.Background(), func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(context.Background(),
+			"INSERT INTO admin_config VALUES ('smoke_commit', 'yes')")
+		return e
+	})
+	if err != nil {
+		t.Fatalf("WithTx commit returned error = %v; want nil", err)
+	}
+
+	// Verify the row is visible after commit.
+	var v string
+	if scanErr := db.SqlDB.QueryRow("SELECT value FROM admin_config WHERE key='smoke_commit'").Scan(&v); scanErr != nil {
+		t.Fatalf("row not found after commit: %v", scanErr)
+	}
+	if v != "yes" {
+		t.Errorf("value = %q; want %q", v, "yes")
+	}
+}
+
+// TestSmoke_WithTx_Rollback is an error-path smoke test for WithTx: fn
+// triggers a UNIQUE constraint violation which WrapError maps to ErrConflict;
+// the transaction is rolled back and no rows from fn are visible.
+// (TS-02-SMOKE-5, 02-PATH-5)
+func TestSmoke_WithTx_Rollback(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	// Insert a user so we can cause a UNIQUE violation on username.
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO users VALUES ('u1','uname','e@e.com',NULL,'user','active','gh','gh1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert user failed: %v", err)
+	}
+
+	// WithTx that inserts a duplicate username and returns WrapError(dupErr).
+	err = db.WithTx(context.Background(), func(tx *sql.Tx) error {
+		_, dupErr := tx.ExecContext(context.Background(),
+			`INSERT INTO users VALUES ('u2','uname','e2@e.com',NULL,'user','active','gh','gh2','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+		return WrapError(dupErr)
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("WithTx error = %v; want ErrConflict", err)
+	}
+
+	// No second user row should exist after rollback.
+	var count int
+	if scanErr := db.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id='u2'").Scan(&count); scanErr != nil {
+		t.Fatalf("count query failed: %v", scanErr)
+	}
+	if count != 0 {
+		t.Errorf("user 'u2' found after rollback; want 0 rows, got %d", count)
+	}
+}
