@@ -138,7 +138,7 @@
             "09-REQ-3.3",
             "09-REQ-3.7"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -159,7 +159,7 @@
             "09-REQ-3.5",
             "09-REQ-3.E3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -183,7 +183,7 @@
             "09-REQ-3.E1",
             "09-REQ-3.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
