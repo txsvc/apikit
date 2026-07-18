@@ -14,8 +14,21 @@ import (
 )
 
 // NewAuthMiddleware creates the Echo middleware function for authentication
-// and authorization. Panics if database or registry is nil.
+// and authorization. Panics immediately with a descriptive message if either
+// argument is nil, rather than returning a partially-constructed middleware
+// that fails at request time (05-REQ-1.E1).
+//
+// The returned middleware is applied to the APIGroup Echo group, not the root
+// router, so that health probes (/healthz, /readyz, /version) and OAuth paths
+// (/auth/providers, /auth/callback) remain unprotected (05-REQ-1.2, 05-REQ-1.3).
 func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.MiddlewareFunc {
+	if database == nil {
+		panic("auth: NewAuthMiddleware requires a non-nil *db.DB")
+	}
+	if registry == nil {
+		panic("auth: NewAuthMiddleware requires a non-nil *PermissionRegistry")
+	}
+
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			// Step 1: Extract Bearer token from Authorization header.
