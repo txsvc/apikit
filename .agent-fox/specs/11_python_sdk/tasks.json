@@ -311,7 +311,7 @@
             "11-REQ-14.1",
             "11-REQ-14.2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -353,7 +353,7 @@
             "11-REQ-15.9",
             "11-REQ-15.10"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -389,7 +389,7 @@
             "11-REQ-20.3",
             "11-REQ-20.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -423,7 +423,7 @@
             "11-PATH-5",
             "11-PATH-6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
