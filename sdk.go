@@ -184,12 +184,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, result inter
 // response. If the body is not valid JSON or does not contain the expected
 // envelope structure, it returns an *APIError with the HTTP status text.
 func decodeErrorResponse(resp *http.Response) *APIError {
-	var envelope struct {
-		Error struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var envelope errorEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return &APIError{
 			Code:    resp.StatusCode,
