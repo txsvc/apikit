@@ -36,6 +36,9 @@ type adminOrgsClient interface {
 	DeleteOrg(ctx context.Context, id string) error
 	BlockOrg(ctx context.Context, id string) (*apikit.Organization, error)
 	UnblockOrg(ctx context.Context, id string) (*apikit.Organization, error)
+	ListOrgMembers(ctx context.Context, orgID string) ([]*apikit.User, error)
+	AddOrgMember(ctx context.Context, orgID, userID string) error
+	RemoveOrgMember(ctx context.Context, orgID, userID string) error
 }
 
 // mockAdminOrgsClient implements adminOrgsClient for testing.
@@ -52,6 +55,10 @@ type mockAdminOrgsClient struct {
 	blockOrgErr      error
 	unblockOrgResult *apikit.Organization
 	unblockOrgErr    error
+	listMembersResult []*apikit.User
+	listMembersErr    error
+	addMemberErr      error
+	removeMemberErr   error
 
 	// Call tracking
 	listOrgsCalled  bool
@@ -67,6 +74,14 @@ type mockAdminOrgsClient struct {
 	blockOrgID      string
 	unblockOrgCalled bool
 	unblockOrgID     string
+	listMembersCalled bool
+	listMembersOrgID  string
+	addMemberCalled   bool
+	addMemberOrgID    string
+	addMemberUserID   string
+	removeMemberCalled bool
+	removeMemberOrgID  string
+	removeMemberUserID string
 
 	// Context tracking
 	capturedCtx context.Context
@@ -113,6 +128,29 @@ func (m *mockAdminOrgsClient) UnblockOrg(ctx context.Context, id string) (*apiki
 	m.unblockOrgCalled = true
 	m.unblockOrgID = id
 	return m.unblockOrgResult, m.unblockOrgErr
+}
+
+func (m *mockAdminOrgsClient) ListOrgMembers(ctx context.Context, orgID string) ([]*apikit.User, error) {
+	m.capturedCtx = ctx
+	m.listMembersCalled = true
+	m.listMembersOrgID = orgID
+	return m.listMembersResult, m.listMembersErr
+}
+
+func (m *mockAdminOrgsClient) AddOrgMember(ctx context.Context, orgID, userID string) error {
+	m.capturedCtx = ctx
+	m.addMemberCalled = true
+	m.addMemberOrgID = orgID
+	m.addMemberUserID = userID
+	return m.addMemberErr
+}
+
+func (m *mockAdminOrgsClient) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
+	m.capturedCtx = ctx
+	m.removeMemberCalled = true
+	m.removeMemberOrgID = orgID
+	m.removeMemberUserID = userID
+	return m.removeMemberErr
 }
 
 // ===========================================================================
@@ -971,6 +1009,351 @@ func TestAdminOrgsUnblockMissingID(t *testing.T) {
 	}
 	if env.Error.Message != "missing required argument: id" {
 		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ===========================================================================
+// Task Group 4.1: admin orgs members tests (REQ-18 – REQ-20)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// TS-14-51: akc admin orgs members list <id> calls ListOrgMembers with the
+// org id and prints the member array as JSON.
+// Requirement: 14-REQ-18.1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersListCommand(t *testing.T) {
+	mock := &mockAdminOrgsClient{
+		listMembersResult: []*apikit.User{{ID: "u1", Username: "alice"}},
+	}
+
+	stdout, err := executeAdminCmd("orgs", "members", "list", "o1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.listMembersCalled {
+		t.Fatal("ListOrgMembers was not called")
+	}
+	if mock.listMembersOrgID != "o1" {
+		t.Errorf("captured orgID = %q, want %q", mock.listMembersOrgID, "o1")
+	}
+
+	// stdout should be a JSON array with one user.
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %q", stdout)
+	}
+
+	var users []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &users); err != nil {
+		t.Fatalf("failed to parse stdout as JSON array: %v", err)
+	}
+	if len(users) != 1 {
+		t.Errorf("got %d users, want 1", len(users))
+	}
+	if id, _ := users[0]["id"].(string); id != "u1" {
+		t.Errorf("user[0].id = %q, want %q", id, "u1")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E22: akc admin orgs members list without the <id> argument exits
+// with code 2 and prints the missing-argument error envelope.
+// Requirement: 14-REQ-18.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersListMissingID(t *testing.T) {
+	stdout, err := executeAdminCmd("orgs", "members", "list")
+
+	if err == nil {
+		t.Error("expected error when <id> argument is missing")
+	}
+
+	if stdout == "" {
+		t.Fatal("stdout is empty; expected JSON error envelope")
+	}
+	env := parseErrorEnvelope(t, stdout)
+	if env.Error.Code != 0 {
+		t.Errorf("error.code = %d, want 0", env.Error.Code)
+	}
+	if env.Error.Message != "missing required argument: id" {
+		t.Errorf("error.message = %q, want %q", env.Error.Message, "missing required argument: id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-52: akc admin orgs members list is registered in the agent interface
+// with method GET, path /orgs/:id/members, auth admin.
+// Requirement: 14-REQ-18.2
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersListAgentInterface(t *testing.T) {
+	cmd := cli.NewAdminCmd()
+
+	membersListCmd, _, err := cmd.Find([]string{"orgs", "members", "list"})
+	if err != nil {
+		t.Fatalf("failed to find 'orgs members list' command: %v", err)
+	}
+	if membersListCmd.Name() != "list" {
+		t.Fatalf("found command %q, want %q", membersListCmd.Name(), "list")
+	}
+
+	annotations := membersListCmd.Annotations
+	if annotations == nil {
+		t.Fatal("orgs members list command has no Annotations")
+	}
+	if annotations["method"] != "GET" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "GET")
+	}
+	if annotations["path"] != "/orgs/:id/members" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/orgs/:id/members")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-53: akc admin orgs members add <org_id> <user_id> calls AddOrgMember
+// and prints '{}' on success.
+// Requirement: 14-REQ-19.1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersAddCommand(t *testing.T) {
+	mock := &mockAdminOrgsClient{
+		addMemberErr: nil,
+	}
+
+	stdout, err := executeAdminCmd("orgs", "members", "add", "o1", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.addMemberCalled {
+		t.Fatal("AddOrgMember was not called")
+	}
+	if mock.addMemberOrgID != "o1" {
+		t.Errorf("captured orgID = %q, want %q", mock.addMemberOrgID, "o1")
+	}
+	if mock.addMemberUserID != "u1" {
+		t.Errorf("captured userID = %q, want %q", mock.addMemberUserID, "u1")
+	}
+
+	// stdout should be exactly '{}'.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("failed to parse stdout as JSON: %v (stdout=%q)", err, stdout)
+	}
+	if len(parsed) != 0 {
+		t.Errorf("stdout = %q, want empty JSON object '{}'", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E23: akc admin orgs members add with missing positional arguments
+// exits with code 2 and prints the appropriate missing-argument error.
+// Requirement: 14-REQ-19.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersAddMissingArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantMsg string
+	}{
+		{
+			name:    "missing both org_id and user_id",
+			args:    []string{"orgs", "members", "add"},
+			wantMsg: "missing required argument: org_id",
+		},
+		{
+			name:    "missing user_id",
+			args:    []string{"orgs", "members", "add", "o1"},
+			wantMsg: "missing required argument: user_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockAdminOrgsClient{}
+
+			stdout, err := executeAdminCmd(tt.args...)
+
+			if err == nil {
+				t.Error("expected error when positional argument is missing")
+			}
+
+			if mock.addMemberCalled {
+				t.Error("AddOrgMember was called despite missing argument")
+			}
+
+			if stdout == "" {
+				t.Fatal("stdout is empty; expected JSON error envelope")
+			}
+			env := parseErrorEnvelope(t, stdout)
+			if env.Error.Code != 0 {
+				t.Errorf("error.code = %d, want 0", env.Error.Code)
+			}
+			if !strings.Contains(env.Error.Message, "missing required argument") {
+				t.Errorf("error.message = %q, want it to contain %q", env.Error.Message, "missing required argument")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-54: akc admin orgs members add is registered in the agent interface
+// with method PUT, path /orgs/:id/members/:user_id, auth admin, two
+// positional args.
+// Requirement: 14-REQ-19.2
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersAddAgentInterface(t *testing.T) {
+	cmd := cli.NewAdminCmd()
+
+	addCmd, _, err := cmd.Find([]string{"orgs", "members", "add"})
+	if err != nil {
+		t.Fatalf("failed to find 'orgs members add' command: %v", err)
+	}
+	if addCmd.Name() != "add" {
+		t.Fatalf("found command %q, want %q", addCmd.Name(), "add")
+	}
+
+	annotations := addCmd.Annotations
+	if annotations == nil {
+		t.Fatal("orgs members add command has no Annotations")
+	}
+	if annotations["method"] != "PUT" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "PUT")
+	}
+	if annotations["path"] != "/orgs/:id/members/:user_id" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/orgs/:id/members/:user_id")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-55: akc admin orgs members remove <org_id> <user_id> calls
+// RemoveOrgMember and prints '{}' on success.
+// Requirement: 14-REQ-20.1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersRemoveCommand(t *testing.T) {
+	mock := &mockAdminOrgsClient{
+		removeMemberErr: nil,
+	}
+
+	stdout, err := executeAdminCmd("orgs", "members", "remove", "o1", "u1")
+
+	if err != nil {
+		t.Errorf("expected nil error (exit 0), got: %v", err)
+	}
+
+	if !mock.removeMemberCalled {
+		t.Fatal("RemoveOrgMember was not called")
+	}
+	if mock.removeMemberOrgID != "o1" {
+		t.Errorf("captured orgID = %q, want %q", mock.removeMemberOrgID, "o1")
+	}
+	if mock.removeMemberUserID != "u1" {
+		t.Errorf("captured userID = %q, want %q", mock.removeMemberUserID, "u1")
+	}
+
+	// stdout should be exactly '{}'.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("failed to parse stdout as JSON: %v (stdout=%q)", err, stdout)
+	}
+	if len(parsed) != 0 {
+		t.Errorf("stdout = %q, want empty JSON object '{}'", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-E24: akc admin orgs members remove with missing positional arguments
+// exits with code 2 and prints the appropriate missing-argument error.
+// Requirement: 14-REQ-20.E1
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersRemoveMissingArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantMsg string
+	}{
+		{
+			name:    "missing both org_id and user_id",
+			args:    []string{"orgs", "members", "remove"},
+			wantMsg: "missing required argument: org_id",
+		},
+		{
+			name:    "missing user_id",
+			args:    []string{"orgs", "members", "remove", "o1"},
+			wantMsg: "missing required argument: user_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockAdminOrgsClient{}
+
+			stdout, err := executeAdminCmd(tt.args...)
+
+			if err == nil {
+				t.Error("expected error when positional argument is missing")
+			}
+
+			if mock.removeMemberCalled {
+				t.Error("RemoveOrgMember was called despite missing argument")
+			}
+
+			if stdout == "" {
+				t.Fatal("stdout is empty; expected JSON error envelope")
+			}
+			env := parseErrorEnvelope(t, stdout)
+			if env.Error.Code != 0 {
+				t.Errorf("error.code = %d, want 0", env.Error.Code)
+			}
+			if !strings.Contains(env.Error.Message, "missing required argument") {
+				t.Errorf("error.message = %q, want it to contain %q", env.Error.Message, "missing required argument")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-14-56: akc admin orgs members remove is registered in the agent
+// interface with method DELETE, path /orgs/:id/members/:user_id, auth admin.
+// Requirement: 14-REQ-20.2
+// ---------------------------------------------------------------------------
+
+func TestAdminOrgsMembersRemoveAgentInterface(t *testing.T) {
+	cmd := cli.NewAdminCmd()
+
+	removeCmd, _, err := cmd.Find([]string{"orgs", "members", "remove"})
+	if err != nil {
+		t.Fatalf("failed to find 'orgs members remove' command: %v", err)
+	}
+	if removeCmd.Name() != "remove" {
+		t.Fatalf("found command %q, want %q", removeCmd.Name(), "remove")
+	}
+
+	annotations := removeCmd.Annotations
+	if annotations == nil {
+		t.Fatal("orgs members remove command has no Annotations")
+	}
+	if annotations["method"] != "DELETE" {
+		t.Errorf("method annotation = %q, want %q", annotations["method"], "DELETE")
+	}
+	if annotations["path"] != "/orgs/:id/members/:user_id" {
+		t.Errorf("path annotation = %q, want %q", annotations["path"], "/orgs/:id/members/:user_id")
+	}
+	if annotations["auth"] != "admin" {
+		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
 	}
 }
 
