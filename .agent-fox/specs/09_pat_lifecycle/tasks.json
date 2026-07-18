@@ -478,7 +478,7 @@
             "09-REQ-7.E1",
             "09-REQ-7.E2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -499,7 +499,7 @@
             "09-REQ-8.3",
             "09-REQ-8.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -524,7 +524,7 @@
             "09-REQ-8.E2",
             "09-REQ-8.E3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -542,7 +542,7 @@
             "09-REQ-8.E1",
             "09-REQ-1.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
