@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -26,7 +27,24 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			includeBlocked, _ := cmd.Flags().GetBool("include-blocked")
+			result, err := runner.ListOrgs(context.Background(), includeBlocked)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 	listCmd.Flags().Bool("include-blocked", false, "Include blocked organizations in the response")
@@ -42,7 +60,40 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			// Validate required flags in order: name, slug.
+			name, err := adminCheckRequiredFlag(cmd, "name")
+			if err != nil {
+				return err
+			}
+			slug, err := adminCheckRequiredFlag(cmd, "slug")
+			if err != nil {
+				return err
+			}
+
+			// URL is optional — only set pointer when explicitly provided.
+			var urlPtr *string
+			if cmd.Flags().Changed("url") {
+				urlStr, _ := cmd.Flags().GetString("url")
+				urlPtr = &urlStr
+			}
+
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			result, err := runner.CreateOrg(context.Background(), name, slug, urlPtr)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 	createCmd.Flags().String("name", "", "Organization name")
@@ -60,7 +111,42 @@ func newAdminOrgsCmd() *cobra.Command {
 			"auth":   "admin",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented")
+			id := args[0]
+
+			// Build update request: set pointer fields only when flags are explicitly provided.
+			var namePtr *string
+			if cmd.Flags().Changed("name") {
+				nameStr, _ := cmd.Flags().GetString("name")
+				namePtr = &nameStr
+			}
+			var urlPtr *string
+			if cmd.Flags().Changed("url") {
+				urlStr, _ := cmd.Flags().GetString("url")
+				urlPtr = &urlStr
+			}
+
+			// Warn on empty patch (neither flag provided).
+			if namePtr == nil && urlPtr == nil {
+				adminWarnf(cmd, "no fields specified for update")
+			}
+
+			raw := ClientFromContext(cmd.Context())
+			if raw == nil {
+				return adminHandleError(cmd, fmt.Errorf("configuration not loaded: missing endpoint URL or API key"))
+			}
+			runner, ok := raw.(*OrgsRunner)
+			if !ok {
+				return adminHandleError(cmd, fmt.Errorf("invalid client configuration"))
+			}
+
+			result, err := runner.UpdateOrg(context.Background(), id, namePtr, urlPtr)
+			if err != nil {
+				return adminHandleError(cmd, err)
+			}
+			if err := adminPrintJSON(cmd, result); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 	updateCmd.Flags().String("name", "", "Organization name")

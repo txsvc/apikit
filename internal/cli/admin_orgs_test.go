@@ -168,7 +168,7 @@ func TestAdminOrgsListCommand(t *testing.T) {
 		listOrgsResult: []*apikit.Organization{{ID: "o1", Name: "Acme", Slug: "acme"}},
 	}
 
-	stdout, err := executeAdminCmd("orgs", "list")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "list")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -213,7 +213,7 @@ func TestAdminOrgsListIncludeBlocked(t *testing.T) {
 		listOrgsResult: []*apikit.Organization{{ID: "o1", Status: "blocked"}},
 	}
 
-	stdout, err := executeAdminCmd("orgs", "list", "--include-blocked")
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "list", "--include-blocked")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -289,7 +289,7 @@ func TestAdminOrgsCreateCommand(t *testing.T) {
 		createOrgResult: &apikit.Organization{ID: "o1", Name: "Acme", Slug: "acme"},
 	}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock),
 		"orgs", "create",
 		"--name", "Acme",
 		"--slug", "acme",
@@ -344,7 +344,7 @@ func TestAdminOrgsCreateWithoutURL(t *testing.T) {
 		createOrgResult: &apikit.Organization{ID: "o1", Name: "Acme", Slug: "acme"},
 	}
 
-	_, err := executeAdminCmd(
+	_, err := executeAdminCmdWithClient(makeOrgsRunner(mock),
 		"orgs", "create",
 		"--name", "Acme",
 		"--slug", "acme",
@@ -423,7 +423,7 @@ func TestAdminOrgsCreateAgentInterface(t *testing.T) {
 func TestAdminOrgsCreateMissingName(t *testing.T) {
 	mock := &mockAdminOrgsClient{}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock),
 		"orgs", "create",
 		"--slug", "acme",
 	)
@@ -457,7 +457,7 @@ func TestAdminOrgsCreateMissingName(t *testing.T) {
 func TestAdminOrgsCreateMissingSlug(t *testing.T) {
 	mock := &mockAdminOrgsClient{}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock),
 		"orgs", "create",
 		"--name", "Acme",
 	)
@@ -497,7 +497,7 @@ func TestAdminOrgsUpdateCommand(t *testing.T) {
 		updateOrgResult: &apikit.Organization{ID: "o1", Name: "NewName"},
 	}
 
-	stdout, err := executeAdminCmd(
+	stdout, err := executeAdminCmdWithClient(makeOrgsRunner(mock),
 		"orgs", "update", "o1",
 		"--name", "NewName",
 		"--url", "https://new.com",
@@ -554,7 +554,7 @@ func TestAdminOrgsUpdateNameOnly(t *testing.T) {
 		updateOrgResult: &apikit.Organization{ID: "o1", Name: "NewName"},
 	}
 
-	_, err := executeAdminCmd("orgs", "update", "o1", "--name", "NewName")
+	_, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "update", "o1", "--name", "NewName")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -588,7 +588,7 @@ func TestAdminOrgsUpdateURLOnly(t *testing.T) {
 		updateOrgResult: &apikit.Organization{ID: "o1"},
 	}
 
-	_, err := executeAdminCmd("orgs", "update", "o1", "--url", "https://new.com")
+	_, err := executeAdminCmdWithClient(makeOrgsRunner(mock), "orgs", "update", "o1", "--url", "https://new.com")
 
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -630,6 +630,11 @@ func TestAdminOrgsUpdateNoFlags(t *testing.T) {
 	cmd.SetOut(stdoutBuf)
 	cmd.SetErr(stderrBuf)
 	cmd.SetArgs([]string{"orgs", "update", "o1"})
+
+	// Inject the mock client into the command's context.
+	ctx := cli.ContextWithClient(context.Background(), makeOrgsRunner(mock))
+	cmd.SetContext(ctx)
+
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	for _, sub := range cmd.Commands() {
@@ -1354,6 +1359,52 @@ func TestAdminOrgsMembersRemoveAgentInterface(t *testing.T) {
 	}
 	if annotations["auth"] != "admin" {
 		t.Errorf("auth annotation = %q, want %q", annotations["auth"], "admin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers for mock injection
+// ---------------------------------------------------------------------------
+
+// makeOrgsRunner creates an OrgsRunner that wraps a mockAdminOrgsClient,
+// bridging the typed mock interface to the any-typed function values used
+// by the production code (which cannot import apikit due to import cycles).
+func makeOrgsRunner(mock *mockAdminOrgsClient) *cli.OrgsRunner {
+	return &cli.OrgsRunner{
+		ListOrgs: func(ctx context.Context, includeBlocked bool) (any, error) {
+			return mock.ListOrgs(ctx, &apikit.ListOrgsOptions{IncludeBlocked: includeBlocked})
+		},
+		CreateOrg: func(ctx context.Context, name, slug string, url *string) (any, error) {
+			return mock.CreateOrg(ctx, &apikit.CreateOrgRequest{
+				Name: name,
+				Slug: slug,
+				URL:  url,
+			})
+		},
+		UpdateOrg: func(ctx context.Context, id string, name *string, url *string) (any, error) {
+			return mock.UpdateOrg(ctx, id, &apikit.UpdateOrgRequest{
+				Name: name,
+				URL:  url,
+			})
+		},
+		DeleteOrg: func(ctx context.Context, id string) error {
+			return mock.DeleteOrg(ctx, id)
+		},
+		BlockOrg: func(ctx context.Context, id string) (any, error) {
+			return mock.BlockOrg(ctx, id)
+		},
+		UnblockOrg: func(ctx context.Context, id string) (any, error) {
+			return mock.UnblockOrg(ctx, id)
+		},
+		ListOrgMembers: func(ctx context.Context, orgID string) (any, error) {
+			return mock.ListOrgMembers(ctx, orgID)
+		},
+		AddOrgMember: func(ctx context.Context, orgID, userID string) error {
+			return mock.AddOrgMember(ctx, orgID, userID)
+		},
+		RemoveOrgMember: func(ctx context.Context, orgID, userID string) error {
+			return mock.RemoveOrgMember(ctx, orgID, userID)
+		},
 	}
 }
 

@@ -19,3 +19,18 @@ type UsersRunner struct {
 	BlockUser      func(ctx context.Context, id string) (any, error)
 	UnblockUser    func(ctx context.Context, id string) (any, error)
 }
+
+// OrgsRunner holds function values for admin org operations.
+// Same DI pattern as UsersRunner — primitive types and any to avoid
+// importing the root apikit package.
+type OrgsRunner struct {
+	ListOrgs        func(ctx context.Context, includeBlocked bool) (any, error)
+	CreateOrg       func(ctx context.Context, name, slug string, url *string) (any, error)
+	UpdateOrg       func(ctx context.Context, id string, name *string, url *string) (any, error)
+	DeleteOrg       func(ctx context.Context, id string) error
+	BlockOrg        func(ctx context.Context, id string) (any, error)
+	UnblockOrg      func(ctx context.Context, id string) (any, error)
+	ListOrgMembers  func(ctx context.Context, orgID string) (any, error)
+	AddOrgMember    func(ctx context.Context, orgID, userID string) error
+	RemoveOrgMember func(ctx context.Context, orgID, userID string) error
+}
