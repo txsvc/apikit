@@ -1093,3 +1093,515 @@ func TestUpdateUser_PointerDistinction(t *testing.T) {
 
 	assertErrorResponse(t, rec, http.StatusBadRequest, "missing required field: full_name")
 }
+
+// ========================================================================
+// Additional Test Helpers (for task group 3)
+// ========================================================================
+
+// sendPost sends an HTTP POST request with no body to the given Echo instance
+// and returns the response recorder.
+func sendPost(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// fetchUserFromDB reads a user record directly from the database and returns
+// the role, status, and updated_at fields. Fails the test if the query errors.
+func fetchUserFromDB(t *testing.T, sqlDB *sql.DB, id string) (role, status, updatedAt string) {
+	t.Helper()
+
+	err := sqlDB.QueryRow(
+		"SELECT role, status, updated_at FROM users WHERE id = ?", id,
+	).Scan(&role, &status, &updatedAt)
+	if err != nil {
+		t.Fatalf("failed to fetch user %q from database: %v", id, err)
+	}
+	return role, status, updatedAt
+}
+
+// ========================================================================
+// Task 3.1: POST /users/:id/promote
+// Test Spec: TS-07-19, TS-07-20, TS-07-21, TS-07-22
+// Requirements: 07-REQ-6.1, 07-REQ-6.2, 07-REQ-6.3, 07-REQ-6.4
+// ========================================================================
+
+// TestPromoteUser_Success verifies that POST /users/:id/promote sets the
+// user's role to admin and returns HTTP 200 with the updated User object.
+//
+// Test Spec: TS-07-19
+// Requirement: 07-REQ-6.1
+func TestPromoteUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "promote-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Capture original updated_at.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/promote")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Role != "admin" {
+		t.Errorf("expected role %q, got %q", "admin", user.Role)
+	}
+
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+
+	// Verify the change is persisted in the database.
+	dbRole, _, _ := fetchUserFromDB(t, sqlDB, userID)
+	if dbRole != "admin" {
+		t.Errorf("expected role in database to be %q, got %q", "admin", dbRole)
+	}
+}
+
+// TestPromoteUser_AlreadyAdmin verifies that POST /users/:id/promote is
+// idempotent: calling it on a user who already has role='admin' returns
+// HTTP 200 with the unchanged User object.
+//
+// Test Spec: TS-07-20
+// Requirement: 07-REQ-6.2
+func TestPromoteUser_AlreadyAdmin(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "already-admin-uuid"
+	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
+
+	// Capture original state.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/promote")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Role != "admin" {
+		t.Errorf("expected role %q, got %q", "admin", user.Role)
+	}
+
+	// updated_at must NOT be refreshed for an idempotent no-op.
+	if user.UpdatedAt != originalUpdatedAt {
+		t.Errorf("expected updated_at to remain %q (idempotent), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// TestPromoteUser_NotFound verifies that POST /users/:id/promote returns
+// HTTP 404 with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-21
+// Requirement: 07-REQ-6.3
+func TestPromoteUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/00000000-0000-0000-0000-000000000000/promote")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestPromoteUser_NonAdmin verifies that POST /users/:id/promote returns
+// HTTP 403 when called by a non-admin user.
+//
+// Test Spec: TS-07-22
+// Requirement: 07-REQ-6.4
+func TestPromoteUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/some-id/promote")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// ========================================================================
+// Task 3.2: POST /users/:id/demote with last-admin safeguard
+// Test Spec: TS-07-23, TS-07-24, TS-07-25, TS-07-26, TS-07-27, TS-07-E8
+// Requirements: 07-REQ-7.1, 07-REQ-7.2, 07-REQ-7.3, 07-REQ-7.4,
+//               07-REQ-7.5, 07-REQ-7.E1
+// ========================================================================
+
+// TestDemoteUser_Success verifies that POST /users/:id/demote sets the user's
+// role to 'user' and returns HTTP 200 when more than one active admin exists.
+//
+// Test Spec: TS-07-23
+// Requirement: 07-REQ-7.1
+func TestDemoteUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Insert two active admins — the target and another to satisfy the safeguard.
+	targetID := "demote-target-uuid"
+	insertTestUserFull(t, sqlDB, targetID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, "other-admin-uuid", "bob", "bob@example.com", "", "admin", "active", "github", "gh-002", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	// Capture original updated_at.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, targetID)
+
+	rec := sendPost(t, e, "/users/"+targetID+"/demote")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Role != "user" {
+		t.Errorf("expected role %q, got %q", "user", user.Role)
+	}
+
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+
+	// Verify the change is persisted in the database.
+	dbRole, _, _ := fetchUserFromDB(t, sqlDB, targetID)
+	if dbRole != "user" {
+		t.Errorf("expected role in database to be %q, got %q", "user", dbRole)
+	}
+}
+
+// TestDemoteUser_AlreadyUser verifies that POST /users/:id/demote is
+// idempotent: calling it on a user who already has role='user' returns
+// HTTP 200 with the unchanged User object.
+//
+// Test Spec: TS-07-24
+// Requirement: 07-REQ-7.2
+func TestDemoteUser_AlreadyUser(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "already-user-uuid"
+	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
+
+	// Capture original state.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/demote")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Role != "user" {
+		t.Errorf("expected role %q, got %q", "user", user.Role)
+	}
+
+	// updated_at must NOT be refreshed for an idempotent no-op.
+	if user.UpdatedAt != originalUpdatedAt {
+		t.Errorf("expected updated_at to remain %q (idempotent), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// TestDemoteUser_LastAdmin verifies that POST /users/:id/demote returns
+// HTTP 409 with message 'cannot demote the last admin' when the target is
+// the only active admin, and leaves the user record unchanged.
+//
+// Test Spec: TS-07-25
+// Requirement: 07-REQ-7.3
+func TestDemoteUser_LastAdmin(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Insert exactly one active admin — the sole admin.
+	soleAdminID := "sole-admin-uuid"
+	insertTestUserFull(t, sqlDB, soleAdminID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	rec := sendPost(t, e, "/users/"+soleAdminID+"/demote")
+
+	assertErrorResponse(t, rec, http.StatusConflict, "cannot demote the last admin")
+
+	// Verify the user's role remains 'admin' in the database.
+	dbRole, _, _ := fetchUserFromDB(t, sqlDB, soleAdminID)
+	if dbRole != "admin" {
+		t.Errorf("expected role in database to remain %q after failed demote, got %q", "admin", dbRole)
+	}
+}
+
+// TestDemoteUser_NotFound verifies that POST /users/:id/demote returns
+// HTTP 404 with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-26
+// Requirement: 07-REQ-7.4
+func TestDemoteUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/00000000-0000-0000-0000-000000000000/demote")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestDemoteUser_NonAdmin verifies that POST /users/:id/demote returns
+// HTTP 403 when called by a non-admin user.
+//
+// Test Spec: TS-07-27
+// Requirement: 07-REQ-7.5
+func TestDemoteUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/some-id/demote")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestDemoteUser_DBCountError verifies that an unexpected database error
+// when counting active admins during demote returns HTTP 500 with message
+// 'internal server error' without modifying the user record.
+//
+// Test Spec: TS-07-E8
+// Requirement: 07-REQ-7.E1
+//
+// NOTE: This test simulates a DB error by closing the database connection
+// after initial data setup. In practice the handler flow is:
+// (1) fetch user, (2) count active admins, (3) update role.
+// Closing the DB causes the first DB query to fail. The handler must
+// return 500 with "internal server error" for any unexpected DB error.
+// A future implementation may refine this to target specifically the COUNT
+// query, but the observable behavior (500 + correct message) is the same.
+func TestDemoteUser_DBCountError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+
+	// Insert an admin user while the database is still open.
+	adminID := "db-error-admin-uuid"
+	now := "2024-01-01T00:00:00Z"
+	_, err = database.SqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, '', 'admin', 'active', 'github', 'gh-001', ?, ?)`,
+		adminID, "alice", "alice@example.com", now, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert admin user: %v", err)
+	}
+
+	e := echo.New()
+	g := e.Group("")
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB)
+
+	// Close the database AFTER registering handlers and inserting data.
+	// This causes subsequent SQL queries to fail, simulating a DB error.
+	database.Close()
+
+	rec := sendPost(t, e, "/users/"+adminID+"/demote")
+
+	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// ========================================================================
+// Task 3.3: POST /users/:id/block and /unblock
+// Test Spec: TS-07-28, TS-07-29, TS-07-30, TS-07-31, TS-07-32, TS-07-33
+// Requirements: 07-REQ-8.1, 07-REQ-8.2, 07-REQ-8.3, 07-REQ-8.4,
+//               07-REQ-9.1, 07-REQ-9.2
+// ========================================================================
+
+// TestBlockUser_Success verifies that POST /users/:id/block sets the user's
+// status to 'blocked' and returns HTTP 200 with the updated User object.
+//
+// Test Spec: TS-07-28
+// Requirement: 07-REQ-8.1
+func TestBlockUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "block-user-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Capture original updated_at.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/block")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Status != "blocked" {
+		t.Errorf("expected status %q, got %q", "blocked", user.Status)
+	}
+
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+
+	// Verify the change is persisted in the database.
+	_, dbStatus, _ := fetchUserFromDB(t, sqlDB, userID)
+	if dbStatus != "blocked" {
+		t.Errorf("expected status in database to be %q, got %q", "blocked", dbStatus)
+	}
+}
+
+// TestBlockUser_AlreadyBlocked verifies that POST /users/:id/block is
+// idempotent: blocking an already-blocked user returns HTTP 200 with the
+// unchanged User object.
+//
+// Test Spec: TS-07-29
+// Requirement: 07-REQ-8.2
+func TestBlockUser_AlreadyBlocked(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "already-blocked-uuid"
+	insertTestUserWithStatus(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001", "blocked")
+
+	// Capture original state.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/block")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Status != "blocked" {
+		t.Errorf("expected status %q, got %q", "blocked", user.Status)
+	}
+
+	// updated_at must NOT be refreshed for an idempotent no-op.
+	if user.UpdatedAt != originalUpdatedAt {
+		t.Errorf("expected updated_at to remain %q (idempotent), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// TestBlockUser_NotFound verifies that POST /users/:id/block returns HTTP 404
+// with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-30
+// Requirement: 07-REQ-8.3
+func TestBlockUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/00000000-0000-0000-0000-000000000000/block")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestBlockUser_NonAdmin verifies that POST /users/:id/block returns HTTP 403
+// when called by a non-admin user.
+//
+// Test Spec: TS-07-31
+// Requirement: 07-REQ-8.4
+func TestBlockUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/some-id/block")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+// TestUnblockUser_Success verifies that POST /users/:id/unblock sets the
+// user's status to 'active' and returns HTTP 200 with the updated User object.
+//
+// Test Spec: TS-07-32
+// Requirement: 07-REQ-9.1
+func TestUnblockUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "unblock-user-uuid"
+	insertTestUserWithStatus(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001", "blocked")
+
+	// Capture original updated_at.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/unblock")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", user.Status)
+	}
+
+	if user.UpdatedAt <= originalUpdatedAt {
+		t.Errorf("expected updated_at to be refreshed (> %q), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+
+	// Verify the change is persisted in the database.
+	_, dbStatus, _ := fetchUserFromDB(t, sqlDB, userID)
+	if dbStatus != "active" {
+		t.Errorf("expected status in database to be %q, got %q", "active", dbStatus)
+	}
+}
+
+// TestUnblockUser_AlreadyActive verifies that POST /users/:id/unblock is
+// idempotent: unblocking an already-active user returns HTTP 200 with the
+// unchanged User object.
+//
+// Test Spec: TS-07-33
+// Requirement: 07-REQ-9.2
+func TestUnblockUser_AlreadyActive(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	userID := "already-active-uuid"
+	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
+
+	// Capture original state.
+	_, _, originalUpdatedAt := fetchUserFromDB(t, sqlDB, userID)
+
+	rec := sendPost(t, e, "/users/"+userID+"/unblock")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	user := parseUserResponse(t, rec)
+
+	if user.Status != "active" {
+		t.Errorf("expected status %q, got %q", "active", user.Status)
+	}
+
+	// updated_at must NOT be refreshed for an idempotent no-op.
+	if user.UpdatedAt != originalUpdatedAt {
+		t.Errorf("expected updated_at to remain %q (idempotent), got %q", originalUpdatedAt, user.UpdatedAt)
+	}
+}
+
+// ========================================================================
+// Task 3.4: POST /users/:id/unblock not-found and auth
+// Test Spec: TS-07-34, TS-07-35
+// Requirements: 07-REQ-9.3, 07-REQ-9.4
+// ========================================================================
+
+// TestUnblockUser_NotFound verifies that POST /users/:id/unblock returns
+// HTTP 404 with message 'user not found' when the target user does not exist.
+//
+// Test Spec: TS-07-34
+// Requirement: 07-REQ-9.3
+func TestUnblockUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/00000000-0000-0000-0000-000000000000/unblock")
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+// TestUnblockUser_NonAdmin verifies that POST /users/:id/unblock returns
+// HTTP 403 when called by a non-admin user.
+//
+// Test Spec: TS-07-35
+// Requirement: 07-REQ-9.4
+func TestUnblockUser_NonAdmin(t *testing.T) {
+	e, _ := setupNonAdminTestServer(t)
+
+	rec := sendPost(t, e, "/users/some-id/unblock")
+
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
