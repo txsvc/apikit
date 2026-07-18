@@ -921,7 +921,7 @@
             "13-REQ-6.E2",
             "13-REQ-6.E3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -944,7 +944,7 @@
             "13-REQ-6.4",
             "13-REQ-7.4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
