@@ -673,7 +673,7 @@
             "08-REQ-2.E3",
             "08-REQ-2.E4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -702,7 +702,7 @@
             "08-REQ-3.4",
             "08-REQ-3.E1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

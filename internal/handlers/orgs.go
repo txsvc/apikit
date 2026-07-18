@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit"
 	"github.com/txsvc/apikit/internal/auth"
+	"github.com/txsvc/apikit/internal/db"
 )
 
 // OrgResponse represents the JSON response shape for an organization resource.
@@ -91,13 +95,114 @@ func requireOrgAdmin(c echo.Context) error {
 }
 
 // createOrg handles POST /orgs — creates a new organization.
+// Requires admin access. Validates name (non-empty after trimming) and slug
+// (URL-safe format). Generates a UUID v4 for the org ID, sets status to
+// 'active', and timestamps to NowUTC(). Returns HTTP 201 with OrgResponse.
+// Handles UNIQUE constraint violations on name and slug columns separately.
 func (h *orgHandlers) createOrg(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-2.7).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Bind request body (08-REQ-2.E4).
+	var req CreateOrgRequest
+	if err := c.Bind(&req); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Validate name: must be non-empty after trimming (08-REQ-2.2).
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return apikit.APIError(c, http.StatusBadRequest, "name is required")
+	}
+
+	// Validate slug: must be non-empty (08-REQ-2.3).
+	if req.Slug == "" {
+		return apikit.APIError(c, http.StatusBadRequest, "slug is required")
+	}
+
+	// Validate slug format (08-REQ-2.4, 08-REQ-2.E1, 08-REQ-2.E2).
+	if err := validateSlug(req.Slug); err != nil {
+		return apikit.APIError(c, http.StatusBadRequest, "invalid slug format")
+	}
+
+	// Build org record with defaults (08-REQ-2.1).
+	now := db.FormatTime(time.Now().UTC())
+	org := OrgResponse{
+		ID:        uuid.New().String(),
+		Name:      req.Name,
+		Slug:      req.Slug,
+		URL:       req.URL,
+		Status:    "active",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// INSERT into orgs table.
+	_, err := h.db.Exec(
+		`INSERT INTO orgs (id, name, slug, url, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		org.ID, org.Name, org.Slug, org.URL, org.Status, org.CreatedAt, org.UpdatedAt,
+	)
+	if err != nil {
+		// Detect UNIQUE constraint violations on name vs slug (08-REQ-2.5, 08-REQ-2.6).
+		// Parse the raw error string before wrapping — db.WrapError loses column identity.
+		errStr := err.Error()
+		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.name") {
+			return apikit.APIError(c, http.StatusConflict, "organization name already exists")
+		}
+		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.slug") {
+			return apikit.APIError(c, http.StatusConflict, "organization slug already exists")
+		}
+		// Any unexpected DB error (08-REQ-2.E3).
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusCreated, org)
 }
 
 // listOrgs handles GET /orgs — lists all organizations.
+// Requires admin access. By default only active organizations are returned;
+// pass include_blocked=true to include blocked organizations. Results are
+// ordered by name ascending. Returns an empty JSON array (not null) when no
+// organizations match.
 func (h *orgHandlers) listOrgs(c echo.Context) error {
-	return apikit.APIError(c, http.StatusNotImplemented, "not implemented")
+	// Auth check: admin only (08-REQ-3.4).
+	if err := auth.RequireAdmin(c); err != nil {
+		return apikit.APIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	// Build query with optional status filter (08-REQ-3.1, 08-REQ-3.2).
+	// Use COALESCE for url to handle potential NULL values defensively.
+	query := `SELECT id, name, slug, COALESCE(url, '') AS url,
+	          status, created_at, updated_at FROM orgs`
+	if c.QueryParam("include_blocked") != "true" {
+		query += ` WHERE status = 'active'`
+	}
+	query += ` ORDER BY name ASC`
+
+	rows, err := h.db.Query(query)
+	if err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer rows.Close()
+
+	// Scan rows into a non-nil slice to ensure [] JSON output (08-REQ-3.3).
+	orgs := make([]OrgResponse, 0)
+	for rows.Next() {
+		var o OrgResponse
+		if err := rows.Scan(&o.ID, &o.Name, &o.Slug, &o.URL,
+			&o.Status, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		orgs = append(orgs, o)
+	}
+	if err := rows.Err(); err != nil {
+		return apikit.APIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.JSON(http.StatusOK, orgs)
 }
 
 // getOrg handles GET /orgs/:id — retrieves a single organization by ID.
