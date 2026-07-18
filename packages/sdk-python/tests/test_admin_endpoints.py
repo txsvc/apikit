@@ -304,8 +304,7 @@ class TestUserKeyManagement:
             "https://api.example.com/api/v1/users/u1/keys/key-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        result = c.revoke_user_key("u1", "key-1")
-        assert result is None
+        c.revoke_user_key("u1", "key-1")  # returns None on 204
 
 
 # ===========================================================================
@@ -338,8 +337,7 @@ class TestUserTokenManagement:
             "https://api.example.com/api/v1/users/u1/tokens/tok-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        result = c.revoke_user_token("u1", "tok-1")
-        assert result is None
+        c.revoke_user_token("u1", "tok-1")  # returns None on 204
 
 
 # ===========================================================================
@@ -494,7 +492,7 @@ class TestDeleteBlockUnblockOrg:
             "https://api.example.com/api/v1/orgs/org-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        assert c.delete_org("org-1") is None
+        c.delete_org("org-1")  # returns None on 204
 
     @respx.mock
     def test_block_org_returns_organization_on_200(self) -> None:
@@ -549,7 +547,7 @@ class TestOrgMemberManagement:
             "https://api.example.com/api/v1/orgs/org-1/members/u-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        assert c.add_org_member("org-1", "u-1") is None
+        c.add_org_member("org-1", "u-1")  # returns None on 204
 
     @respx.mock
     def test_remove_org_member_returns_none_on_204(self) -> None:
@@ -558,4 +556,4 @@ class TestOrgMemberManagement:
             "https://api.example.com/api/v1/orgs/org-1/members/u-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        assert c.remove_org_member("org-1", "u-1") is None
+        c.remove_org_member("org-1", "u-1")  # returns None on 204

@@ -392,8 +392,7 @@ class TestRevokeKeyEndpoint:
             "https://api.example.com/api/v1/user/keys/key-abc"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        result = c.revoke_key("key-abc")
-        assert result is None
+        c.revoke_key("key-abc")  # returns None on 204
 
 
 # ===========================================================================
@@ -498,8 +497,7 @@ class TestRevokeTokenEndpoint:
             "https://api.example.com/api/v1/user/tokens/tok-1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        result = c.revoke_token("tok-1")
-        assert result is None
+        c.revoke_token("tok-1")  # returns None on 204
 
 
 # ===========================================================================

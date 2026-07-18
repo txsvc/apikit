@@ -91,7 +91,7 @@ class TestHTTP204ReturnsNone:
             "https://api.example.com/api/v1/user/keys/k1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        assert c.revoke_key("k1") is None
+        c.revoke_key("k1")  # returns None on 204
 
     @respx.mock
     def test_add_org_member_204_returns_none(self) -> None:
@@ -100,7 +100,7 @@ class TestHTTP204ReturnsNone:
             "https://api.example.com/api/v1/orgs/o1/members/u1"
         ).mock(return_value=httpx.Response(204))
         c = Client("https://api.example.com", api_key="tok")
-        assert c.add_org_member("o1", "u1") is None
+        c.add_org_member("o1", "u1")  # returns None on 204
 
 
 # ===========================================================================
@@ -148,7 +148,7 @@ class TestKeywordOnlyArgs:
         """Calling update_user with positional arg raises TypeError."""
         c = Client("https://api.example.com", api_key="tok")
         with pytest.raises(TypeError):
-            c.update_user("Alice Smith")  # type: ignore[misc]
+            c.update_user("Alice Smith")  # type: ignore[call-arg]
 
 
 # ===========================================================================

@@ -255,7 +255,7 @@ class TestAPIErrorMalformedEnvelope:
     @respx.mock
     def test_no_key_error_propagates(self) -> None:
         """No KeyError or AttributeError escapes; APIError is raised."""
-        body = {"error": {}}
+        body: dict[str, object] = {"error": {}}
         respx.get("https://api.example.com/api/v1/user").mock(
             return_value=httpx.Response(500, json=body)
         )

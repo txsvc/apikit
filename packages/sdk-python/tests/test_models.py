@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
+from typing import Any
 
 import httpx
 import pytest
@@ -327,10 +328,10 @@ _DATACLASS_SAMPLES: list[tuple[type, dict[str, object]]] = [
     (PAT, SAMPLE_PAT_DICT),
     (PATWithSecret, SAMPLE_PAT_WITH_SECRET_DICT),
     (Organization, SAMPLE_ORG_DICT),
-    (OAuthProvider, SAMPLE_OAUTH_PROVIDER_DICT),
+    (OAuthProvider, dict(SAMPLE_OAUTH_PROVIDER_DICT)),
     (AuthCallbackResponse, SAMPLE_AUTH_CALLBACK_RESPONSE_DICT),
-    (VersionInfo, SAMPLE_VERSION_DICT),
-    (HealthStatus, SAMPLE_HEALTH_DICT),
+    (VersionInfo, dict(SAMPLE_VERSION_DICT)),
+    (HealthStatus, dict(SAMPLE_HEALTH_DICT)),
 ]
 
 
@@ -343,7 +344,7 @@ class TestFromDictExtraKeysProperty:
         ids=[c.__name__ for c, _ in _DATACLASS_SAMPLES],
     )
     def test_extra_keys_never_raise(
-        self, cls: type, sample: dict[str, object]
+        self, cls: Any, sample: dict[str, object]
     ) -> None:
         augmented = {
             **sample,

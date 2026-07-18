@@ -329,7 +329,7 @@ class Client:
         return [Organization.from_dict(o) for o in resp.json()]
 
     # ------------------------------------------------------------------
-    # Admin user management endpoints (stubs for group 8)
+    # Admin user management endpoints
     # ------------------------------------------------------------------
 
     def list_users(
@@ -338,7 +338,11 @@ class Client:
         include_blocked: bool = False,
     ) -> list[User]:
         """GET /users - List all users (admin)."""
-        raise NotImplementedError
+        params: dict[str, Any] | None = None
+        if include_blocked:
+            params = {"include_blocked": "true"}
+        resp = self._request("GET", "/users", params=params)
+        return [User.from_dict(u) for u in resp.json()]
 
     def create_user(
         self,
@@ -349,7 +353,16 @@ class Client:
         provider_id: str,
     ) -> User:
         """POST /users - Create a new user (admin)."""
-        raise NotImplementedError
+        from apikit.models import CreateUserRequest
+
+        body = CreateUserRequest(
+            username=username,
+            email=email,
+            provider=provider,
+            provider_id=provider_id,
+        ).to_dict()
+        resp = self._request("POST", "/users", json=body)
+        return User.from_dict(resp.json())
 
     def get_user_by_id(
         self,
@@ -358,7 +371,13 @@ class Client:
         if_none_match: str | None = None,
     ) -> User:
         """GET /users/{user_id} - Get a user by ID (admin)."""
-        raise NotImplementedError
+        extra: dict[str, str] | None = None
+        if if_none_match is not None:
+            extra = {"If-None-Match": if_none_match}
+        resp = self._request(
+            "GET", f"/users/{user_id}", extra_headers=extra
+        )
+        return User.from_dict(resp.json())
 
     def update_user_by_id(
         self,
@@ -367,38 +386,72 @@ class Client:
         full_name: str,
     ) -> User:
         """PATCH /users/{user_id} - Update a user by ID (admin)."""
-        raise NotImplementedError
+        from apikit.models import UpdateUserRequest
+
+        body = UpdateUserRequest(full_name=full_name).to_dict()
+        resp = self._request(
+            "PATCH", f"/users/{user_id}", json=body
+        )
+        return User.from_dict(resp.json())
+
+    def promote_user(self, user_id: str) -> User:
+        """POST /users/{user_id}/promote - Promote a user (admin)."""
+        resp = self._request(
+            "POST", f"/users/{user_id}/promote"
+        )
+        return User.from_dict(resp.json())
+
+    def demote_user(self, user_id: str) -> User:
+        """POST /users/{user_id}/demote - Demote a user (admin)."""
+        resp = self._request(
+            "POST", f"/users/{user_id}/demote"
+        )
+        return User.from_dict(resp.json())
 
     def block_user(self, user_id: str) -> User:
         """POST /users/{user_id}/block - Block a user (admin)."""
-        raise NotImplementedError
+        resp = self._request(
+            "POST", f"/users/{user_id}/block"
+        )
+        return User.from_dict(resp.json())
 
     def unblock_user(self, user_id: str) -> User:
         """POST /users/{user_id}/unblock - Unblock a user (admin)."""
-        raise NotImplementedError
+        resp = self._request(
+            "POST", f"/users/{user_id}/unblock"
+        )
+        return User.from_dict(resp.json())
 
     def list_user_keys(self, user_id: str) -> list[APIKey]:
         """GET /users/{user_id}/keys - List a user's keys (admin)."""
-        raise NotImplementedError
+        resp = self._request("GET", f"/users/{user_id}/keys")
+        return [APIKey.from_dict(k) for k in resp.json()]
 
     def revoke_user_key(
         self, user_id: str, key_id: str
     ) -> None:
         """DELETE /users/{user_id}/keys/{key_id} - Revoke key (admin)."""
-        raise NotImplementedError
+        self._request(
+            "DELETE", f"/users/{user_id}/keys/{key_id}"
+        )
 
     def list_user_tokens(self, user_id: str) -> list[PAT]:
         """GET /users/{user_id}/tokens - List user's PATs (admin)."""
-        raise NotImplementedError
+        resp = self._request(
+            "GET", f"/users/{user_id}/tokens"
+        )
+        return [PAT.from_dict(t) for t in resp.json()]
 
     def revoke_user_token(
         self, user_id: str, token_id: str
     ) -> None:
         """DELETE /users/{user_id}/tokens/{token_id} (admin)."""
-        raise NotImplementedError
+        self._request(
+            "DELETE", f"/users/{user_id}/tokens/{token_id}"
+        )
 
     # ------------------------------------------------------------------
-    # Organization management endpoints (stubs for group 8)
+    # Organization management endpoints
     # ------------------------------------------------------------------
 
     def list_orgs(
@@ -407,7 +460,11 @@ class Client:
         include_blocked: bool = False,
     ) -> list[Organization]:
         """GET /orgs - List organizations."""
-        raise NotImplementedError
+        params: dict[str, Any] | None = None
+        if include_blocked:
+            params = {"include_blocked": "true"}
+        resp = self._request("GET", "/orgs", params=params)
+        return [Organization.from_dict(o) for o in resp.json()]
 
     def create_org(
         self,
@@ -417,7 +474,15 @@ class Client:
         url: str | None = None,
     ) -> Organization:
         """POST /orgs - Create an organization."""
-        raise NotImplementedError
+        from apikit.models import CreateOrgRequest
+
+        body = CreateOrgRequest(
+            name=name,
+            slug=slug,
+            url=url,
+        ).to_dict()
+        resp = self._request("POST", "/orgs", json=body)
+        return Organization.from_dict(resp.json())
 
     def get_org(
         self,
@@ -426,7 +491,13 @@ class Client:
         if_none_match: str | None = None,
     ) -> Organization:
         """GET /orgs/{org_id} - Get an organization."""
-        raise NotImplementedError
+        extra: dict[str, str] | None = None
+        if if_none_match is not None:
+            extra = {"If-None-Match": if_none_match}
+        resp = self._request(
+            "GET", f"/orgs/{org_id}", extra_headers=extra
+        )
+        return Organization.from_dict(resp.json())
 
     def update_org(
         self,
@@ -436,7 +507,31 @@ class Client:
         url: str | None = None,
     ) -> Organization:
         """PATCH /orgs/{org_id} - Update an organization."""
-        raise NotImplementedError
+        from apikit.models import UpdateOrgRequest
+
+        body = UpdateOrgRequest(name=name, url=url).to_dict()
+        resp = self._request(
+            "PATCH", f"/orgs/{org_id}", json=body
+        )
+        return Organization.from_dict(resp.json())
+
+    def delete_org(self, org_id: str) -> None:
+        """DELETE /orgs/{org_id} - Delete an organization."""
+        self._request("DELETE", f"/orgs/{org_id}")
+
+    def block_org(self, org_id: str) -> Organization:
+        """POST /orgs/{org_id}/block - Block an organization."""
+        resp = self._request(
+            "POST", f"/orgs/{org_id}/block"
+        )
+        return Organization.from_dict(resp.json())
+
+    def unblock_org(self, org_id: str) -> Organization:
+        """POST /orgs/{org_id}/unblock - Unblock an organization."""
+        resp = self._request(
+            "POST", f"/orgs/{org_id}/unblock"
+        )
+        return Organization.from_dict(resp.json())
 
     def list_org_members(self, org_id: str) -> list[User]:
         """GET /orgs/{org_id}/members - List organization members."""
@@ -447,10 +542,14 @@ class Client:
         self, org_id: str, user_id: str
     ) -> None:
         """PUT /orgs/{org_id}/members/{user_id} - Add a member."""
-        raise NotImplementedError
+        self._request(
+            "PUT", f"/orgs/{org_id}/members/{user_id}"
+        )
 
     def remove_org_member(
         self, org_id: str, user_id: str
     ) -> None:
         """DELETE /orgs/{org_id}/members/{user_id} - Remove a member."""
-        raise NotImplementedError
+        self._request(
+            "DELETE", f"/orgs/{org_id}/members/{user_id}"
+        )

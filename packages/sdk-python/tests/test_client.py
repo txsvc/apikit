@@ -660,7 +660,7 @@ class TestPropertyHeaderResetAtStart:
             )
             return original_transport_request(*args, **kwargs)  # type: ignore[arg-type]
 
-        c._http_client.request = capturing_request  # type: ignore[assignment]
+        c._http_client.request = capturing_request  # type: ignore[method-assign]
 
         c.healthz()
         c.healthz()
