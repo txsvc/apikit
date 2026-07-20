@@ -8,7 +8,7 @@ LDFLAGS := -ldflags "-X github.com/txsvc/apikit.Version=$(VERSION) -X github.com
 build:
 	go build -o bin/apikit $(LDFLAGS) ./cmd/apikit
 	go build -o bin/akc $(LDFLAGS) ./cmd/akc
-
+	
 test:
 	go test ./... -count=1
 	rm apikit db.test
