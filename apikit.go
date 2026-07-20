@@ -41,6 +41,12 @@ func LoadConfig() (*Config, error) {
 	return config.Load()
 }
 
+// ConfigDir returns the directory containing config.toml,
+// used for resolving adjacent files like admin_token.
+func ConfigDir() string {
+	return config.ConfigDir()
+}
+
 // GenerateAPIKey creates a new API key for the given user, revoking any
 // existing active keys. It delegates to keys.GenerateAPIKey.
 func GenerateAPIKey(tx db.Executor, userID string, expiresDays int, logger echo.Logger) (*APIKeyResult, error) {

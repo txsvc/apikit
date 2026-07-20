@@ -752,9 +752,9 @@ func TestRun_SubsequentBoot_Success(t *testing.T) {
 	}
 }
 
-// TestRun_SubsequentBoot_NoStoredHash verifies that Run returns an error
-// instructing the operator to run with --reset-admin-token when
-// admin_token_hash is absent from admin_config on a subsequent boot.
+// TestRun_SubsequentBoot_NoStoredHash verifies that Run treats a missing
+// admin_token_hash as a first boot (regardless of user count) and requires
+// --admin-email.
 // [TS-04-23] [04-REQ-4.7]
 func TestRun_SubsequentBoot_NoStoredHash(t *testing.T) {
 	db := openMemoryDB(t)
@@ -771,8 +771,8 @@ func TestRun_SubsequentBoot_NoStoredHash(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-nil error when admin_token_hash is absent")
 	}
-	if !strings.Contains(err.Error(), "no admin token hash found") {
-		t.Errorf("error %q does not contain 'no admin token hash found'", err.Error())
+	if !strings.Contains(err.Error(), "--admin-email is required") {
+		t.Errorf("error %q does not contain '--admin-email is required'", err.Error())
 	}
 }
 

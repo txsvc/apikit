@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/txsvc/apikit/internal/bootstrap"
 	"github.com/txsvc/apikit/internal/db"
 )
 
@@ -185,14 +186,11 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 				// New user — determine role.
 				newRole := "user"
 
-				// Check admin_config for admin_email and whether an admin already exists.
-				var adminEmail string
-				adminErr := tx.QueryRowContext(ctx,
-					`SELECT value FROM admin_config WHERE key = ?`, "admin_email",
-				).Scan(&adminEmail)
-
-				if adminErr == nil && adminEmail == userInfo.Email {
-					// Email matches admin_email. Check if an admin already exists.
+				promote, promoteErr := bootstrap.ShouldAutoPromote(ctx, tx, userInfo.Email)
+				if promoteErr != nil {
+					return promoteErr
+				}
+				if promote {
 					var adminCount int
 					countErr := tx.QueryRowContext(ctx,
 						`SELECT COUNT(*) FROM users WHERE role = 'admin'`,
@@ -204,7 +202,6 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 						newRole = "admin"
 					}
 				}
-				// If adminErr is sql.ErrNoRows or other error, treat as no admin_email configured → role='user'.
 
 				// Insert new user.
 				newID := uuid.New().String()

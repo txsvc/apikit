@@ -195,6 +195,12 @@ func parseBodySize(s string) (int64, error) {
 	return n * multiplier, nil
 }
 
+// ConfigDir returns the directory where config.toml is located (or would be
+// located), for resolving adjacent files like admin_token.
+func ConfigDir() string {
+	return filepath.Dir(resolveConfigPath())
+}
+
 // resolveConfigPath returns the path to config.toml, respecting XDG_CONFIG_HOME.
 func resolveConfigPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {

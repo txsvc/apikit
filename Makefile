@@ -11,6 +11,7 @@ build:
 
 test:
 	go test ./... -count=1
+	rm apikit db.test
 
 lint:
 	go vet ./...
@@ -21,4 +22,13 @@ check-spec:
 check: lint test check-spec
 
 clean:
-	rm -f bin/apikit
+	rm -f bin/apikit bin/akc
+
+server-reset:
+	rm -rf bin/data
+	mkdir -p bin/data
+	cd bin && ./apikit --admin-email=hello@micku.me
+
+server-run:
+	-mv bin/admin_token bin/token
+	cd bin && ADMIN_TOKEN=$$(cat token) ./apikit 

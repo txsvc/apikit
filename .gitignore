@@ -1,5 +1,6 @@
 # Secrets etc
 .env
+config.toml
 
 # Build, test, internal stuff
 /hack/

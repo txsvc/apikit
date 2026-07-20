@@ -174,6 +174,16 @@ Registered at the server root (not under the mount point):
 | `GET /readyz` | `no-cache` | Readiness. Calls `HealthChecker` if provided |
 | `GET /version` | `public, max-age=300` | Returns version, build, and mount point |
 
+#### Verify the server is running
+
+```sh
+curl http://localhost:8080/healthz
+# {"status": "ok"}
+
+curl http://localhost:8080/readyz
+# {"status": "ready"}
+```
+
 ### API Mount Point
 
 `server.APIGroup()` returns an Echo route group at the configured mount point (default `/api/v1`). The group has `Cache-Control: no-store` pre-applied. Mount your routes on this group:

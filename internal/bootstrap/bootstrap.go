@@ -24,6 +24,7 @@ import (
 	crypto_rand "crypto/rand"
 
 	"github.com/sirupsen/logrus"
+	"github.com/txsvc/apikit/internal/db"
 )
 
 // randReader is the source of randomness for token generation.
@@ -112,16 +113,20 @@ func Run(_ context.Context, params BootstrapParams) error {
 		return runTokenRotation(params)
 	}
 
-	// Determine boot type by counting users.
-	var userCount int
-	if err := params.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
-		return fmt.Errorf("querying user count: %w", err)
+	// Determine boot type: if an admin token hash already exists,
+	// bootstrap has run before — treat as subsequent boot regardless
+	// of user count.
+	var hashExists bool
+	if err := params.DB.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM admin_config WHERE key = 'admin_token_hash')",
+	).Scan(&hashExists); err != nil {
+		return fmt.Errorf("checking admin_token_hash: %w", err)
 	}
 
-	if userCount == 0 {
-		return runFirstBoot(params)
+	if hashExists {
+		return runSubsequentBoot(params)
 	}
-	return runSubsequentBoot(params)
+	return runFirstBoot(params)
 }
 
 // runFirstBoot handles the first boot sequence: validates admin email,
@@ -263,9 +268,9 @@ func runTokenRotation(params BootstrapParams) error {
 //	    // set role = "admin" on the new user record
 //	    logger.Infof("auto-promoted user %s to admin", userEmail)
 //	}
-func ShouldAutoPromote(_ context.Context, sqlDB *sql.DB, email string) (bool, error) {
+func ShouldAutoPromote(ctx context.Context, q db.Executor, email string) (bool, error) {
 	var storedEmail string
-	err := sqlDB.QueryRow(
+	err := q.QueryRowContext(ctx,
 		"SELECT value FROM admin_config WHERE key = ?", "admin_email",
 	).Scan(&storedEmail)
 	if err == sql.ErrNoRows {

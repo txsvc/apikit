@@ -230,6 +230,11 @@ func (s *Server) Start() error {
 		s.Shutdown(context.Background())
 	}()
 
+	logrus.WithFields(logrus.Fields{
+		"addr":        s.addr,
+		"mount_point": s.cfg.Server.MountPoint,
+	}).Info("server listening")
+
 	// Serve using the listener
 	s.echo.Listener = ln
 	err = s.echo.Start("")

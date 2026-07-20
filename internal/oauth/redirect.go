@@ -17,8 +17,9 @@ func ValidateRedirectURI(redirectURI, externalURL string) error {
 		return fmt.Errorf("redirect_uri is not allowed")
 	}
 
-	// Check localhost: must be http (not https), host must be localhost
-	if parsed.Hostname() == "localhost" {
+	// Check localhost: must be http (not https), host must be localhost or 127.0.0.1
+	hostname := parsed.Hostname()
+	if hostname == "localhost" || hostname == "127.0.0.1" {
 		if parsed.Scheme == "http" {
 			return nil
 		}
