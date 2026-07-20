@@ -1,0 +1,21 @@
+[server]
+port = 8080
+bind = "0.0.0.0"
+external_url = "http://localhost:8080"
+mount_point = "/api/v1"
+max_body_size = "1MB"
+
+[database]
+path = "data/app.db"
+
+[logging]
+level = "info"
+
+# To enable GitHub OAuth login, register an OAuth App at
+# https://github.com/settings/developers and fill in the credentials below.
+# Set the callback URL to http://localhost:8080/api/v1/auth/callback
+#
+# [[oauth.providers]]
+# name = "github"
+# client_id = ""
+# client_secret = ""
