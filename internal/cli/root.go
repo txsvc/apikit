@@ -143,17 +143,10 @@ func RootCommand() *cobra.Command {
 // This is a package-level variable so it can be overridden for testing.
 var newAPIClient = defaultNewAPIClient
 
-// cliClient is a lightweight API client for use within internal/cli.
-// It avoids importing the root apikit package (which would create a cycle).
-type cliClient struct {
-	EndpointURL string
-	APIKey      string
-}
-
 func defaultNewAPIClient(endpointURL, apiKey string) any {
-	return &cliClient{
-		EndpointURL: endpointURL,
-		APIKey:      apiKey,
+	return &cmdClient{
+		endpointURL: endpointURL,
+		apiKey:      apiKey,
 	}
 }
 

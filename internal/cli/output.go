@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -63,8 +64,20 @@ func ExitCode(err error) int {
 // For all other errors, the envelope uses code: 0 (client sentinel)
 // and err.Error() as the message.
 // Nothing is written to stderr (13-REQ-9.2).
+// printedError wraps an error that has already been printed as a JSON
+// envelope by cmdHandleError. PrintError checks for this to avoid
+// double-printing.
+type printedError struct{ err error }
+
+func (e *printedError) Error() string { return e.err.Error() }
+func (e *printedError) Unwrap() error { return e.err }
+
 func PrintError(err error) {
 	if err == nil {
+		return
+	}
+	var pe *printedError
+	if errors.As(err, &pe) {
 		return
 	}
 

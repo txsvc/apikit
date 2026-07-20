@@ -147,9 +147,62 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		return nil, fmt.Errorf("userinfo: %w", err)
 	}
 
+	email := result.Email
+	if email == "" {
+		var err error
+		email, err = g.primaryEmail(ctx, accessToken)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &UserInfo{
 		Username:   result.Login,
-		Email:      result.Email,
+		Email:      email,
 		ProviderID: strconv.FormatInt(result.ID, 10),
 	}, nil
+}
+
+// primaryEmail fetches the authenticated user's primary verified email
+// from GET /user/emails (requires the user:email scope).
+func (g *GitHubProvider) primaryEmail(ctx context.Context, accessToken string) (string, error) {
+	emailsURL := strings.TrimSuffix(g.userinfoURL, "/user") + "/user/emails"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("userinfo: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("userinfo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("userinfo: emails endpoint returned HTTP %d", resp.StatusCode)
+	}
+
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", fmt.Errorf("userinfo: %w", err)
+	}
+
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return e.Email, nil
+		}
+	}
+	for _, e := range emails {
+		if e.Verified {
+			return e.Email, nil
+		}
+	}
+
+	return "", fmt.Errorf("userinfo: no verified email found")
 }

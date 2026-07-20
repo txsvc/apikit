@@ -119,6 +119,7 @@ func RegisterUserHandlers(g *echo.Group, database *sql.DB) {
 	g.GET("/user", h.getOwnProfile)
 	g.PATCH("/user", h.updateOwnProfile)
 	g.GET("/user/orgs", h.listOwnOrgs)
+
 }
 
 // createUser handles POST /users — creates a new user record.
@@ -876,3 +877,4 @@ func (h *userHandlers) listOwnOrgs(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, orgs)
 }
+

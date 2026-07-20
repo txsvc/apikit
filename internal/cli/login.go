@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -107,10 +109,20 @@ func NewLoginCmd() *cobra.Command {
 				endpointURL = ResolveEndpointURL(cmd)
 			}
 
+			home, err := os.UserHomeDir()
+			if err != nil || home == "" {
+				return fmt.Errorf("cannot determine home directory: $HOME is not set or unresolvable")
+			}
+			configDir := filepath.Join(home, "."+TokenPrefix)
+			if err := InitConfig(configDir); err != nil {
+				return err
+			}
+
 			opts := loginOpts{
 				provider:      provider,
 				expires:       expires,
 				endpointURL:   endpointURL,
+				configPath:    configDir,
 				openBrowserFn: openBrowser,
 				saveConfigFn:  SaveConfig,
 				stderr:        cmd.ErrOrStderr(),
@@ -255,6 +267,18 @@ func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error 
 		return fmt.Errorf("failed to exchange OAuth code: %w", err)
 	}
 	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(httpResp.Body).Decode(&errResp); err == nil && errResp.Error.Message != "" {
+			return fmt.Errorf("login failed: %s", errResp.Error.Message)
+		}
+		return fmt.Errorf("login failed: server returned HTTP %d", httpResp.StatusCode)
+	}
 
 	var exchangeResp authCallbackResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&exchangeResp); err != nil {

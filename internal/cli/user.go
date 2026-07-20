@@ -95,7 +95,7 @@ func cmdHandleError(cmd *cobra.Command, err error) error {
 		},
 	}
 	_ = cmdPrintJSON(cmd, envelope)
-	return err
+	return &printedError{err}
 }
 
 // doRequest performs an authenticated HTTP request and returns the decoded
