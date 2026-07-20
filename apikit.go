@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/txsvc/apikit/internal/apiutil"
+	"github.com/txsvc/apikit/internal/authctx"
 	"github.com/txsvc/apikit/internal/bootstrap"
 	"github.com/txsvc/apikit/internal/config"
 	"github.com/txsvc/apikit/internal/db"
@@ -48,6 +49,30 @@ type UserInfo = oauth.UserInfo
 // APIKeyResult is a type alias for the internal keys.APIKeyResult struct.
 // Consumers can use *apikit.APIKeyResult without importing internal/keys.
 type APIKeyResult = keys.APIKeyResult
+
+// AuthInfo is a type alias for the internal authctx.AuthInfo struct.
+// Consumers can use *apikit.AuthInfo to inspect the authenticated credential
+// without importing internal/authctx.
+type AuthInfo = authctx.AuthInfo
+
+// GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
+// Returns nil if no AuthInfo has been injected (e.g. no auth middleware ran).
+func GetAuthInfo(c echo.Context) *AuthInfo {
+	return authctx.GetAuthInfo(c)
+}
+
+// SetAuthInfo stores the AuthInfo in the request's context.Context, making it
+// available via GetAuthInfo. Test code can call this to inject auth state
+// without running the full middleware stack.
+func SetAuthInfo(c echo.Context, info *AuthInfo) {
+	authctx.SetAuthInfo(c, info)
+}
+
+// GetUserID returns the authenticated user's UUID string from the context
+// AuthInfo, or an empty string if AuthInfo is nil or UserID is empty.
+func GetUserID(c echo.Context) string {
+	return authctx.GetUserID(c)
+}
 
 // Permission defines a custom PAT permission scope. Register custom
 // permissions by passing them to MountHandlers:
