@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/bootstrap"
 	"github.com/txsvc/apikit/internal/db"
 )
@@ -36,10 +37,6 @@ func cachePublicMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// defaultTokenPrefix is the API key prefix used when constructing the full key
-// string. Matches the root apikit.TokenPrefix default ("ak"), defined here to
-// avoid a circular import from internal/oauth → root apikit.
-const defaultTokenPrefix = "ak"
 
 // handleCallback returns an Echo handler for POST /auth/callback.
 // It implements the full OAuth callback flow:
@@ -240,7 +237,7 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 			}
 
 			// Generate new API key material.
-			apiKeyRes, err = GenerateAPIKey(defaultTokenPrefix, expires)
+			apiKeyRes, err = GenerateAPIKey(apiutil.TokenPrefix, expires)
 			if err != nil {
 				return err
 			}

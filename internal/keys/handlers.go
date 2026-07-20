@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/authctx"
 	"github.com/txsvc/apikit/internal/db"
 )
@@ -273,7 +274,7 @@ func (h *keyHandlers) refreshKey(c echo.Context) error {
 	}
 
 	// Step 10: Construct full key and log.
-	fullKey := fmt.Sprintf("%s_%s_%s", defaultTokenPrefix, keyID, newSecret)
+	fullKey := fmt.Sprintf("%s_%s_%s", apiutil.TokenPrefix, keyID, newSecret)
 	c.Logger().Infof("api_key_refreshed user_id=%s key_id=%s", userID, keyID)
 
 	// Step 11: Return success response.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/db"
 )
 
@@ -24,9 +25,6 @@ const (
 	// maxInsertAttempts is the maximum number of INSERT attempts before giving up
 	// on key_id collision.
 	maxInsertAttempts = 3
-	// defaultTokenPrefix matches the root apikit.TokenPrefix default ("ak").
-	// Defined here to avoid a circular import (apikit imports internal/keys).
-	defaultTokenPrefix = "ak"
 )
 
 // randReader is the random reader used for key generation.
@@ -179,7 +177,7 @@ func generateWithExecutor(exec db.Executor, userID string, expiresDays int, logg
 		}
 
 		// Success: build result and log.
-		fullKey := defaultTokenPrefix + "_" + keyID + "_" + secret
+		fullKey := apiutil.TokenPrefix + "_" + keyID + "_" + secret
 
 		logger.Infof("api_key_created user_id=%s key_id=%s", userID, keyID)
 
