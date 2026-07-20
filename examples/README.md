@@ -39,10 +39,10 @@ bin/mycli version
 
 **What it demonstrates:**
 
-- `apikit.RootCommand()` as the starting point
-- Adding custom Cobra commands alongside apikit's built-in ones
-
-> **Note:** The full `akc` command set (login, user, keys, tokens, orgs, admin) is available via the `akc` binary shipped with apikit. These commands use internal packages and are not individually importable. To embed them in your own CLI, use `cmd/akc/main.go` as a reference.
+- `apikit.RootCommand()` as the base command tree
+- `apikit.LoginCmd()`, `UserCmd()`, `KeysCmd()`, `TokensCmd()`, `OrgsCmd()`, `AdminCmd()` to register all built-in commands
+- Adding custom Cobra commands alongside the built-in ones
+- `CLIExecute()` / `CLIPrintError()` / `CLIExitCode()` for centralized error handling
 
 ## Using in your own project
 
