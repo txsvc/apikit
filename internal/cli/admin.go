@@ -75,7 +75,7 @@ func adminHandleError(cmd *cobra.Command, err error) error {
 		},
 	}
 	_ = adminPrintJSON(cmd, envelope)
-	return err
+	return &printedError{err}
 }
 
 // adminCheckMissingArg returns a Cobra PositionalArgs validator that:

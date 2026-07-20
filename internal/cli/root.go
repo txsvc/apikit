@@ -119,10 +119,14 @@ func RootCommand() *cobra.Command {
 		}
 		userID, _ := ResolveField("user_id", "--user-id", uidFlag, uidChanged, "USER_ID", uidConfig, false)
 
-		// Construct the API client. We use the newClient function to avoid
-		// importing the root apikit package (import cycle). The client is
-		// stored as any in context.
+		// Construct the API client.
 		client := newAPIClient(endpointURL, apiKey)
+
+		// For admin commands, wrap the client in the appropriate Runner
+		// so admin command RunE functions can type-assert it.
+		if isAdminCommand(cmd) {
+			client = buildAdminRunner(client, cmd)
+		}
 
 		// Store client and user_id in context.
 		ctx := cmd.Context()
@@ -147,6 +151,159 @@ func defaultNewAPIClient(endpointURL, apiKey string) any {
 	return &cmdClient{
 		endpointURL: endpointURL,
 		apiKey:      apiKey,
+	}
+}
+
+// isAdminCommand returns true if cmd is in the "admin" subtree.
+func isAdminCommand(cmd *cobra.Command) bool {
+	for p := cmd.Parent(); p != nil; p = p.Parent() {
+		if p.Name() == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
+// adminCommandGroup returns the admin subgroup name (users, orgs, keys, tokens)
+// for a leaf command inside the admin tree.
+func adminCommandGroup(cmd *cobra.Command) string {
+	for p := cmd; p != nil; p = p.Parent() {
+		if pp := p.Parent(); pp != nil && pp.Name() == "admin" {
+			return p.Name()
+		}
+	}
+	return ""
+}
+
+// buildAdminRunner wraps a *cmdClient in the Runner type expected by the
+// admin command group that cmd belongs to.
+func buildAdminRunner(raw any, cmd *cobra.Command) any {
+	c, ok := raw.(*cmdClient)
+	if !ok {
+		return raw
+	}
+	switch adminCommandGroup(cmd) {
+	case "users":
+		return buildUsersRunner(c)
+	case "orgs":
+		return buildOrgsRunner(c)
+	case "keys":
+		return buildKeysRunner(c)
+	case "tokens":
+		return buildTokensRunner(c)
+	default:
+		return raw
+	}
+}
+
+func buildUsersRunner(c *cmdClient) *UsersRunner {
+	return &UsersRunner{
+		ListUsers: func(ctx context.Context, includeBlocked bool) (any, error) {
+			path := "/users"
+			if includeBlocked {
+				path += "?include_blocked=true"
+			}
+			return c.doRequest(ctx, "GET", path, nil)
+		},
+		GetUserByID: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "GET", "/users/"+id, nil)
+		},
+		CreateUser: func(ctx context.Context, username, email, provider, providerID string) (any, error) {
+			body := map[string]string{
+				"username": username, "email": email,
+				"provider": provider, "provider_id": providerID,
+			}
+			return c.doRequest(ctx, "POST", "/users", body)
+		},
+		UpdateUserByID: func(ctx context.Context, id string, fullName string) (any, error) {
+			return c.doRequest(ctx, "PATCH", "/users/"+id, map[string]string{"full_name": fullName})
+		},
+		PromoteUser: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/users/"+id+"/promote", nil)
+		},
+		DemoteUser: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/users/"+id+"/demote", nil)
+		},
+		BlockUser: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/users/"+id+"/block", nil)
+		},
+		UnblockUser: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/users/"+id+"/unblock", nil)
+		},
+	}
+}
+
+func buildOrgsRunner(c *cmdClient) *OrgsRunner {
+	return &OrgsRunner{
+		ListOrgs: func(ctx context.Context, includeBlocked bool) (any, error) {
+			path := "/orgs"
+			if includeBlocked {
+				path += "?include_blocked=true"
+			}
+			return c.doRequest(ctx, "GET", path, nil)
+		},
+		CreateOrg: func(ctx context.Context, name, slug string, url *string) (any, error) {
+			body := map[string]any{"name": name, "slug": slug}
+			if url != nil {
+				body["url"] = *url
+			}
+			return c.doRequest(ctx, "POST", "/orgs", body)
+		},
+		UpdateOrg: func(ctx context.Context, id string, name *string, url *string) (any, error) {
+			body := map[string]any{}
+			if name != nil {
+				body["name"] = *name
+			}
+			if url != nil {
+				body["url"] = *url
+			}
+			return c.doRequest(ctx, "PATCH", "/orgs/"+id, body)
+		},
+		DeleteOrg: func(ctx context.Context, id string) error {
+			_, err := c.doRequest(ctx, "DELETE", "/orgs/"+id, nil)
+			return err
+		},
+		BlockOrg: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/orgs/"+id+"/block", nil)
+		},
+		UnblockOrg: func(ctx context.Context, id string) (any, error) {
+			return c.doRequest(ctx, "POST", "/orgs/"+id+"/unblock", nil)
+		},
+		ListOrgMembers: func(ctx context.Context, orgID string) (any, error) {
+			return c.doRequest(ctx, "GET", "/orgs/"+orgID+"/members", nil)
+		},
+		AddOrgMember: func(ctx context.Context, orgID, userID string) error {
+			_, err := c.doRequest(ctx, "PUT", "/orgs/"+orgID+"/members/"+userID, nil)
+			return err
+		},
+		RemoveOrgMember: func(ctx context.Context, orgID, userID string) error {
+			_, err := c.doRequest(ctx, "DELETE", "/orgs/"+orgID+"/members/"+userID, nil)
+			return err
+		},
+	}
+}
+
+func buildKeysRunner(c *cmdClient) *KeysRunner {
+	return &KeysRunner{
+		ListUserKeys: func(ctx context.Context, userID string) (any, error) {
+			return c.doRequest(ctx, "GET", "/users/"+userID+"/keys", nil)
+		},
+		RevokeUserKey: func(ctx context.Context, userID, keyID string) error {
+			_, err := c.doRequest(ctx, "DELETE", "/users/"+userID+"/keys/"+keyID, nil)
+			return err
+		},
+	}
+}
+
+func buildTokensRunner(c *cmdClient) *TokensRunner {
+	return &TokensRunner{
+		ListUserTokens: func(ctx context.Context, userID string) (any, error) {
+			return c.doRequest(ctx, "GET", "/users/"+userID+"/tokens", nil)
+		},
+		RevokeUserToken: func(ctx context.Context, userID, tokenID string) error {
+			_, err := c.doRequest(ctx, "DELETE", "/users/"+userID+"/tokens/"+tokenID, nil)
+			return err
+		},
 	}
 }
 
