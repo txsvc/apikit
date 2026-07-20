@@ -15,6 +15,11 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
+
+	"github.com/txsvc/apikit/internal/auth"
+	"github.com/txsvc/apikit/internal/handlers"
+	"github.com/txsvc/apikit/internal/keys"
+	"github.com/txsvc/apikit/internal/oauth"
 )
 
 // drainTimeout is the fixed drain window for graceful shutdown.
@@ -287,4 +292,33 @@ func (s *Server) Addr() string {
 // Returns the same *echo.Group on every call.
 func (s *Server) APIGroup() *echo.Group {
 	return s.apiGroup
+}
+
+// MountHandlers registers the default OAuth, authentication, and API handlers
+// on the server's API group. This wires up the OAuth provider registry from
+// config, the auth middleware, and all resource handlers (users, orgs, keys, PATs).
+//
+// Must be called after NewServer and before Start.
+func (s *Server) MountHandlers(database *DB) error {
+	oauthProviders := make([]oauth.ProviderConfig, len(s.cfg.OAuth.Providers))
+	for i, p := range s.cfg.OAuth.Providers {
+		oauthProviders[i] = oauth.ProviderConfig(p)
+	}
+	registry, err := oauth.BuildRegistryFromConfig(oauthProviders, http.DefaultClient)
+	if err != nil {
+		return err
+	}
+
+	api := s.APIGroup()
+	oauth.RegisterOAuthHandlers(api, registry, database, s.cfg.Server.ExternalURL)
+
+	permReg := auth.NewPermissionRegistry()
+	api.Use(auth.NewAuthMiddleware(database, permReg))
+
+	handlers.RegisterUserHandlers(api, database.SqlDB)
+	handlers.RegisterOrgHandlers(api, database.SqlDB)
+	keys.RegisterKeyHandlers(api, database.SqlDB)
+	handlers.NewPATHandler(database, permReg).RegisterRoutes(api)
+
+	return nil
 }

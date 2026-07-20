@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"github.com/txsvc/apikit"
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/auth"
 	"github.com/txsvc/apikit/internal/db"
 )
@@ -89,7 +89,7 @@ func RegisterOrgHandlers(g *echo.Group, database *sql.DB) {
 // returns a 403 APIError if the user is not an admin.
 func requireOrgAdmin(c echo.Context) error {
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 	return nil
 }
@@ -102,29 +102,29 @@ func requireOrgAdmin(c echo.Context) error {
 func (h *orgHandlers) createOrg(c echo.Context) error {
 	// Auth check: admin only (08-REQ-2.7).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Bind request body (08-REQ-2.E4).
 	var req CreateOrgRequest
 	if err := c.Bind(&req); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
 	}
 
 	// Validate name: must be non-empty after trimming (08-REQ-2.2).
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "name is required")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "name is required")
 	}
 
 	// Validate slug: must be non-empty (08-REQ-2.3).
 	if req.Slug == "" {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "slug is required")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "slug is required")
 	}
 
 	// Validate slug format (08-REQ-2.4, 08-REQ-2.E1, 08-REQ-2.E2).
 	if err := validateSlug(req.Slug); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid slug format")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid slug format")
 	}
 
 	// Build org record with defaults (08-REQ-2.1).
@@ -150,13 +150,13 @@ func (h *orgHandlers) createOrg(c echo.Context) error {
 		// Parse the raw error string before wrapping — db.WrapError loses column identity.
 		errStr := err.Error()
 		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.name") {
-			return apikit.WriteAPIError(c, http.StatusConflict, "organization name already exists")
+			return apiutil.WriteAPIError(c, http.StatusConflict, "organization name already exists")
 		}
 		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.slug") {
-			return apikit.WriteAPIError(c, http.StatusConflict, "organization slug already exists")
+			return apiutil.WriteAPIError(c, http.StatusConflict, "organization slug already exists")
 		}
 		// Any unexpected DB error (08-REQ-2.E3).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusCreated, org)
@@ -170,7 +170,7 @@ func (h *orgHandlers) createOrg(c echo.Context) error {
 func (h *orgHandlers) listOrgs(c echo.Context) error {
 	// Auth check: admin only (08-REQ-3.4).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Build query with optional status filter (08-REQ-3.1, 08-REQ-3.2).
@@ -184,7 +184,7 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 
 	rows, err := h.db.Query(query)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	defer rows.Close()
 
@@ -194,12 +194,12 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 		var o OrgResponse
 		if err := rows.Scan(&o.ID, &o.Name, &o.Slug, &o.URL,
 			&o.Status, &o.CreatedAt, &o.UpdatedAt); err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 		orgs = append(orgs, o)
 	}
 	if err := rows.Err(); err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, orgs)
@@ -213,7 +213,7 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 	// Validate :id path parameter (08-REQ-4.5).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Query the org from the database (08-REQ-4.4).
@@ -226,9 +226,9 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Access control: admin or org member (08-REQ-4.1, 08-REQ-4.2, 08-REQ-4.3).
@@ -237,10 +237,10 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 		isMember, err := isOrgMember(h.db, org.ID, userID)
 		if err != nil {
 			// DB error on membership check (08-REQ-4.E1).
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 		if !isMember {
-			return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+			return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 		}
 	}
 
@@ -248,13 +248,13 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 	// SetETag/CheckETag accept time.Time, not string.
 	updatedAt, err := db.ParseTime(org.UpdatedAt)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
-	apikit.SetETag(c, updatedAt)
+	apiutil.SetETag(c, updatedAt)
 
 	// Check If-None-Match for conditional GET (08-REQ-4.6).
-	if apikit.CheckETag(c, updatedAt) {
+	if apiutil.CheckETag(c, updatedAt) {
 		return c.NoContent(http.StatusNotModified)
 	}
 
@@ -268,31 +268,31 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 func (h *orgHandlers) updateOrg(c echo.Context) error {
 	// Auth check: admin only (08-REQ-5.7).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-5.6).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Bind request body (08-REQ-5.3).
 	var req UpdateOrgRequest
 	if err := c.Bind(&req); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
 	}
 
 	// Check if there are any recognized fields to update (08-REQ-5.3).
 	if req.Name == nil && req.URL == nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "no fields to update")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "no fields to update")
 	}
 
 	// If name is provided, validate it after trimming (08-REQ-5.E1).
 	if req.Name != nil {
 		trimmed := strings.TrimSpace(*req.Name)
 		if trimmed == "" {
-			return apikit.WriteAPIError(c, http.StatusBadRequest, "name is required")
+			return apiutil.WriteAPIError(c, http.StatusBadRequest, "name is required")
 		}
 		req.Name = &trimmed
 	}
@@ -307,9 +307,9 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Build dynamic UPDATE — slug is never in the SET clause (08-REQ-5.2, 08-PROP-1).
@@ -334,10 +334,10 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 		// Detect UNIQUE constraint violation on name (08-REQ-5.4).
 		errStr := err.Error()
 		if strings.Contains(errStr, "UNIQUE constraint failed: orgs.name") {
-			return apikit.WriteAPIError(c, http.StatusConflict, "organization name already exists")
+			return apiutil.WriteAPIError(c, http.StatusConflict, "organization name already exists")
 		}
 		// Any other DB error (08-REQ-5.E2).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Re-fetch the updated org to return (08-REQ-5.1).
@@ -348,7 +348,7 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, org)
@@ -363,29 +363,29 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 func (h *orgHandlers) deleteOrg(c echo.Context) error {
 	// Auth check: admin only (08-REQ-6.4).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-6.3).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Execute DELETE (08-REQ-6.1); ON DELETE CASCADE handles org_members.
 	result, err := h.db.Exec("DELETE FROM orgs WHERE id = ?", id)
 	if err != nil {
 		// DB error (08-REQ-6.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Check rows affected — zero means org not found (08-REQ-6.2).
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	if rowsAffected == 0 {
-		return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 	}
 
 	return c.NoContent(http.StatusNoContent)
@@ -399,13 +399,13 @@ func (h *orgHandlers) deleteOrg(c echo.Context) error {
 func (h *orgHandlers) blockOrg(c echo.Context) error {
 	// Auth check: admin only (08-REQ-7.5).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-7.4).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Fetch current org state (08-REQ-7.3).
@@ -418,9 +418,9 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Idempotent: already blocked → return as-is (08-REQ-7.2, 08-PROP-5).
@@ -436,7 +436,7 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 	)
 	if err != nil {
 		// DB error on UPDATE (08-REQ-7.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Re-fetch updated org to return.
@@ -447,7 +447,7 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, org)
@@ -461,13 +461,13 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 func (h *orgHandlers) unblockOrg(c echo.Context) error {
 	// Auth check: admin only (08-REQ-8.5).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-8.4).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Fetch current org state (08-REQ-8.3).
@@ -480,9 +480,9 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Idempotent: already active → return as-is (08-REQ-8.2, 08-PROP-6).
@@ -498,7 +498,7 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 	)
 	if err != nil {
 		// DB error on UPDATE (08-REQ-8.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Re-fetch updated org to return.
@@ -509,7 +509,7 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, org)
@@ -524,7 +524,7 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 	// Validate :id path parameter (08-REQ-9.6).
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Verify the org exists (08-REQ-9.4).
@@ -532,9 +532,9 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", id).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Access control: admin or org member (08-REQ-9.1, 08-REQ-9.2, 08-REQ-9.3).
@@ -542,10 +542,10 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 		userID := auth.GetUserID(c)
 		isMember, err := isOrgMember(h.db, id, userID)
 		if err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 		if !isMember {
-			return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+			return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 		}
 	}
 
@@ -559,7 +559,7 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 	)
 	if err != nil {
 		// DB error on join query (08-REQ-9.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	defer rows.Close()
 
@@ -568,13 +568,13 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 	for rows.Next() {
 		var m OrgMemberResponse
 		if err := rows.Scan(&m.UserID, &m.Username, &m.Email, &m.Role, &m.CreatedAt); err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 		m.OrgID = id
 		members = append(members, m)
 	}
 	if err := rows.Err(); err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, members)
@@ -587,19 +587,19 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 func (h *orgHandlers) addOrgMember(c echo.Context) error {
 	// Auth check: admin only (08-REQ-10.7).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-10.5).
 	orgID := c.Param("id")
 	if _, err := uuid.Parse(orgID); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Validate :user_id path parameter (08-REQ-10.6).
 	userID := c.Param("user_id")
 	if _, err := uuid.Parse(userID); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
 	}
 
 	// Verify the org exists (08-REQ-10.3).
@@ -607,9 +607,9 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", orgID).Scan(&orgExists)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "organization not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Verify the user exists (08-REQ-10.4).
@@ -617,9 +617,9 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", userID).Scan(&userExists)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "user not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
 		}
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// INSERT into org_members (08-REQ-10.1).
@@ -636,7 +636,7 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 			return c.NoContent(http.StatusNoContent)
 		}
 		// Any other DB error (08-REQ-10.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.NoContent(http.StatusNoContent)
@@ -649,19 +649,19 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 func (h *orgHandlers) removeOrgMember(c echo.Context) error {
 	// Auth check: admin only (08-REQ-11.5).
 	if err := auth.RequireAdmin(c); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "forbidden")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
 	// Validate :id path parameter (08-REQ-11.3).
 	orgID := c.Param("id")
 	if _, err := uuid.Parse(orgID); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
 	}
 
 	// Validate :user_id path parameter (08-REQ-11.4).
 	userID := c.Param("user_id")
 	if _, err := uuid.Parse(userID); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
 	}
 
 	// DELETE the membership row (08-REQ-11.1).
@@ -671,16 +671,16 @@ func (h *orgHandlers) removeOrgMember(c echo.Context) error {
 	)
 	if err != nil {
 		// DB error (08-REQ-11.E1).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Check rows affected — zero means membership not found (08-REQ-11.2).
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	if rowsAffected == 0 {
-		return apikit.WriteAPIError(c, http.StatusNotFound, "membership not found")
+		return apiutil.WriteAPIError(c, http.StatusNotFound, "membership not found")
 	}
 
 	return c.NoContent(http.StatusNoContent)

@@ -9,7 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/txsvc/apikit"
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/db"
 )
 
@@ -34,22 +34,22 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 			// Step 1: Extract Bearer token from Authorization header.
 			header := c.Request().Header.Get("Authorization")
 			if header == "" {
-				return apikit.WriteAPIError(c, http.StatusUnauthorized, "missing authorization header")
+				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "missing authorization header")
 			}
 
 			if !strings.HasPrefix(header, "Bearer ") {
-				return apikit.WriteAPIError(c, http.StatusUnauthorized, "invalid authorization header format")
+				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "invalid authorization header format")
 			}
 
 			token := header[len("Bearer "):]
 			if token == "" {
-				return apikit.WriteAPIError(c, http.StatusUnauthorized, "missing token")
+				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "missing token")
 			}
 
 			// Step 2: Detect credential type.
 			credType, components, err := parseToken(token)
 			if err != nil {
-				return apikit.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
+				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
 
 			// Step 3: Dispatch to credential-type-specific validation.
@@ -59,7 +59,7 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 			switch credType {
 			case "admin_token":
 				// Extract hex suffix after '<prefix>_admin_'.
-				adminPrefix := apikit.TokenPrefix + "_admin_"
+				adminPrefix := apiutil.TokenPrefix + "_admin_"
 				hexSuffix := token[len(adminPrefix):]
 				authInfo, validationErr = validateAdminToken(database, token, hexSuffix)
 			case "api_key":
@@ -69,14 +69,14 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 				// components[0] = token_id, components[1] = secret.
 				authInfo, validationErr = validatePAT(database, components[0], components[1])
 			default:
-				return apikit.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
+				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
 			}
 
 			if validationErr != nil {
 				if ae, ok := validationErr.(*authError); ok {
-					return apikit.WriteAPIError(c, ae.Code, ae.Message)
+					return apiutil.WriteAPIError(c, ae.Code, ae.Message)
 				}
-				return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+				return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 			}
 
 			// Step 4: Inject AuthInfo into request context and call next handler.
@@ -88,7 +88,7 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 
 // parseToken extracts the credential type and components from a raw Bearer
 // token string. It checks for the admin pattern first, then PAT, then falls
-// back to the API key pattern, using apikit.TokenPrefix for the prefix value.
+// back to the API key pattern, using apiutil.TokenPrefix for the prefix value.
 //
 // Returns the credential type ("admin_token", "api_key", or "pat"), the
 // parsed components, and a non-nil error if the token is unrecognized.
@@ -96,7 +96,7 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 // Note: parseToken classifies admin tokens by prefix alone. Hex suffix
 // validation is deferred to validateAdminToken (05-REQ-4.E2).
 func parseToken(token string) (string, []string, error) {
-	prefix := apikit.TokenPrefix
+	prefix := apiutil.TokenPrefix
 
 	// Check 1: Admin token — prefix_admin_<anything>
 	adminPrefix := prefix + "_admin_"

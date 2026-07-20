@@ -14,7 +14,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/txsvc/apikit"
+	"github.com/txsvc/apikit/internal/apiutil"
 	"github.com/txsvc/apikit/internal/auth"
 	"github.com/txsvc/apikit/internal/db"
 )
@@ -96,34 +96,34 @@ func (h *PATHandler) RegisterRoutes(g *echo.Group) {
 func (h *PATHandler) createPAT(c echo.Context) error {
 	// Auth check: require tokens:manage permission (09-REQ-1.2).
 	if err := auth.RequirePermission(c, "tokens", "manage"); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
 	}
 
 	// Decode JSON request body (09-REQ-3.7).
 	var req CreatePATRequest
 	if err := c.Bind(&req); err != nil {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
 	}
 
 	// Validate name (09-REQ-3.1, 09-REQ-3.2).
 	if req.Name == "" {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "name is required")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "name is required")
 	}
 	if len(req.Name) > 255 {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "name must be 255 characters or fewer")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "name must be 255 characters or fewer")
 	}
 
 	// Validate permissions (09-REQ-3.3, 09-REQ-3.4, 09-REQ-3.5, 09-REQ-3.E3).
 	if len(req.Permissions) == 0 {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
 	}
 	for _, p := range req.Permissions {
 		if strings.Count(p, ":") != 1 {
-			return apikit.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("invalid permission format: %s", p))
+			return apiutil.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("invalid permission format: %s", p))
 		}
 		parts := strings.SplitN(p, ":", 2)
 		if !h.registry.IsValid(parts[0], parts[1]) {
-			return apikit.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("unknown permission: %s", p))
+			return apiutil.WriteAPIError(c, http.StatusBadRequest, fmt.Sprintf("unknown permission: %s", p))
 		}
 	}
 
@@ -133,7 +133,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		expiresDays = *req.Expires
 	}
 	if expiresDays != 0 && expiresDays != 30 && expiresDays != 60 && expiresDays != 90 {
-		return apikit.WriteAPIError(c, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "expires must be 0, 30, 60, or 90")
 	}
 
 	// Privilege escalation check (09-REQ-4.1, 09-REQ-4.2, 09-REQ-4.3).
@@ -145,7 +145,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		}
 		for _, p := range req.Permissions {
 			if !authPerms[p] {
-				return apikit.WriteAPIError(c, http.StatusForbidden, fmt.Sprintf("cannot grant permission: %s", p))
+				return apiutil.WriteAPIError(c, http.StatusForbidden, fmt.Sprintf("cannot grant permission: %s", p))
 			}
 		}
 	}
@@ -153,16 +153,16 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 	// Generate token_id and secret (09-REQ-2.1, 09-REQ-2.2, 09-REQ-2.E1).
 	tokenID, err := generateTokenID()
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	secret, err := generateSecret()
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Hash secret and build full token string (09-REQ-2.3, 09-REQ-2.4).
 	secretHash := hashSecret(secret)
-	token := fmt.Sprintf("%s_pat_%s_%s", apikit.TokenPrefix, tokenID, secret)
+	token := fmt.Sprintf("%s_pat_%s_%s", apiutil.TokenPrefix, tokenID, secret)
 
 	// Calculate timestamps (09-REQ-5.4).
 	now := time.Now().UTC()
@@ -176,7 +176,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 	// Serialize permissions to JSON for storage (09-REQ-5.3).
 	permsJSON, err := json.Marshal(req.Permissions)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Store in database via transaction (09-REQ-5.1, 09-REQ-5.5, 09-REQ-5.E1).
@@ -190,7 +190,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		return execErr
 	})
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Return HTTP 201 with the one-time response (09-REQ-5.1, 09-REQ-5.2).
@@ -211,7 +211,7 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 func (h *PATHandler) listPATs(c echo.Context) error {
 	// Auth check: require tokens:read permission (09-REQ-6.5).
 	if err := auth.RequirePermission(c, "tokens", "read"); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
 	}
 
 	// Get authenticated user ID (09-REQ-6.4).
@@ -222,7 +222,7 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 		`SELECT token_id, name, permissions, created_at, expires_at, revoked_at
 		 FROM pats WHERE user_id = ? ORDER BY created_at DESC`, userID)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	defer rows.Close()
 
@@ -241,13 +241,13 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 		)
 
 		if err := rows.Scan(&tokenID, &name, &permsJSON, &createdAt, &expiresAt, &revokedAt); err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 
 		// Parse permissions JSON array (09-REQ-6.3 — preserves insertion order).
 		var permissions []string
 		if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 
 		pat := PATResponse{
@@ -268,7 +268,7 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 	}
 
 	if err := rows.Err(); err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.JSON(http.StatusOK, results)
@@ -281,7 +281,7 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 func (h *PATHandler) getPAT(c echo.Context) error {
 	// Auth check: require tokens:read permission (09-REQ-7.3).
 	if err := auth.RequirePermission(c, "tokens", "read"); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
 	}
 
 	// Extract path parameter and authenticated user ID (09-REQ-7.1).
@@ -305,16 +305,16 @@ func (h *PATHandler) getPAT(c echo.Context) error {
 	if err != nil {
 		// Both nonexistent and other-user tokens return 404 (09-REQ-7.2, 09-REQ-7.E1).
 		if err == sql.ErrNoRows {
-			return apikit.WriteAPIError(c, http.StatusNotFound, "token not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "token not found")
 		}
 		// Any other DB error returns 500 (09-REQ-7.E2).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Parse permissions JSON array — preserves insertion order (09-PROP-3).
 	var permissions []string
 	if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Build PATResponse (09-REQ-7.1).
@@ -343,7 +343,7 @@ func (h *PATHandler) getPAT(c echo.Context) error {
 func (h *PATHandler) revokePAT(c echo.Context) error {
 	// Auth check: require tokens:manage permission (09-REQ-8.3).
 	if err := auth.RequirePermission(c, "tokens", "manage"); err != nil {
-		return apikit.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
 	}
 
 	// Extract path parameter and authenticated user ID (09-REQ-8.1).
@@ -360,12 +360,12 @@ func (h *PATHandler) revokePAT(c echo.Context) error {
 		revokedAtStr, tokenID, userID,
 	)
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	if rowsAffected == 1 {
@@ -383,12 +383,12 @@ func (h *PATHandler) revokePAT(c echo.Context) error {
 			 FROM pats WHERE token_id = ? AND user_id = ?`, tokenID, userID,
 		).Scan(&name, &permsJSON, &createdAt, &expiresAt, &revokedAt)
 		if err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 
 		var permissions []string
 		if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
-			return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
 
 		resp := PATResponse{
@@ -417,14 +417,14 @@ func (h *PATHandler) revokePAT(c echo.Context) error {
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No row matches token_id AND user_id — token not found (09-REQ-8.E2).
-			return apikit.WriteAPIError(c, http.StatusNotFound, "token not found")
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "token not found")
 		}
 		// Database error (09-REQ-8.E3).
-		return apikit.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Row exists but revoked_at is already set (09-REQ-8.2).
-	return apikit.WriteAPIError(c, http.StatusBadRequest, "token already revoked")
+	return apiutil.WriteAPIError(c, http.StatusBadRequest, "token already revoked")
 }
 
 // generateTokenID generates a cryptographically random 8-character string
