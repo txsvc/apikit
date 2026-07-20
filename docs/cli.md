@@ -19,9 +19,9 @@ Set version metadata at build time with `-ldflags`:
 
 ```
 go build -ldflags "\
-  -X github.com/txsvc/apikit.Version=v1.0.0 \
-  -X github.com/txsvc/apikit.Build=$(git rev-parse --short HEAD) \
-  -X github.com/txsvc/apikit.TokenPrefix=ak" \
+  -X github.com/txsvc/apikit/internal/cli.Version=v1.0.0 \
+  -X github.com/txsvc/apikit/internal/cli.Build=$(git rev-parse --short HEAD) \
+  -X github.com/txsvc/apikit/internal/cli.TokenPrefix=ak" \
   -o akc ./cmd/akc
 ```
 
@@ -58,7 +58,7 @@ $HOME/.<prefix>/config.toml
 ```
 
 The default prefix is `ak`, so the default path is `$HOME/.ak/config.toml`.
-The prefix is set at build time via the `TokenPrefix` linker variable.
+The prefix is set at build time via `-X github.com/txsvc/apikit/internal/cli.TokenPrefix=<prefix>`.
 
 ### Config file format
 
@@ -419,7 +419,7 @@ Calls `POST /api/v1/user/tokens`.
 
 **stdout:** Token JSON including the plaintext token (shown once only)
 
-**stderr:** `"Token created. Save the token value -- it cannot be retrieved later."`
+**stderr:** `"Token created. Save the token value — it cannot be retrieved later."`
 
 **Example:**
 
@@ -768,7 +768,10 @@ akc admin orgs members remove <org_id> <user_id>
 
 All command output is JSON with two-space indentation, written to stdout.
 There is no table output mode. HTML escaping is disabled in the JSON
-encoder, so characters like `<`, `>`, and `&` appear unescaped.
+encoder for non-admin commands (`user`, `keys`, `tokens`, `orgs`, `login`),
+so characters like `<`, `>`, and `&` appear unescaped. Admin commands
+and the top-level error handler use Go's default JSON encoding, which
+escapes these characters.
 
 ### Error envelopes
 
@@ -785,7 +788,8 @@ Errors are returned as JSON on stdout in this format:
 
 For API/server errors, `code` is the HTTP status code. For client-side
 errors (missing config, validation failures), `code` is `0` (from the
-top-level error handler) or `2` (from command-level error handlers).
+top-level error handler and admin command handlers) or `2` (from
+non-admin command handlers like `user`, `keys`, `tokens`, `orgs`).
 
 ### Human-readable messages
 
@@ -797,7 +801,7 @@ and scripting:
 - Login success: `"Logged in as <username>"`
 - Key refresh: `"API key refreshed"`
 - Key revoke: `"API key revoked. Run 'akc login' to obtain a new key."`
-- Token create: `"Token created. Save the token value -- it cannot be retrieved later."`
+- Token create: `"Token created. Save the token value — it cannot be retrieved later."`
 - Token revoke: `"Token <id> revoked"`
 - Server unreachable: `"warning: could not reach server: <error>"`
 

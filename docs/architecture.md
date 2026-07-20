@@ -108,10 +108,10 @@ github.com/txsvc/apikit
 
 - **Root package** imports `internal/config`, `internal/db`, `internal/keys`, `internal/oauth` for type aliases and delegation. It never imports `internal/auth`, `internal/handlers`, `internal/bootstrap`, or `internal/cli`.
 - **`internal/authctx`** has zero internal dependencies. It exists solely to break the import cycle between `internal/keys` and `internal/auth`.
-- **`internal/auth`** imports `internal/authctx` and `internal/db`.
-- **`internal/handlers`** imports `internal/auth`, `internal/authctx`, `internal/db`, and the root `apikit` package (for `WriteAPIError`).
+- **`internal/auth`** imports `internal/authctx`, `internal/db`, and the root `apikit` package (for `WriteAPIError` and `TokenPrefix`).
+- **`internal/handlers`** imports `internal/auth`, `internal/db`, and the root `apikit` package (for `WriteAPIError`).
 - **`internal/keys`** imports `internal/authctx` and `internal/db`. It uses its own `writeAPIError` copy to avoid a circular import with the root package.
-- **`internal/oauth`** imports `internal/db` only.
+- **`internal/oauth`** imports `internal/bootstrap` and `internal/db`.
 - **`internal/cli`** imports nothing from the root package or other internal packages at the type level. It uses Runners with `any`-typed function fields to avoid import cycles.
 
 ---
@@ -224,16 +224,23 @@ server.Shutdown(ctx)
 A production server extends the basic lifecycle:
 
 ```
-1. LoadConfig()                       -- read config.toml
-2. db.Open(cfg.Database.Path)         -- open SQLite, init schema
-3. bootstrap.Run(ctx, params)         -- admin token, admin email seeding
-4. oauth.BuildRegistryFromConfig(...) -- configure OAuth providers
-5. auth.NewPermissionRegistry()       -- register built-in permissions
-6. NewServer(cfg, db.Ping)            -- construct server with health checker
-7. Register handlers on APIGroup()    -- mount auth, user, org, key, PAT routes
-8. auth.NewAuthMiddleware(db, reg)    -- attach to API group
-9. server.Start()                     -- listen and serve
+1. LoadConfig()                        -- read config.toml
+2. db.Open(cfg.Database.Path)          -- open SQLite, init schema
+3. bootstrap.Run(ctx, params)          -- conditional: runs when --admin-email,
+                                          --reset-admin-token, or existing hash
+4. NewServer(cfg, db.Ping)             -- construct server with health checker
+5. oauth.BuildRegistryFromConfig(...)  -- configure OAuth providers
+6. auth.NewPermissionRegistry()        -- register built-in permissions
+7. RegisterOAuthHandlers(api, ...)     -- mount OAuth (before auth middleware)
+8. api.Use(auth.NewAuthMiddleware(...))-- attach auth middleware to API group
+9. Register domain handlers            -- mount user, org, key, PAT routes
+10. server.Start()                     -- listen and serve
 ```
+
+Note: OAuth handlers are registered before the auth middleware (step 7 before
+step 8) so that `/auth/providers` and `/auth/callback` are accessible without
+authentication. Domain handlers (step 9) are registered after the middleware
+so they are protected.
 
 ### Key Lifecycle Properties
 
@@ -368,14 +375,16 @@ Handlers are registered on the `*echo.Group` returned by `server.APIGroup()`. Ea
 ```go
 api := server.APIGroup()
 
+// OAuth registered before auth middleware (public endpoints)
+oauth.RegisterOAuthHandlers(api, oauthRegistry, db, externalURL)
+
 // Auth middleware applied to the group
 api.Use(auth.NewAuthMiddleware(database, registry))
 
-// Domain handlers
+// Domain handlers (protected by auth middleware)
 handlers.RegisterUserHandlers(api, sqlDB)
 handlers.RegisterOrgHandlers(api, sqlDB)
 keys.RegisterKeyHandlers(api, sqlDB)
-oauth.RegisterOAuthHandlers(api, oauthRegistry, db, externalURL)
 patHandler.RegisterRoutes(api)
 ```
 
@@ -656,11 +665,13 @@ This is a deliberate design decision: PATs preserve scoping regardless of user r
 
 The bootstrap sequence (`internal/bootstrap`) handles first-boot admin provisioning:
 
-1. **First boot** (no users exist): Requires `--admin-email` flag. Generates admin token, stores hash in `admin_config`, writes plaintext to `<config_dir>/admin_token` (mode 0600). The `admin_email` is stored for auto-promotion of the first matching OAuth user.
+1. **First boot** (no `admin_token_hash` in `admin_config` table): Requires `--admin-email` flag. Generates admin token, stores hash in `admin_config`, writes plaintext to `<config_dir>/admin_token` (mode 0600). The `admin_email` is stored for auto-promotion of the first matching OAuth user.
 
-2. **Subsequent boots**: Requires `ADMIN_TOKEN` environment variable. Validates against stored hash using constant-time comparison. Refuses to start if the `admin_token` file still exists on disk (forces the operator to save and delete it).
+2. **Subsequent boots** (`admin_token_hash` exists): Requires `ADMIN_TOKEN` environment variable. Validates against stored hash using constant-time comparison. Refuses to start if the `admin_token` file still exists on disk (forces the operator to save and delete it).
 
 3. **Token rotation**: `--reset-admin-token` flag generates a new token regardless of boot state.
+
+Bootstrap runs conditionally: only when `--admin-email`, `--reset-admin-token`, or an existing `admin_token_hash` is present.
 
 ---
 

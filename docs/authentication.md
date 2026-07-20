@@ -177,14 +177,14 @@ Server starts
   |     YES --> Generate new token, store hash, write file, done
   |     NO  --> Continue
   |
-  +-- Count users in database
+  +-- Check admin_token_hash in admin_config table
         |
-        +-- 0 users (first boot)
+        +-- Not found (first boot)
         |     +-- --admin-email provided?
         |     |     NO  --> Fatal: "--admin-email is required"
         |     |     YES --> Store email, generate token, store hash, write file, done
         |     
-        +-- >0 users (subsequent boot)
+        +-- Found (subsequent boot)
               +-- admin_token file exists on disk?
               |     YES --> Fatal: "save the token and delete the file"
               |     NO  --> Continue
@@ -237,8 +237,7 @@ Checks whether the credential carries a specific `resource_type:action` permissi
 - `GET /user/orgs` requires `orgs:read`.
 - `GET /user/tokens` requires `tokens:read`.
 - `POST /user/tokens` and `DELETE /user/tokens/:token_id` require `tokens:manage`.
-- `GET /user/keys` requires `keys:read`.
-- `POST /user/keys/:key_id/refresh` and `DELETE /user/keys/:key_id` require `keys:manage`.
+- `GET /user/keys`, `POST /user/keys/:key_id/refresh`, and `DELETE /user/keys/:key_id` require any valid credential (Admin Token, API Key, or PAT). No specific permission is enforced by the handlers; the auth middleware validates the credential.
 
 ### Authorization summary by credential type
 

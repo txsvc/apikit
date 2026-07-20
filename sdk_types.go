@@ -128,8 +128,7 @@ type HealthResponse struct {
 // VersionResponse is the response body from GET /version.
 type VersionResponse struct {
 	Version    string `json:"version"`
-	BuildTime  string `json:"build_time"`
-	Commit     string `json:"commit"`
+	Build      string `json:"build"`
 	MountPoint string `json:"mount_point"`
 }
 

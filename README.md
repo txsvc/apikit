@@ -24,7 +24,7 @@ apikit is designed to be used as a library. Import the root package, call three 
 - **ETag support** -- conditional GET with `If-None-Match` / `304 Not Modified`
 - **Go SDK client** -- typed client with generics, ETag support, and `ClientOption` pattern
 - **CLI client (`akc`)** -- browser-based OAuth login, full admin command set
-- **Embeddable command tree** -- import `apikit.RootCommand()` to add the full CLI to your own Cobra app
+- **Embeddable command tree** -- import `apikit.RootCommand()` to get the base CLI (version, help); add subcommands with `rootCmd.AddCommand()`
 - **OpenAPI 3.1 spec** -- machine-readable API definition at `api/openapi.yaml`
 - **Graceful shutdown** -- SIGTERM/SIGINT handling with a 15-second drain timeout
 - **Pure-Go SQLite** -- no CGo, no external dependencies for the database
@@ -370,18 +370,25 @@ make clean       # Remove build artifacts
 
 Version and build info are injected via `-ldflags`:
 
+The server reads `Version` and `Build` from the root `apikit` package. The CLI reads `Version`, `Build`, and `TokenPrefix` from `internal/cli`. Both sets must be injected for full coverage:
+
 ```bash
-go build -ldflags "-X github.com/txsvc/apikit.Version=1.0.0 \
+go build -ldflags "\
+    -X github.com/txsvc/apikit.Version=1.0.0 \
     -X github.com/txsvc/apikit.Build=$(git rev-parse --short HEAD) \
-    -X github.com/txsvc/apikit.TokenPrefix=ak" \
+    -X github.com/txsvc/apikit/internal/cli.Version=1.0.0 \
+    -X github.com/txsvc/apikit/internal/cli.Build=$(git rev-parse --short HEAD) \
+    -X github.com/txsvc/apikit/internal/cli.TokenPrefix=ak" \
     ./cmd/apikit
 ```
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `Version` | `dev` | Semantic version string |
-| `Build` | `dev` | Short git commit SHA |
-| `TokenPrefix` | `ak` | Token namespace prefix |
+| Package | Variable | Default | Purpose |
+|---|---|---|---|
+| `apikit` | `Version` | `dev` | Server version string |
+| `apikit` | `Build` | `dev` | Server build identifier |
+| `internal/cli` | `Version` | `dev` | CLI version string |
+| `internal/cli` | `Build` | `unknown` | CLI build identifier |
+| `internal/cli` | `TokenPrefix` | `ak` | Config directory name (`$HOME/.<prefix>/`) |
 
 ## Documentation
 

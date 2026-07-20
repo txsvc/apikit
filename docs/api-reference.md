@@ -247,7 +247,7 @@ the user are revoked.
 
 **Redirect URI rules:**
 
-- `http://localhost:<any-port>/<any-path>` is accepted (HTTPS on localhost is rejected)
+- `http://localhost:<any-port>/<any-path>` and `http://127.0.0.1:<any-port>/<any-path>` are accepted (HTTPS on localhost/127.0.0.1 is rejected)
 - URIs matching the server's configured `external_url` scheme and host are accepted
 - All other origins are rejected
 
@@ -360,7 +360,7 @@ Updates the authenticated user's profile. Only `full_name` can be changed.
 
 Lists all API keys for the authenticated user (metadata only, no secrets).
 
-**Auth:** Bearer (Admin Token, API Key, or PAT with `keys:read`)
+**Auth:** Bearer (Admin Token, API Key, or PAT)
 
 **Conditional request:** Supports `If-None-Match` header.
 
@@ -431,7 +431,7 @@ authentication -- PAT authentication is rejected with 401.
 Revokes an API key. The key remains in the database for audit purposes but can
 no longer be used for authentication.
 
-**Auth:** Bearer (Admin Token, API Key, or PAT with `keys:manage`)
+**Auth:** Bearer (Admin Token, API Key, or PAT)
 
 **Path parameters:**
 
@@ -548,14 +548,11 @@ Returns metadata for a specific PAT owned by the authenticated user.
 |---|---|---|
 | `token_id` | string | The token identifier |
 
-**Conditional request:** Supports `If-None-Match` header.
-
 **Response:**
 
 | Status | Body |
 |---|---|
 | 200 | PAT metadata |
-| 304 | No body (cache is current) |
 
 ```json
 {
@@ -567,8 +564,6 @@ Returns metadata for a specific PAT owned by the authenticated user.
   "revoked_at": null
 }
 ```
-
-**Headers:** `ETag` header set on 200 responses.
 
 **Errors:** 401, 403, 404
 
@@ -797,6 +792,8 @@ A last-admin safeguard prevents demoting the only remaining admin.
 
 | Status | Condition |
 |---|---|
+| 401 | Missing or invalid credentials |
+| 403 | Non-admin caller |
 | 404 | User not found |
 | 409 | Cannot demote the last remaining admin |
 
