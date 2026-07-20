@@ -49,6 +49,18 @@ type UserInfo = oauth.UserInfo
 // Consumers can use *apikit.APIKeyResult without importing internal/keys.
 type APIKeyResult = keys.APIKeyResult
 
+// Permission defines a custom PAT permission scope. Register custom
+// permissions by passing them to MountHandlers:
+//
+//	server.MountHandlers(database,
+//	    apikit.Permission{Resource: "workspaces", Action: "read"},
+//	    apikit.Permission{Resource: "workspaces", Action: "create"},
+//	)
+type Permission struct {
+	Resource string
+	Action   string
+}
+
 // BootstrapOptions configures the admin bootstrap sequence.
 type BootstrapOptions struct {
 	// AdminEmail is the designated admin email (--admin-email flag).

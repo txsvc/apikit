@@ -782,3 +782,88 @@ func TestStart_SecondCallAfterShutdownReturnsError(t *testing.T) {
 		t.Errorf("error message %q does not indicate server is already shut down", err.Error())
 	}
 }
+
+// ========================================================================
+// MountHandlers custom permissions
+// ========================================================================
+
+func TestMountHandlers_CustomPermissions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := apikit.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	err = srv.MountHandlers(database,
+		apikit.Permission{Resource: "workspaces", Action: "read"},
+		apikit.Permission{Resource: "workspaces", Action: "create"},
+	)
+	if err != nil {
+		t.Fatalf("MountHandlers with custom permissions failed: %v", err)
+	}
+}
+
+func TestMountHandlers_InvalidPermissionReturnsError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := apikit.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	err = srv.MountHandlers(database,
+		apikit.Permission{Resource: "INVALID", Action: "read"},
+	)
+	if err == nil {
+		t.Fatal("expected error for invalid permission resource, got nil")
+	}
+	if !strings.Contains(err.Error(), "INVALID") {
+		t.Errorf("error %q does not mention the invalid resource", err.Error())
+	}
+}
+
+func TestMountHandlers_DuplicateBuiltinPermissionReturnsError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := apikit.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	err = srv.MountHandlers(database,
+		apikit.Permission{Resource: "users", Action: "read"},
+	)
+	if err == nil {
+		t.Fatal("expected error for duplicate built-in permission, got nil")
+	}
+	if !strings.Contains(err.Error(), "already registered") {
+		t.Errorf("error %q does not mention duplicate registration", err.Error())
+	}
+}
+
+func TestMountHandlers_NoPermissions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := apikit.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	err = srv.MountHandlers(database)
+	if err != nil {
+		t.Fatalf("MountHandlers with no custom permissions failed: %v", err)
+	}
+}

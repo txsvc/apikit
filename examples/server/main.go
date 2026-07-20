@@ -38,7 +38,11 @@ func main() {
 	})
 
 	// Mount all built-in handlers (OAuth, users, orgs, keys, PATs).
-	if err := server.MountHandlers(database); err != nil {
+	// Pass custom permissions to extend the PAT permission model.
+	if err := server.MountHandlers(database,
+		apikit.Permission{Resource: "widgets", Action: "read"},
+		apikit.Permission{Resource: "widgets", Action: "create"},
+	); err != nil {
 		log.Fatal(err)
 	}
 

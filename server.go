@@ -299,7 +299,7 @@ func (s *Server) APIGroup() *echo.Group {
 // config, the auth middleware, and all resource handlers (users, orgs, keys, PATs).
 //
 // Must be called after NewServer and before Start.
-func (s *Server) MountHandlers(database *DB) error {
+func (s *Server) MountHandlers(database *DB, permissions ...Permission) error {
 	oauthProviders := make([]oauth.ProviderConfig, len(s.cfg.OAuth.Providers))
 	for i, p := range s.cfg.OAuth.Providers {
 		oauthProviders[i] = oauth.ProviderConfig(p)
@@ -313,6 +313,11 @@ func (s *Server) MountHandlers(database *DB) error {
 	oauth.RegisterOAuthHandlers(api, registry, database, s.cfg.Server.ExternalURL)
 
 	permReg := auth.NewPermissionRegistry()
+	for _, p := range permissions {
+		if err := permReg.Register(p.Resource, p.Action); err != nil {
+			return fmt.Errorf("registering permission %s:%s: %w", p.Resource, p.Action, err)
+		}
+	}
 	api.Use(auth.NewAuthMiddleware(database, permReg))
 
 	handlers.RegisterUserHandlers(api, database.SqlDB)
