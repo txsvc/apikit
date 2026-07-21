@@ -19,3 +19,12 @@ level = "info"
 # name = "github"
 # client_id = ""
 # client_secret = ""
+
+# To enable Google OAuth login, create OAuth credentials at
+# https://console.cloud.google.com/apis/credentials and fill in below.
+# Set the authorized redirect URI to http://localhost:8080/api/v1/auth/callback
+#
+# [[oauth.providers]]
+# name = "google"
+# client_id = ""
+# client_secret = ""

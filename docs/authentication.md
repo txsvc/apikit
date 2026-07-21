@@ -305,7 +305,12 @@ Any OAuth provider must implement four methods:
 | `Exchange(ctx, code, redirectURI)` | Exchanges an authorization code for an access token |
 | `UserInfo(ctx, accessToken)` | Retrieves user identity (username, email, provider ID) |
 
-The built-in GitHub provider requests the `user:email` scope and maps GitHub's `login`, `email`, and `id` fields to the `UserInfo` struct.
+### Built-in providers
+
+| Provider | Scope | Username field | Email field | ID field |
+|---|---|---|---|---|
+| GitHub | `user:email` | `login` | `email` (with `/user/emails` fallback) | `id` (numeric, converted to string) |
+| Google | `openid email profile` | `name` (with `given_name` fallback) | `email` | `sub` (string) |
 
 ### Provider discovery
 

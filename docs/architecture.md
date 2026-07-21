@@ -68,6 +68,7 @@ github.com/txsvc/apikit
 |   |   |-- provider.go     Provider interface, UserInfo struct
 |   |   |-- registry.go     Registry, BuildRegistryFromConfig
 |   |   |-- github.go       GitHubProvider implementation
+|   |   |-- google.go       GoogleProvider implementation
 |   |   |-- handler.go      RegisterOAuthHandlers, handleCallback
 |   |   |-- callback.go     APIKeyResult, GenerateAPIKey, callbackResponse types
 |   |   |-- key.go          GenerateKeyMaterial, HashSecret, randomString

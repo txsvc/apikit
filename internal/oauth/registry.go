@@ -80,6 +80,18 @@ func BuildRegistryFromConfig(providers []ProviderConfig, client *http.Client) (*
 			if err := registry.Register(p); err != nil {
 				return nil, err
 			}
+		case "google":
+			p := NewGoogleProvider(
+				pc.ClientID,
+				pc.ClientSecret,
+				pc.AuthorizeURL,
+				pc.TokenURL,
+				pc.UserinfoURL,
+				client,
+			)
+			if err := registry.Register(p); err != nil {
+				return nil, err
+			}
 		default:
 			return nil, fmt.Errorf("unknown provider: %s", pc.Name)
 		}
