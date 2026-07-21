@@ -310,9 +310,10 @@ func TestGoogle_UserInfo_Success(t *testing.T) {
 		capturedReq = r
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"sub":   "110248495921238986420",
-			"name":  "Jane Doe",
-			"email": "jane@example.com",
+			"sub":            "110248495921238986420",
+			"name":           "Jane Doe",
+			"email":          "jane@example.com",
+			"email_verified": true,
 		}); err != nil {
 			t.Errorf("failed to encode response: %v", err)
 		}
@@ -392,9 +393,10 @@ func TestGoogle_UserInfo_FallbackUsername(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"sub":        "12345",
-			"given_name": "Jane",
-			"email":      "jane@example.com",
+			"sub":            "12345",
+			"given_name":     "Jane",
+			"email":          "jane@example.com",
+			"email_verified": true,
 		}); err != nil {
 			t.Errorf("failed to encode response: %v", err)
 		}
@@ -411,6 +413,74 @@ func TestGoogle_UserInfo_FallbackUsername(t *testing.T) {
 
 	if ui.Username != "Jane" {
 		t.Errorf("UserInfo().Username = %q, want %q (should fall back to given_name)", ui.Username, "Jane")
+	}
+}
+
+// ========================================================================
+// TestGoogle_UserInfo_UnverifiedEmail verifies that UserInfo returns
+// (nil, non-nil error) when the userinfo response has email_verified=false.
+// ========================================================================
+
+func TestGoogle_UserInfo_UnverifiedEmail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"sub":            "123",
+			"name":           "Eve",
+			"email":          "eve@example.com",
+			"email_verified": false,
+		}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	p := oauth.NewGoogleProvider("cid", "csec", "", "", srv.URL, client)
+
+	ui, err := p.UserInfo(context.Background(), "tok")
+	if ui != nil {
+		t.Errorf("UserInfo() = %+v, want nil for unverified email", ui)
+	}
+	if err == nil {
+		t.Fatal("UserInfo() error = nil, want non-nil error for unverified email")
+	}
+	if !strings.Contains(err.Error(), "email not verified") {
+		t.Errorf("UserInfo() error = %q, want it to contain %q", err.Error(), "email not verified")
+	}
+}
+
+// ========================================================================
+// TestGoogle_UserInfo_MissingVerifiedField verifies that UserInfo returns
+// (nil, non-nil error) when the userinfo response omits email_verified
+// entirely, treating the missing field as unverified (Go bool zero = false).
+// ========================================================================
+
+func TestGoogle_UserInfo_MissingVerifiedField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"sub":   "123",
+			"name":  "Eve",
+			"email": "eve@example.com",
+		}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	p := oauth.NewGoogleProvider("cid", "csec", "", "", srv.URL, client)
+
+	ui, err := p.UserInfo(context.Background(), "tok")
+	if ui != nil {
+		t.Errorf("UserInfo() = %+v, want nil for missing email_verified", ui)
+	}
+	if err == nil {
+		t.Fatal("UserInfo() error = nil, want non-nil error when email_verified is absent")
+	}
+	if !strings.Contains(err.Error(), "email not verified") {
+		t.Errorf("UserInfo() error = %q, want it to contain %q", err.Error(), "email not verified")
 	}
 }
 

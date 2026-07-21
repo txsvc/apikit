@@ -141,10 +141,11 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 	}
 
 	var result struct {
-		Sub       string `json:"sub"`
-		Name      string `json:"name"`
-		GivenName string `json:"given_name"`
-		Email     string `json:"email"`
+		Sub           string `json:"sub"`
+		Name          string `json:"name"`
+		GivenName     string `json:"given_name"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("userinfo: %w", err)
@@ -152,6 +153,9 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 
 	if result.Email == "" {
 		return nil, fmt.Errorf("userinfo: email not returned")
+	}
+	if !result.EmailVerified {
+		return nil, fmt.Errorf("userinfo: email not verified")
 	}
 
 	username := result.Name
