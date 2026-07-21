@@ -95,7 +95,7 @@ func NewServer(cfg *Config, checker HealthChecker) *Server {
 	e.Use(panicRecoveryMiddleware())
 	e.Use(requestIDMiddleware())
 	e.Use(securityHeadersMiddleware())
-	e.Use(loggingMiddleware())
+	e.Use(loggingMiddleware(cfg.Logging.LogHealthProbes))
 
 	// Determine max body bytes: use parsed value from config, default to 1MB
 	maxBytes := cfg.Server.MaxBodyBytes()

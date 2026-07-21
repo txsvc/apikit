@@ -433,10 +433,11 @@ func TestHealth_VersionEmptyStringOverride(t *testing.T) {
 func TestHealth_PropertyLogSuppression(t *testing.T) {
 	healthPaths := []string{"/healthz", "/readyz"}
 
-	// Test at debug level: entries should be present with all five fields
+	// Test at debug level with log_health_probes enabled: entries should be present
 	t.Run("visible_at_debug", func(t *testing.T) {
 		cfg := buildTestConfig(0)
 		cfg.Logging.Level = "debug"
+		cfg.Logging.LogHealthProbes = true
 		srv := apikit.NewServer(cfg, nil)
 
 		logs := startLogCapture(t, logrus.DebugLevel)

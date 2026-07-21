@@ -48,6 +48,7 @@ type DatabaseConfig struct {
 
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
-	Level string `toml:"level"`
+	Level           string `toml:"level"`
+	LogHealthProbes bool   `toml:"log_health_probes"`
 }
 

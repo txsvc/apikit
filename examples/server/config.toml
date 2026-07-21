@@ -10,6 +10,7 @@ path = "data/app.db"
 
 [logging]
 level = "info"
+# log_health_probes = true
 
 # To enable GitHub OAuth login, register an OAuth App at
 # https://github.com/settings/developers and fill in the credentials below.

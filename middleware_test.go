@@ -578,6 +578,7 @@ func TestRequestID_GeneratedWhenMissing(t *testing.T) {
 func TestRequestID_ValidUUIDv4Reused(t *testing.T) {
 	cfg := buildTestConfig(0)
 	cfg.Logging.Level = "debug"
+	cfg.Logging.LogHealthProbes = true
 	srv := apikit.NewServer(cfg, nil)
 
 	logs := startLogCapture(t, logrus.DebugLevel)
@@ -761,9 +762,10 @@ func TestLogging_StructuredJSONFields(t *testing.T) {
 // probe entries should be absent.
 // Covers TS-01-43 (Requirement: 01-REQ-11.2).
 func TestLogging_HealthProbesAtDebugLevel(t *testing.T) {
-	t.Run("visible_at_debug", func(t *testing.T) {
+	t.Run("visible_at_debug_when_enabled", func(t *testing.T) {
 		cfg := buildTestConfig(0)
 		cfg.Logging.Level = "debug"
+		cfg.Logging.LogHealthProbes = true
 		srv := apikit.NewServer(cfg, nil)
 
 		logs := startLogCapture(t, logrus.DebugLevel)
@@ -848,13 +850,48 @@ func TestLogging_HealthProbesAtDebugLevel(t *testing.T) {
 		// Allow logging to complete
 		time.Sleep(50 * time.Millisecond)
 
-		// At info level, health probe entries (logged at debug) should NOT appear
+		// At info level, health probe entries should NOT appear
 		for _, path := range []string{"/healthz", "/readyz"} {
 			entries := logs.findByPath(path)
 			if len(entries) > 0 {
 				t.Errorf("path %s: found %d log entries at info level, "+
-					"want 0 (health probes should be debug-only)",
+					"want 0 (health probes should not appear)",
 					path, len(entries))
+			}
+		}
+	})
+
+	t.Run("fully_suppressed_at_debug_by_default", func(t *testing.T) {
+		cfg := buildTestConfig(0)
+		cfg.Logging.Level = "debug"
+		// LogHealthProbes defaults to false
+		srv := apikit.NewServer(cfg, nil)
+
+		logs := startLogCapture(t, logrus.DebugLevel)
+
+		startErr := startServerInBackground(srv)
+		t.Cleanup(func() {
+			srv.Shutdown(context.Background())
+			<-startErr
+		})
+
+		addr := waitUntilListening(t, srv, 2*time.Second)
+
+		for _, path := range []string{"/healthz", "/readyz"} {
+			resp, err := http.Get("http://" + addr + path)
+			if err != nil {
+				t.Fatalf("GET %s failed: %v", path, err)
+			}
+			resp.Body.Close()
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		for _, path := range []string{"/healthz", "/readyz"} {
+			entries := logs.findByPath(path)
+			if len(entries) > 0 {
+				t.Errorf("path %s: found %d log entries at debug level with log_health_probes=false, "+
+					"want 0", path, len(entries))
 			}
 		}
 	})
@@ -1034,6 +1071,7 @@ func TestMiddleware_PropertyAllStepsApplied(t *testing.T) {
 func TestRequestID_PropertyAlwaysValidAndMatchesLog(t *testing.T) {
 	cfg := buildTestConfig(0)
 	cfg.Logging.Level = "debug"
+	cfg.Logging.LogHealthProbes = true
 	srv := apikit.NewServer(cfg, nil)
 
 	logs := startLogCapture(t, logrus.DebugLevel)

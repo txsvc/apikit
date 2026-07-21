@@ -93,6 +93,7 @@ Logging settings.
 | Key | Type | TOML key | Default | Description |
 |-----|------|----------|---------|-------------|
 | Level | string | `level` | `"info"` | Log verbosity level. Must be one of the seven canonical levels listed below. Comparison is case-insensitive. |
+| LogHealthProbes | boolean | `log_health_probes` | `false` | When `true`, requests to `/healthz` and `/readyz` are logged at debug level. When `false` (the default), health-probe requests produce no log output at any level. |
 
 Accepted log levels (in increasing verbosity):
 
@@ -162,6 +163,7 @@ When `config.toml` is absent, the server starts with these defaults:
 | `server.max_body_size` | `"1MB"` (1,048,576 bytes) |
 | `database.path` | `$XDG_DATA_HOME/apikit.db` or `./data/apikit.db` |
 | `logging.level` | `"info"` |
+| `logging.log_health_probes` | `false` |
 | `oauth.providers` | `[]` (no providers configured) |
 
 When a config file exists but omits individual fields, the same defaults apply

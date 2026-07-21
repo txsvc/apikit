@@ -80,7 +80,7 @@ func requestIDMiddleware() echo.MiddlewareFunc {
 // for every HTTP request. Health probe paths (/healthz, /readyz) are logged
 // at debug level; all other paths are logged at info level.
 // Fields: method, path, status, duration (float64 ms), request_id.
-func loggingMiddleware() echo.MiddlewareFunc {
+func loggingMiddleware(logHealthProbes bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			start := time.Now()
@@ -102,10 +102,11 @@ func loggingMiddleware() echo.MiddlewareFunc {
 				"request_id": requestID,
 			}
 
-			// Health probe paths are logged at debug level
 			path := c.Request().URL.Path
 			if path == "/healthz" || path == "/readyz" {
-				logrus.WithFields(fields).Debug("request completed")
+				if logHealthProbes {
+					logrus.WithFields(fields).Debug("request completed")
+				}
 			} else {
 				logrus.WithFields(fields).Info("request completed")
 			}
