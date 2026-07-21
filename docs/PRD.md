@@ -214,7 +214,8 @@ First boot sequence:
 4. The plaintext token is written to an `admin_token` file (mode 0600) next
    to `config.toml`.
 5. The server logs the file path at `warn` level.
-6. The server starts normally, ready to accept OAuth logins.
+6. The process exits. The operator must save the token, delete the file,
+   and restart with `ADMIN_TOKEN` set.
 
 When the designated email authenticates via OAuth for the first time, that
 user is automatically granted the `admin` role. The server logs this event
@@ -239,7 +240,8 @@ The server accepts a `--reset-admin-token` flag on boot. When set:
 1. A new admin token is generated (same flow as first boot: new token,
    hash stored, plaintext written to `admin_token` file).
 2. The old token is invalidated immediately.
-3. The server starts normally for this boot.
+3. The process exits. The operator must save the new token, delete the
+   file, and restart with `ADMIN_TOKEN` set to the new value.
 4. On the next restart, the same file-presence check applies — the
    operator must save the new token and delete the file before the server
    will start again.

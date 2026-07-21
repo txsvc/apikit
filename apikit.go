@@ -86,6 +86,12 @@ type Permission struct {
 	Action   string
 }
 
+// ErrBootstrapComplete is returned by Bootstrap when the bootstrap sequence
+// generates an admin token (first boot or token rotation). The caller must
+// exit the process cleanly without starting the HTTP server — the operator
+// needs to save the token and delete the file before the next start.
+var ErrBootstrapComplete = bootstrap.ErrTokenGenerated
+
 // BootstrapOptions configures the admin bootstrap sequence.
 type BootstrapOptions struct {
 	// AdminEmail is the designated admin email (--admin-email flag).
@@ -117,6 +123,11 @@ func OpenDatabase(path string) (*DB, error) {
 // It detects whether bootstrap is needed (admin email provided, reset flag,
 // or server already bootstrapped) and executes the appropriate sequence.
 // Returns nil without action when no bootstrap is needed.
+//
+// Returns ErrBootstrapComplete when a token is generated (first boot or
+// token rotation). The caller must exit the process cleanly without
+// starting the HTTP server. Returns nil on a successful subsequent boot
+// (server should proceed to start). Any other non-nil error is fatal.
 //
 // Must be called after the database is opened and before the HTTP server
 // begins accepting requests.

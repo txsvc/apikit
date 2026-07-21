@@ -16,6 +16,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,13 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/txsvc/apikit/internal/db"
 )
+
+// ErrTokenGenerated is returned by Run when the bootstrap sequence
+// generates an admin token (first boot or token rotation). The caller
+// must treat this as a signal to exit the process without starting
+// the HTTP server — the operator needs to save the token and delete
+// the file before the next start.
+var ErrTokenGenerated = errors.New("admin token generated; save the token securely and delete the file before restarting")
 
 // randReader is the source of randomness for token generation.
 // Tests override this via SetRandReader in export_test.go.
@@ -103,9 +111,12 @@ func writeTokenFile(path, token string) error {
 // LoadConfig completes and after the database is opened with schema applied,
 // but before the HTTP server begins accepting requests.
 //
-// The caller (server binary main) must treat a non-nil return value as fatal
-// and not start the HTTP server. Run never terminates the process internally;
-// all errors are returned to the caller so that main() controls process
+// Run returns ErrTokenGenerated when a token is generated (first boot or
+// token rotation). The caller must exit the process cleanly without
+// starting the HTTP server. Run returns nil on a successful subsequent
+// boot, meaning the server should proceed to start. Any other non-nil
+// error is fatal. Run never terminates the process internally; all
+// outcomes are returned to the caller so that main() controls process
 // termination.
 func Run(_ context.Context, params BootstrapParams) error {
 	// Token rotation takes priority over first-boot/subsequent-boot logic.
@@ -172,7 +183,7 @@ func runFirstBoot(params BootstrapParams) error {
 	}
 	params.Logger.Warnf("Admin token written to %s — save the token securely and delete the file", absPath)
 
-	return nil
+	return ErrTokenGenerated
 }
 
 // runSubsequentBoot handles the subsequent boot sequence: checks the
@@ -247,7 +258,7 @@ func runTokenRotation(params BootstrapParams) error {
 	}
 	params.Logger.Warnf("Admin token written to %s — save the token securely and delete the file", absPath)
 
-	return nil
+	return ErrTokenGenerated
 }
 
 // ShouldAutoPromote checks whether a newly created user should receive the

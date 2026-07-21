@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 
 	"github.com/txsvc/apikit"
@@ -28,6 +30,10 @@ func main() {
 		AdminEmail: *adminEmail,
 		ResetToken: *resetToken,
 	}); err != nil {
+		if errors.Is(err, apikit.ErrBootstrapComplete) {
+			fmt.Println(err)
+			return
+		}
 		log.Fatal(err)
 	}
 

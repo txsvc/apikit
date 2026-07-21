@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -30,6 +32,10 @@ func main() {
 		AdminEmail: *adminEmail,
 		ResetToken: *resetToken,
 	}); err != nil {
+		if errors.Is(err, apikit.ErrBootstrapComplete) {
+			fmt.Println(err)
+			return
+		}
 		log.Fatal(err)
 	}
 

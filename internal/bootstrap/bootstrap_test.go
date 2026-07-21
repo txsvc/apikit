@@ -20,6 +20,14 @@ import (
 	"github.com/txsvc/apikit/internal/bootstrap"
 )
 
+// requireTokenGenerated asserts that err is bootstrap.ErrTokenGenerated.
+func requireTokenGenerated(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+		t.Fatalf("Run() = %v, want ErrTokenGenerated", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers (subtask 1.1)
 // ---------------------------------------------------------------------------
@@ -163,9 +171,7 @@ func TestRun_FirstBoot_UserCountQueried(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, t.TempDir(), logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// The zero-user branch was executed: verify admin_email was stored.
 	v := queryAdminConfig(t, db, "admin_email")
@@ -183,9 +189,7 @@ func TestRun_FirstBoot_Classification(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, t.TempDir(), logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	v := queryAdminConfig(t, db, "admin_email")
 	if v != "admin@example.com" {
@@ -275,9 +279,7 @@ func TestRun_FirstBoot_EmailStored(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, t.TempDir(), logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	v := queryAdminConfig(t, db, "admin_email")
 	if v != "admin@example.com" {
@@ -299,9 +301,7 @@ func TestRun_FirstBoot_TokenFormat(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	tokenPath := filepath.Join(tmpDir, "admin_token")
 	content := string(readFileBytes(t, tokenPath))
@@ -326,9 +326,7 @@ func TestRun_FirstBoot_TokenHashStored(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	token := string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
 	expectedHash := hexSHA256(token)
@@ -360,9 +358,7 @@ func TestRun_FirstBoot_TokenFilePermissions(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	tokenPath := filepath.Join(tmpDir, "admin_token")
 	fi, err := os.Stat(tokenPath)
@@ -384,9 +380,7 @@ func TestRun_FirstBoot_WarnLog(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	absPath, err := filepath.Abs(filepath.Join(tmpDir, "admin_token"))
 	if err != nil {
@@ -406,17 +400,17 @@ func TestRun_FirstBoot_WarnLog(t *testing.T) {
 	}
 }
 
-// TestRun_FirstBoot_ReturnsNil verifies that Run returns nil when the full
-// first boot sequence completes without error.
+// TestRun_FirstBoot_ReturnsErrTokenGenerated verifies that Run returns
+// ErrTokenGenerated when the full first boot sequence completes successfully.
 // [TS-04-10] [04-REQ-2.7]
-func TestRun_FirstBoot_ReturnsNil(t *testing.T) {
+func TestRun_FirstBoot_ReturnsErrTokenGenerated(t *testing.T) {
 	db := openMemoryDB(t)
 	logger, _ := newTestLogger()
 	params := makeParams(db, "admin@example.com", false, t.TempDir(), logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Errorf("Run() = %v, want nil", err)
+	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+		t.Errorf("Run() = %v, want ErrTokenGenerated", err)
 	}
 
 	// Also verify the first boot sequence actually completed: admin_email must
@@ -437,9 +431,7 @@ func TestRun_FirstBoot_NoTrailingNewline(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	content := readFileBytes(t, filepath.Join(tmpDir, "admin_token"))
 	if len(content) == 0 {
@@ -876,9 +868,7 @@ func TestRun_ResetToken_GeneratesToken(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// Verify the admin_token file was written with valid format.
 	tokenPath := filepath.Join(tmpDir, "admin_token")
@@ -912,9 +902,7 @@ func TestRun_ResetToken_InvalidatesOldHash(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// Read the new token from the file.
 	newToken := string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
@@ -948,9 +936,7 @@ func TestRun_ResetToken_FilePermissions(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	tokenPath := filepath.Join(tmpDir, "admin_token")
 	fi, err := os.Stat(tokenPath)
@@ -985,9 +971,7 @@ func TestRun_ResetToken_WarnLog(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	absPath, err := filepath.Abs(filepath.Join(tmpDir, "admin_token"))
 	if err != nil {
@@ -1023,8 +1007,8 @@ func TestRun_ResetToken_SkipsGuards(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Errorf("Run() = %v, want nil (reset boot should skip guards)", err)
+	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+		t.Errorf("Run() = %v, want ErrTokenGenerated (reset boot should skip guards)", err)
 	}
 }
 
@@ -1303,9 +1287,7 @@ func TestGenerateToken_Format(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	tokenPath := filepath.Join(tmpDir, "admin_token")
 	content := string(readFileBytes(t, tokenPath))
@@ -1348,9 +1330,7 @@ func TestHashToken_KnownValue(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// Read the token from the file.
 	token := string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
@@ -1446,9 +1426,7 @@ func TestTokenFile_NoTrailingNewline(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	raw := readFileBytes(t, filepath.Join(tmpDir, "admin_token"))
 	if len(raw) == 0 {
@@ -1503,8 +1481,8 @@ func TestRun_SchemaExistsBeforeRun(t *testing.T) {
 	tmpDir := t.TempDir()
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Errorf("Run() = %v, want nil (schema exists and first boot is valid)", err)
+	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+		t.Errorf("Run() = %v, want ErrTokenGenerated (schema exists and first boot is valid)", err)
 	}
 
 	// Verify that first boot actually executed (admin_email stored).
@@ -1531,9 +1509,7 @@ func TestRun_ResetToken_Priority(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil (ResetToken should bypass first-boot checks)", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// If first-boot ran, admin_email would be set (or error).
 	// If rotation ran, a token file was written.
@@ -1655,9 +1631,7 @@ func TestTokenFilePath_XDGSet(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, configDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	expectedPath := filepath.Join(configDir, "admin_token")
 	if !fileExists(expectedPath) {
@@ -1680,9 +1654,7 @@ func TestTokenFilePath_XDGUnset(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	expectedPath := filepath.Join(tmpDir, "admin_token")
 	if !fileExists(expectedPath) {
@@ -1704,9 +1676,7 @@ func TestTokenFilePath_UsesConfigDir(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, configDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	expectedPath := filepath.Join(configDir, "admin_token")
 	if !fileExists(expectedPath) {
@@ -1763,8 +1733,8 @@ func TestProp_TokenUniqueness(t *testing.T) {
 		params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 		err := bootstrap.Run(context.Background(), params)
-		if err != nil {
-			t.Fatalf("Run() iteration %d: %v", i, err)
+		if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+			t.Fatalf("Run() iteration %d: %v, want ErrTokenGenerated", i, err)
 		}
 
 		token := string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
@@ -1785,9 +1755,7 @@ func TestProp_HashDeterminism(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// Read the token from the file.
 	token := string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
@@ -1824,8 +1792,8 @@ func TestProp_HashDiscrimination(t *testing.T) {
 		params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 		err := bootstrap.Run(context.Background(), params)
-		if err != nil {
-			t.Fatalf("Run() iteration %d: %v", i, err)
+		if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+			t.Fatalf("Run() iteration %d: %v, want ErrTokenGenerated", i, err)
 		}
 
 		tokens[i] = string(readFileBytes(t, filepath.Join(tmpDir, "admin_token")))
@@ -1904,9 +1872,7 @@ func TestProp_OldTokenInvalidatedAfterRotation(t *testing.T) {
 	// Rotate the token.
 	params := makeParams(db, "", true, tmpDir, logger)
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// Read the new hash from admin_config.
 	newHash := queryAdminConfig(t, db, "admin_token_hash")
@@ -2042,9 +2008,7 @@ func TestSmoke_FirstBoot(t *testing.T) {
 	params := makeParams(db, "admin@example.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// admin_config.admin_email = 'admin@example.com'
 	if v := queryAdminConfig(t, db, "admin_email"); v != "admin@example.com" {
@@ -2180,9 +2144,7 @@ func TestSmoke_TokenRotation(t *testing.T) {
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Run() = %v, want nil", err)
-	}
+	requireTokenGenerated(t, err)
 
 	// New token file exists.
 	tokenPath := filepath.Join(tmpDir, "admin_token")
@@ -2291,8 +2253,8 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	params := makeParams(db, "admin@corp.com", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Fatalf("Step 1 (first boot): Run() = %v", err)
+	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
+		t.Fatalf("Step 1 (first boot): Run() = %v, want ErrTokenGenerated", err)
 	}
 
 	// Verify admin_email stored.

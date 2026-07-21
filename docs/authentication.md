@@ -26,9 +26,9 @@ The admin token is a break-glass credential for system operators. It is not tied
 
 The 64-character hex suffix is derived from 32 cryptographically random bytes (`crypto/rand`), hex-encoded to lowercase. The full token string, including the prefix and `_admin_` segment, is hashed with SHA-256 before storage.
 
-**Generation and bootstrap.** Admin tokens are never created through the API. They are generated exclusively by the bootstrap sequence at server startup (see [Bootstrap Sequence](#bootstrap-sequence)). The plaintext token is written once to a file on disk (`<config_dir>/admin_token`, mode `0600`). The operator must save the token securely and delete the file before the server will start again on subsequent boots.
+**Generation and bootstrap.** Admin tokens are never created through the API. They are generated exclusively by the bootstrap sequence (see [Bootstrap Sequence](#bootstrap-sequence)). Token generation is an offline operation: the process writes the plaintext token to a file on disk (`<config_dir>/admin_token`, mode `0600`) and exits without starting the HTTP server. The operator must save the token securely, delete the file, and restart with the `ADMIN_TOKEN` environment variable set.
 
-**Token rotation.** An operator can force a new admin token by starting the server with the `--reset-admin-token` flag. This generates a new token, overwrites the stored hash in `admin_config`, and writes the new plaintext to the token file. The old token is immediately invalidated.
+**Token rotation.** An operator can force a new admin token by running the server binary with the `--reset-admin-token` flag. This generates a new token, overwrites the stored hash in `admin_config`, writes the new plaintext to the token file, and exits. The old token is immediately invalidated.
 
 **Validation flow:**
 
@@ -138,9 +138,11 @@ Detection priority matters: the admin token prefix (`ak_admin_`) and PAT prefix 
 
 ## Bootstrap Sequence
 
-The bootstrap sequence runs after configuration loading and database initialization but before the HTTP server begins accepting requests. A non-nil error from `Run()` is fatal -- the server must not start.
+The bootstrap sequence runs after configuration loading and database initialization but before the HTTP server begins accepting requests. The `--admin-email` and `--reset-admin-token` flags are **offline operations**: when either flag triggers token generation, the process exits after writing the token file. The server is never started. Only on a subsequent boot (with `ADMIN_TOKEN` set) does the server proceed to accept requests.
 
-### First Boot (zero users in the database)
+### First Boot (`--admin-email`)
+
+First boot is triggered by providing the `--admin-email` flag when no `admin_token_hash` exists in the database. The process generates the admin token and exits without starting the HTTP server.
 
 1. **Require admin email.** The `--admin-email` flag must be provided. If empty, the server exits with `"first boot: --admin-email is required"`.
 2. **Store admin email.** Writes `admin_email` to the `admin_config` table via `INSERT OR REPLACE`.
@@ -148,23 +150,28 @@ The bootstrap sequence runs after configuration loading and database initializat
 4. **Store token hash.** Computes `SHA-256(token)` and stores the hex digest in `admin_config` under the key `admin_token_hash`.
 5. **Write token file.** Writes the plaintext token to `<config_dir>/admin_token` with file mode `0600` (owner read/write only).
 6. **Log warning.** Logs the absolute path to the token file at WARN level: `"Admin token written to <path> -- save the token securely and delete the file"`.
+7. **Exit.** The process terminates. The operator must save the token, delete the file, and restart with `ADMIN_TOKEN` set.
 
-### Subsequent Boot (users exist in the database)
+### Subsequent Boot (normal server start)
+
+On subsequent boots (when `admin_token_hash` exists in the database and neither `--admin-email` nor `--reset-admin-token` is provided), the bootstrap sequence validates the `ADMIN_TOKEN` environment variable and then starts the HTTP server.
 
 1. **File-presence guard.** If the `<config_dir>/admin_token` file exists on disk, the server refuses to start: `"admin_token file exists at <path>: save the token securely and delete the file before restarting"`. This prevents an operator from accidentally leaving the plaintext token on disk.
 2. **Ignore admin email.** The `--admin-email` flag is silently ignored on subsequent boots.
 3. **Require ADMIN_TOKEN environment variable.** If `ADMIN_TOKEN` is empty, the server exits with `"ADMIN_TOKEN environment variable is required"`.
 4. **Read stored hash.** Queries `admin_config` for `admin_token_hash`. If missing, suggests running with `--reset-admin-token`.
 5. **Constant-time comparison.** Computes `SHA-256(ADMIN_TOKEN)` and compares against the stored hash using `crypto/subtle.ConstantTimeCompare`. A mismatch is fatal.
+6. **Start server.** Validation passed; the HTTP server begins accepting requests.
 
 ### Token Rotation (`--reset-admin-token`)
 
-Token rotation takes priority over all other bootstrap logic. When the `--reset-admin-token` flag is set:
+Token rotation takes priority over all other bootstrap logic. Like first boot, this is an offline operation: the process generates a new token and exits without starting the HTTP server.
 
 1. Generate a new admin token.
 2. Compute SHA-256 and store the hash via `INSERT OR REPLACE`.
 3. Write the new plaintext to the token file (mode `0600`).
 4. Log the file path at WARN level.
+5. **Exit.** The process terminates. The operator must save the new token, delete the file, and restart with `ADMIN_TOKEN` set to the new value.
 
 Token rotation skips the file-presence guard and the `ADMIN_TOKEN` environment variable check. The previous token is immediately invalidated because the stored hash is overwritten.
 
@@ -174,7 +181,7 @@ Token rotation skips the file-presence guard and the `ADMIN_TOKEN` environment v
 Server starts
   |
   +-- --reset-admin-token set?
-  |     YES --> Generate new token, store hash, write file, done
+  |     YES --> Generate new token, store hash, write file, EXIT
   |     NO  --> Continue
   |
   +-- Check admin_token_hash in admin_config table
@@ -182,7 +189,7 @@ Server starts
         +-- Not found (first boot)
         |     +-- --admin-email provided?
         |     |     NO  --> Fatal: "--admin-email is required"
-        |     |     YES --> Store email, generate token, store hash, write file, done
+        |     |     YES --> Store email, generate token, store hash, write file, EXIT
         |     
         +-- Found (subsequent boot)
               +-- admin_token file exists on disk?
@@ -193,7 +200,7 @@ Server starts
               |     YES --> Continue
               +-- Compare SHA-256(ADMIN_TOKEN) vs stored hash
                     MISMATCH --> Fatal: "does not match"
-                    MATCH    --> Boot succeeds
+                    MATCH    --> Start HTTP server
 ```
 
 ---
