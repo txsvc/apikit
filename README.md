@@ -145,9 +145,10 @@ userinfo_url = ""        # Defaults to GitHub's user API if empty
 
 ### Database Path Resolution
 
-1. If `database.path` is set in config: used as-is
-2. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`
-3. Otherwise: `./data/apikit.db`
+1. If `database.path` contains a directory (e.g. `"./name.db"`): used as-is
+2. If `database.path` is a bare filename (e.g. `"myapp.db"`) and `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/myapp.db`
+3. If `database.path` is empty and `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`
+4. Otherwise: `./data/apikit.db`
 
 See [docs/configuration.md](docs/configuration.md) for the complete configuration reference.
 

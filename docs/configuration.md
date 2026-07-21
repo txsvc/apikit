@@ -41,12 +41,17 @@ Database settings.
 
 | Key | Type | TOML key | Default | Description |
 |-----|------|----------|---------|-------------|
-| Path | string | `path` | *(resolved, see below)* | File path to the SQLite database. When omitted, the path is resolved by checking `$XDG_DATA_HOME/apikit.db` first, then falling back to `./data/apikit.db`. When explicitly set, the value is used as-is. |
+| Path | string | `path` | *(resolved, see below)* | File path to the SQLite database. Resolution depends on whether the value contains a directory component and whether `XDG_DATA_HOME` is set (see below). |
 
-**Database path resolution** (applied when `path` is empty or absent):
+**Database path resolution:**
 
-1. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`
-2. Otherwise: `./data/apikit.db`
+1. If `path` contains a directory component (e.g. `"./name.db"`,
+   `"/var/lib/name.db"`): used as-is, regardless of `XDG_DATA_HOME`.
+2. If `path` is a bare filename (e.g. `"myapp.db"`) and `XDG_DATA_HOME` is
+   set: `$XDG_DATA_HOME/myapp.db`.
+3. If `path` is a bare filename and `XDG_DATA_HOME` is unset: used as-is.
+4. If `path` is empty and `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`.
+5. If `path` is empty and `XDG_DATA_HOME` is unset: `./data/apikit.db`.
 
 ### `[logging]`
 

@@ -514,6 +514,86 @@ func TestConfig_XDGDataHome_DatabasePath(t *testing.T) {
 	}
 }
 
+// TestConfig_XDGDataHome_BareFilename verifies that when XDG_DATA_HOME is set
+// and database.path is a bare filename, the path is combined with XDG_DATA_HOME.
+func TestConfig_XDGDataHome_BareFilename(t *testing.T) {
+	dataDir := t.TempDir()
+	cfgDir := t.TempDir()
+	clearXDGVars(t)
+	t.Setenv("XDG_DATA_HOME", dataDir)
+	t.Chdir(cfgDir)
+
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("[database]\npath = \"myapp.db\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := filepath.Join(dataDir, "myapp.db")
+	if cfg.Database.Path != want {
+		t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, want)
+	}
+}
+
+// TestConfig_XDGDataHome_RelativePath verifies that when database.path has a
+// directory component, it is used as-is even when XDG_DATA_HOME is set.
+func TestConfig_XDGDataHome_RelativePath(t *testing.T) {
+	dataDir := t.TempDir()
+	cfgDir := t.TempDir()
+	clearXDGVars(t)
+	t.Setenv("XDG_DATA_HOME", dataDir)
+	t.Chdir(cfgDir)
+
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("[database]\npath = \"./myapp.db\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Database.Path != "./myapp.db" {
+		t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, "./myapp.db")
+	}
+}
+
+// TestConfig_BareFilename_NoXDG verifies that a bare filename is used as-is
+// when XDG_DATA_HOME is not set.
+func TestConfig_BareFilename_NoXDG(t *testing.T) {
+	cfgDir := t.TempDir()
+	clearXDGVars(t)
+	t.Chdir(cfgDir)
+
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("[database]\npath = \"myapp.db\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Database.Path != "myapp.db" {
+		t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, "myapp.db")
+	}
+}
+
 // TestConfig_NoXDG_CwdDefaults verifies that when neither XDG_CONFIG_HOME nor
 // XDG_DATA_HOME is set, LoadConfig uses ./config.toml and ./data/apikit.db.
 // Covers TS-01-20 (Requirement: 01-REQ-4.3).

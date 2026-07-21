@@ -223,9 +223,16 @@ The database file path is resolved by `resolveDataPath` in `internal/config/load
 
 **Resolution order:**
 
-1. If `database.path` is explicitly set in `config.toml`, that value is used as-is.
-2. If `XDG_DATA_HOME` is set, the path is `$XDG_DATA_HOME/apikit.db`.
-3. Otherwise, the path defaults to `./data/apikit.db`.
+1. If `database.path` contains a directory component (e.g. `"./name.db"`,
+   `"/var/lib/name.db"`), the value is used as-is.
+2. If `database.path` is a bare filename (e.g. `"myapp.db"`) and
+   `XDG_DATA_HOME` is set, the path resolves to `$XDG_DATA_HOME/myapp.db`.
+3. If `database.path` is a bare filename and `XDG_DATA_HOME` is unset, the
+   value is used as-is.
+4. If `database.path` is empty and `XDG_DATA_HOME` is set, the path resolves
+   to `$XDG_DATA_HOME/apikit.db`.
+5. If `database.path` is empty and `XDG_DATA_HOME` is unset, the path
+   defaults to `./data/apikit.db`.
 
 When `Open` is called, it creates the parent directory with mode `0700` if it
 does not already exist.

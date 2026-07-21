@@ -214,14 +214,24 @@ func resolveConfigPath() string {
 	return "config.toml"
 }
 
-// resolveDataPath returns the database path. When dbPath is empty (absent from
-// config), the default is determined by XDG_DATA_HOME. When dbPath is
-// non-empty, it is returned as-is.
+// resolveDataPath returns the database path.
+//
+// Resolution order:
+//  1. If dbPath contains a directory component (e.g. "./name.db",
+//     "/abs/path/name.db"), it is used as-is.
+//  2. If dbPath is a bare filename (e.g. "name.db") and XDG_DATA_HOME
+//     is set, the filename is placed under $XDG_DATA_HOME.
+//  3. If dbPath is empty and XDG_DATA_HOME is set: $XDG_DATA_HOME/apikit.db.
+//  4. If dbPath is empty and XDG_DATA_HOME is unset: ./data/apikit.db.
 func resolveDataPath(dbPath string) string {
+	xdg := os.Getenv("XDG_DATA_HOME")
 	if dbPath != "" {
+		if filepath.Base(dbPath) == dbPath && xdg != "" {
+			return filepath.Join(xdg, dbPath)
+		}
 		return dbPath
 	}
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+	if xdg != "" {
 		return filepath.Join(xdg, "apikit.db")
 	}
 	return "./data/apikit.db"

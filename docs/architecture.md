@@ -540,9 +540,10 @@ apikit uses SQLite via `modernc.org/sqlite`, a pure-Go (CGo-free) SQLite impleme
 - Both set `MaxOpenConns(1)` and `MaxIdleConns(1)`, enforcing a single-connection pool. This is the standard SQLite best practice since SQLite does not support concurrent writers. WAL mode allows concurrent readers alongside the single writer.
 
 **Path resolution**: The database path is resolved through a hierarchy:
-1. Explicit `database.path` in config.toml
-2. `$XDG_DATA_HOME/apikit.db` if `XDG_DATA_HOME` is set
-3. `./data/apikit.db` as the fallback
+1. `database.path` with a directory component (e.g. `"./name.db"`) is used as-is
+2. Bare filename (e.g. `"myapp.db"`) combined with `$XDG_DATA_HOME` when set
+3. `$XDG_DATA_HOME/apikit.db` when `database.path` is empty and `XDG_DATA_HOME` is set
+4. `./data/apikit.db` as the fallback
 
 Parent directories are created with mode `0700` by `Open`.
 
