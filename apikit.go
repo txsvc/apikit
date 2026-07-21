@@ -113,6 +113,11 @@ func ConfigDir() string {
 	return config.ConfigDir()
 }
 
+// ConfigPath returns the resolved path to config.toml.
+func ConfigPath() string {
+	return config.ConfigPath()
+}
+
 // OpenDatabase opens and initializes a SQLite database at the given path.
 // The schema is applied automatically. The caller must call Close when done.
 func OpenDatabase(path string) (*DB, error) {

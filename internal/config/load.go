@@ -201,6 +201,11 @@ func ConfigDir() string {
 	return filepath.Dir(resolveConfigPath())
 }
 
+// ConfigPath returns the resolved path to config.toml.
+func ConfigPath() string {
+	return resolveConfigPath()
+}
+
 // resolveConfigPath returns the path to config.toml, respecting XDG_CONFIG_HOME.
 func resolveConfigPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {

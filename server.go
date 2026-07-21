@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -235,6 +236,12 @@ func (s *Server) Start() error {
 		s.Shutdown(context.Background())
 	}()
 
+	cfgPath, _ := filepath.Abs(ConfigPath())
+	dbDir, _ := filepath.Abs(filepath.Dir(s.cfg.Database.Path))
+	logrus.WithFields(logrus.Fields{
+		"config": cfgPath,
+		"data":   dbDir,
+	}).Info("paths")
 	logrus.WithFields(logrus.Fields{
 		"addr":        s.addr,
 		"mount_point": s.cfg.Server.MountPoint,
