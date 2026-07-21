@@ -21,6 +21,39 @@ fails with a parse error.
 Loading the configuration performs no filesystem side effects beyond reading the
 file itself -- it does not create directories or files.
 
+## Environment Variable Expansion
+
+Before the TOML file is parsed, all `$VAR` and `${VAR}` references in the file
+text are expanded from the process environment using Go's `os.ExpandEnv`. This
+lets you keep secrets out of config files:
+
+```toml
+[[oauth.providers]]
+name = "github"
+client_id     = "${GITHUB_CLIENT_ID}"
+client_secret = "${GITHUB_CLIENT_SECRET}"
+```
+
+Any string value in the file can reference environment variables -- not just
+OAuth fields. For example:
+
+```toml
+[server]
+external_url = "$APP_EXTERNAL_URL"
+
+[database]
+path = "${DB_PATH}"
+```
+
+**Undefined variables** expand to an empty string. If the resulting value
+violates a validation rule (for example, an empty `client_secret`), startup
+fails with the usual validation error.
+
+Expansion happens on the raw file text before TOML parsing, so it cannot be
+used for non-string types like integers. Writing `port = $PORT` (unquoted)
+produces a TOML parse error because the parser sees a bare string where it
+expects an integer. For integer fields, write `port = 9090` directly.
+
 ## Complete Reference
 
 ### `[server]`

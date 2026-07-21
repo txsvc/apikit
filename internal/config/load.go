@@ -54,8 +54,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
 
+	// Expand $VAR and ${VAR} references before parsing so that secrets
+	// (e.g. OAuth client_secret) can be injected from the environment.
+	expanded := os.ExpandEnv(string(data))
+
 	// Parse TOML into config.
-	if _, err := toml.Decode(string(data), cfg); err != nil {
+	if _, err := toml.Decode(expanded, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config.toml: %w", err)
 	}
 

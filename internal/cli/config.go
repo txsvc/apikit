@@ -55,7 +55,8 @@ func LoadConfig(configDir string) (*CLIConfig, error) {
 	}
 
 	var cfg CLIConfig
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
+	expanded := os.ExpandEnv(string(data))
+	if _, err := toml.Decode(expanded, &cfg); err != nil {
 		return nil, fmt.Errorf("config file is unparseable: %s", err.Error())
 	}
 

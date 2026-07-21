@@ -613,3 +613,68 @@ func TestConfig_NoXDG_CwdDefaults(t *testing.T) {
 		t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, "./data/apikit.db")
 	}
 }
+
+// ========================================================================
+// Environment variable expansion
+// ========================================================================
+
+// TestConfig_EnvExpansion_DollarVar verifies that $VAR syntax in a string
+// field is expanded from the environment before TOML parsing.
+func TestConfig_EnvExpansion_DollarVar(t *testing.T) {
+	t.Setenv("TEST_EXTERNAL_URL", "https://expanded.example.com")
+	cfg, err := loadWithTOML(t, `[server]
+external_url = "$TEST_EXTERNAL_URL"
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Server.ExternalURL != "https://expanded.example.com" {
+		t.Errorf("ExternalURL = %q, want %q", cfg.Server.ExternalURL, "https://expanded.example.com")
+	}
+}
+
+// TestConfig_EnvExpansion_BracedVar verifies that ${VAR} syntax works for
+// secret fields like client_secret.
+func TestConfig_EnvExpansion_BracedVar(t *testing.T) {
+	t.Setenv("TEST_GH_ID", "gh-id-123")
+	t.Setenv("TEST_GH_SECRET", "gh-secret-456")
+	cfg, err := loadWithTOML(t, `
+[[oauth.providers]]
+name = "github"
+client_id = "${TEST_GH_ID}"
+client_secret = "${TEST_GH_SECRET}"
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.OAuth.Providers) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(cfg.OAuth.Providers))
+	}
+	p := cfg.OAuth.Providers[0]
+	if p.ClientID != "gh-id-123" {
+		t.Errorf("ClientID = %q, want %q", p.ClientID, "gh-id-123")
+	}
+	if p.ClientSecret != "gh-secret-456" {
+		t.Errorf("ClientSecret = %q, want %q", p.ClientSecret, "gh-secret-456")
+	}
+}
+
+// TestConfig_EnvExpansion_UndefinedVar verifies that a reference to an
+// undefined env var expands to an empty string, which triggers a validation
+// error for required fields.
+func TestConfig_EnvExpansion_UndefinedVar(t *testing.T) {
+	mustUnsetenv(t, "DEFINITELY_NOT_SET_12345")
+	t.Setenv("TEST_GH_ID", "gh-id-123")
+	_, err := loadWithTOML(t, `
+[[oauth.providers]]
+name = "github"
+client_id = "${TEST_GH_ID}"
+client_secret = "${DEFINITELY_NOT_SET_12345}"
+`)
+	if err == nil {
+		t.Fatal("expected validation error for empty client_secret from undefined env var")
+	}
+	if !strings.Contains(err.Error(), "client_secret") {
+		t.Errorf("error should mention client_secret: %v", err)
+	}
+}

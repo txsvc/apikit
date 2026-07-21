@@ -17,8 +17,8 @@ level = "info"
 #
 # [[oauth.providers]]
 # name = "github"
-# client_id = ""
-# client_secret = ""
+# client_id = "$GITHUB_CLIENT_ID"
+# client_secret = "$GITHUB_CLIENT_SECRET"
 
 # To enable Google OAuth login, create OAuth credentials at
 # https://console.cloud.google.com/apis/credentials and fill in below.
@@ -26,5 +26,5 @@ level = "info"
 #
 # [[oauth.providers]]
 # name = "google"
-# client_id = ""
-# client_secret = ""
+# client_id = "$GOOGLE_CLIENT_ID"
+# client_secret = "$GOOGLE_CLIENT_SECRET"
