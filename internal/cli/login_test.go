@@ -1439,3 +1439,210 @@ func TestCallbackHandler_FaviconDoesNotShutDown(t *testing.T) {
 			resp2.StatusCode, http.StatusNotFound)
 	}
 }
+
+// ===========================================================================
+// Issue #37: HTTP request timeout tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// TS-NS-5: Verify httpRequestTimeout constant is ≤ 30 seconds and distinct
+// from loginTimeoutSeconds.
+// Requirement: NS-REQ-5
+// ---------------------------------------------------------------------------
+
+func TestHTTPRequestTimeout_NamedConstant(t *testing.T) {
+	if httpRequestTimeout > 30*time.Second {
+		t.Errorf("httpRequestTimeout = %v, want ≤ 30s", httpRequestTimeout)
+	}
+	if httpRequestTimeout <= 0 {
+		t.Errorf("httpRequestTimeout = %v, want > 0", httpRequestTimeout)
+	}
+	if httpRequestTimeout == time.Duration(loginTimeoutSeconds)*time.Second {
+		t.Errorf("httpRequestTimeout (%v) must differ from loginTimeoutSeconds (%ds)",
+			httpRequestTimeout, loginTimeoutSeconds)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-NS-1: Verify provider discovery returns an error when the server stalls,
+// rather than hanging indefinitely.
+// Requirement: NS-REQ-1
+// ---------------------------------------------------------------------------
+
+func TestRunLogin_ProviderDiscovery_Timeout(t *testing.T) {
+	done := make(chan struct{})
+
+	// Server that stalls indefinitely on /auth/providers.
+	stallSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Block until the test is done (simulates unresponsive server).
+		<-done
+	}))
+	defer func() {
+		close(done)      // Unblock handler first
+		stallSrv.Close() // Then close server
+	}()
+
+	opts := loginOpts{
+		provider:      "github",
+		expires:       90,
+		endpointURL:   stallSrv.URL,
+		openBrowserFn: func(_ string) error { return nil },
+		stderr:        new(bytes.Buffer),
+		stdout:        new(bytes.Buffer),
+	}
+
+	// Use a short-deadline parent context so the HTTP request timeout fires quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := runLogin(ctx, 2*time.Second, opts)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("runLogin returned nil against stalling provider endpoint, want error")
+	}
+
+	if !strings.Contains(err.Error(), "failed to fetch providers") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "failed to fetch providers")
+	}
+
+	// Must return well before the 2-second browser timeout.
+	if elapsed > 2*time.Second {
+		t.Errorf("runLogin took %v against stalling server, want < 2s", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-NS-2: Verify token exchange returns an error when the server stalls on
+// /auth/callback, rather than hanging indefinitely.
+// Requirement: NS-REQ-2
+// ---------------------------------------------------------------------------
+
+func TestRunLogin_TokenExchange_Timeout(t *testing.T) {
+	done := make(chan struct{})
+
+	// Server that responds to provider discovery but stalls on token exchange.
+	stallSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/auth/providers"):
+			_, _ = w.Write([]byte(`[{"name":"github","authorize_url":"https://github.com/login/oauth/authorize?client_id=abc"}]`))
+		case strings.HasSuffix(r.URL.Path, "/auth/callback"):
+			// Stall until the test is done.
+			<-done
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer func() {
+		close(done)      // Unblock handler first
+		stallSrv.Close() // Then close server
+	}()
+
+	// Use a short parent context to limit how long we wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	opts := loginOpts{
+		provider:    "github",
+		expires:     90,
+		endpointURL: stallSrv.URL,
+		openBrowserFn: func(authURL string) error {
+			// Simulate the browser callback arriving so we reach the exchange step.
+			parsed, err := url.Parse(authURL)
+			if err != nil {
+				return nil
+			}
+			redirectURI := parsed.Query().Get("redirect_uri")
+			state := parsed.Query().Get("state")
+			if redirectURI != "" && state != "" {
+				go func() {
+					time.Sleep(10 * time.Millisecond)
+					callbackURL := fmt.Sprintf("%s?code=testcode&state=%s", redirectURI, state)
+					resp, err := http.Get(callbackURL)
+					if err == nil {
+						resp.Body.Close()
+					}
+				}()
+			}
+			return nil
+		},
+		stderr: new(bytes.Buffer),
+		stdout: new(bytes.Buffer),
+	}
+
+	start := time.Now()
+	err := runLogin(ctx, 2*time.Second, opts)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("runLogin returned nil against stalling exchange endpoint, want error")
+	}
+
+	if !strings.Contains(err.Error(), "failed to exchange OAuth code") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "failed to exchange OAuth code")
+	}
+
+	// Must return well before the 2-second browser timeout.
+	if elapsed > 2*time.Second {
+		t.Errorf("runLogin took %v against stalling exchange server, want < 2s", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TS-NS-3: Verify cancelling the parent context cancels in-flight HTTP
+// requests and runLogin returns promptly with a context.Canceled error.
+// Requirement: NS-REQ-3
+// ---------------------------------------------------------------------------
+
+func TestRunLogin_ParentCancel_CancelsHTTPRequests(t *testing.T) {
+	done := make(chan struct{})
+
+	// Server that stalls on /auth/providers until the test is done.
+	stallSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-done
+	}))
+	defer func() {
+		close(done)      // Unblock handler first
+		stallSrv.Close() // Then close server
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	opts := loginOpts{
+		provider:      "github",
+		expires:       90,
+		endpointURL:   stallSrv.URL,
+		openBrowserFn: func(_ string) error { return nil },
+		stderr:        new(bytes.Buffer),
+		stdout:        new(bytes.Buffer),
+	}
+
+	// Cancel the context after a short delay.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := runLogin(ctx, 10*time.Second, opts)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("runLogin returned nil after parent cancel, want error")
+	}
+
+	// The error must wrap context.Canceled.
+	if !errors.Is(err, context.Canceled) {
+		// Accept errors that contain the cancellation message even if not directly wrapping.
+		if !strings.Contains(err.Error(), "context canceled") {
+			t.Errorf("error = %q, want to wrap context.Canceled", err.Error())
+		}
+	}
+
+	// Must return well under 1 second after cancellation.
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("runLogin took %v after cancel, want < 500ms", elapsed)
+	}
+}

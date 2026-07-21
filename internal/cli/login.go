@@ -23,6 +23,11 @@ import (
 // waits for the browser OAuth callback before timing out.
 const loginTimeoutSeconds = 120
 
+// httpRequestTimeout is the maximum time allowed for individual HTTP requests
+// (provider discovery, token exchange) during the login flow. This is separate
+// from loginTimeoutSeconds which governs the browser callback wait.
+const httpRequestTimeout = 30 * time.Second
+
 // Verbatim HTML responses for the OAuth callback server.
 const (
 	callbackSuccessHTML = `<html><body><h1>Login successful</h1><p>You may close this tab.</p></body></html>`
@@ -158,7 +163,15 @@ func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error 
 	baseURL := strings.TrimRight(opts.endpointURL, "/")
 	providersURL := baseURL + apiMountPoint + "/auth/providers"
 
-	providersResp, err := http.Get(providersURL)
+	providerCtx, providerCancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer providerCancel()
+
+	providerReq, err := http.NewRequestWithContext(providerCtx, http.MethodGet, providersURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch providers: %w", err)
+	}
+
+	providersResp, err := http.DefaultClient.Do(providerReq)
 	if err != nil {
 		return fmt.Errorf("failed to fetch providers: %w", err)
 	}
@@ -266,7 +279,17 @@ func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error 
 	}
 
 	exchangeURL := baseURL + apiMountPoint + "/auth/callback"
-	httpResp, err := http.Post(exchangeURL, "application/json", bytes.NewReader(reqBody))
+
+	exchangeCtx, exchangeCancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer exchangeCancel()
+
+	exchangeHTTPReq, err := http.NewRequestWithContext(exchangeCtx, http.MethodPost, exchangeURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to exchange OAuth code: %w", err)
+	}
+	exchangeHTTPReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := http.DefaultClient.Do(exchangeHTTPReq)
 	if err != nil {
 		return fmt.Errorf("failed to exchange OAuth code: %w", err)
 	}
