@@ -412,18 +412,14 @@ func TestConfig_MaxBodySizeValidation(t *testing.T) {
 // ========================================================================
 
 // TestConfig_XDGConfigHome_FilePresent verifies that when XDG_CONFIG_HOME is
-// set and apikit/config.toml exists there, LoadConfig reads from the XDG path
+// set and config.toml exists there, LoadConfig reads from the XDG path
 // exclusively and does NOT fall back to ./config.toml.
 // Covers TS-01-18 (Requirement: 01-REQ-4.1).
 func TestConfig_XDGConfigHome_FilePresent(t *testing.T) {
 	// Set up XDG config dir with config.toml (port=9090)
 	xdgDir := t.TempDir()
-	apikitCfgDir := filepath.Join(xdgDir, "apikit")
-	if err := os.MkdirAll(apikitCfgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(
-		filepath.Join(apikitCfgDir, "config.toml"),
+		filepath.Join(xdgDir, "config.toml"),
 		[]byte("[server]\nport = 9090\n"),
 		0o644,
 	); err != nil {
@@ -458,11 +454,11 @@ func TestConfig_XDGConfigHome_FilePresent(t *testing.T) {
 }
 
 // TestConfig_XDGConfigHome_FileAbsent verifies that when XDG_CONFIG_HOME is set
-// but $XDG_CONFIG_HOME/apikit/config.toml does not exist, LoadConfig applies
+// but $XDG_CONFIG_HOME/config.toml does not exist, LoadConfig applies
 // all defaults and does NOT fall back to ./config.toml.
 // Covers TS-01-E7 (Requirement: 01-REQ-4.E1).
 func TestConfig_XDGConfigHome_FileAbsent(t *testing.T) {
-	// XDG config dir exists but has no apikit/config.toml
+	// XDG config dir exists but has no config.toml
 	xdgDir := t.TempDir()
 
 	// cwd has a config.toml with port=9999
@@ -493,8 +489,8 @@ func TestConfig_XDGConfigHome_FileAbsent(t *testing.T) {
 }
 
 // TestConfig_XDGDataHome_DatabasePath verifies that when XDG_DATA_HOME is set,
-// Config.Database.Path resolves to $XDG_DATA_HOME/apikit/apikit.db and no
-// directory is created.
+// Config.Database.Path resolves to $XDG_DATA_HOME/apikit.db and no
+// subdirectory is created.
 // Covers TS-01-19 (Requirement: 01-REQ-4.2).
 func TestConfig_XDGDataHome_DatabasePath(t *testing.T) {
 	dataDir := t.TempDir()
@@ -512,15 +508,9 @@ func TestConfig_XDGDataHome_DatabasePath(t *testing.T) {
 		t.Fatal("expected non-nil config")
 	}
 
-	want := filepath.Join(dataDir, "apikit", "apikit.db")
+	want := filepath.Join(dataDir, "apikit.db")
 	if cfg.Database.Path != want {
 		t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, want)
-	}
-
-	// Verify no apikit subdirectory was created
-	apikitSubdir := filepath.Join(dataDir, "apikit")
-	if _, err := os.Stat(apikitSubdir); err == nil {
-		t.Errorf("apikit directory should NOT be created in XDG_DATA_HOME")
 	}
 }
 

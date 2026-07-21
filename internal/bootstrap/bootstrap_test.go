@@ -1615,16 +1615,12 @@ func TestRun_NoOsExitInSource(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestTokenFilePath_XDGSet verifies that Run resolves the admin_token file
-// path to $XDG_CONFIG_HOME/apikit/admin_token when XDG_CONFIG_HOME is set.
+// path to $XDG_CONFIG_HOME/admin_token when XDG_CONFIG_HOME is set.
 // [TS-04-39] [04-REQ-8.1]
 func TestTokenFilePath_XDGSet(t *testing.T) {
-	xdgBase := t.TempDir()
-	configDir := filepath.Join(xdgBase, "apikit")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	configDir := t.TempDir()
 
-	t.Setenv("XDG_CONFIG_HOME", xdgBase)
+	t.Setenv("XDG_CONFIG_HOME", configDir)
 
 	db := openMemoryDB(t)
 	logger, _ := newTestLogger()

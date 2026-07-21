@@ -30,7 +30,7 @@ var bodyRe = regexp.MustCompile(`^([1-9][0-9]*)(KB|MB|GB)$`)
 // Load reads config.toml, applies defaults, validates fields, and returns
 // a populated *Config. The config file path is resolved as follows:
 //
-//   - If XDG_CONFIG_HOME is set, exclusively use $XDG_CONFIG_HOME/apikit/config.toml.
+//   - If XDG_CONFIG_HOME is set, exclusively use $XDG_CONFIG_HOME/config.toml.
 //   - Otherwise, use ./config.toml in the current working directory.
 //
 // When the resolved config file is absent, all defaults are applied and
@@ -204,7 +204,7 @@ func ConfigDir() string {
 // resolveConfigPath returns the path to config.toml, respecting XDG_CONFIG_HOME.
 func resolveConfigPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "apikit", "config.toml")
+		return filepath.Join(xdg, "config.toml")
 	}
 	return "config.toml"
 }
@@ -217,7 +217,7 @@ func resolveDataPath(dbPath string) string {
 		return dbPath
 	}
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "apikit", "apikit.db")
+		return filepath.Join(xdg, "apikit.db")
 	}
 	return "./data/apikit.db"
 }
