@@ -10,7 +10,7 @@ The configuration loader resolves the path to `config.toml` using the following
 rules, evaluated in order:
 
 1. If the `XDG_CONFIG_HOME` environment variable is set, the file is read from
-   `$XDG_CONFIG_HOME/apikit/config.toml`.
+   `$XDG_CONFIG_HOME/config.toml`.
 2. Otherwise, the file is read from `./config.toml` in the current working
    directory.
 
@@ -41,11 +41,11 @@ Database settings.
 
 | Key | Type | TOML key | Default | Description |
 |-----|------|----------|---------|-------------|
-| Path | string | `path` | *(resolved, see below)* | File path to the SQLite database. When omitted, the path is resolved by checking `$XDG_DATA_HOME/apikit/apikit.db` first, then falling back to `./data/apikit.db`. When explicitly set, the value is used as-is. |
+| Path | string | `path` | *(resolved, see below)* | File path to the SQLite database. When omitted, the path is resolved by checking `$XDG_DATA_HOME/apikit.db` first, then falling back to `./data/apikit.db`. When explicitly set, the value is used as-is. |
 
 **Database path resolution** (applied when `path` is empty or absent):
 
-1. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit/apikit.db`
+1. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`
 2. Otherwise: `./data/apikit.db`
 
 ### `[logging]`
@@ -122,7 +122,7 @@ When `config.toml` is absent, the server starts with these defaults:
 | `server.external_url` | `""` (empty) |
 | `server.mount_point` | `"/api/v1"` |
 | `server.max_body_size` | `"1MB"` (1,048,576 bytes) |
-| `database.path` | `$XDG_DATA_HOME/apikit/apikit.db` or `./data/apikit.db` |
+| `database.path` | `$XDG_DATA_HOME/apikit.db` or `./data/apikit.db` |
 | `logging.level` | `"info"` |
 | `oauth.providers` | `[]` (no providers configured) |
 

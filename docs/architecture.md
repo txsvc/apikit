@@ -541,7 +541,7 @@ apikit uses SQLite via `modernc.org/sqlite`, a pure-Go (CGo-free) SQLite impleme
 
 **Path resolution**: The database path is resolved through a hierarchy:
 1. Explicit `database.path` in config.toml
-2. `$XDG_DATA_HOME/apikit/apikit.db` if `XDG_DATA_HOME` is set
+2. `$XDG_DATA_HOME/apikit.db` if `XDG_DATA_HOME` is set
 3. `./data/apikit.db` as the fallback
 
 Parent directories are created with mode `0700` by `Open`.

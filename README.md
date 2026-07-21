@@ -115,7 +115,7 @@ docs/                     # Documentation and ADRs
 
 apikit uses a `config.toml` file for server configuration. The file is resolved using XDG conventions:
 
-1. If `XDG_CONFIG_HOME` is set: `$XDG_CONFIG_HOME/apikit/config.toml`
+1. If `XDG_CONFIG_HOME` is set: `$XDG_CONFIG_HOME/config.toml`
 2. Otherwise: `./config.toml` in the current working directory
 
 When the config file is absent, all defaults are applied and the server starts normally.
@@ -146,7 +146,7 @@ userinfo_url = ""        # Defaults to GitHub's user API if empty
 ### Database Path Resolution
 
 1. If `database.path` is set in config: used as-is
-2. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit/apikit.db`
+2. If `XDG_DATA_HOME` is set: `$XDG_DATA_HOME/apikit.db`
 3. Otherwise: `./data/apikit.db`
 
 See [docs/configuration.md](docs/configuration.md) for the complete configuration reference.
