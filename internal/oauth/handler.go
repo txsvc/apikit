@@ -270,8 +270,11 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 			if errors.Is(txErr, errUserBlocked) {
 				return oauthError(c, http.StatusForbidden, "user is blocked")
 			}
-			// Wrap and return as internal server error.
-			_ = db.WrapError(txErr)
+			// Map DB-layer errors to appropriate HTTP status codes.
+			wrappedErr := db.WrapError(txErr)
+			if errors.Is(wrappedErr, db.ErrConflict) {
+				return oauthError(c, http.StatusConflict, "user already exists")
+			}
 			return oauthError(c, http.StatusInternalServerError, "internal server error")
 		}
 

@@ -288,6 +288,7 @@ The `api_key.key` value contains the plaintext secret and is only returned once.
 | 400 | Missing required field, invalid `expires` value, unknown provider, disallowed redirect URI, empty email from provider |
 | 401 | Authorization code exchange failed |
 | 403 | User account is blocked |
+| 409 | Provider identity already registered |
 | 502 | Failed to retrieve user info from the OAuth provider |
 
 ---

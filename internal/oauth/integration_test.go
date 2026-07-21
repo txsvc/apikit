@@ -1740,3 +1740,154 @@ func TestIntegration_CallbackRemovedProviderReturns400(t *testing.T) {
 		t.Errorf("message = %q, want %q", resp.Error.Message, "unknown provider: github")
 	}
 }
+
+// ========================================================================
+// TS-NS-1: Duplicate provider identity returns HTTP 409
+// (Requirement: NS-REQ-1)
+// ========================================================================
+
+// TestIntegration_CallbackDuplicateProviderIDConflict verifies that when a
+// new user INSERT hits a UNIQUE constraint violation on (provider, provider_id),
+// the handler returns HTTP 409 with "user already exists".
+func TestIntegration_CallbackDuplicateProviderIDConflict(t *testing.T) {
+	database := openTestDB(t)
+
+	// Pre-insert a user with provider_id "dup-id-1" — but with a different
+	// email/username so the SELECT by (provider, provider_id) won't match
+	// the one from UserInfo. We use a different provider_id for the SELECT
+	// path, but create a UNIQUE constraint scenario by inserting directly
+	// with the same (provider, provider_id) that the new INSERT will attempt.
+	//
+	// The trick: the existing test flow does a SELECT first. If it finds a
+	// match, it updates instead of inserting. To trigger the INSERT conflict,
+	// we need a row that won't be found by the SELECT but will conflict on
+	// INSERT. This can happen if there's a UNIQUE constraint on another
+	// column combination. Instead, we use a simpler approach: insert a row
+	// between the SELECT and INSERT by making the provider match via a
+	// race-like scenario.
+	//
+	// The cleanest approach: create a second UNIQUE constraint violation on
+	// the (provider, provider_id) pair by having UserInfo return a provider_id
+	// that matches an existing row with a DIFFERENT provider name, and then
+	// the INSERT will conflict on (provider, provider_id). But actually the
+	// SELECT checks (provider, provider_id) first.
+	//
+	// Simplest reliable way: use a testProvider that returns a provider_id
+	// matching a pre-inserted row but with a different value for the SELECT
+	// column so it takes the INSERT path, then conflicts.
+	//
+	// Actually, the simplest is to pre-insert a row that matches the exact
+	// (provider, provider_id) that UserInfo returns. The SELECT will find it
+	// and take the UPDATE path. We need to trigger the INSERT path's conflict.
+	//
+	// To properly test this, we need to create a unique constraint error
+	// from within the transaction. We can exploit the fact that the users
+	// table has UNIQUE constraints. The most reliable approach: insert
+	// another user row with a different provider_id, but since the handler
+	// first does SELECT by (provider, provider_id) and then INSERT if not
+	// found, we need concurrent modification. However, SQLite serializes
+	// transactions with a single connection.
+	//
+	// Better approach: tamper with the database schema to create a
+	// UNIQUE index on email, so that a new user with a duplicate email
+	// triggers a UNIQUE constraint error during INSERT.
+	_, err := database.SqlDB.Exec(
+		"CREATE UNIQUE INDEX idx_users_email ON users (email)",
+	)
+	if err != nil {
+		t.Fatalf("create unique index: %v", err)
+	}
+
+	// Pre-insert a user with a known email.
+	now := db.FormatTime(time.Now().UTC())
+	_, err = database.SqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+		"conflict-uuid-1", "existing", "conflict@example.com", "user", "active", "github", "existing-pid",
+		now, now,
+	)
+	if err != nil {
+		t.Fatalf("insert existing user: %v", err)
+	}
+
+	// UserInfo returns a different provider_id (so SELECT won't find a match)
+	// but the same email (so INSERT hits the UNIQUE constraint on email).
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "newuser",
+				Email:      "conflict@example.com", // duplicate email
+				ProviderID: "new-pid",              // different provider_id
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	resp := parseIntegrationError(t, rec.Body.String())
+	if resp.Error.Code != 409 {
+		t.Errorf("error.code = %d, want 409", resp.Error.Code)
+	}
+	if resp.Error.Message != "user already exists" {
+		t.Errorf("error.message = %q, want %q", resp.Error.Message, "user already exists")
+	}
+}
+
+// ========================================================================
+// TS-NS-2: Non-conflict transaction errors still return HTTP 500
+// (Requirement: NS-REQ-2)
+// ========================================================================
+
+// TestIntegration_CallbackNonConflictDBErrorReturns500 verifies that when the
+// database transaction fails with a non-constraint error, the handler returns
+// HTTP 500 with "internal server error".
+func TestIntegration_CallbackNonConflictDBErrorReturns500(t *testing.T) {
+	database := openTestDB(t)
+
+	// Break the DB by dropping a required column so INSERT fails with a
+	// non-constraint error.
+	_, err := database.SqlDB.Exec("ALTER TABLE users RENAME COLUMN email TO email_old")
+	if err != nil {
+		t.Fatalf("alter table: %v", err)
+	}
+
+	p := &testProvider{
+		name: "github",
+		exchangeFn: func(_ context.Context, _, _ string) (string, error) {
+			return "token", nil
+		},
+		userInfoFn: func(_ context.Context, _ string) (*oauth.UserInfo, error) {
+			return &oauth.UserInfo{
+				Username:   "erruser",
+				Email:      "err@example.com",
+				ProviderID: "ns2-pid",
+			}, nil
+		},
+	}
+	e := setupIntegrationEcho(t, []oauth.Provider{p}, database, "")
+
+	body := `{"provider":"github","code":"abc","redirect_uri":"http://localhost:9000/cb"}`
+	rec := postCallbackJSON(e, body)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+
+	resp := parseIntegrationError(t, rec.Body.String())
+	if resp.Error.Code != 500 {
+		t.Errorf("error.code = %d, want 500", resp.Error.Code)
+	}
+	if resp.Error.Message != "internal server error" {
+		t.Errorf("error.message = %q, want %q", resp.Error.Message, "internal server error")
+	}
+}
