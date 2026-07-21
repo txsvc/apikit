@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1420,6 +1421,70 @@ func TestDemoteUser_DBCountError(t *testing.T) {
 	rec := sendPost(t, e, "/users/"+adminID+"/demote")
 
 	assertErrorResponse(t, rec, http.StatusInternalServerError, "internal server error")
+}
+
+// TestDemoteUser_ConcurrentLastTwoAdmins verifies that concurrent demote
+// requests against two admins (leaving only one) cannot both succeed.
+// Exactly one request must return HTTP 200 and the other HTTP 409, ensuring
+// the database always retains at least one active admin.
+//
+// Test Spec: TS-NS-1
+// Requirement: NS-REQ-1
+func TestDemoteUser_ConcurrentLastTwoAdmins(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	// Insert exactly two active admins.
+	adminA := testUUID("concurrent-admin-a")
+	adminB := testUUID("concurrent-admin-b")
+	insertTestUserFull(t, sqlDB, adminA, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, adminB, "bob", "bob@example.com", "", "admin", "active", "github", "gh-002", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+	var wg sync.WaitGroup
+	recA := httptest.NewRecorder()
+	recB := httptest.NewRecorder()
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		req := httptest.NewRequest(http.MethodPost, "/users/"+adminA+"/demote", nil)
+		e.ServeHTTP(recA, req)
+	}()
+	go func() {
+		defer wg.Done()
+		req := httptest.NewRequest(http.MethodPost, "/users/"+adminB+"/demote", nil)
+		e.ServeHTTP(recB, req)
+	}()
+	wg.Wait()
+
+	codes := []int{recA.Code, recB.Code}
+
+	count200 := 0
+	count409 := 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusOK:
+			count200++
+		case http.StatusConflict:
+			count409++
+		}
+	}
+
+	if count200 != 1 || count409 != 1 {
+		t.Errorf("expected exactly one 200 and one 409, got codes %v (200=%d, 409=%d)",
+			codes, count200, count409)
+	}
+
+	// Verify exactly one active admin remains in the database.
+	var adminCount int
+	err := sqlDB.QueryRow(
+		`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`,
+	).Scan(&adminCount)
+	if err != nil {
+		t.Fatalf("failed to count active admins: %v", err)
+	}
+	if adminCount != 1 {
+		t.Errorf("expected exactly 1 active admin remaining, got %d", adminCount)
+	}
 }
 
 // ========================================================================

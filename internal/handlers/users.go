@@ -430,28 +430,28 @@ func (h *userHandlers) demoteUser(c echo.Context) error {
 		return c.JSON(http.StatusOK, user)
 	}
 
-	// Count active admins for the last-admin safeguard (07-REQ-7.3, 07-PROP-1).
-	var adminCount int
-	err = h.db.QueryRow(
-		`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`,
-	).Scan(&adminCount)
-	if err != nil {
-		// Unexpected DB error on COUNT query (07-REQ-7.E1).
-		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
-	}
-
-	if adminCount <= 1 {
-		return apiutil.WriteAPIError(c, http.StatusConflict, "cannot demote the last admin")
-	}
-
-	// Update role to user (07-REQ-7.1).
+	// Atomic demote: combine the last-admin safeguard (07-REQ-7.3, 07-PROP-1)
+	// with the role update (07-REQ-7.1) in a single statement to prevent
+	// TOCTOU races where concurrent requests both pass a separate count check.
 	now := db.FormatTime(time.Now().UTC())
-	_, err = h.db.Exec(
-		`UPDATE users SET role = 'user', updated_at = ? WHERE id = ?`,
+	result, err := h.db.Exec(
+		`UPDATE users SET role = 'user', updated_at = ?
+		 WHERE id = ? AND role = 'admin'
+		 AND (SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active') > 1`,
 		now, id,
 	)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	if rowsAffected == 0 {
+		// The subquery found <= 1 active admin — this is the last admin (07-REQ-7.3).
+		return apiutil.WriteAPIError(c, http.StatusConflict, "cannot demote the last admin")
 	}
 
 	user.Role = "user"
