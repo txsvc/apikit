@@ -19,15 +19,15 @@ import (
 // These commands cannot import the root apikit package (which imports
 // internal/cli), so they make raw HTTP calls — the same approach used by
 // the login command (login.go). The admin commands use a Runner DI pattern
-// (runners.go); the non-admin commands use cmdClient, which wraps an
+// (runners.go); the non-admin commands use CmdClient, which wraps an
 // HTTP client with endpoint URL and API key.
 // ---------------------------------------------------------------------------
 
-// cmdClient holds configuration for authenticated non-admin commands.
+// CmdClient holds configuration for authenticated non-admin commands.
 // Commands retrieve it from the Cobra context via ClientFromContext.
 // In production, PersistentPreRunE injects it; in tests, the test
 // helper injects it directly.
-type cmdClient struct {
+type CmdClient struct {
 	endpointURL  string
 	apiKey       string
 	httpClient   *http.Client
@@ -35,50 +35,70 @@ type cmdClient struct {
 	configPath   string
 }
 
-// cmdError is a pre-validation or client-side error with a fixed code.
+// NewCmdClient constructs a CmdClient for making authenticated API calls.
+// Custom CLI commands that bypass PersistentPreRunE can use this directly.
+func NewCmdClient(endpointURL, apiKey string) *CmdClient {
+	return &CmdClient{
+		endpointURL: endpointURL,
+		apiKey:      apiKey,
+	}
+}
+
+// EndpointURL returns the configured server endpoint URL.
+func (c *CmdClient) EndpointURL() string { return c.endpointURL }
+
+// APIKey returns the configured API key.
+func (c *CmdClient) APIKey() string { return c.apiKey }
+
+// CmdError is a pre-validation or client-side error with a fixed code.
 // Satisfies the codedError interface (admin.go) for consistent error
 // envelope rendering.
-type cmdError struct {
+type CmdError struct {
 	code    int
 	message string
 }
 
-func (e *cmdError) Error() string        { return e.message }
-func (e *cmdError) ErrorCode() int       { return e.code }
-func (e *cmdError) ErrorMessage() string { return e.message }
+// NewCmdError creates a CmdError with the given code and message.
+func NewCmdError(code int, message string) *CmdError {
+	return &CmdError{code: code, message: message}
+}
 
-// newAuthenticatedCmdClient retrieves a *cmdClient from the command's
+func (e *CmdError) Error() string        { return e.message }
+func (e *CmdError) ErrorCode() int       { return e.code }
+func (e *CmdError) ErrorMessage() string { return e.message }
+
+// NewAuthenticatedCmdClient retrieves a *CmdClient from the command's
 // context. If no client is injected (nil context value), it returns
 // the "no API key configured" error — matching the spec's
 // NewAuthenticatedClient pre-validation behavior.
-func newAuthenticatedCmdClient(cmd *cobra.Command) (*cmdClient, error) {
+func NewAuthenticatedCmdClient(cmd *cobra.Command) (*CmdClient, error) {
 	raw := ClientFromContext(cmd.Context())
-	if c, ok := raw.(*cmdClient); ok && c != nil {
+	if c, ok := raw.(*CmdClient); ok && c != nil {
 		return c, nil
 	}
 
 	// No client injected. In production, PersistentPreRunE on the root
 	// command injects the client after resolving config/env/flags.
 	// Without injection, we report the missing-key error.
-	return nil, &cmdError{
+	return nil, &CmdError{
 		code:    2,
 		message: "no API key configured — run 'akc login' first",
 	}
 }
 
-// cmdPrintJSON writes v as indented JSON to cmd's stdout.
+// CmdPrintJSON writes v as indented JSON to cmd's stdout.
 // Uses json.NewEncoder with HTML escaping disabled per 15-REQ-20.1.
-func cmdPrintJSON(cmd *cobra.Command, v any) error {
+func CmdPrintJSON(cmd *cobra.Command, v any) error {
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
 }
 
-// cmdHandleError writes a JSON error envelope to stdout and returns
+// CmdHandleError writes a JSON error envelope to stdout and returns
 // the original error. For coded errors (satisfying codedError), the
 // envelope uses the error's code. For other errors, code is 2.
-func cmdHandleError(cmd *cobra.Command, err error) error {
+func CmdHandleError(cmd *cobra.Command, err error) error {
 	code := 2
 	msg := err.Error()
 
@@ -94,28 +114,28 @@ func cmdHandleError(cmd *cobra.Command, err error) error {
 			"message": msg,
 		},
 	}
-	_ = cmdPrintJSON(cmd, envelope)
+	_ = CmdPrintJSON(cmd, envelope)
 	return &printedError{err}
 }
 
-// doRequest performs an authenticated HTTP request and returns the decoded
+// DoRequest performs an authenticated HTTP request and returns the decoded
 // response body. On 4xx/5xx responses, it decodes the error envelope and
-// returns a *cmdError. The caller prints the result or error envelope.
-func (c *cmdClient) doRequest(ctx context.Context, method, path string, body any) (any, error) {
+// returns a *CmdError. The caller prints the result or error envelope.
+func (c *CmdClient) DoRequest(ctx context.Context, method, path string, body any) (any, error) {
 	fullURL := strings.TrimRight(c.endpointURL, "/") + "/api/v1" + path
 
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return nil, &cmdError{code: 2, message: fmt.Sprintf("failed to marshal request: %v", err)}
+			return nil, &CmdError{code: 2, message: fmt.Sprintf("failed to marshal request: %v", err)}
 		}
 		bodyReader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
-		return nil, &cmdError{code: 2, message: err.Error()}
+		return nil, &CmdError{code: 2, message: err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
@@ -130,13 +150,13 @@ func (c *cmdClient) doRequest(ctx context.Context, method, path string, body any
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, &cmdError{code: 2, message: err.Error()}
+		return nil, &CmdError{code: 2, message: err.Error()}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &cmdError{code: 2, message: err.Error()}
+		return nil, &CmdError{code: 2, message: err.Error()}
 	}
 
 	if resp.StatusCode >= 400 {
@@ -148,9 +168,9 @@ func (c *cmdClient) doRequest(ctx context.Context, method, path string, body any
 			} `json:"error"`
 		}
 		if json.Unmarshal(respBody, &errEnv) == nil && errEnv.Error.Code != 0 {
-			return nil, &cmdError{code: errEnv.Error.Code, message: errEnv.Error.Message}
+			return nil, &CmdError{code: errEnv.Error.Code, message: errEnv.Error.Message}
 		}
-		return nil, &cmdError{code: resp.StatusCode, message: http.StatusText(resp.StatusCode)}
+		return nil, &CmdError{code: resp.StatusCode, message: http.StatusText(resp.StatusCode)}
 	}
 
 	// Decode response body into any (map[string]any for objects,
@@ -158,11 +178,69 @@ func (c *cmdClient) doRequest(ctx context.Context, method, path string, body any
 	var result any
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &result); err != nil {
-			return nil, &cmdError{code: 2, message: fmt.Sprintf("failed to decode response: %v", err)}
+			return nil, &CmdError{code: 2, message: fmt.Sprintf("failed to decode response: %v", err)}
 		}
 	}
 
 	return result, nil
+}
+
+// DoRequestRaw performs an authenticated HTTP request and returns the raw
+// response body and HTTP status code. Unlike DoRequest, it does not decode
+// the response — the caller is responsible for unmarshaling. On 4xx/5xx
+// responses it decodes the error envelope and returns a *CmdError.
+func (c *CmdClient) DoRequestRaw(ctx context.Context, method, path string, body any) ([]byte, int, error) {
+	fullURL := strings.TrimRight(c.endpointURL, "/") + "/api/v1" + path
+
+	var bodyReader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, &CmdError{code: 2, message: fmt.Sprintf("failed to marshal request: %v", err)}
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
+	if err != nil {
+		return nil, 0, &CmdError{code: 2, message: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	httpClient := c.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, &CmdError{code: 2, message: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, &CmdError{code: 2, message: err.Error()}
+	}
+
+	if resp.StatusCode >= 400 {
+		var errEnv struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errEnv) == nil && errEnv.Error.Code != 0 {
+			return nil, resp.StatusCode, &CmdError{code: errEnv.Error.Code, message: errEnv.Error.Message}
+		}
+		return nil, resp.StatusCode, &CmdError{code: resp.StatusCode, message: http.StatusText(resp.StatusCode)}
+	}
+
+	return respBody, resp.StatusCode, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -200,17 +278,17 @@ func newUserShowCmd() *cobra.Command {
 			"path":   "/user",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/user", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/user", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -233,18 +311,18 @@ func newUserUpdateCmd() *cobra.Command {
 			"path":   "/user",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			body := map[string]string{"full_name": fullName}
-			result, err := client.doRequest(cmd.Context(), http.MethodPatch, "/user", body)
+			result, err := client.DoRequest(cmd.Context(), http.MethodPatch, "/user", body)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 

@@ -38,17 +38,17 @@ func newOrgsListCmd() *cobra.Command {
 			"path":   "/orgs",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/orgs", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/orgs", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -68,18 +68,18 @@ func newOrgsShowCmd() *cobra.Command {
 			"path":   "/orgs/:id",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			id := args[0]
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/orgs/"+id, nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/orgs/"+id, nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -99,18 +99,18 @@ func newOrgsMembersCmd() *cobra.Command {
 			"path":   "/orgs/:id/members",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			id := args[0]
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/orgs/"+id+"/members", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/orgs/"+id+"/members", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }

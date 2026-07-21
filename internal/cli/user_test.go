@@ -50,10 +50,10 @@ func executeUserCmd(args ...string) (stdout, stderr string, err error) {
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
-// executeUserCmdWithClient is like executeUserCmd but injects a *cmdClient
+// executeUserCmdWithClient is like executeUserCmd but injects a *CmdClient
 // into the command's context via ContextWithClient. Used for happy-path
 // and integration tests that need an authenticated client.
-func executeUserCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+func executeUserCmdWithClient(client *CmdClient, args ...string) (stdout, stderr string, err error) {
 	cmd := NewUserCmd()
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
@@ -108,7 +108,7 @@ func TestUserShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_keyid_secret",
 	}
@@ -223,7 +223,7 @@ func TestUserUpdate_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -271,7 +271,7 @@ func TestUserUpdate_ServerError422(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -328,7 +328,7 @@ func TestUserShow_NoHTMLEscaping(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -383,7 +383,7 @@ func TestUserShow_APIError401(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}

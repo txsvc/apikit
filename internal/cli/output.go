@@ -65,7 +65,7 @@ func ExitCode(err error) int {
 // and err.Error() as the message.
 // Nothing is written to stderr (13-REQ-9.2).
 // printedError wraps an error that has already been printed as a JSON
-// envelope by cmdHandleError. PrintError checks for this to avoid
+// envelope by CmdHandleError. PrintError checks for this to avoid
 // double-printing.
 type printedError struct{ err error }
 

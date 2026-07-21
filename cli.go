@@ -1,6 +1,8 @@
 package apikit
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 	"github.com/txsvc/apikit/internal/cli"
 )
@@ -40,3 +42,71 @@ func CLIPrintError(err error) { cli.PrintError(err) }
 
 // CLIExitCode maps an error to an exit code: 0 (nil), 1 (API error), 2 (other).
 func CLIExitCode(err error) int { return cli.ExitCode(err) }
+
+// ---------------------------------------------------------------------------
+// Public CLI client API for custom commands
+// ---------------------------------------------------------------------------
+
+// CLIClient is an authenticated HTTP client for CLI commands. It handles
+// Bearer-token injection, JSON request/response marshaling, the /api/v1
+// path prefix, and server error envelope decoding.
+//
+// Custom commands should retrieve the client from the Cobra context via
+// CLIClientFromCmd rather than constructing one directly — this ensures
+// the client inherits credentials resolved by apikit's PersistentPreRunE
+// (config file, environment variables, and CLI flags).
+type CLIClient = cli.CmdClient
+
+// CLIError represents a client-side or API error with an integer code and
+// message. It satisfies the error interface and is used by CLIHandleError
+// to render JSON error envelopes.
+type CLIError = cli.CmdError
+
+// NewCLIClient constructs a CLIClient with the given endpoint URL and API
+// key. Prefer CLIClientFromCmd for commands registered on apikit's root
+// command tree — it automatically uses resolved credentials.
+func NewCLIClient(endpointURL, apiKey string) *CLIClient {
+	return cli.NewCmdClient(endpointURL, apiKey)
+}
+
+// NewCLIError creates a CLIError with the given code and message.
+func NewCLIError(code int, message string) *CLIError {
+	return cli.NewCmdError(code, message)
+}
+
+// CLIClientFromCmd retrieves the authenticated CLIClient from a Cobra
+// command's context. The client is injected by apikit's PersistentPreRunE
+// after resolving credentials from flags, environment variables, and the
+// config file. Returns an error if no client is available (e.g., the user
+// has not run "login" yet).
+func CLIClientFromCmd(cmd *cobra.Command) (*CLIClient, error) {
+	return cli.NewAuthenticatedCmdClient(cmd)
+}
+
+// CLIPrintResult writes v as indented JSON (two-space indent, no HTML
+// escaping) to cmd's stdout. Use this for successful command output.
+func CLIPrintResult(cmd *cobra.Command, v any) error {
+	return cli.CmdPrintJSON(cmd, v)
+}
+
+// CLIHandleError writes a JSON error envelope to cmd's stdout and returns
+// the error wrapped so that CLIPrintError will not double-print it.
+// Use this to report errors from custom command RunE functions.
+func CLIHandleError(cmd *cobra.Command, err error) error {
+	return cli.CmdHandleError(cmd, err)
+}
+
+// CLIResolveOrgSlug resolves an organization slug to its UUID by listing
+// the authenticated user's organizations and matching on slug. Useful for
+// custom commands that accept org slugs as user-friendly identifiers.
+func CLIResolveOrgSlug(ctx context.Context, client *CLIClient, slug string) (string, error) {
+	respBody, status, err := client.DoRequestRaw(ctx, "GET", "/user/orgs", nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 400 {
+		return "", NewCLIError(status, "failed to list organizations")
+	}
+
+	return resolveOrgSlugFromJSON(respBody, slug)
+}

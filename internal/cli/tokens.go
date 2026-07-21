@@ -40,17 +40,17 @@ func newTokensListCmd() *cobra.Command {
 			"path":   "/user/tokens",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/user/tokens", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/user/tokens", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -82,17 +82,17 @@ func newTokensCreateCmd() *cobra.Command {
 			// take priority over missing-api-key errors.
 			perms, err := parsePermissions(permissions)
 			if err != nil {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: err.Error()})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
 			}
 
 			// Validate expires.
 			if err := validateExpires(expires); err != nil {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: err.Error()})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
 			}
 
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			body := map[string]any{
@@ -100,12 +100,12 @@ func newTokensCreateCmd() *cobra.Command {
 				"permissions": perms,
 				"expires":     expires,
 			}
-			result, err := client.doRequest(cmd.Context(), http.MethodPost, "/user/tokens", body)
+			result, err := client.DoRequest(cmd.Context(), http.MethodPost, "/user/tokens", body)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			if err := cmdPrintJSON(cmd, result); err != nil {
+			if err := CmdPrintJSON(cmd, result); err != nil {
 				return err
 			}
 
@@ -141,18 +141,18 @@ func newTokensShowCmd() *cobra.Command {
 			"path":   "/user/tokens/:token_id",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			tokenID := args[0]
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/user/tokens/"+tokenID, nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/user/tokens/"+tokenID, nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -173,20 +173,20 @@ func newTokensRevokeCmd() *cobra.Command {
 			"path":   "/user/tokens/:token_id",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			tokenID := args[0]
-			_, err = client.doRequest(cmd.Context(), http.MethodDelete, "/user/tokens/"+tokenID, nil)
+			_, err = client.DoRequest(cmd.Context(), http.MethodDelete, "/user/tokens/"+tokenID, nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			// RevokeToken returns no body (HTTP 204). Print {} to stdout.
 			emptyObj := map[string]any{}
-			if err := cmdPrintJSON(cmd, emptyObj); err != nil {
+			if err := CmdPrintJSON(cmd, emptyObj); err != nil {
 				return err
 			}
 

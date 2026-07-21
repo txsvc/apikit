@@ -40,10 +40,10 @@ func executeKeysCmd(args ...string) (stdout, stderr string, err error) {
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
-// executeKeysCmdWithClient is like executeKeysCmd but injects a *cmdClient
+// executeKeysCmdWithClient is like executeKeysCmd but injects a *CmdClient
 // into the command's context via ContextWithClient. Used for happy-path,
 // config-mutation, and error-injection tests.
-func executeKeysCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+func executeKeysCmdWithClient(client *CmdClient, args ...string) (stdout, stderr string, err error) {
 	cmd := NewKeysCmd()
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
@@ -91,7 +91,7 @@ func TestKeysList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -155,7 +155,7 @@ func TestKeysRefresh_HappyPath(t *testing.T) {
 	defer server.Close()
 
 	var savedConfig *CLIConfig
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_keyid123_secret",
 		saveConfigFn: func(_ string, cfg *CLIConfig) error {
@@ -216,7 +216,7 @@ func TestKeysRefresh_InvalidKeyFormat(t *testing.T) {
 	defer server.Close()
 
 	// Inject client with api_key='badkey' (no underscores) — parseKeyID should fail.
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "badkey",
 	}
@@ -280,7 +280,7 @@ func TestKeysRevoke_HappyPath(t *testing.T) {
 	defer server.Close()
 
 	var savedConfig *CLIConfig
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_keyid123_secret",
 		saveConfigFn: func(_ string, cfg *CLIConfig) error {
@@ -345,7 +345,7 @@ func TestKeysRevoke_InvalidKeyFormat(t *testing.T) {
 	defer server.Close()
 
 	// Inject client with api_key='onlyone' (no underscores).
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "onlyone",
 	}
@@ -403,7 +403,7 @@ func TestKeysRefresh_ConfigPreservation(t *testing.T) {
 	defer server.Close()
 
 	var savedConfig *CLIConfig
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 		saveConfigFn: func(_ string, cfg *CLIConfig) error {
@@ -462,7 +462,7 @@ func TestKeysRefresh_ConfigWriteFailure(t *testing.T) {
 	defer server.Close()
 
 	// Stub config save to fail.
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_keyid_secret",
 		saveConfigFn: func(_ string, _ *CLIConfig) error {
@@ -520,7 +520,7 @@ func TestKeysRevoke_ConfigWriteFailure(t *testing.T) {
 	defer server.Close()
 
 	// Stub config save to fail.
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_keyid_secret",
 		saveConfigFn: func(_ string, _ *CLIConfig) error {

@@ -785,7 +785,7 @@ func TestSmokeSpec15_LoginOAuthFlowEndToEnd(t *testing.T) {
 //
 // Execution Path: 15-PATH-2
 // Real components: internal/cli/user.go (newUserShowCmd),
-//   CLI Core NewAuthenticatedClient (via cmdClient injection)
+//   CLI Core NewAuthenticatedClient (via CmdClient injection)
 // Mockable: httptest.Server handling GET /user
 // =========================================================================
 
@@ -805,7 +805,7 @@ func TestSmokeSpec15_UserShowHappyPath(t *testing.T) {
 	}))
 	defer mockSrv.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: mockSrv.URL,
 		apiKey:      "test-api-key",
 		httpClient:  mockSrv.Client(),
@@ -880,7 +880,7 @@ func TestSmokeSpec15_KeysRefreshEndToEnd(t *testing.T) {
 
 	var savedConfig *CLIConfig
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: mockSrv.URL,
 		apiKey:      "ak_keyid123_secret",
 		httpClient:  mockSrv.Client(),
@@ -998,7 +998,7 @@ func TestSmokeSpec15_LoginTimeoutNoCallback(t *testing.T) {
 // Execution Path: 15-PATH-5
 // Real components: internal/cli/tokens.go (newTokensCreateCmd),
 //   internal/cli/helpers.go (parsePermissions, validateExpires),
-//   CLI Core NewAuthenticatedClient (via cmdClient injection)
+//   CLI Core NewAuthenticatedClient (via CmdClient injection)
 // Mockable: httptest.Server handling POST /tokens
 // =========================================================================
 
@@ -1026,7 +1026,7 @@ func TestSmokeSpec15_TokensCreateEndToEnd(t *testing.T) {
 	}))
 	defer mockSrv.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: mockSrv.URL,
 		apiKey:      "test-api-key",
 		httpClient:  mockSrv.Client(),
@@ -1090,7 +1090,7 @@ func TestSmokeSpec15_TokensCreateEndToEnd(t *testing.T) {
 //
 // Execution Path: 15-PATH-6
 // Real components: internal/cli/orgs.go (newOrgsListCmd),
-//   CLI Core NewAuthenticatedClient (via cmdClient context absence)
+//   CLI Core NewAuthenticatedClient (via CmdClient context absence)
 // Mockable: httptest.Server recording all incoming requests
 // =========================================================================
 

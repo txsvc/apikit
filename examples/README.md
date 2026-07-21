@@ -28,21 +28,29 @@ The server starts on `http://localhost:8080`. Edit `config.toml` to configure th
 
 ## cli/
 
-A custom CLI that embeds apikit's base command tree (version, help) and adds a custom command.
+A custom CLI that embeds apikit's base command tree (version, help) and adds custom API-backed commands.
 
 ```bash
 cd cli
 make build
-bin/mycli hello
 bin/mycli version
+bin/mycli widget list
+bin/mycli widget create --name "gear"
+bin/mycli widget get <id>
+bin/mycli widget delete <id> --confirm
 ```
 
 **What it demonstrates:**
 
 - `apikit.RootCommand()` as the base command tree
-- `apikit.LoginCmd()`, `UserCmd()`, `KeysCmd()`, `TokensCmd()`, `OrgsCmd()`, `AdminCmd()` to register all built-in commands
-- Adding custom Cobra commands alongside the built-in ones
+- All built-in commands: `LoginCmd()`, `UserCmd()`, `KeysCmd()`, `TokensCmd()`, `OrgsCmd()`, `AdminCmd()`
+- Custom commands using `CLIClientFromCmd()` to get the authenticated client
+- `DoRequest()` for authenticated API calls with automatic error envelope handling
+- `CLIPrintResult()` for consistent JSON output
+- `CLIHandleError()` / `NewCLIError()` for structured error reporting
 - `CLIExecute()` / `CLIPrintError()` / `CLIExitCode()` for centralized error handling
+
+See [docs/custom-cli.md](../docs/custom-cli.md) for the full guide on building custom CLI commands.
 
 ## Using in your own project
 

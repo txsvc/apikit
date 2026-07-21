@@ -1,6 +1,7 @@
 package apikit
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -50,5 +51,80 @@ func TestEmbeddableRootCommandViaAddCommand(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("'akc' subcommand not found under consumer root after AddCommand")
+	}
+}
+
+// =========================================================================
+// Tests for public CLI client API
+// =========================================================================
+
+func TestNewCLIClient(t *testing.T) {
+	client := NewCLIClient("https://api.example.com", "ak_key_secret")
+	if client == nil {
+		t.Fatal("NewCLIClient should return non-nil")
+	}
+	if client.EndpointURL() != "https://api.example.com" {
+		t.Errorf("EndpointURL = %q, want %q", client.EndpointURL(), "https://api.example.com")
+	}
+	if client.APIKey() != "ak_key_secret" {
+		t.Errorf("APIKey = %q, want %q", client.APIKey(), "ak_key_secret")
+	}
+}
+
+func TestNewCLIError(t *testing.T) {
+	err := NewCLIError(404, "not found")
+	if err == nil {
+		t.Fatal("NewCLIError should return non-nil")
+	}
+	if err.Error() != "not found" {
+		t.Errorf("Error() = %q, want %q", err.Error(), "not found")
+	}
+	if err.ErrorCode() != 404 {
+		t.Errorf("ErrorCode() = %d, want 404", err.ErrorCode())
+	}
+}
+
+func TestCLIResolveOrgSlug_Found(t *testing.T) {
+	id, err := resolveOrgSlugFromJSON(
+		[]byte(`[{"id":"uuid-1","slug":"acme"},{"id":"uuid-2","slug":"beta"}]`),
+		"acme",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "uuid-1" {
+		t.Errorf("id = %q, want %q", id, "uuid-1")
+	}
+}
+
+func TestCLIResolveOrgSlug_NotFound(t *testing.T) {
+	_, err := resolveOrgSlugFromJSON(
+		[]byte(`[{"id":"uuid-1","slug":"acme"}]`),
+		"nonexistent",
+	)
+	if err == nil {
+		t.Fatal("expected error for missing slug")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", err.Error())
+	}
+}
+
+func TestCLIResolveOrgSlug_EmptyID(t *testing.T) {
+	_, err := resolveOrgSlugFromJSON(
+		[]byte(`[{"id":"","slug":"acme"}]`),
+		"acme",
+	)
+	if err == nil {
+		t.Fatal("expected error for empty UUID")
+	}
+}
+
+func TestCLIClientFromCmd_NoClient(t *testing.T) {
+	cmd := &cobra.Command{Use: "test"}
+	cmd.SetContext(context.Background())
+	_, err := CLIClientFromCmd(cmd)
+	if err == nil {
+		t.Fatal("expected error when no client in context")
 	}
 }

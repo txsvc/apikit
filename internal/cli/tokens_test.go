@@ -42,10 +42,10 @@ func executeTokensCmd(args ...string) (stdout, stderr string, err error) {
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
-// executeTokensCmdWithClient is like executeTokensCmd but injects a *cmdClient
+// executeTokensCmdWithClient is like executeTokensCmd but injects a *CmdClient
 // into the command's context via ContextWithClient. Used for happy-path and
 // integration tests that need an authenticated client.
-func executeTokensCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+func executeTokensCmdWithClient(client *CmdClient, args ...string) (stdout, stderr string, err error) {
 	cmd := NewTokensCmd()
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
@@ -103,7 +103,7 @@ func TestTokensList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -163,7 +163,7 @@ func TestTokensCreate_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -348,7 +348,7 @@ func TestTokensShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -404,7 +404,7 @@ func TestTokensRevoke_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -457,7 +457,7 @@ func TestTokensRevoke_Property_AlwaysEmitsEmptyJSON(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := &cmdClient{
+			client := &CmdClient{
 				endpointURL: server.URL,
 				apiKey:      "ak_k_s",
 			}

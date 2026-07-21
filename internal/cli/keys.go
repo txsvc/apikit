@@ -39,17 +39,17 @@ func newKeysListCmd() *cobra.Command {
 			"path":   "/user/keys",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			result, err := client.doRequest(cmd.Context(), http.MethodGet, "/user/keys", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodGet, "/user/keys", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
-			return cmdPrintJSON(cmd, result)
+			return CmdPrintJSON(cmd, result)
 		},
 	}
 }
@@ -70,32 +70,32 @@ func newKeysRefreshCmd() *cobra.Command {
 			"path":   "/user/keys/:key_id/refresh",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			// Parse key_id from the configured api_key.
 			keyID, err := parseKeyID(client.apiKey)
 			if err != nil {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: err.Error()})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
 			}
 
 			// Call the refresh endpoint.
-			result, err := client.doRequest(cmd.Context(), http.MethodPost, "/user/keys/"+keyID+"/refresh", nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodPost, "/user/keys/"+keyID+"/refresh", nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			// Extract the new key from the response for config update.
 			resultMap, ok := result.(map[string]any)
 			if !ok {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: "unexpected response format"})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: "unexpected response format"})
 			}
 
 			newKey, _ := resultMap["key"].(string)
 			if newKey == "" {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: "response missing key field"})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: "response missing key field"})
 			}
 
 			// Update config with the new key via atomic write.
@@ -109,14 +109,14 @@ func newKeysRefreshCmd() *cobra.Command {
 			}
 			if err := saveFn(client.configPath, cfg); err != nil {
 				// Config write failure — do NOT print the new key.
-				return cmdHandleError(cmd, &cmdError{
+				return CmdHandleError(cmd, &CmdError{
 					code:    2,
 					message: fmt.Sprintf("failed to save config: %v", err),
 				})
 			}
 
 			// Success: print response JSON and status message.
-			if err := cmdPrintJSON(cmd, result); err != nil {
+			if err := CmdPrintJSON(cmd, result); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "API key refreshed")
@@ -142,21 +142,21 @@ func newKeysRevokeCmd() *cobra.Command {
 			"path":   "/user/keys/:key_id",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAuthenticatedCmdClient(cmd)
+			client, err := NewAuthenticatedCmdClient(cmd)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			// Parse key_id from the configured api_key.
 			keyID, err := parseKeyID(client.apiKey)
 			if err != nil {
-				return cmdHandleError(cmd, &cmdError{code: 2, message: err.Error()})
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
 			}
 
 			// Call the revoke endpoint.
-			result, err := client.doRequest(cmd.Context(), http.MethodDelete, "/user/keys/"+keyID, nil)
+			result, err := client.DoRequest(cmd.Context(), http.MethodDelete, "/user/keys/"+keyID, nil)
 			if err != nil {
-				return cmdHandleError(cmd, err)
+				return CmdHandleError(cmd, err)
 			}
 
 			// Clear api_key and user_id in config via atomic write.
@@ -171,14 +171,14 @@ func newKeysRevokeCmd() *cobra.Command {
 			}
 			if err := saveFn(client.configPath, cfg); err != nil {
 				// Config write failure — do NOT print the response data.
-				return cmdHandleError(cmd, &cmdError{
+				return CmdHandleError(cmd, &CmdError{
 					code:    2,
 					message: fmt.Sprintf("failed to save config: %v", err),
 				})
 			}
 
 			// Success: print response JSON and revocation message.
-			if err := cmdPrintJSON(cmd, result); err != nil {
+			if err := CmdPrintJSON(cmd, result); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "API key revoked. Run 'akc login' to obtain a new key.")

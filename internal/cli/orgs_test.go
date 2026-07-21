@@ -47,10 +47,10 @@ func executeOrgsCmd(args ...string) (stdout, stderr string, err error) {
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
-// executeOrgsCmdWithClient is like executeOrgsCmd but injects a *cmdClient
+// executeOrgsCmdWithClient is like executeOrgsCmd but injects a *CmdClient
 // into the command's context via ContextWithClient. Used for happy-path and
 // integration tests that need an authenticated client.
-func executeOrgsCmdWithClient(client *cmdClient, args ...string) (stdout, stderr string, err error) {
+func executeOrgsCmdWithClient(client *CmdClient, args ...string) (stdout, stderr string, err error) {
 	cmd := NewOrgsCmd()
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
@@ -112,7 +112,7 @@ func TestOrgsList_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -179,7 +179,7 @@ func TestOrgsShow_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}
@@ -251,7 +251,7 @@ func TestOrgsMembers_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cmdClient{
+	client := &CmdClient{
 		endpointURL: server.URL,
 		apiKey:      "ak_k_s",
 	}

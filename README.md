@@ -25,6 +25,7 @@ apikit is designed to be used as a library. Import the root package, call three 
 - **Go SDK client** -- typed client with generics, ETag support, and `ClientOption` pattern
 - **CLI client (`akc`)** -- browser-based OAuth login, full admin command set
 - **Embeddable command tree** -- import `apikit.RootCommand()` to get the base CLI (version, help); add subcommands with `rootCmd.AddCommand()`
+- **CLI client API** -- `CLIClientFromCmd`, `DoRequest`, `CLIPrintResult`, `CLIHandleError` for building custom commands with authenticated API calls, consistent JSON output, and automatic credential resolution
 - **OpenAPI 3.1 spec** -- machine-readable API definition at `api/openapi.yaml`
 - **Graceful shutdown** -- SIGTERM/SIGINT handling with a 15-second drain timeout
 - **Pure-Go SQLite** -- no CGo, no external dependencies for the database
@@ -342,7 +343,8 @@ akc admin orgs members add <org_id> <user_id>
 akc version
 ```
 
-See [docs/cli.md](docs/cli.md) for the complete CLI reference.
+See [docs/cli.md](docs/cli.md) for the complete CLI reference and
+[docs/custom-cli.md](docs/custom-cli.md) for building custom CLI commands.
 
 ## API Reference
 
@@ -397,6 +399,7 @@ go build -ldflags "\
 - [Authentication](docs/authentication.md) -- credential types, bootstrap, authorization model
 - [API Reference](docs/api-reference.md) -- complete HTTP endpoint reference
 - [CLI Reference](docs/cli.md) -- akc command reference
+- [Custom CLI Commands](docs/custom-cli.md) -- building custom API-backed commands
 - [Database](docs/database.md) -- schema, transactions, error handling
 - [Configuration](docs/configuration.md) -- config.toml reference
 

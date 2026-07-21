@@ -945,6 +945,27 @@ akc admin orgs members remove <org_id> <user_id>
 akc admin orgs delete <org_id>
 ```
 
+### Building custom commands
+
+apikit exposes a public API for building custom CLI commands that make
+authenticated API calls, use the same JSON output formatting, and inherit
+credential resolution automatically. See
+[docs/custom-cli.md](custom-cli.md) for the full guide.
+
+Key functions:
+
+| Function | Purpose |
+|----------|---------|
+| `CLIClientFromCmd(cmd)` | Get the authenticated client from a Cobra command |
+| `client.DoRequest(ctx, method, path, body)` | Make an authenticated API request (returns decoded JSON) |
+| `client.DoRequestRaw(ctx, method, path, body)` | Make an authenticated API request (returns raw bytes) |
+| `CLIPrintResult(cmd, v)` | Print JSON result to stdout |
+| `CLIHandleError(cmd, err)` | Print JSON error envelope to stdout |
+| `NewCLIError(code, message)` | Create a typed client-side error |
+| `CLIResolveOrgSlug(ctx, client, slug)` | Resolve an org slug to its UUID |
+
+---
+
 ### Scripting with jq
 
 ```bash
