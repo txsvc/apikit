@@ -135,17 +135,19 @@ func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 
 // contentTypeEnforcementMiddleware returns Echo middleware that rejects POST,
 // PUT, and PATCH requests with a Content-Type other than application/json
-// with HTTP 415 via WriteAPIError(). GET, DELETE, HEAD, and OPTIONS pass through
-// without Content-Type inspection.
+// with HTTP 415 via WriteAPIError(). Requests with no body (Content-Length 0
+// or missing) are exempt since there is no media type to enforce. GET, DELETE,
+// HEAD, and OPTIONS pass through without Content-Type inspection.
 func contentTypeEnforcementMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			method := c.Request().Method
 			if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
-				ct := c.Request().Header.Get("Content-Type")
-				// Check if Content-Type starts with "application/json"
-				if !strings.HasPrefix(ct, "application/json") {
-					return WriteAPIError(c, http.StatusUnsupportedMediaType, "unsupported media type")
+				if c.Request().ContentLength != 0 {
+					ct := c.Request().Header.Get("Content-Type")
+					if !strings.HasPrefix(ct, "application/json") {
+						return WriteAPIError(c, http.StatusUnsupportedMediaType, "unsupported media type")
+					}
 				}
 			}
 			return next(c)

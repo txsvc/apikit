@@ -285,6 +285,45 @@ func TestMiddleware_LogStatusMatchesResponseStatus(t *testing.T) {
 	}
 }
 
+// TestContentType_BodilessPostPassesThrough verifies that a POST request
+// with no body (Content-Length 0, no Content-Type header) passes through the
+// Content-Type enforcement middleware without a 415 rejection.
+func TestContentType_BodilessPostPassesThrough(t *testing.T) {
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	api := srv.APIGroup()
+	if api == nil {
+		t.Fatal("APIGroup() returned nil")
+	}
+	api.POST("/action", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "done"})
+	})
+
+	req, err := http.NewRequest("POST", "http://"+addr+"/api/v1/action", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200; bodiless POST should not be rejected by Content-Type enforcement", resp.StatusCode)
+	}
+}
+
 // ========================================================================
 // Task 3.2: Unit and integration tests for panic recovery middleware
 // (TS-01-37, TS-01-38, TS-01-E14)
