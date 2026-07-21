@@ -1,6 +1,7 @@
 package apikit
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -43,7 +44,11 @@ func HTTPErrorHandler(err error, c echo.Context) {
 	code := http.StatusInternalServerError
 	message := "internal server error"
 
-	if he, ok := err.(*echo.HTTPError); ok {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		code = http.StatusRequestEntityTooLarge
+		message = "payload too large"
+	} else if he, ok := err.(*echo.HTTPError); ok {
 		code = he.Code
 		if m, ok := he.Message.(string); ok {
 			message = m

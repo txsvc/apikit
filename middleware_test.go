@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -1061,4 +1064,260 @@ func TestRequestID_PropertyAlwaysValidAndMatchesLog(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ========================================================================
+// Issue #36: Body size limit overshoot in limitedReadCloser
+// Tests for chunked/streaming body limit enforcement and HTTPErrorHandler
+// MaxBytesError handling.
+// ========================================================================
+
+// TestChunkedBody_ExceedingLimitReturns413 verifies that a chunked HTTP
+// request (Transfer-Encoding: chunked, no Content-Length) whose total body
+// exceeds the configured limit returns HTTP 413 with the standard JSON error
+// envelope, not HTTP 500.
+// Covers TS-NS-1 (Requirement: NS-REQ-1).
+func TestChunkedBody_ExceedingLimitReturns413(t *testing.T) {
+	cfg := buildTestConfig(0)
+	cfg.Server.MaxBodySize = "1MB"
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	// Register a handler that reads the body (triggers MaxBytesReader error)
+	api := srv.APIGroup()
+	if api == nil {
+		t.Fatal("APIGroup() returned nil")
+	}
+	api.POST("/test", func(c echo.Context) error {
+		if _, err := io.ReadAll(c.Request().Body); err != nil {
+			return err // Surfaces MaxBytesError to the error handler
+		}
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Use io.Pipe to create a chunked transfer (no Content-Length).
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		// Write more than 1MB in chunks
+		chunk := bytes.Repeat([]byte("x"), 64*1024) // 64KB chunks
+		for i := 0; i < 20; i++ {                   // 20 * 64KB = 1.25MB
+			if _, err := pw.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+
+	req, err := http.NewRequest("POST", "http://"+addr+"/api/v1/test", pr)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Explicitly set ContentLength to -1 to force chunked encoding
+	req.ContentLength = -1
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Verify 413 status (not 500)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", resp.StatusCode)
+	}
+
+	// Verify standard JSON error envelope
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	errObj, ok := body["error"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response body missing 'error' object")
+	}
+	code, ok := errObj["code"].(float64)
+	if !ok || int(code) != 413 {
+		t.Errorf("error.code = %v, want 413", errObj["code"])
+	}
+	msg, ok := errObj["message"].(string)
+	if !ok || msg != "payload too large" {
+		t.Errorf("error.message = %v, want %q", errObj["message"], "payload too large")
+	}
+}
+
+// TestHTTPErrorHandler_MaxBytesError verifies that HTTPErrorHandler maps
+// *http.MaxBytesError to HTTP 413 with the standard JSON error envelope.
+// Covers TS-NS-3 (Requirement: NS-REQ-3).
+func TestHTTPErrorHandler_MaxBytesError(t *testing.T) {
+	e := echo.New()
+	e.HTTPErrorHandler = apikit.HTTPErrorHandler
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	c := e.NewContext(req, rec)
+
+	// Invoke the error handler with a *http.MaxBytesError
+	apikit.HTTPErrorHandler(&http.MaxBytesError{Limit: 1}, c)
+
+	// Verify 413 status
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+
+	// Verify JSON error envelope
+	var body map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	errObj, ok := body["error"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response body missing 'error' object")
+	}
+	code, ok := errObj["code"].(float64)
+	if !ok || int(code) != 413 {
+		t.Errorf("error.code = %v, want 413", errObj["code"])
+	}
+	msg, ok := errObj["message"].(string)
+	if !ok || msg != "payload too large" {
+		t.Errorf("error.message = %v, want %q", errObj["message"], "payload too large")
+	}
+}
+
+// TestHTTPErrorHandler_WrappedMaxBytesError verifies that HTTPErrorHandler
+// correctly detects a wrapped *http.MaxBytesError via errors.As.
+func TestHTTPErrorHandler_WrappedMaxBytesError(t *testing.T) {
+	e := echo.New()
+	e.HTTPErrorHandler = apikit.HTTPErrorHandler
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	c := e.NewContext(req, rec)
+
+	// Wrap the MaxBytesError
+	wrappedErr := fmt.Errorf("reading body: %w", &http.MaxBytesError{Limit: 1024})
+	apikit.HTTPErrorHandler(wrappedErr, c)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+}
+
+// TestChunkedBody_413IncludesValidUUIDv4RequestID verifies that a chunked
+// body 413 response includes the X-Request-ID header with a valid UUID v4.
+// Covers TS-NS-4 (Requirement: NS-REQ-4).
+func TestChunkedBody_413IncludesValidUUIDv4RequestID(t *testing.T) {
+	cfg := buildTestConfig(0)
+	cfg.Server.MaxBodySize = "1MB"
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	api := srv.APIGroup()
+	if api == nil {
+		t.Fatal("APIGroup() returned nil")
+	}
+	api.POST("/test", func(c echo.Context) error {
+		if _, err := io.ReadAll(c.Request().Body); err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Use io.Pipe to create chunked transfer
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		chunk := bytes.Repeat([]byte("x"), 64*1024)
+		for i := 0; i < 20; i++ {
+			if _, err := pw.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+
+	req, err := http.NewRequest("POST", "http://"+addr+"/api/v1/test", pr)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+
+	// Verify X-Request-ID is present and valid UUID v4
+	requestID := resp.Header.Get("X-Request-ID")
+	if requestID == "" {
+		t.Fatal("X-Request-ID header missing from chunked 413 response")
+	}
+	if !isValidUUIDv4(requestID) {
+		t.Errorf("X-Request-ID = %q, want valid UUID v4", requestID)
+	}
+}
+
+// TestHTTPErrorHandler_NonBodyErrors_NotMisclassified verifies that errors
+// unrelated to body size are not misclassified as 413.
+// Covers TS-NS-5 (Requirement: NS-REQ-5).
+func TestHTTPErrorHandler_NonBodyErrors_NotMisclassified(t *testing.T) {
+	e := echo.New()
+	e.HTTPErrorHandler = apikit.HTTPErrorHandler
+
+	t.Run("generic_error_returns_500", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		c := e.NewContext(req, rec)
+
+		apikit.HTTPErrorHandler(fmt.Errorf("something else"), c)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("status = %d, want 500", rec.Code)
+		}
+	})
+
+	t.Run("echo_http_error_404", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		c := e.NewContext(req, rec)
+
+		apikit.HTTPErrorHandler(echo.NewHTTPError(http.StatusNotFound, "not found"), c)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
+		}
+
+		// Verify JSON error envelope
+		var body map[string]interface{}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode response body: %v", err)
+		}
+		errObj, ok := body["error"].(map[string]interface{})
+		if !ok {
+			t.Fatal("response body missing 'error' object")
+		}
+		code, ok := errObj["code"].(float64)
+		if !ok || int(code) != 404 {
+			t.Errorf("error.code = %v, want 404", errObj["code"])
+		}
+	})
 }
