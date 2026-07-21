@@ -3,6 +3,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -39,9 +40,9 @@ func WrapError(err error) error {
 	if errors.As(err, &sqlErr) {
 		switch sqlErr.Code() {
 		case sqlite3.SQLITE_CONSTRAINT_UNIQUE, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY:
-			return ErrConflict
+			return fmt.Errorf("%w: %v", ErrConflict, err)
 		case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
-			return ErrDatabaseLocked
+			return fmt.Errorf("%w: %v", ErrDatabaseLocked, err)
 		}
 	}
 

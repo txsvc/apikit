@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit/internal/auth"
@@ -175,9 +176,19 @@ func isRFC3339(s string) bool {
 	return strings.HasSuffix(s, "Z") || (len(s) >= 25 && (s[19] == '+' || s[19] == '-'))
 }
 
+// testUUID returns a deterministic UUID v5 for any string, so tests can use
+// readable names while producing valid UUIDs for handlers with UUID validation.
+func testUUID(name string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(name)).String()
+}
+
 // insertTestUser inserts a user directly into the users table for test setup.
+// If id is not a valid UUID, it is converted to one via testUUID.
 func insertTestUser(t *testing.T, sqlDB *sql.DB, id, username, email, provider, providerID string) {
 	t.Helper()
+	if _, err := uuid.Parse(id); err != nil {
+		id = testUUID(id)
+	}
 
 	now := "2024-01-01T00:00:00Z"
 	_, err := sqlDB.Exec(
@@ -639,6 +650,9 @@ func setupNonAdminTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
 // status (e.g. "active" or "blocked"). Uses role="user" and full_name="".
 func insertTestUserWithStatus(t *testing.T, sqlDB *sql.DB, id, username, email, provider, providerID, status string) {
 	t.Helper()
+	if _, err := uuid.Parse(id); err != nil {
+		id = testUUID(id)
+	}
 
 	now := "2024-01-01T00:00:00Z"
 	_, err := sqlDB.Exec(
@@ -655,6 +669,9 @@ func insertTestUserWithStatus(t *testing.T, sqlDB *sql.DB, id, username, email, 
 // specified, providing maximum control for test setup.
 func insertTestUserFull(t *testing.T, sqlDB *sql.DB, id, username, email, fullName, role, status, provider, providerID, createdAt, updatedAt string) {
 	t.Helper()
+	if _, err := uuid.Parse(id); err != nil {
+		id = testUUID(id)
+	}
 
 	_, err := sqlDB.Exec(
 		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
@@ -850,7 +867,7 @@ func TestListUsers_DBError(t *testing.T) {
 func TestGetUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "get-user-uuid-1"
+	userID := testUUID("get-user-uuid-1")
 	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
 
 	rec := sendGet(t, e, "/users/"+userID)
@@ -922,7 +939,7 @@ func TestGetUser_NonAdmin(t *testing.T) {
 func TestGetUser_ETag(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "etag-user-uuid"
+	userID := testUUID("etag-user-uuid")
 	insertTestUser(t, sqlDB, userID, "etaguser", "etag@example.com", "github", "gh-etag")
 
 	// First request: get the ETag from the response.
@@ -965,7 +982,7 @@ func TestGetUser_ETag(t *testing.T) {
 func TestUpdateUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "update-user-uuid-1"
+	userID := testUUID("update-user-uuid-1")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Capture the original updated_at.
@@ -999,7 +1016,7 @@ func TestUpdateUser_Success(t *testing.T) {
 func TestUpdateUser_MissingField(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "update-missing-uuid"
+	userID := testUUID("update-missing-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{}`)
@@ -1042,7 +1059,7 @@ func TestUpdateUser_NonAdmin(t *testing.T) {
 func TestUpdateUser_ClearFullName(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "clear-name-uuid"
+	userID := testUUID("clear-name-uuid")
 	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
 
 	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{"full_name":""}`)
@@ -1090,7 +1107,7 @@ func TestUpdateUser_PointerDistinction(t *testing.T) {
 	// results in a nil pointer and triggers HTTP 400.
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "pointer-test-uuid"
+	userID := testUUID("pointer-test-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	rec := sendJSON(t, e, http.MethodPatch, "/users/"+userID, `{}`)
@@ -1142,7 +1159,7 @@ func fetchUserFromDB(t *testing.T, sqlDB *sql.DB, id string) (role, status, upda
 func TestPromoteUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "promote-user-uuid"
+	userID := testUUID("promote-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Capture original updated_at.
@@ -1180,7 +1197,7 @@ func TestPromoteUser_Success(t *testing.T) {
 func TestPromoteUser_AlreadyAdmin(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "already-admin-uuid"
+	userID := testUUID("already-admin-uuid")
 	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
 
 	// Capture original state.
@@ -1246,7 +1263,7 @@ func TestDemoteUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
 	// Insert two active admins — the target and another to satisfy the safeguard.
-	targetID := "demote-target-uuid"
+	targetID := testUUID("demote-target-uuid")
 	insertTestUserFull(t, sqlDB, targetID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
 	insertTestUserFull(t, sqlDB, "other-admin-uuid", "bob", "bob@example.com", "", "admin", "active", "github", "gh-002", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
 
@@ -1285,7 +1302,7 @@ func TestDemoteUser_Success(t *testing.T) {
 func TestDemoteUser_AlreadyUser(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "already-user-uuid"
+	userID := testUUID("already-user-uuid")
 	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "", "user", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-06-15T12:00:00Z")
 
 	// Capture original state.
@@ -1319,7 +1336,7 @@ func TestDemoteUser_LastAdmin(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
 	// Insert exactly one active admin — the sole admin.
-	soleAdminID := "sole-admin-uuid"
+	soleAdminID := testUUID("sole-admin-uuid")
 	insertTestUserFull(t, sqlDB, soleAdminID, "alice", "alice@example.com", "", "admin", "active", "github", "gh-001", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
 
 	rec := sendPost(t, e, "/users/"+soleAdminID+"/demote")
@@ -1380,7 +1397,7 @@ func TestDemoteUser_DBCountError(t *testing.T) {
 	}
 
 	// Insert an admin user while the database is still open.
-	adminID := "db-error-admin-uuid"
+	adminID := testUUID("db-error-admin-uuid")
 	now := "2024-01-01T00:00:00Z"
 	_, err = database.SqlDB.Exec(
 		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
@@ -1420,7 +1437,7 @@ func TestDemoteUser_DBCountError(t *testing.T) {
 func TestBlockUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "block-user-uuid"
+	userID := testUUID("block-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Capture original updated_at.
@@ -1458,7 +1475,7 @@ func TestBlockUser_Success(t *testing.T) {
 func TestBlockUser_AlreadyBlocked(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "already-blocked-uuid"
+	userID := testUUID("already-blocked-uuid")
 	insertTestUserWithStatus(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001", "blocked")
 
 	// Capture original state.
@@ -1516,7 +1533,7 @@ func TestBlockUser_NonAdmin(t *testing.T) {
 func TestUnblockUser_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "unblock-user-uuid"
+	userID := testUUID("unblock-user-uuid")
 	insertTestUserWithStatus(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001", "blocked")
 
 	// Capture original updated_at.
@@ -1554,7 +1571,7 @@ func TestUnblockUser_Success(t *testing.T) {
 func TestUnblockUser_AlreadyActive(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "already-active-uuid"
+	userID := testUUID("already-active-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Capture original state.
@@ -1704,7 +1721,7 @@ var patMetaExpectedFields = map[string]bool{
 func TestListUserKeys_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "keys-user-uuid"
+	userID := testUUID("keys-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Insert two API keys: one active, one revoked.
@@ -1785,7 +1802,7 @@ func TestListUserKeys_NonAdmin(t *testing.T) {
 func TestListUserKeys_NoSecrets(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "nosecrets-key-uuid"
+	userID := testUUID("nosecrets-key-uuid")
 	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
 
 	// Insert an API key with a known secret_hash value to ensure it's not returned.
@@ -1843,7 +1860,7 @@ func TestListUserKeys_NoSecrets(t *testing.T) {
 func TestRevokeUserKey_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "revoke-key-user-uuid"
+	userID := testUUID("revoke-key-user-uuid")
 	keyID := "revoke-key-1"
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 	insertTestAPIKey(t, sqlDB, keyID, userID, "hash-aaa", 30,
@@ -1882,7 +1899,7 @@ func TestRevokeUserKey_Success(t *testing.T) {
 func TestRevokeUserKey_AlreadyRevoked(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "idem-key-user-uuid"
+	userID := testUUID("idem-key-user-uuid")
 	keyID := "idem-key-1"
 	originalRevokedAt := "2025-02-15T12:00:00Z"
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -1922,7 +1939,7 @@ func TestRevokeUserKey_AlreadyRevoked(t *testing.T) {
 func TestRevokeUserKey_NotFound(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "nokey-user-uuid"
+	userID := testUUID("nokey-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	rec := sendDelete(t, e, "/users/"+userID+"/keys/nonexistent-key-id")
@@ -1959,7 +1976,7 @@ func TestRevokeUserKey_NonAdmin(t *testing.T) {
 func TestListUserTokens_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "tokens-user-uuid"
+	userID := testUUID("tokens-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Insert two PATs: one active, one revoked.
@@ -2041,7 +2058,7 @@ func TestListUserTokens_NonAdmin(t *testing.T) {
 func TestListUserTokens_NoSecrets(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "nosecrets-tok-uuid"
+	userID := testUUID("nosecrets-tok-uuid")
 	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
 
 	// Insert a PAT with a known secret_hash value to ensure it's not returned.
@@ -2100,7 +2117,7 @@ func TestListUserTokens_NoSecrets(t *testing.T) {
 func TestRevokeUserToken_Success(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "revoke-tok-user-uuid"
+	userID := testUUID("revoke-tok-user-uuid")
 	tokenID := "revoke-tok-1"
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 	insertTestPAT(t, sqlDB, tokenID, userID, "My Token", "hash-tok-aaa",
@@ -2140,7 +2157,7 @@ func TestRevokeUserToken_Success(t *testing.T) {
 func TestRevokeUserToken_AlreadyRevoked(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "idem-tok-user-uuid"
+	userID := testUUID("idem-tok-user-uuid")
 	tokenID := "idem-tok-1"
 	originalRevokedAt := "2025-02-15T12:00:00Z"
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2181,7 +2198,7 @@ func TestRevokeUserToken_AlreadyRevoked(t *testing.T) {
 func TestRevokeUserToken_NotFound(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "notok-user-uuid"
+	userID := testUUID("notok-user-uuid")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	rec := sendDelete(t, e, "/users/"+userID+"/tokens/nonexistent-token-id")
@@ -2279,7 +2296,7 @@ func parseOrgsResponse(t *testing.T, rec *httptest.ResponseRecorder) []handlers.
 // Test Spec: TS-07-50
 // Requirement: 07-REQ-14.1
 func TestGetOwnProfile_Success(t *testing.T) {
-	userID := "own-profile-uuid"
+	userID := testUUID("own-profile-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUserFull(t, sqlDB, userID, "alice", "alice@example.com", "Alice Smith",
@@ -2320,7 +2337,7 @@ func TestGetOwnProfile_Success(t *testing.T) {
 // Test Spec: TS-07-50
 // Requirement: 07-REQ-14.1
 func TestGetOwnProfile_PATWithPermission(t *testing.T) {
-	userID := "pat-perm-profile-uuid"
+	userID := testUUID("pat-perm-profile-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
@@ -2339,7 +2356,7 @@ func TestGetOwnProfile_PATWithPermission(t *testing.T) {
 // Test Spec: TS-07-51
 // Requirement: 07-REQ-14.2
 func TestGetOwnProfile_PATWithoutPermission(t *testing.T) {
-	userID := "noperm-profile-uuid"
+	userID := testUUID("noperm-profile-uuid")
 	e, _ := setupPATTestServer(t, userID, []string{"orgs:read"}) // no users:read
 
 	rec := sendGet(t, e, "/user")
@@ -2354,7 +2371,7 @@ func TestGetOwnProfile_PATWithoutPermission(t *testing.T) {
 // Test Spec: TS-07-E11
 // Requirement: 07-REQ-14.E1
 func TestGetOwnProfile_ETag(t *testing.T) {
-	userID := "etag-profile-uuid"
+	userID := testUUID("etag-profile-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2397,7 +2414,7 @@ func TestGetOwnProfile_ETag(t *testing.T) {
 // Test Spec: TS-07-52
 // Requirement: 07-REQ-15.1
 func TestUpdateOwnProfile_Success(t *testing.T) {
-	userID := "update-own-uuid"
+	userID := testUUID("update-own-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2431,7 +2448,7 @@ func TestUpdateOwnProfile_Success(t *testing.T) {
 // Test Spec: TS-07-53
 // Requirement: 07-REQ-15.2
 func TestUpdateOwnProfile_MissingField(t *testing.T) {
-	userID := "update-own-missing-uuid"
+	userID := testUUID("update-own-missing-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2447,7 +2464,7 @@ func TestUpdateOwnProfile_MissingField(t *testing.T) {
 // Test Spec: TS-07-52
 // Requirement: 07-REQ-15.1
 func TestUpdateOwnProfile_PATWithPermission(t *testing.T) {
-	userID := "update-own-perm-uuid"
+	userID := testUUID("update-own-perm-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
@@ -2471,7 +2488,7 @@ func TestUpdateOwnProfile_PATWithPermission(t *testing.T) {
 // Test Spec: TS-07-54
 // Requirement: 07-REQ-15.3
 func TestUpdateOwnProfile_PATWithoutPermission(t *testing.T) {
-	userID := "update-own-noperm-uuid"
+	userID := testUUID("update-own-noperm-uuid")
 	e, _ := setupPATTestServer(t, userID, []string{"orgs:read"}) // no users:read
 
 	rec := sendJSON(t, e, http.MethodPatch, "/user", `{"full_name":"X"}`)
@@ -2487,7 +2504,7 @@ func TestUpdateOwnProfile_PATWithoutPermission(t *testing.T) {
 // Test Spec: TS-07-E12
 // Requirement: 07-REQ-15.E1
 func TestUpdateOwnProfile_UsesReadPermission(t *testing.T) {
-	userID := "update-own-read-uuid"
+	userID := testUUID("update-own-read-uuid")
 	// Only users:read — explicitly no users:write
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
@@ -2518,7 +2535,7 @@ func TestUpdateOwnProfile_UsesReadPermission(t *testing.T) {
 // Test Spec: TS-07-55
 // Requirement: 07-REQ-16.1
 func TestListOwnOrgs_Success(t *testing.T) {
-	userID := "orgs-user-uuid"
+	userID := testUUID("orgs-user-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2575,7 +2592,7 @@ func TestListOwnOrgs_Success(t *testing.T) {
 // Test Spec: TS-07-56
 // Requirement: 07-REQ-16.2
 func TestListOwnOrgs_PATWithoutPermission(t *testing.T) {
-	userID := "orgs-noperm-uuid"
+	userID := testUUID("orgs-noperm-uuid")
 	e, _ := setupPATTestServer(t, userID, []string{"users:read"}) // no orgs:read
 
 	rec := sendGet(t, e, "/user/orgs")
@@ -2590,7 +2607,7 @@ func TestListOwnOrgs_PATWithoutPermission(t *testing.T) {
 // Test Spec: TS-07-E13
 // Requirement: 07-REQ-16.E1
 func TestListOwnOrgs_ExcludesBlockedOrgs(t *testing.T) {
-	userID := "orgs-blocked-uuid"
+	userID := testUUID("orgs-blocked-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2624,7 +2641,7 @@ func TestListOwnOrgs_ExcludesBlockedOrgs(t *testing.T) {
 // Test Spec: TS-07-E14
 // Requirement: 07-REQ-16.E2
 func TestListOwnOrgs_NoMemberships(t *testing.T) {
-	userID := "orgs-empty-uuid"
+	userID := testUUID("orgs-empty-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
@@ -2649,7 +2666,7 @@ func TestListOwnOrgs_NoMemberships(t *testing.T) {
 // Test Spec: TS-07-55
 // Requirement: 07-REQ-16.1
 func TestListOwnOrgs_PATWithPermission(t *testing.T) {
-	userID := "orgs-perm-uuid"
+	userID := testUUID("orgs-perm-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
 
 	insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
@@ -2755,7 +2772,7 @@ func TestProp_ActionIdempotency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e, sqlDB := setupAdminTestServer(t)
 
-			userID := "idem-prop-" + tt.action + "-uuid"
+			userID := testUUID("idem-prop-" + tt.action + "-uuid")
 			// For demote tests, ensure at least 2 admins to avoid last-admin safeguard.
 			if tt.action == "demote" {
 				insertTestUserFull(t, sqlDB, "idem-other-admin", "otheradmin", "other@example.com", "",
@@ -2806,7 +2823,7 @@ func TestProp_CredentialRevocationIdempotency(t *testing.T) {
 	t.Run("api_key", func(t *testing.T) {
 		e, sqlDB := setupAdminTestServer(t)
 
-		userID := "revoke-prop-key-user"
+		userID := testUUID("revoke-prop-key-user")
 		keyID := "revoke-prop-key-id"
 		insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 		insertTestAPIKey(t, sqlDB, keyID, userID, "hash-aaa", 30,
@@ -2842,7 +2859,7 @@ func TestProp_CredentialRevocationIdempotency(t *testing.T) {
 	t.Run("pat", func(t *testing.T) {
 		e, sqlDB := setupAdminTestServer(t)
 
-		userID := "revoke-prop-tok-user"
+		userID := testUUID("revoke-prop-tok-user")
 		tokenID := "revoke-prop-tok-id"
 		insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
 		insertTestPAT(t, sqlDB, tokenID, userID, "My Token", "hash-bbb",
@@ -2887,7 +2904,7 @@ func TestProp_CredentialRevocationIdempotency(t *testing.T) {
 func TestProp_NoSecretsInListings(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "secrets-prop-user"
+	userID := testUUID("secrets-prop-user")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 	// Pre-defined credential data with known secrets.
@@ -2971,7 +2988,7 @@ func TestProp_AdminAuthBeforeDataAccess(t *testing.T) {
 	e, sqlDB := setupNonAdminTestServer(t)
 
 	// Seed a user so endpoints would have data to access if auth check fails.
-	userID := "auth-prop-user"
+	userID := testUUID("auth-prop-user")
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 	insertTestAPIKey(t, sqlDB, "auth-prop-key", userID, "hash-aaa", 30,
 		nullStr("2025-12-31T00:00:00Z"), nullStrEmpty(), "2025-01-01T00:00:00Z")
@@ -3064,7 +3081,7 @@ func TestProp_ListEndpointsEmptyArray(t *testing.T) {
 	t.Run("GET /users/:id/keys empty", func(t *testing.T) {
 		e, sqlDB := setupAdminTestServer(t)
 
-		userID := "empty-keys-user"
+		userID := testUUID("empty-keys-user")
 		insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 
 		rec := sendGet(t, e, "/users/"+userID+"/keys")
@@ -3082,7 +3099,7 @@ func TestProp_ListEndpointsEmptyArray(t *testing.T) {
 	t.Run("GET /users/:id/tokens empty", func(t *testing.T) {
 		e, sqlDB := setupAdminTestServer(t)
 
-		userID := "empty-tokens-user"
+		userID := testUUID("empty-tokens-user")
 		insertTestUser(t, sqlDB, userID, "bob", "bob@example.com", "github", "gh-002")
 
 		rec := sendGet(t, e, "/users/"+userID+"/tokens")
@@ -3098,7 +3115,7 @@ func TestProp_ListEndpointsEmptyArray(t *testing.T) {
 	})
 
 	t.Run("GET /user/orgs empty", func(t *testing.T) {
-		userID := "empty-orgs-user"
+		userID := testUUID("empty-orgs-user")
 		e, sqlDB := setupPATTestServer(t, userID, []string{"orgs:read"})
 
 		insertTestUser(t, sqlDB, userID, "carol", "carol@example.com", "github", "gh-003")
@@ -3192,11 +3209,13 @@ func TestSmoke_DemoteWithSafeguard(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
 	// Seed two active admins.
-	insertTestUserFull(t, sqlDB, "smoke-admin-1", "admin1", "admin1@example.com", "", "admin", "active", "github", "gh-a1", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
-	insertTestUserFull(t, sqlDB, "smoke-admin-2", "admin2", "admin2@example.com", "", "admin", "active", "github", "gh-a2", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	admin1 := testUUID("smoke-admin-1")
+	admin2 := testUUID("smoke-admin-2")
+	insertTestUserFull(t, sqlDB, admin1, "admin1", "admin1@example.com", "", "admin", "active", "github", "gh-a1", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+	insertTestUserFull(t, sqlDB, admin2, "admin2", "admin2@example.com", "", "admin", "active", "github", "gh-a2", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
 
 	// First call (two active admins): demote admin-1 should succeed.
-	rec1 := sendPost(t, e, "/users/smoke-admin-1/demote")
+	rec1 := sendPost(t, e, "/users/"+admin1+"/demote")
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("expected HTTP 200 for first demote, got %d; body: %s", rec1.Code, rec1.Body.String())
 	}
@@ -3207,7 +3226,7 @@ func TestSmoke_DemoteWithSafeguard(t *testing.T) {
 	}
 
 	// Second call (sole admin): demote admin-2 should fail.
-	rec2 := sendPost(t, e, "/users/smoke-admin-2/demote")
+	rec2 := sendPost(t, e, "/users/"+admin2+"/demote")
 	assertErrorResponse(t, rec2, http.StatusConflict, "cannot demote the last admin")
 
 	// Verify exactly one active admin remains.
@@ -3229,7 +3248,7 @@ func TestSmoke_DemoteWithSafeguard(t *testing.T) {
 func TestSmoke_RevokeAPIKey(t *testing.T) {
 	e, sqlDB := setupAdminTestServer(t)
 
-	userID := "smoke-key-user"
+	userID := testUUID("smoke-key-user")
 	keyID := "smoke-key-id"
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")
 	insertTestAPIKey(t, sqlDB, keyID, userID, "hash-smoke", 30,
@@ -3278,7 +3297,7 @@ func TestSmoke_RevokeAPIKey(t *testing.T) {
 // Test Spec: TS-07-SMOKE-4
 // Execution Path: 07-PATH-4
 func TestSmoke_OwnProfile(t *testing.T) {
-	userID := "smoke-own-uuid"
+	userID := testUUID("smoke-own-uuid")
 	e, sqlDB := setupPATTestServer(t, userID, []string{"users:read"})
 
 	insertTestUser(t, sqlDB, userID, "alice", "alice@example.com", "github", "gh-001")

@@ -124,7 +124,7 @@ func (h *keyHandlers) listKeys(c echo.Context) error {
 	// Step 3: Query all key metadata for this user.
 	rows, err := h.db.Query(
 		`SELECT key_id, created_at, expires_at, revoked_at
-		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`,
+		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`,
 		userID,
 	)
 	if err != nil {

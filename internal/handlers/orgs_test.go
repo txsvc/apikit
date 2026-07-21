@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit"
@@ -359,7 +360,7 @@ func TestIsOrgMember_True(t *testing.T) {
 	defer database.Close()
 
 	orgID := "org-uuid-001"
-	userID := "user-uuid-001"
+	userID := testUUID("user-uuid-001")
 
 	// Insert prerequisite user and org rows (FK constraints require them).
 	insertTestUser(t, database.SqlDB, userID, "testuser", "test@example.com", "github", "gh-001")
@@ -437,7 +438,7 @@ func setupOrgNonAdminTestServer(t *testing.T) (*echo.Echo, *sql.DB) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("non-admin-user-uuid"))
+	g.Use(nonAdminAuthMiddleware(testUUID("non-admin-user-uuid")))
 	handlers.RegisterOrgHandlers(g, database.SqlDB)
 
 	return e, database.SqlDB
@@ -995,7 +996,7 @@ func TestGetOrg_AsAdmin(t *testing.T) {
 // Test Spec: TS-08-15
 // Requirement: 08-REQ-4.2
 func TestGetOrg_AsMember(t *testing.T) {
-	memberUserID := "member-user-uuid-1"
+	memberUserID := testUUID("member-user-uuid-1")
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, memberUserID)
 
 	orgID := "a0000002-0000-4000-8000-000000000002"
@@ -1028,7 +1029,7 @@ func TestGetOrg_AsMember(t *testing.T) {
 // Test Spec: TS-08-16
 // Requirement: 08-REQ-4.3
 func TestGetOrg_NotMember(t *testing.T) {
-	nonMemberUserID := "non-member-user-uuid-1"
+	nonMemberUserID := testUUID("non-member-user-uuid-1")
 	e, sqlDB := setupOrgNonAdminTestServerWithUserID(t, nonMemberUserID)
 
 	orgID := "a0000003-0000-4000-8000-000000000003"
@@ -1114,7 +1115,7 @@ func TestGetOrg_ETag(t *testing.T) {
 // Test Spec: TS-08-E7
 // Requirement: 08-REQ-4.E1
 func TestGetOrg_MembershipDBError(t *testing.T) {
-	nonAdminUserID := "dberr-member-user-uuid"
+	nonAdminUserID := testUUID("dberr-member-user-uuid")
 
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -2029,6 +2030,9 @@ func parseMembersResponse(t *testing.T, rec *httptest.ResponseRecorder) []handle
 // the specified role for test setup.
 func insertTestUserWithRole(t *testing.T, sqlDB *sql.DB, id, username, email, provider, providerID, role string) {
 	t.Helper()
+	if _, err := uuid.Parse(id); err != nil {
+		id = testUUID(id)
+	}
 
 	now := "2024-01-01T00:00:00Z"
 	_, err := sqlDB.Exec(
@@ -3161,8 +3165,8 @@ func TestOrgDeleteCascade(t *testing.T) {
 // TestOrgMemberAccess verifies that org members can view their org and
 // member list, while non-members cannot.
 func TestOrgMemberAccess(t *testing.T) {
-	memberUserID := "access-member-uuid-001"
-	nonMemberUserID := "access-nonmember-uuid-002"
+	memberUserID := testUUID("access-member-uuid-001")
+	nonMemberUserID := testUUID("access-nonmember-uuid-002")
 
 	// --- Set up admin server to create the org and add member ---
 	adminDB := setupOrgAdminTestServerShared(t)

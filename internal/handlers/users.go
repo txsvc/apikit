@@ -208,6 +208,7 @@ func (h *userHandlers) listUsers(c echo.Context) error {
 	if c.QueryParam("include_blocked") != "true" {
 		query += ` WHERE status = 'active'`
 	}
+	query += ` ORDER BY created_at DESC LIMIT 200`
 
 	rows, err := h.db.Query(query)
 	if err != nil {
@@ -243,6 +244,9 @@ func (h *userHandlers) getUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	var user User
 	err := h.db.QueryRow(
@@ -287,6 +291,9 @@ func (h *userHandlers) updateUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Bind request body into UpdateUserRequest (07-REQ-5.2, 07-REQ-5.E2).
 	var req UpdateUserRequest
@@ -345,6 +352,9 @@ func (h *userHandlers) promoteUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Fetch the target user (07-REQ-6.3).
 	var user User
@@ -395,6 +405,9 @@ func (h *userHandlers) demoteUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Fetch the target user (07-REQ-7.4).
 	var user User
@@ -457,6 +470,9 @@ func (h *userHandlers) blockUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Fetch the target user (07-REQ-8.3).
 	var user User
@@ -505,6 +521,9 @@ func (h *userHandlers) unblockUser(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Fetch the target user (07-REQ-9.3).
 	var user User
@@ -554,6 +573,9 @@ func (h *userHandlers) listUserKeys(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Verify the user exists before querying api_keys (07-REQ-10.2).
 	var exists int
@@ -568,7 +590,7 @@ func (h *userHandlers) listUserKeys(c echo.Context) error {
 	// Query only metadata columns — never include secret_hash (07-REQ-10.E1, 07-PROP-4).
 	rows, err := h.db.Query(
 		`SELECT key_id, user_id, created_at, expires_at, revoked_at
-		 FROM api_keys WHERE user_id = ?`, id,
+		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`, id,
 	)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
@@ -602,6 +624,9 @@ func (h *userHandlers) revokeUserKey(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 	keyID := c.Param("key_id")
 
 	// Fetch the key matching both key_id and user_id (07-REQ-11.3).
@@ -647,6 +672,9 @@ func (h *userHandlers) listUserTokens(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 
 	// Verify the user exists before querying pats (07-REQ-12.2).
 	var exists int
@@ -661,7 +689,7 @@ func (h *userHandlers) listUserTokens(c echo.Context) error {
 	// Query only metadata columns — never include secret_hash (07-REQ-12.E1, 07-PROP-4).
 	rows, err := h.db.Query(
 		`SELECT token_id, name, permissions, user_id, created_at, expires_at, revoked_at
-		 FROM pats WHERE user_id = ?`, id,
+		 FROM pats WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`, id,
 	)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
@@ -701,6 +729,9 @@ func (h *userHandlers) revokeUserToken(c echo.Context) error {
 	}
 
 	id := c.Param("id")
+	if _, err := uuid.Parse(id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	}
 	tokenID := c.Param("token_id")
 
 	// Fetch the token matching both token_id and user_id (07-REQ-13.3).

@@ -42,6 +42,7 @@ type Server struct {
 	listener net.Listener
 	apiGroup *echo.Group
 	shutdown bool
+	done     chan struct{}
 }
 
 // NewServer constructs a configured Echo HTTP server from a *Config.
@@ -229,11 +230,16 @@ func (s *Server) Start() error {
 	s.addrMu.Unlock()
 
 	// Set up SIGTERM/SIGINT handler
+	s.done = make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		<-sigCh
-		s.Shutdown(context.Background())
+		select {
+		case <-sigCh:
+			s.Shutdown(context.Background())
+		case <-s.done:
+		}
+		signal.Stop(sigCh)
 	}()
 
 	cfgPath, _ := filepath.Abs(ConfigPath())
@@ -253,6 +259,8 @@ func (s *Server) Start() error {
 	if err != nil && errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
+
+	close(s.done)
 
 	// Clear the address after shutdown
 	s.addrMu.Lock()

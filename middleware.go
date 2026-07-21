@@ -2,7 +2,6 @@ package apikit
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -125,41 +124,13 @@ func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 				return WriteAPIError(c, http.StatusRequestEntityTooLarge, "payload too large")
 			}
 
-			// For chunked transfers or unknown Content-Length, wrap the body
-			// with a limited reader
 			if c.Request().Body != nil {
-				c.Request().Body = &limitedReadCloser{
-					rc:    c.Request().Body,
-					limit: maxBytes,
-					c:     c,
-				}
+				c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maxBytes)
 			}
 
 			return next(c)
 		}
 	}
-}
-
-// limitedReadCloser wraps an io.ReadCloser and returns an error if reading
-// would exceed the byte limit.
-type limitedReadCloser struct {
-	rc    io.ReadCloser
-	limit int64
-	read  int64
-	c     echo.Context
-}
-
-func (l *limitedReadCloser) Read(p []byte) (int, error) {
-	n, err := l.rc.Read(p)
-	l.read += int64(n)
-	if l.read > l.limit {
-		return n, fmt.Errorf("request body too large")
-	}
-	return n, err
-}
-
-func (l *limitedReadCloser) Close() error {
-	return l.rc.Close()
 }
 
 // contentTypeEnforcementMiddleware returns Echo middleware that rejects POST,

@@ -180,7 +180,7 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 	if c.QueryParam("include_blocked") != "true" {
 		query += ` WHERE status = 'active'`
 	}
-	query += ` ORDER BY name ASC`
+	query += ` ORDER BY name ASC LIMIT 200`
 
 	rows, err := h.db.Query(query)
 	if err != nil {
@@ -555,7 +555,7 @@ func (h *orgHandlers) listOrgMembers(c echo.Context) error {
 		 FROM org_members om
 		 JOIN users u ON u.id = om.user_id
 		 WHERE om.org_id = ?
-		 ORDER BY u.username ASC`, id,
+		 ORDER BY u.username ASC LIMIT 200`, id,
 	)
 	if err != nil {
 		// DB error on join query (08-REQ-9.E1).

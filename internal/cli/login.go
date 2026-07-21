@@ -164,6 +164,10 @@ func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error 
 	}
 	defer providersResp.Body.Close()
 
+	if providersResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch providers: server returned %s", providersResp.Status)
+	}
+
 	var providers []*oauthProvider
 	if err := json.NewDecoder(providersResp.Body).Decode(&providers); err != nil {
 		return fmt.Errorf("failed to decode providers response: %w", err)

@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	crypto_rand "crypto/rand"
 
@@ -291,5 +292,5 @@ func ShouldAutoPromote(ctx context.Context, q db.Executor, email string) (bool, 
 		return false, fmt.Errorf("querying admin_email: %w", err)
 	}
 
-	return storedEmail == email, nil
+	return strings.EqualFold(storedEmail, email), nil
 }

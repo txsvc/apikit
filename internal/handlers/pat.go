@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,18 +180,29 @@ func (h *PATHandler) createPAT(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
-	// Store in database via transaction (09-REQ-5.1, 09-REQ-5.5, 09-REQ-5.E1).
+	// Store in database via transaction with retry on token_id collision.
 	userID := auth.GetUserID(c)
-	err = h.database.WithTx(c.Request().Context(), func(tx *sql.Tx) error {
-		_, execErr := tx.Exec(
-			`INSERT INTO pats (token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			tokenID, userID, req.Name, secretHash, string(permsJSON), expiresDays, expiresAt, createdAt,
-		)
-		return execErr
-	})
-	if err != nil {
-		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	const maxRetries = 3
+	for attempt := 0; ; attempt++ {
+		err = h.database.WithTx(c.Request().Context(), func(tx *sql.Tx) error {
+			_, execErr := tx.Exec(
+				`INSERT INTO pats (token_id, user_id, name, secret_hash, permissions, expires_days, expires_at, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				tokenID, userID, req.Name, secretHash, string(permsJSON), expiresDays, expiresAt, createdAt,
+			)
+			return execErr
+		})
+		if err == nil {
+			break
+		}
+		if attempt >= maxRetries-1 || !errors.Is(db.WrapError(err), db.ErrConflict) {
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		tokenID, err = generateTokenID()
+		if err != nil {
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		token = fmt.Sprintf("%s_pat_%s_%s", apiutil.TokenPrefix, tokenID, secret)
 	}
 
 	// Return HTTP 201 with the one-time response (09-REQ-5.1, 09-REQ-5.2).
@@ -220,7 +232,7 @@ func (h *PATHandler) listPATs(c echo.Context) error {
 	// Query all PATs for this user, ordered by created_at DESC (09-REQ-6.1).
 	rows, err := h.database.SqlDB.QueryContext(c.Request().Context(),
 		`SELECT token_id, name, permissions, created_at, expires_at, revoked_at
-		 FROM pats WHERE user_id = ? ORDER BY created_at DESC`, userID)
+		 FROM pats WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`, userID)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
@@ -440,16 +452,24 @@ func generateSecret() (string, error) {
 }
 
 // randomString generates a cryptographically random string of the given length
-// drawn exclusively from tokenAlphabet using the package-level randReader.
+// drawn exclusively from tokenAlphabet using rejection sampling to avoid
+// modular bias.
 func randomString(length int) (string, error) {
-	b := make([]byte, length)
-	if _, err := io.ReadFull(randReader, b); err != nil {
-		return "", err
+	// 252 is the largest multiple of 36 that fits in a byte.
+	const maxUnbiased = 252
+	result := make([]byte, length)
+	buf := make([]byte, 1)
+	for i := 0; i < length; {
+		if _, err := io.ReadFull(randReader, buf); err != nil {
+			return "", err
+		}
+		if buf[0] >= maxUnbiased {
+			continue
+		}
+		result[i] = tokenAlphabet[buf[0]%byte(len(tokenAlphabet))]
+		i++
 	}
-	for i := range b {
-		b[i] = tokenAlphabet[b[i]%byte(len(tokenAlphabet))]
-	}
-	return string(b), nil
+	return string(result), nil
 }
 
 // hashSecret computes the SHA-256 hash of the input string and returns

@@ -106,6 +106,7 @@ func newKeysRefreshCmd() *cobra.Command {
 			cfg := &CLIConfig{
 				EndpointURL: client.endpointURL,
 				APIKey:      newKey,
+				UserID:      UserIDFromContext(cmd.Context()),
 			}
 			if err := saveFn(client.configPath, cfg); err != nil {
 				// Config write failure — do NOT print the new key.

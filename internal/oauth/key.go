@@ -37,14 +37,21 @@ func HashSecret(secret string) string {
 }
 
 // randomString generates a random alphanumeric string of the given length
-// using bytes from the provided reader.
+// using rejection sampling to avoid modular bias.
 func randomString(rand io.Reader, length int) (string, error) {
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(rand, buf); err != nil {
-		return "", err
+	// 252 is the largest multiple of 62 that fits in a byte.
+	const maxUnbiased = 252
+	result := make([]byte, length)
+	buf := make([]byte, 1)
+	for i := 0; i < length; {
+		if _, err := io.ReadFull(rand, buf); err != nil {
+			return "", err
+		}
+		if buf[0] >= maxUnbiased {
+			continue
+		}
+		result[i] = charset[buf[0]%byte(len(charset))]
+		i++
 	}
-	for i := range buf {
-		buf[i] = charset[int(buf[i])%len(charset)]
-	}
-	return string(buf), nil
+	return string(result), nil
 }

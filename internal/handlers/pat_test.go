@@ -472,7 +472,8 @@ func setupCreatePATServer(t *testing.T) (*echo.Echo, *db.DB) {
 	t.Cleanup(func() { database.Close() })
 
 	// Insert a test user so that PAT INSERT satisfies FK constraint.
-	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+	testUserID := testUUID("test-user-uuid")
+	insertTestUser(t, database.SqlDB, testUserID, "testuser",
 		"test@example.com", "github", "gh-test")
 
 	registry := auth.NewPermissionRegistry()
@@ -483,7 +484,7 @@ func setupCreatePATServer(t *testing.T) (*echo.Echo, *db.DB) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	g.Use(nonAdminAuthMiddleware(testUserID))
 	handler.RegisterRoutes(g)
 
 	return e, database
@@ -777,7 +778,8 @@ func setupCreatePATServerWithPATAuth(t *testing.T, permissions []string) (*echo.
 	t.Cleanup(func() { database.Close() })
 
 	// Insert a test user so that PAT INSERT satisfies FK constraint.
-	insertTestUser(t, database.SqlDB, "test-user-uuid", "testuser",
+	testUserID := testUUID("test-user-uuid")
+	insertTestUser(t, database.SqlDB, testUserID, "testuser",
 		"test@example.com", "github", "gh-test")
 
 	registry := auth.NewPermissionRegistry()
@@ -788,7 +790,7 @@ func setupCreatePATServerWithPATAuth(t *testing.T, permissions []string) (*echo.
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(patAuthMiddleware("test-user-uuid", permissions))
+	g.Use(patAuthMiddleware(testUserID, permissions))
 	handler.RegisterRoutes(g)
 
 	return e, database
@@ -1356,7 +1358,7 @@ func TestCreatePAT_TransactionRollback(t *testing.T) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	g.Use(nonAdminAuthMiddleware(testUUID("test-user-uuid")))
 	handler.RegisterRoutes(g)
 
 	// Close the database AFTER server setup to simulate a DB/transaction failure.
@@ -1395,7 +1397,7 @@ func TestCreatePAT_GeneratedBeforeTransaction(t *testing.T) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("test-user-uuid"))
+	g.Use(nonAdminAuthMiddleware(testUUID("test-user-uuid")))
 	handler.RegisterRoutes(g)
 
 	// Close the database to cause the WithTx transaction to fail.
@@ -1680,7 +1682,7 @@ func sendDELETE(t *testing.T, e *echo.Echo, path string) *httptest.ResponseRecor
 // Test Spec: TS-09-27
 // Requirement: 09-REQ-6.1
 func TestListPATs_Success(t *testing.T) {
-	const userID = "user-list-1"
+	userID := testUUID("user-list-1")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert 3 PATs at different timestamps.
@@ -1726,7 +1728,7 @@ func TestListPATs_Success(t *testing.T) {
 // Test Spec: TS-09-28
 // Requirement: 09-REQ-6.2
 func TestListPATs_IncludesExpiredAndRevoked(t *testing.T) {
-	const userID = "user-list-2"
+	userID := testUUID("user-list-2")
 	e, database := setupListPATServer(t, userID)
 
 	// Active PAT: expires in the future, not revoked.
@@ -1792,7 +1794,7 @@ func TestListPATs_IncludesExpiredAndRevoked(t *testing.T) {
 // Test Spec: TS-09-29
 // Requirement: 09-REQ-6.3
 func TestListPATs_NoSecrets(t *testing.T) {
-	const userID = "user-list-3"
+	userID := testUUID("user-list-3")
 	e, database := setupListPATServer(t, userID)
 
 	insertTestPAT(t, database.SqlDB, "nosec111", userID, "secret-check",
@@ -1835,8 +1837,8 @@ func TestListPATs_NoSecrets(t *testing.T) {
 // Test Spec: TS-09-30
 // Requirement: 09-REQ-6.4
 func TestListPATs_OtherUserTokensExcluded(t *testing.T) {
-	const user1ID = "user-list-4a"
-	const user2ID = "user-list-4b"
+	user1ID := testUUID("user-list-4a")
+	user2ID := testUUID("user-list-4b")
 
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -1984,7 +1986,7 @@ func TestListPATs_DBError(t *testing.T) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("user-dberr-1"))
+	g.Use(nonAdminAuthMiddleware(testUUID("user-dberr-1")))
 	handler.RegisterRoutes(g)
 
 	// Close the database AFTER setup to cause query failures.
@@ -2000,7 +2002,7 @@ func TestListPATs_DBError(t *testing.T) {
 //
 // Requirement: 09-REQ-6.1
 func TestListPATs_OrderByCreatedAtDesc(t *testing.T) {
-	const userID = "user-order-1"
+	userID := testUUID("user-order-1")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert PATs with intentionally non-sequential token_ids to ensure
@@ -2072,17 +2074,21 @@ func TestPATUserIsolation_Property(t *testing.T) {
 			}
 			t.Cleanup(func() { database.Close() })
 
+			// Convert to UUIDs for consistency between DB inserts and middleware.
+			userAID := testUUID(pair.userA)
+			userBID := testUUID(pair.userB)
+
 			// Insert both users.
-			insertTestUser(t, database.SqlDB, pair.userA, "userA",
+			insertTestUser(t, database.SqlDB, userAID, "userA",
 				"a@example.com", "github", "gh-a")
-			insertTestUser(t, database.SqlDB, pair.userB, "userB",
+			insertTestUser(t, database.SqlDB, userBID, "userB",
 				"b@example.com", "github", "gh-b")
 
 			// Create PATs for user A with different characteristics.
 			userAPATs := []string{"isopataa", "isopatab", "isopatac"}
 			for i, tokenID := range userAPATs {
 				createdAt := fmt.Sprintf("2024-0%d-01T00:00:00Z", i+1)
-				insertTestPAT(t, database.SqlDB, tokenID, pair.userA,
+				insertTestPAT(t, database.SqlDB, tokenID, userAID,
 					fmt.Sprintf("userA-pat-%d", i),
 					fmt.Sprintf("hash-a-%d", i),
 					`["tokens:read"]`, 90, nullStr("2025-01-01T00:00:00Z"), nullStrEmpty(), createdAt)
@@ -2097,7 +2103,7 @@ func TestPATUserIsolation_Property(t *testing.T) {
 
 			e := echo.New()
 			g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-			g.Use(nonAdminAuthMiddleware(pair.userB))
+			g.Use(nonAdminAuthMiddleware(userBID))
 			handler.RegisterRoutes(g)
 
 			// Verify GET /user/tokens/:token_id for each of userA's PATs returns 404.
@@ -2177,7 +2183,7 @@ func TestPATUserIsolation_Property(t *testing.T) {
 // Test Spec: TS-09-32
 // Requirement: 09-REQ-7.1
 func TestGetPAT_Success(t *testing.T) {
-	const userID = "user-get-1"
+	userID := testUUID("user-get-1")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert a PAT with known attributes.
@@ -2261,7 +2267,7 @@ func TestGetPAT_NotFound(t *testing.T) {
 // Test Spec: TS-09-34
 // Requirement: 09-REQ-7.3
 func TestGetPAT_RequiresTokensRead(t *testing.T) {
-	const userID = "user-get-perm"
+	userID := testUUID("user-get-perm")
 	// PAT with only tokens:manage — no tokens:read.
 	e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:manage"})
 
@@ -2284,8 +2290,8 @@ func TestGetPAT_RequiresTokensRead(t *testing.T) {
 // Test Spec: TS-09-E11
 // Requirement: 09-REQ-7.E1
 func TestGetPAT_OtherUserToken(t *testing.T) {
-	const user1ID = "user-get-a"
-	const user2ID = "user-get-b"
+	user1ID := testUUID("user-get-a")
+	user2ID := testUUID("user-get-b")
 
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -2349,7 +2355,7 @@ func TestGetPAT_DBError(t *testing.T) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("user-get-dberr"))
+	g.Use(nonAdminAuthMiddleware(testUUID("user-get-dberr")))
 	handler.RegisterRoutes(g)
 
 	// Close the database AFTER setup to cause query failures.
@@ -2374,7 +2380,7 @@ func TestGetPAT_DBError(t *testing.T) {
 // Test Spec: TS-09-35
 // Requirement: 09-REQ-8.1
 func TestRevokePAT_Success(t *testing.T) {
-	const userID = "user-revoke-1"
+	userID := testUUID("user-revoke-1")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert an active (non-revoked) PAT.
@@ -2423,7 +2429,7 @@ func TestRevokePAT_Success(t *testing.T) {
 // Test Spec: TS-09-37
 // Requirement: 09-REQ-8.3
 func TestRevokePAT_RequiresTokensManage(t *testing.T) {
-	const userID = "user-revoke-perm"
+	userID := testUUID("user-revoke-perm")
 	// PAT with only tokens:read — no tokens:manage.
 	e, database := setupListPATServerWithPATAuth(t, userID, []string{"tokens:read"})
 
@@ -2458,7 +2464,7 @@ func TestRevokePAT_RequiresTokensManage(t *testing.T) {
 // Test Spec: TS-09-38
 // Requirement: 09-REQ-8.4
 func TestRevokePAT_DoesNotDelete(t *testing.T) {
-	const userID = "user-revoke-nodelete"
+	userID := testUUID("user-revoke-nodelete")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert an active PAT.
@@ -2528,7 +2534,7 @@ func TestRevokePAT_NotFound(t *testing.T) {
 // Test Spec: TS-09-36
 // Requirement: 09-REQ-8.2
 func TestRevokePAT_AlreadyRevoked(t *testing.T) {
-	const userID = "user-revoke-already"
+	userID := testUUID("user-revoke-already")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert a revoked PAT.
@@ -2548,8 +2554,8 @@ func TestRevokePAT_AlreadyRevoked(t *testing.T) {
 // Test Spec: TS-09-E14
 // Requirement: 09-REQ-8.E2
 func TestRevokePAT_OtherUserToken(t *testing.T) {
-	const user1ID = "user-revoke-a"
-	const user2ID = "user-revoke-b"
+	user1ID := testUUID("user-revoke-a")
+	user2ID := testUUID("user-revoke-b")
 
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -2610,7 +2616,7 @@ func TestRevokePAT_OtherUserToken(t *testing.T) {
 // Test Spec: TS-09-E13
 // Requirement: 09-REQ-8.E1
 func TestRevokePAT_Concurrent(t *testing.T) {
-	const userID = "user-revoke-concurrent"
+	userID := testUUID("user-revoke-concurrent")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert an active PAT.
@@ -2703,7 +2709,7 @@ func TestRevokePAT_DBError(t *testing.T) {
 
 	e := echo.New()
 	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
-	g.Use(nonAdminAuthMiddleware("user-revoke-dberr"))
+	g.Use(nonAdminAuthMiddleware(testUUID("user-revoke-dberr")))
 	handler.RegisterRoutes(g)
 
 	// Close the database AFTER setup to cause UPDATE failures.
@@ -2732,7 +2738,7 @@ func TestRevocationIdempotency_Property(t *testing.T) {
 	// Test with varying concurrency levels.
 	for _, n := range []int{2, 5, 10} {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
-			const userID = "user-idem-prop"
+			userID := testUUID("user-idem-prop")
 			tokenID := fmt.Sprintf("idem%04d", n)
 
 			e, database := setupListPATServer(t, userID)
@@ -2810,7 +2816,7 @@ func TestRevocationIdempotency_Property(t *testing.T) {
 // See also TestCacheControl below (group-7, TS-09-4) for the spec-driven
 // integration variant.
 func TestCacheControlHeader_Property(t *testing.T) {
-	const userID = "user-cache-prop"
+	userID := testUUID("user-cache-prop")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert PATs for various test scenarios.
@@ -3065,7 +3071,7 @@ func TestCreateAndRevokePAT(t *testing.T) {
 // Test Spec: TS-09-39
 // Requirement: 09-REQ-9.1
 func TestListPATs_IncludesExpiredVisible(t *testing.T) {
-	const userID = "user-expired-vis"
+	userID := testUUID("user-expired-vis")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert an expired PAT (expires_at in the past).
@@ -3144,7 +3150,7 @@ func TestListPATs_IncludesExpiredVisible(t *testing.T) {
 // Test Spec: TS-09-40
 // Requirement: 09-REQ-9.2
 func TestGetPAT_IncludesRevokedVisible(t *testing.T) {
-	const userID = "user-revoked-vis"
+	userID := testUUID("user-revoked-vis")
 	e, database := setupListPATServer(t, userID)
 
 	// Insert a revoked PAT.
@@ -3203,7 +3209,7 @@ func TestGetPAT_IncludesRevokedVisible(t *testing.T) {
 // Test Spec: TS-09-41
 // Requirement: 09-REQ-9.3
 func TestGetPAT_ExpiredNotRejectedByHandler(t *testing.T) {
-	const userID = "user-expired-handler"
+	userID := testUUID("user-expired-handler")
 	// Using API key auth middleware (which stubs through the auth middleware).
 	e, database := setupListPATServer(t, userID)
 
@@ -3249,7 +3255,8 @@ func TestBlockedUser_RejectedByMiddleware(t *testing.T) {
 	registry := auth.NewPermissionRegistry()
 
 	// Insert a blocked user.
-	insertTestUserWithStatus(t, database.SqlDB, "blocked-user-1", "blockeduser",
+	blockedUserID := testUUID("blocked-user-1")
+	insertTestUserWithStatus(t, database.SqlDB, blockedUserID, "blockeduser",
 		"blocked@example.com", "github", "gh-blocked", "blocked")
 
 	// Insert an API key for the blocked user. The key_id must not contain
@@ -3258,7 +3265,7 @@ func TestBlockedUser_RejectedByMiddleware(t *testing.T) {
 	secretHash := sha256Hex("testsecretforblocked")
 	_, err = database.SqlDB.Exec(
 		`INSERT INTO api_keys (key_id, user_id, secret_hash, expires_days, created_at) VALUES (?, ?, ?, ?, ?)`,
-		"blkkey01", "blocked-user-1", secretHash, 0, "2024-01-01T00:00:00Z",
+		"blkkey01", blockedUserID, secretHash, 0, "2024-01-01T00:00:00Z",
 	)
 	if err != nil {
 		t.Fatalf("failed to insert API key for blocked user: %v", err)
@@ -3408,7 +3415,7 @@ func TestCacheControl(t *testing.T) {
 //
 // Requirements: 09-REQ-6.5, 09-REQ-7.3
 func TestPATPermissionCheck_Read(t *testing.T) {
-	const userID = "user-perm-read"
+	userID := testUUID("user-perm-read")
 
 	// PAT with tokens:read — should succeed.
 	t.Run("with_tokens_read", func(t *testing.T) {
@@ -3460,7 +3467,7 @@ func TestPATPermissionCheck_Read(t *testing.T) {
 //
 // Requirements: 09-REQ-5.6, 09-REQ-8.3
 func TestPATPermissionCheck_Manage(t *testing.T) {
-	const userID = "user-perm-manage"
+	userID := testUUID("user-perm-manage")
 
 	// PAT with tokens:manage — POST should succeed.
 	t.Run("create_with_tokens_manage", func(t *testing.T) {
