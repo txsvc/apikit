@@ -86,9 +86,7 @@ func adminHandleError(cmd *cobra.Command, err error) error {
 func adminCheckMissingArg(argName string) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {
-			err := fmt.Errorf("missing required argument: %s", argName)
-			_ = adminHandleError(cmd, err)
-			return err
+			return adminHandleError(cmd, fmt.Errorf("missing required argument: %s", argName))
 		}
 		if len(args) > 1 {
 			return fmt.Errorf("accepts 1 arg(s), received %d", len(args))
@@ -102,9 +100,7 @@ func adminCheckMissingArg(argName string) cobra.PositionalArgs {
 // an error. The flag's value (including empty string) is returned on success.
 func adminCheckRequiredFlag(cmd *cobra.Command, flagName string) (string, error) {
 	if !cmd.Flags().Changed(flagName) {
-		err := fmt.Errorf("missing required flag: --%s", flagName)
-		_ = adminHandleError(cmd, err)
-		return "", err
+		return "", adminHandleError(cmd, fmt.Errorf("missing required flag: --%s", flagName))
 	}
 	val, _ := cmd.Flags().GetString(flagName)
 	return val, nil
@@ -117,14 +113,10 @@ func adminCheckRequiredFlag(cmd *cobra.Command, flagName string) (string, error)
 func adminCheckTwoArgs(arg1Name, arg2Name string) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {
-			err := fmt.Errorf("missing required argument: %s", arg1Name)
-			_ = adminHandleError(cmd, err)
-			return err
+			return adminHandleError(cmd, fmt.Errorf("missing required argument: %s", arg1Name))
 		}
 		if len(args) < 2 {
-			err := fmt.Errorf("missing required argument: %s", arg2Name)
-			_ = adminHandleError(cmd, err)
-			return err
+			return adminHandleError(cmd, fmt.Errorf("missing required argument: %s", arg2Name))
 		}
 		if len(args) > 2 {
 			return fmt.Errorf("accepts 2 arg(s), received %d", len(args))
