@@ -3,6 +3,7 @@ package apikit
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
@@ -138,9 +139,11 @@ func OpenDatabase(path string) (*DB, error) {
 // begins accepting requests.
 func Bootstrap(ctx context.Context, database *DB, opts BootstrapOptions) error {
 	var bootstrapped bool
-	database.SqlDB.QueryRow(
+	if err := database.SqlDB.QueryRow(
 		"SELECT EXISTS(SELECT 1 FROM admin_config WHERE key = 'admin_token_hash')",
-	).Scan(&bootstrapped)
+	).Scan(&bootstrapped); err != nil {
+		return fmt.Errorf("checking bootstrap state: %w", err)
+	}
 
 	if opts.AdminEmail == "" && !opts.ResetToken && !bootstrapped {
 		return nil
