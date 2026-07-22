@@ -14,15 +14,19 @@ import (
 // (TS-01-67, TS-01-68, TS-01-69, TS-01-70)
 // ========================================================================
 
-// TestConfig_BuildVarDefaults verifies that Version, Build, and TokenPrefix
-// are declared with correct default values when built without -ldflags.
+// TestConfig_BuildVarDefaults verifies that Version, Commit, BuildTime, and
+// TokenPrefix are declared with correct default values when built without
+// -ldflags.
 // Covers TS-01-67 (Requirement: 01-REQ-20.1).
 func TestConfig_BuildVarDefaults(t *testing.T) {
 	if apikit.Version != "dev" {
 		t.Errorf("Version = %q, want %q", apikit.Version, "dev")
 	}
-	if apikit.Build != "dev" {
-		t.Errorf("Build = %q, want %q", apikit.Build, "dev")
+	if apikit.Commit != "dev" {
+		t.Errorf("Commit = %q, want %q", apikit.Commit, "dev")
+	}
+	if apikit.BuildTime != "" {
+		t.Errorf("BuildTime = %q, want %q", apikit.BuildTime, "")
 	}
 	if apikit.TokenPrefix != "ak" {
 		t.Errorf("TokenPrefix = %q, want %q", apikit.TokenPrefix, "ak")

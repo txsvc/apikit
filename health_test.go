@@ -200,7 +200,7 @@ func TestHealth_ReadyzWithNilChecker(t *testing.T) {
 }
 
 // TestHealth_VersionEndpoint verifies that GET /version returns HTTP 200
-// with JSON body containing version (string), build (string), and mount_point
+// with JSON body containing version, build_time, commit, and mount_point
 // (string matching config), with Cache-Control: public, max-age=300.
 // Covers TS-01-24 (Requirement: 01-REQ-5.4).
 func TestHealth_VersionEndpoint(t *testing.T) {
@@ -236,9 +236,14 @@ func TestHealth_VersionEndpoint(t *testing.T) {
 		t.Error("body missing 'version' string field")
 	}
 
-	// Verify build field exists and is a string
-	if _, ok := body["build"].(string); !ok {
-		t.Error("body missing 'build' string field")
+	// Verify build_time field exists and is a string
+	if _, ok := body["build_time"].(string); !ok {
+		t.Error("body missing 'build_time' string field")
+	}
+
+	// Verify commit field exists and is a string
+	if _, ok := body["commit"].(string); !ok {
+		t.Error("body missing 'commit' string field")
 	}
 
 	// Verify mount_point matches config
@@ -321,16 +326,15 @@ func TestHealth_EndpointsAtServerRoot(t *testing.T) {
 }
 
 // TestHealth_VersionDefaultDevValues verifies that GET /version returns
-// version='dev' and build='dev' when the binary was built without -ldflags
-// overrides (the default values of apikit.Version and apikit.Build).
+// version='dev', commit='dev', and build_time='' when the binary was built
+// without -ldflags overrides.
 // Covers TS-01-E8 (Requirement: 01-REQ-5.E1).
 func TestHealth_VersionDefaultDevValues(t *testing.T) {
-	// Verify the package-level defaults are "dev" (no -ldflags in test builds)
 	if apikit.Version != "dev" {
 		t.Errorf("apikit.Version = %q, want %q (default)", apikit.Version, "dev")
 	}
-	if apikit.Build != "dev" {
-		t.Errorf("apikit.Build = %q, want %q (default)", apikit.Build, "dev")
+	if apikit.Commit != "dev" {
+		t.Errorf("apikit.Commit = %q, want %q (default)", apikit.Commit, "dev")
 	}
 
 	cfg := buildTestConfig(0)
@@ -362,25 +366,30 @@ func TestHealth_VersionDefaultDevValues(t *testing.T) {
 	if body["version"] != "dev" {
 		t.Errorf("version = %q, want %q", body["version"], "dev")
 	}
-	if body["build"] != "dev" {
-		t.Errorf("build = %q, want %q", body["build"], "dev")
+	if body["commit"] != "dev" {
+		t.Errorf("commit = %q, want %q", body["commit"], "dev")
+	}
+	if body["build_time"] != "" {
+		t.Errorf("build_time = %q, want %q", body["build_time"], "")
 	}
 }
 
 // TestHealth_VersionEmptyStringOverride verifies that /version returns
-// empty strings for version and build when those package-level variables
-// are overridden to empty string (simulating -ldflags '-X ...= -X ...='),
+// empty strings for version, commit, and build_time when those package-level
+// variables are overridden to empty string (simulating -ldflags '-X ...= -X ...='),
 // without any runtime fallback to "dev".
 // Covers TS-01-E9 (Requirement: 01-REQ-5.E2).
 func TestHealth_VersionEmptyStringOverride(t *testing.T) {
-	// Override package-level vars to empty string (simulating -ldflags override)
 	origVersion := apikit.Version
-	origBuild := apikit.Build
+	origCommit := apikit.Commit
+	origBuildTime := apikit.BuildTime
 	apikit.Version = ""
-	apikit.Build = ""
+	apikit.Commit = ""
+	apikit.BuildTime = ""
 	t.Cleanup(func() {
 		apikit.Version = origVersion
-		apikit.Build = origBuild
+		apikit.Commit = origCommit
+		apikit.BuildTime = origBuildTime
 	})
 
 	cfg := buildTestConfig(0)
@@ -409,12 +418,14 @@ func TestHealth_VersionEmptyStringOverride(t *testing.T) {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 
-	// Verify empty strings, NOT fallback to "dev"
 	if body["version"] != "" {
 		t.Errorf("version = %q, want empty string (no fallback)", body["version"])
 	}
-	if body["build"] != "" {
-		t.Errorf("build = %q, want empty string (no fallback)", body["build"])
+	if body["commit"] != "" {
+		t.Errorf("commit = %q, want empty string (no fallback)", body["commit"])
+	}
+	if body["build_time"] != "" {
+		t.Errorf("build_time = %q, want empty string (no fallback)", body["build_time"])
 	}
 }
 

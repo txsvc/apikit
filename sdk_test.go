@@ -2888,6 +2888,12 @@ func TestVersion(t *testing.T) {
 	if resp.Version != "1.0.0" {
 		t.Errorf("resp.Version = %q, want %q", resp.Version, "1.0.0")
 	}
+	if resp.BuildTime != "2024-01-01" {
+		t.Errorf("resp.BuildTime = %q, want %q", resp.BuildTime, "2024-01-01")
+	}
+	if resp.Commit != "abc123" {
+		t.Errorf("resp.Commit = %q, want %q", resp.Commit, "abc123")
+	}
 	if capturedPath != "/version" {
 		t.Errorf("path = %q, want /version", capturedPath)
 	}

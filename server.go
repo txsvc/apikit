@@ -191,7 +191,8 @@ func (s *Server) versionHandler(c echo.Context) error {
 	c.Response().Header().Set("Content-Type", "application/json; charset=utf-8")
 	return c.JSON(http.StatusOK, map[string]string{
 		"version":     Version,
-		"build":       Build,
+		"build_time":  BuildTime,
+		"commit":      Commit,
 		"mount_point": mp,
 	})
 }

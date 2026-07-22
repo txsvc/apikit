@@ -25,8 +25,10 @@ func init() {
 var (
 	// Version holds the semantic version string.
 	Version = "dev"
-	// Build holds the short git commit SHA.
-	Build = "dev"
+	// Commit holds the short git commit SHA.
+	Commit = "dev"
+	// BuildTime holds the UTC build timestamp (e.g. "2025-06-01T00:00:00Z").
+	BuildTime = ""
 	// TokenPrefix is the token namespace prefix.
 	TokenPrefix = "ak"
 )
