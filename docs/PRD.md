@@ -215,7 +215,7 @@ First boot sequence:
    to `config.toml`.
 5. The server logs the file path at `warn` level.
 6. The process exits. The operator must save the token, delete the file,
-   and restart with `ADMIN_TOKEN` set.
+   and restart the server.
 
 When the designated email authenticates via OAuth for the first time, that
 user is automatically granted the `admin` role. The server logs this event
@@ -227,10 +227,8 @@ On subsequent boots:
    operator to save the token securely and delete the file. This prevents
    the plaintext admin token from persisting on disk beyond the initial
    retrieval.
-2. Once the file is removed, the server reads `ADMIN_TOKEN` from the
-   environment, hashes it with SHA-256, and compares against the stored
-   hash. The server refuses to start if the variable is missing or the hash
-   does not match.
+2. Once the file is removed, the server starts normally. The admin token
+   is validated at request time by the auth middleware, not at startup.
 3. The `--admin-email` flag is ignored on subsequent boots (an admin already
    exists).
 
@@ -241,7 +239,7 @@ The server accepts a `--reset-admin-token` flag on boot. When set:
    hash stored, plaintext written to `admin_token` file).
 2. The old token is invalidated immediately.
 3. The process exits. The operator must save the new token, delete the
-   file, and restart with `ADMIN_TOKEN` set to the new value.
+   file, and restart the server.
 4. On the next restart, the same file-presence check applies — the
    operator must save the new token and delete the file before the server
    will start again.
@@ -801,7 +799,6 @@ client_secret = "..."
 
 | Variable | Description |
 |----------|-------------|
-| `ADMIN_TOKEN` | Required on subsequent boots (validated against stored hash) |
 | `ENDPOINT_URL` | Default endpoint URL for CLI commands |
 | `USER_ID` | Default user ID for CLI commands |
 | `API_KEY` | Default API key for CLI commands |
@@ -1034,10 +1031,11 @@ OpenAPI specification.
   OAuth, they receive the admin role. This is deterministic and avoids race
   conditions (vs. "first user wins").
 
-- **Admin token is break-glass only.** The admin token is still generated on
-  first boot and validated on subsequent boots via `ADMIN_TOKEN` env var, but
-  it is not intended for routine use. It exists for emergency access when all
-  admin users are unavailable.
+- **Admin token is break-glass only.** The admin token is generated on first
+  boot and stored as a hash in the database. It is validated at request time
+  by the auth middleware, not at server startup. It is not intended for
+  routine use — it exists for emergency access when all admin users are
+  unavailable.
 
 - **Admin token rotation via boot flag.** `--reset-admin-token` reuses
   first-boot token generation logic. Chosen over a runtime CLI command because

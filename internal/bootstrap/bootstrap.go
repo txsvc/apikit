@@ -13,7 +13,6 @@ package bootstrap
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -84,12 +83,6 @@ func generateToken(prefix string) (string, error) {
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
-}
-
-// compareTokenHashes performs a timing-safe comparison of two hex-encoded
-// hash strings using crypto/subtle.ConstantTimeCompare.
-func compareTokenHashes(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // tokenFilePath returns the path to the admin_token file within the given
@@ -188,8 +181,8 @@ func runFirstBoot(params BootstrapParams) error {
 }
 
 // runSubsequentBoot handles the subsequent boot sequence: checks the
-// file-presence guard, validates the ADMIN_TOKEN environment variable,
-// and compares hashes.
+// file-presence guard and proceeds. The admin token is validated at
+// request time by the auth middleware, not at startup.
 func runSubsequentBoot(params BootstrapParams) error {
 	tokenPath := tokenFilePath(params.ConfigDir)
 
@@ -201,35 +194,11 @@ func runSubsequentBoot(params BootstrapParams) error {
 
 	// AdminEmail is silently ignored on subsequent boots (no logging, no DB write).
 
-	// Validate the ADMIN_TOKEN environment variable.
-	envToken := os.Getenv("ADMIN_TOKEN")
-	if envToken == "" {
-		return fmt.Errorf("ADMIN_TOKEN environment variable is required")
-	}
-
-	// Read the stored hash from admin_config.
-	var storedHash string
-	err := params.DB.QueryRow(
-		"SELECT value FROM admin_config WHERE key = ?", "admin_token_hash",
-	).Scan(&storedHash)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("no admin token hash found in database; run with --reset-admin-token to generate a new token")
-	}
-	if err != nil {
-		return fmt.Errorf("reading admin_token_hash: %w", err)
-	}
-
-	// Compare hashes using constant-time comparison.
-	candidateHash := hashToken(envToken)
-	if !compareTokenHashes(candidateHash, storedHash) {
-		return fmt.Errorf("ADMIN_TOKEN does not match the stored admin token")
-	}
-
 	return nil
 }
 
 // runTokenRotation generates a new admin token, stores its hash, and writes
-// the new token file. It skips the file-presence guard and ADMIN_TOKEN check.
+// the new token file. It skips the file-presence guard.
 func runTokenRotation(params BootstrapParams) error {
 	// Generate a new token.
 	token, err := generateToken(params.TokenPrefix)

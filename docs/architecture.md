@@ -669,11 +669,11 @@ The bootstrap sequence (`internal/bootstrap`) handles first-boot admin provision
 
 1. **First boot** (no `admin_token_hash` in `admin_config` table): Requires `--admin-email` flag. Generates admin token, stores hash in `admin_config`, writes plaintext to `<config_dir>/admin_token` (mode 0600). The `admin_email` is stored for auto-promotion of the first matching OAuth user. The process exits after writing the token file — the server is not started.
 
-2. **Subsequent boots** (`admin_token_hash` exists): Requires `ADMIN_TOKEN` environment variable. Validates against stored hash using constant-time comparison. Refuses to start if the `admin_token` file still exists on disk (forces the operator to save and delete it). On successful validation, the HTTP server starts normally.
+2. **Subsequent boots** (`admin_token_hash` exists): Refuses to start if the `admin_token` file still exists on disk (forces the operator to save and delete it). Once the file is removed, the HTTP server starts normally. The admin token is validated at request time by the auth middleware, not at startup.
 
 3. **Token rotation**: `--reset-admin-token` flag generates a new token regardless of boot state. The process exits after writing the token file — the server is not started.
 
-Bootstrap runs conditionally: only when `--admin-email`, `--reset-admin-token`, or an existing `admin_token_hash` is present. Token generation operations (`--admin-email` on first boot, `--reset-admin-token`) are offline: they write the token and exit. Only the subsequent-boot validation path leads to server startup.
+Bootstrap runs conditionally: only when `--admin-email`, `--reset-admin-token`, or an existing `admin_token_hash` is present. Token generation operations (`--admin-email` on first boot, `--reset-admin-token`) are offline: they write the token and exit. The subsequent-boot path checks only the file-presence guard before allowing server startup.
 
 ---
 

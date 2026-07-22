@@ -91,19 +91,11 @@ func TestBootstrap_HealthyDB_Bootstrapped_Proceeds(t *testing.T) {
 	}
 
 	// When bootstrapped is true, the early-return nil branch is NOT taken,
-	// and bootstrap.Run is called. Without ADMIN_TOKEN set or a valid setup,
-	// Run will return an error — but the key assertion is that Bootstrap did
-	// NOT return nil (it correctly proceeded past the query).
+	// and bootstrap.Run is called. With no admin_token file on disk, the
+	// subsequent boot path returns nil (server proceeds to start).
 	err := apikit.Bootstrap(context.Background(), database, apikit.BootstrapOptions{})
-	// We expect some error from bootstrap.Run (e.g. ADMIN_TOKEN required),
-	// which proves the query succeeded and control flow was correct.
-	if err == nil {
-		t.Fatal("Bootstrap() = nil, expected it to proceed to bootstrap.Run and return an error")
-	}
-	// The error should NOT be about checking bootstrap state (that query
-	// succeeded); it should be about the subsequent boot validation.
-	if strings.Contains(err.Error(), "checking bootstrap state") {
-		t.Errorf("unexpected query error: %v", err)
+	if err != nil {
+		t.Fatalf("Bootstrap() = %v, want nil (subsequent boot should succeed)", err)
 	}
 }
 

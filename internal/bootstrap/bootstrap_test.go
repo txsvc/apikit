@@ -207,13 +207,8 @@ func TestRun_SubsequentBoot_Classification(t *testing.T) {
 	logger, _ := newTestLogger()
 	tmpDir := t.TempDir()
 
-	// Create a known token and store its hash in admin_config.
-	token := "ak_admin_" + strings.Repeat("ab", 32) // 64 hex chars
-	hash := hexSHA256(token)
-	setAdminConfig(t, db, "admin_token_hash", hash)
-
-	// Set ADMIN_TOKEN env var to match.
-	t.Setenv("ADMIN_TOKEN", token)
+	// Store a hash in admin_config so Run classifies this as subsequent boot.
+	setAdminConfig(t, db, "admin_token_hash", "somehash")
 
 	params := makeParams(db, "", false, tmpDir, logger)
 
@@ -594,94 +589,6 @@ func TestRun_SubsequentBoot_FileExists(t *testing.T) {
 	}
 }
 
-// TestRun_SubsequentBoot_NoEnvVar verifies that Run returns an error
-// containing 'ADMIN_TOKEN environment variable is required' when
-// ADMIN_TOKEN is empty or unset on a subsequent boot.
-// [TS-04-18] [04-REQ-4.2]
-func TestRun_SubsequentBoot_NoEnvVar(t *testing.T) {
-	db := openMemoryDB(t)
-	insertUser(t, db)
-	tmpDir := t.TempDir()
-	logger, _ := newTestLogger()
-
-	// Ensure admin_token_hash is stored so we get past the missing-hash check.
-	setAdminConfig(t, db, "admin_token_hash", "somehash")
-
-	// Unset ADMIN_TOKEN.
-	t.Setenv("ADMIN_TOKEN", "")
-
-	params := makeParams(db, "", false, tmpDir, logger)
-
-	err := bootstrap.Run(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected non-nil error when ADMIN_TOKEN is unset on subsequent boot")
-	}
-	if !strings.Contains(err.Error(), "ADMIN_TOKEN environment variable is required") {
-		t.Errorf("error %q does not contain 'ADMIN_TOKEN environment variable is required'", err.Error())
-	}
-}
-
-// TestRun_SubsequentBoot_HashComparison verifies that Run computes the
-// SHA-256 of ADMIN_TOKEN and compares it against the stored hash,
-// returning nil when they match.
-// [TS-04-19] [04-REQ-4.3]
-func TestRun_SubsequentBoot_HashComparison(t *testing.T) {
-	db := openMemoryDB(t)
-	insertUser(t, db)
-	tmpDir := t.TempDir()
-	logger, _ := newTestLogger()
-
-	// Use a known token and store its correct SHA-256 hash.
-	token := "ak_admin_" + strings.Repeat("ab", 32)
-	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-
-	t.Setenv("ADMIN_TOKEN", token)
-
-	params := makeParams(db, "", false, tmpDir, logger)
-
-	err := bootstrap.Run(context.Background(), params)
-	if err != nil {
-		t.Errorf("Run() = %v, want nil (hash comparison should succeed)", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests: Subsequent Boot – Hash Mismatch, Email Ignore, Success, Missing Hash
-// (subtask 2.2)
-// ---------------------------------------------------------------------------
-
-// TestRun_SubsequentBoot_WrongToken verifies that Run returns an error
-// containing 'does not match' when the SHA-256 hash of ADMIN_TOKEN does
-// not match the stored admin_token_hash.
-// [TS-04-20] [04-REQ-4.4]
-func TestRun_SubsequentBoot_WrongToken(t *testing.T) {
-	db := openMemoryDB(t)
-	insertUser(t, db)
-	tmpDir := t.TempDir()
-	logger, _ := newTestLogger()
-
-	// Store the hash of the "correct" token.
-	correctToken := "ak_admin_" + strings.Repeat("ab", 32)
-	setAdminConfig(t, db, "admin_token_hash", hexSHA256(correctToken))
-
-	// Set ADMIN_TOKEN to a different (wrong) token.
-	wrongToken := "ak_admin_" + strings.Repeat("cd", 32)
-	if correctToken == wrongToken {
-		t.Fatal("test setup: tokens must differ")
-	}
-	t.Setenv("ADMIN_TOKEN", wrongToken)
-
-	params := makeParams(db, "", false, tmpDir, logger)
-
-	err := bootstrap.Run(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected non-nil error when ADMIN_TOKEN does not match stored hash")
-	}
-	if !strings.Contains(err.Error(), "does not match") {
-		t.Errorf("error %q does not contain 'does not match'", err.Error())
-	}
-}
-
 // TestRun_SubsequentBoot_IgnoresAdminEmail verifies that Run silently
 // ignores AdminEmail on a subsequent boot: it returns nil, does not
 // modify the stored admin_email, and does not log a warning about it.
@@ -693,11 +600,8 @@ func TestRun_SubsequentBoot_IgnoresAdminEmail(t *testing.T) {
 	logger, hook := newTestLogger()
 
 	// Set up a valid subsequent boot with existing admin_email.
-	token := "ak_admin_" + strings.Repeat("ab", 32)
-	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
+	setAdminConfig(t, db, "admin_token_hash", "somehash")
 	setAdminConfig(t, db, "admin_email", "original@example.com")
-
-	t.Setenv("ADMIN_TOKEN", token)
 
 	// Pass a different AdminEmail — should be silently ignored.
 	params := makeParams(db, "new@example.com", false, tmpDir, logger)
@@ -722,8 +626,8 @@ func TestRun_SubsequentBoot_IgnoresAdminEmail(t *testing.T) {
 	}
 }
 
-// TestRun_SubsequentBoot_Success verifies that Run returns nil when the
-// subsequent boot hash comparison succeeds.
+// TestRun_SubsequentBoot_Success verifies that Run returns nil on a
+// subsequent boot when the file-presence guard passes.
 // [TS-04-22] [04-REQ-4.6]
 func TestRun_SubsequentBoot_Success(t *testing.T) {
 	db := openMemoryDB(t)
@@ -731,10 +635,7 @@ func TestRun_SubsequentBoot_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger, _ := newTestLogger()
 
-	token := "ak_admin_" + strings.Repeat("ab", 32)
-	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-
-	t.Setenv("ADMIN_TOKEN", token)
+	setAdminConfig(t, db, "admin_token_hash", "somehash")
 
 	params := makeParams(db, "", false, tmpDir, logger)
 
@@ -766,90 +667,6 @@ func TestRun_SubsequentBoot_NoStoredHash(t *testing.T) {
 	if !strings.Contains(err.Error(), "--admin-email is required") {
 		t.Errorf("error %q does not contain '--admin-email is required'", err.Error())
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests: Subsequent Boot Error Paths (subtask 2.3)
-// ---------------------------------------------------------------------------
-
-// TestRun_SubsequentBoot_DBReadFailure verifies that Run returns a non-nil
-// error wrapping the database error when reading admin_token_hash from
-// admin_config fails during a subsequent boot.
-// [TS-04-E7] [04-REQ-4.E1]
-func TestRun_SubsequentBoot_DBReadFailure(t *testing.T) {
-	db := openMemoryDB(t)
-	insertUser(t, db)
-	tmpDir := t.TempDir()
-	logger, _ := newTestLogger()
-
-	// Drop admin_config table so reads from it fail.
-	if _, err := db.Exec("DROP TABLE admin_config"); err != nil {
-		t.Fatalf("drop table: %v", err)
-	}
-
-	t.Setenv("ADMIN_TOKEN", "some_token")
-
-	params := makeParams(db, "", false, tmpDir, logger)
-
-	err := bootstrap.Run(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected non-nil error when admin_config read fails")
-	}
-}
-
-// TestConstantTimeCompare_UsedInSource verifies that the token hash
-// comparison uses subtle.ConstantTimeCompare to prevent timing
-// side-channel attacks, via both source inspection and functional checks.
-// [TS-04-E8] [04-REQ-4.E2]
-func TestConstantTimeCompare_UsedInSource(t *testing.T) {
-	// Part 1: Static analysis — source must import and use subtle.ConstantTimeCompare.
-	source, err := os.ReadFile("bootstrap.go")
-	if err != nil {
-		t.Fatalf("failed to read bootstrap.go: %v", err)
-	}
-	src := string(source)
-
-	if !strings.Contains(src, "subtle.ConstantTimeCompare") {
-		t.Error("bootstrap.go does not contain 'subtle.ConstantTimeCompare'")
-	}
-	if !strings.Contains(src, `"crypto/subtle"`) {
-		t.Error("bootstrap.go does not import \"crypto/subtle\"")
-	}
-
-	// Part 2: Functional checks via Run — same hash compares equal,
-	// different hashes compare unequal.
-	t.Run("same_hash_matches", func(t *testing.T) {
-		db := openMemoryDB(t)
-		insertUser(t, db)
-		tmpDir := t.TempDir()
-		logger, _ := newTestLogger()
-
-		token := "ak_admin_" + strings.Repeat("ee", 32)
-		setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-		t.Setenv("ADMIN_TOKEN", token)
-
-		params := makeParams(db, "", false, tmpDir, logger)
-		if err := bootstrap.Run(context.Background(), params); err != nil {
-			t.Errorf("Run() = %v, want nil (same hash should match)", err)
-		}
-	})
-
-	t.Run("different_hash_rejects", func(t *testing.T) {
-		db := openMemoryDB(t)
-		insertUser(t, db)
-		tmpDir := t.TempDir()
-		logger, _ := newTestLogger()
-
-		correctToken := "ak_admin_" + strings.Repeat("ee", 32)
-		wrongToken := "ak_admin_" + strings.Repeat("ff", 32)
-		setAdminConfig(t, db, "admin_token_hash", hexSHA256(correctToken))
-		t.Setenv("ADMIN_TOKEN", wrongToken)
-
-		params := makeParams(db, "", false, tmpDir, logger)
-		if err := bootstrap.Run(context.Background(), params); err == nil {
-			t.Error("expected non-nil error when hashes differ")
-		}
-	})
 }
 
 // ---------------------------------------------------------------------------
@@ -991,24 +808,20 @@ func TestRun_ResetToken_WarnLog(t *testing.T) {
 	}
 }
 
-// TestRun_ResetToken_SkipsGuards verifies that Run skips the file-presence
-// guard and ADMIN_TOKEN env var check during a reset boot, returning nil
-// even when ADMIN_TOKEN is unset.
+// TestRun_ResetToken_SkipsFileGuard verifies that Run skips the file-presence
+// guard during a reset boot.
 // [TS-04-28] [04-REQ-5.5]
-func TestRun_ResetToken_SkipsGuards(t *testing.T) {
+func TestRun_ResetToken_SkipsFileGuard(t *testing.T) {
 	db := openMemoryDB(t)
 	insertUser(t, db)
 	tmpDir := t.TempDir()
 	logger, _ := newTestLogger()
 
-	// Deliberately unset ADMIN_TOKEN — should not matter during reset.
-	t.Setenv("ADMIN_TOKEN", "")
-
 	params := makeParams(db, "", true, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
 	if !errors.Is(err, bootstrap.ErrTokenGenerated) {
-		t.Errorf("Run() = %v, want ErrTokenGenerated (reset boot should skip guards)", err)
+		t.Errorf("Run() = %v, want ErrTokenGenerated (reset boot should skip file guard)", err)
 	}
 }
 
@@ -1018,7 +831,7 @@ func TestRun_ResetToken_SkipsGuards(t *testing.T) {
 
 // TestRun_ResetToken_NextRestart_FileGuardFires verifies that on the next
 // restart after token rotation (without --reset-admin-token), the
-// file-presence guard and ADMIN_TOKEN validation apply normally.
+// file-presence guard applies normally.
 // [TS-04-29] [04-REQ-5.6]
 func TestRun_ResetToken_NextRestart_FileGuardFires(t *testing.T) {
 	db := openMemoryDB(t)
@@ -1034,9 +847,7 @@ func TestRun_ResetToken_NextRestart_FileGuardFires(t *testing.T) {
 	}
 	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
 
-	// Next restart: ResetToken=false, ADMIN_TOKEN unset.
-	t.Setenv("ADMIN_TOKEN", "")
-
+	// Next restart: ResetToken=false, token file still on disk.
 	params := makeParams(db, "", false, tmpDir, logger)
 
 	err := bootstrap.Run(context.Background(), params)
@@ -1356,46 +1167,6 @@ func TestHashToken_KnownValue(t *testing.T) {
 	}
 }
 
-// TestConstantTimeCompare_Correctness verifies that the token hash comparison
-// produces correct results: matching hashes compare equal, non-matching hashes
-// compare unequal. The implementation must use subtle.ConstantTimeCompare
-// (verified separately in TestConstantTimeCompare_UsedInSource).
-// [TS-04-32] [04-REQ-6.3]
-func TestConstantTimeCompare_Correctness(t *testing.T) {
-	t.Run("matching_hashes", func(t *testing.T) {
-		db := openMemoryDB(t)
-		insertUser(t, db)
-		tmpDir := t.TempDir()
-		logger, _ := newTestLogger()
-
-		token := "ak_admin_" + strings.Repeat("aa", 32)
-		setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-		t.Setenv("ADMIN_TOKEN", token)
-
-		params := makeParams(db, "", false, tmpDir, logger)
-		if err := bootstrap.Run(context.Background(), params); err != nil {
-			t.Errorf("Run() = %v, want nil (matching hashes should succeed)", err)
-		}
-	})
-
-	t.Run("non_matching_hashes", func(t *testing.T) {
-		db := openMemoryDB(t)
-		insertUser(t, db)
-		tmpDir := t.TempDir()
-		logger, _ := newTestLogger()
-
-		tokenA := "ak_admin_" + strings.Repeat("aa", 32)
-		tokenB := "ak_admin_" + strings.Repeat("bb", 32)
-		setAdminConfig(t, db, "admin_token_hash", hexSHA256(tokenA))
-		t.Setenv("ADMIN_TOKEN", tokenB)
-
-		params := makeParams(db, "", false, tmpDir, logger)
-		if err := bootstrap.Run(context.Background(), params); err == nil {
-			t.Error("expected non-nil error when hashes do not match")
-		}
-	})
-}
-
 // TestGenerateToken_NoCryptoRand verifies that the bootstrap source file
 // does not import math/rand and does import crypto/rand, ensuring all
 // randomness comes from a cryptographically secure source.
@@ -1563,9 +1334,7 @@ func TestRun_SingleInstanceDocumented(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger, _ := newTestLogger()
 
-	token := "ak_admin_" + strings.Repeat("ab", 32)
-	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-	t.Setenv("ADMIN_TOKEN", token)
+	setAdminConfig(t, db, "admin_token_hash", "somehash")
 
 	params := makeParams(db, "", false, tmpDir, logger)
 
@@ -1832,10 +1601,8 @@ func TestProp_FilePresentGuardBlocks(t *testing.T) {
 				t.Fatalf("WriteFile: %v", err)
 			}
 
-			// Set up a valid hash so we test the file guard, not the hash check.
-			validToken := "ak_admin_" + strings.Repeat("ab", 32)
-			setAdminConfig(t, db, "admin_token_hash", hexSHA256(validToken))
-			t.Setenv("ADMIN_TOKEN", validToken)
+			// Set up a hash so Run classifies this as subsequent boot.
+			setAdminConfig(t, db, "admin_token_hash", "somehash")
 
 			params := makeParams(db, "", false, tmpDir, logger)
 
@@ -2062,7 +1829,7 @@ func TestSmoke_FirstBoot(t *testing.T) {
 }
 
 // TestSmoke_SubsequentBoot exercises the subsequent boot happy path:
-// operator deletes the token file, sets ADMIN_TOKEN, and restarts.
+// operator deletes the token file and restarts.
 // [TS-04-SMOKE-2] [04-PATH-2]
 func TestSmoke_SubsequentBoot(t *testing.T) {
 	db := openMemoryDB(t)
@@ -2070,10 +1837,9 @@ func TestSmoke_SubsequentBoot(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger, _ := newTestLogger()
 
-	// Set up admin_token_hash and matching ADMIN_TOKEN.
+	// Set up admin_token_hash so Run classifies this as subsequent boot.
 	token := "ak_admin_" + strings.Repeat("ab", 32)
 	setAdminConfig(t, db, "admin_token_hash", hexSHA256(token))
-	t.Setenv("ADMIN_TOKEN", token)
 
 	// No admin_token file on disk (operator deleted it).
 	params := makeParams(db, "", false, tmpDir, logger)
@@ -2236,7 +2002,7 @@ func TestSmoke_AutoPromotion(t *testing.T) {
 }
 
 // TestSmoke_EndToEnd exercises the full lifecycle: first boot, auto-promotion
-// on first OAuth login, and subsequent boot with ADMIN_TOKEN validation.
+// on first OAuth login, and subsequent boot.
 // [TS-04-SMOKE-6] [04-PATH-6]
 func TestSmoke_EndToEnd(t *testing.T) {
 	db := openMemoryDB(t)
@@ -2300,7 +2066,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	}
 
 	// -------------------------------------------------------
-	// Step 3: Subsequent boot with ADMIN_TOKEN
+	// Step 3: Subsequent boot
 	// -------------------------------------------------------
 
 	// Operator saves the token and deletes the file.
@@ -2310,9 +2076,6 @@ func TestSmoke_EndToEnd(t *testing.T) {
 
 	// Insert a user to simulate post-OAuth state.
 	insertUser(t, db)
-
-	// Set ADMIN_TOKEN to the saved token.
-	t.Setenv("ADMIN_TOKEN", token)
 
 	params2 := makeParams(db, "", false, tmpDir, logger)
 
