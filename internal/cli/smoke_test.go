@@ -329,7 +329,7 @@ func TestSmokeVersionWithReachableServer(t *testing.T) {
 		if r.URL.Path == "/version" && r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]string{
-				"version":     "2.0.0",
+				"go_version":  "2.0.0",
 				"build_time":  "2025-06-01T00:00:00Z",
 				"commit":      "abc123",
 				"mount_point": "/api/v1",
@@ -371,7 +371,7 @@ func TestSmokeVersionWithReachableServer(t *testing.T) {
 		Build         string `json:"build"`
 		Prefix        string `json:"prefix"`
 		ServerVersion *struct {
-			Version    string `json:"version"`
+			Version    string `json:"go_version"`
 			BuildTime  string `json:"build_time"`
 			Commit     string `json:"commit"`
 			MountPoint string `json:"mount_point"`
@@ -397,7 +397,7 @@ func TestSmokeVersionWithReachableServer(t *testing.T) {
 		t.Error("server_version should be present when mock server is reachable")
 	} else {
 		if output.ServerVersion.Version != "2.0.0" {
-			t.Errorf("server_version.version = %q, want %q", output.ServerVersion.Version, "2.0.0")
+			t.Errorf("server_version.go_version = %q, want %q", output.ServerVersion.Version, "2.0.0")
 		}
 	}
 

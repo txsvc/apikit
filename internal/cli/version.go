@@ -30,7 +30,7 @@ type VersionOutput struct {
 // avoiding the import cycle. The JSON tags match exactly so marshal output
 // is identical to the SDK type.
 type versionResponse struct {
-	Version    string `json:"version"`
+	Version    string `json:"go_version"`
 	BuildTime  string `json:"build_time"`
 	Commit     string `json:"commit"`
 	MountPoint string `json:"mount_point"`

@@ -231,9 +231,9 @@ func TestHealth_VersionEndpoint(t *testing.T) {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 
-	// Verify version field exists and is a string
-	if _, ok := body["version"].(string); !ok {
-		t.Error("body missing 'version' string field")
+	// Verify go_version field exists and is a string
+	if _, ok := body["go_version"].(string); !ok {
+		t.Error("body missing 'go_version' string field")
 	}
 
 	// Verify build_time field exists and is a string
@@ -363,8 +363,8 @@ func TestHealth_VersionDefaultDevValues(t *testing.T) {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 
-	if body["version"] != "dev" {
-		t.Errorf("version = %q, want %q", body["version"], "dev")
+	if body["go_version"] != "dev" {
+		t.Errorf("go_version = %q, want %q", body["go_version"], "dev")
 	}
 	if body["commit"] != "dev" {
 		t.Errorf("commit = %q, want %q", body["commit"], "dev")
@@ -418,8 +418,8 @@ func TestHealth_VersionEmptyStringOverride(t *testing.T) {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 
-	if body["version"] != "" {
-		t.Errorf("version = %q, want empty string (no fallback)", body["version"])
+	if body["go_version"] != "" {
+		t.Errorf("go_version = %q, want empty string (no fallback)", body["go_version"])
 	}
 	if body["commit"] != "" {
 		t.Errorf("commit = %q, want empty string (no fallback)", body["commit"])

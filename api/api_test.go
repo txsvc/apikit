@@ -974,7 +974,7 @@ func TestOpenAPIVersion(t *testing.T) {
 
 	// 200 response schema: version, build_time, commit, mount_point (all strings).
 	schema := requireResponseSchema(t, op, "200", label)
-	for _, field := range []string{"version", "build_time", "commit", "mount_point"} {
+	for _, field := range []string{"go_version", "build_time", "commit", "mount_point"} {
 		if schema.Properties == nil || schema.Properties.GetOrZero(field) == nil {
 			t.Errorf("%s: 200 response schema missing '%s' property", label, field)
 			continue

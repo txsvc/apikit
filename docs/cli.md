@@ -169,7 +169,7 @@ When the server is unreachable, a warning is printed to stderr and the
   "build": "abc1234",
   "prefix": "ak",
   "server_version": {
-    "version": "v1.0.0",
+    "go_version": "v1.0.0",
     "build_time": "2026-07-01T12:00:00Z",
     "commit": "def5678",
     "mount_point": "/api/v1"

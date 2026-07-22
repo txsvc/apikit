@@ -585,7 +585,7 @@ const testUserJSON = `{"id":"u1","username":"alice","email":"a@b.com","full_name
 
 const testHealthJSON = `{"status":"ok"}`
 
-const testVersionJSON = `{"version":"1.0","build_time":"2024-01-01","commit":"abc123","mount_point":"/api/v1"}`
+const testVersionJSON = `{"go_version":"1.0","build_time":"2024-01-01","commit":"abc123","mount_point":"/api/v1"}`
 
 // ---------------------------------------------------------------------------
 // Task 2.1: do method headers (Accept, Content-Type, Authorization)
@@ -2873,7 +2873,7 @@ func TestVersion(t *testing.T) {
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"version":"1.0.0","build_time":"2024-01-01","commit":"abc123","mount_point":"/api/v1"}`))
+		_, _ = w.Write([]byte(`{"go_version":"1.0.0","build_time":"2024-01-01","commit":"abc123","mount_point":"/api/v1"}`))
 	}))
 	defer server.Close()
 

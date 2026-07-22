@@ -188,8 +188,9 @@ Returns server version and build information.
 
 ```json
 {
-  "version": "0.1.0",
-  "build": "7fb5b55",
+  "go_version": "0.1.0",
+  "build_time": "2026-07-01T12:00:00Z",
+  "commit": "7fb5b55",
   "mount_point": "/api/v1"
 }
 ```

@@ -562,12 +562,12 @@ paths:
               schema:
                 type: object
                 required:
-                  - version
+                  - go_version
                   - commit
                   - build_time
                   - mount_point
                 properties:
-                  version:
+                  go_version:
                     type: string
                     description: Server version string.
                   commit:

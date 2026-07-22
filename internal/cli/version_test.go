@@ -14,7 +14,7 @@ import (
 // serverVersionJSON is a test helper struct for parsing the server_version
 // sub-object from the version command JSON output.
 type serverVersionJSON struct {
-	Version    string `json:"version"`
+	Version    string `json:"go_version"`
 	BuildTime  string `json:"build_time"`
 	Commit     string `json:"commit"`
 	MountPoint string `json:"mount_point"`
@@ -177,7 +177,7 @@ func TestVersionCmdWithMockServer(t *testing.T) {
 		if r.URL.Path == "/version" && r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]string{
-				"version":     "2.0.0",
+				"go_version":  "2.0.0",
 				"build_time":  "2025-06-01T00:00:00Z",
 				"commit":      "def456",
 				"mount_point": "/api/v1",
