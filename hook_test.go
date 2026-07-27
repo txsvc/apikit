@@ -135,7 +135,9 @@ var _ oauth.Provider = (*hookTestProvider)(nil)
 
 // setupOAuthTestEcho creates an Echo instance with OAuth handlers using a mock
 // provider and an in-memory DB. Returns the Echo, DB, and provider.
-func setupOAuthTestEcho(t *testing.T, provider *hookTestProvider) (*echo.Echo, *db.DB) {
+// An optional AfterUserCreateFunc hook may be passed; when provided it is
+// wired into the OAuth callback handler.
+func setupOAuthTestEcho(t *testing.T, provider *hookTestProvider, hooks ...apikit.AfterUserCreateFunc) (*echo.Echo, *db.DB) {
 	t.Helper()
 
 	database := openHookTestDB(t)
@@ -147,7 +149,11 @@ func setupOAuthTestEcho(t *testing.T, provider *hookTestProvider) (*echo.Echo, *
 
 	e := echo.New()
 	g := e.Group("")
-	oauth.RegisterOAuthHandlers(g, registry, database, "http://localhost:9000")
+	if len(hooks) > 0 && hooks[0] != nil {
+		oauth.RegisterOAuthHandlers(g, registry, database, "http://localhost:9000", hooks[0])
+	} else {
+		oauth.RegisterOAuthHandlers(g, registry, database, "http://localhost:9000")
+	}
 
 	return e, database
 }
@@ -550,8 +556,6 @@ func TestOrgHook_OAuthNewUserCallsHookWithCorrectArgs(t *testing.T) {
 		},
 	}
 
-	e, database := setupOAuthTestEcho(t, provider)
-
 	type capturedArgs struct {
 		tx       *sql.Tx
 		userID   string
@@ -561,26 +565,15 @@ func TestOrgHook_OAuthNewUserCallsHookWithCorrectArgs(t *testing.T) {
 	var captured *capturedArgs
 	var mu sync.Mutex
 
-	// The hook needs to be wired into the OAuth callback handler.
-	// Currently RegisterOAuthHandlers does not accept a hook, so this
-	// test will fail until the implementation is complete.
-	// For now, we register the hook but it won't be called.
-	_ = e // The hook is not wired into the OAuth handler yet.
-	_ = &mu
-	_ = &captured
-
-	// We need to set up the hook such that it captures arguments.
-	// Since the hook registration goes through Server.OnAfterUserCreate
-	// and RegisterOAuthHandlers doesn't accept a hook, we test the
-	// expected behavior: the hook SHOULD be called during OAuth callback.
-	cfg := buildHookTestConfig(0)
-	srv := apikit.NewServer(cfg, nil)
-	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+	// Wire the hook directly into the OAuth handler via setupOAuthTestEcho.
+	hookFn := apikit.AfterUserCreateFunc(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
 		mu.Lock()
 		captured = &capturedArgs{tx: tx, userID: userID, username: username, email: email}
 		mu.Unlock()
 		return nil
 	})
+
+	e, database := setupOAuthTestEcho(t, provider, hookFn)
 
 	// Use the OAuth test Echo (which has the mock provider) to send the callback.
 	rec := postOAuthCallback(e, "github", "test-code", "http://localhost:9000/cb")
@@ -592,7 +585,6 @@ func TestOrgHook_OAuthNewUserCallsHookWithCorrectArgs(t *testing.T) {
 	}
 
 	// Assert: hook should have been called with correct args.
-	// This will FAIL until the hook is wired into handleCallback (group 6).
 	mu.Lock()
 	c := captured
 	mu.Unlock()
@@ -640,24 +632,16 @@ func TestOrgHook_OAuthHookErrorRollsBack(t *testing.T) {
 		},
 	}
 
-	e, database := setupOAuthTestEcho(t, provider)
-
-	// The hook that returns an error — should cause transaction rollback.
-	// Currently not wired, so this test will fail.
-	_ = errors.New("hook failed")
-
-	cfg := buildHookTestConfig(0)
-	srv := apikit.NewServer(cfg, nil)
-	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+	// Wire the hook that returns an error directly into the OAuth handler.
+	hookFn := apikit.AfterUserCreateFunc(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
 		return errors.New("hook failed")
 	})
-	_ = srv // Hook not wired into the OAuth handler yet.
+
+	e, database := setupOAuthTestEcho(t, provider, hookFn)
 
 	rec := postOAuthCallback(e, "github", "test-code", "http://localhost:9000/cb")
 
 	// When hook is wired and returns error: expect HTTP 500.
-	// Currently the callback succeeds because the hook is not called.
-	// This assertion will FAIL until the hook is wired (group 6).
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d when hook returns error", rec.Code, http.StatusInternalServerError)
 	}
@@ -688,23 +672,22 @@ func TestOrgHook_OAuthReturningUserNoHookCall(t *testing.T) {
 		},
 	}
 
-	e, database := setupOAuthTestEcho(t, provider)
-
-	// Pre-insert the user so the OAuth callback sees a returning user.
-	insertTestUser(t, database.SqlDB, "frank", "frank@example.com", "github", "frank-pid-789")
-
 	hookCallCount := 0
 	var mu sync.Mutex
 
-	cfg := buildHookTestConfig(0)
-	srv := apikit.NewServer(cfg, nil)
-	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+	// Wire the hook into the OAuth handler — it should NOT be called for
+	// returning users.
+	hookFn := apikit.AfterUserCreateFunc(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
 		mu.Lock()
 		hookCallCount++
 		mu.Unlock()
 		return nil
 	})
-	_ = srv // Hook not wired into the OAuth handler yet.
+
+	e, database := setupOAuthTestEcho(t, provider, hookFn)
+
+	// Pre-insert the user so the OAuth callback sees a returning user.
+	insertTestUser(t, database.SqlDB, "frank", "frank@example.com", "github", "frank-pid-789")
 
 	rec := postOAuthCallback(e, "github", "test-code", "http://localhost:9000/cb")
 
@@ -744,12 +727,8 @@ func TestOrgHook_OAuthContextCancellationRollsBack(t *testing.T) {
 		},
 	}
 
-	e, database := setupOAuthTestEcho(t, provider)
-
-	cfg := buildHookTestConfig(0)
-	srv := apikit.NewServer(cfg, nil)
-	// Register a hook that blocks until context is cancelled.
-	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+	// Wire a hook that blocks until context is cancelled.
+	hookFn := apikit.AfterUserCreateFunc(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
 		// Wait for context cancellation or a timeout.
 		select {
 		case <-ctx.Done():
@@ -758,7 +737,8 @@ func TestOrgHook_OAuthContextCancellationRollsBack(t *testing.T) {
 			return context.DeadlineExceeded
 		}
 	})
-	_ = srv // Hook not wired yet.
+
+	e, database := setupOAuthTestEcho(t, provider, hookFn)
 
 	// Create a request with a short-lived context.
 	body := `{"provider":"github","code":"test-code","redirect_uri":"http://localhost:9000/cb"}`
@@ -771,7 +751,6 @@ func TestOrgHook_OAuthContextCancellationRollsBack(t *testing.T) {
 	e.ServeHTTP(rec, req)
 
 	// When hook is wired and context is cancelled: expect HTTP 500.
-	// This will FAIL until the hook is wired (group 6).
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d when context is cancelled during hook execution", rec.Code, http.StatusInternalServerError)
 	}
@@ -1299,22 +1278,15 @@ func TestAfterUserCreate_PropertyHookInvocationCount(t *testing.T) {
 				},
 			}
 
-			e, database := setupOAuthTestEcho(t, provider)
-
-			// Register hook that counts invocations per username.
-			cfg := buildHookTestConfig(0)
-			srv := apikit.NewServer(cfg, nil)
-			srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+			// Wire the hook directly into the OAuth handler via setupOAuthTestEcho.
+			hookFn := apikit.AfterUserCreateFunc(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
 				mu.Lock()
 				hookCounts[username]++
 				mu.Unlock()
 				return nil
 			})
-			// NOTE: hook is not wired into OAuth handler yet (group 6).
-			// The Server is created to register the hook, but the OAuth
-			// handlers from setupOAuthTestEcho don't call it. Test will
-			// FAIL until group 6 threads the hook through.
-			_ = srv
+
+			e, database := setupOAuthTestEcho(t, provider, hookFn)
 
 			// Pre-insert returning users into the database.
 			for _, u := range sc.users {

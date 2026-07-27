@@ -327,7 +327,12 @@ func (s *Server) MountHandlers(database *DB, permissions ...Permission) error {
 	}
 
 	api := s.APIGroup()
-	oauth.RegisterOAuthHandlers(api, registry, database, s.cfg.Server.ExternalURL)
+
+	// Pass the after-user-create hook to both OAuth and user handlers so that
+	// the hook is invoked within the transaction after a new user INSERT in
+	// either code path (04-REQ-1.5). The hook value is captured at
+	// MountHandlers call time — callers must register hooks before this call.
+	oauth.RegisterOAuthHandlers(api, registry, database, s.cfg.Server.ExternalURL, s.afterUserCreateHook)
 
 	permReg := auth.NewPermissionRegistry()
 	for _, p := range permissions {
@@ -337,7 +342,7 @@ func (s *Server) MountHandlers(database *DB, permissions ...Permission) error {
 	}
 	api.Use(auth.NewAuthMiddleware(database, permReg))
 
-	handlers.RegisterUserHandlers(api, database.SqlDB)
+	handlers.RegisterUserHandlers(api, database.SqlDB, s.afterUserCreateHook)
 	handlers.RegisterOrgHandlers(api, database.SqlDB)
 	keys.RegisterKeyHandlers(api, database.SqlDB)
 	handlers.NewPATHandler(database, permReg).RegisterRoutes(api)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -70,7 +71,8 @@ type PATMeta struct {
 // handler functions. Methods on this struct are unexported; only
 // RegisterUserHandlers is exported from this file.
 type userHandlers struct {
-	db *sql.DB
+	db              *sql.DB
+	afterUserCreate func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
 }
 
 // RegisterUserHandlers registers all user management routes on the provided
@@ -92,8 +94,16 @@ type userHandlers struct {
 //   - GET    /user
 //   - PATCH  /user
 //   - GET    /user/orgs
-func RegisterUserHandlers(g *echo.Group, database *sql.DB) {
-	h := &userHandlers{db: database}
+//
+// An optional after-user-create hook may be passed as the last argument.
+// When provided, createUser wraps the INSERT and hook call in a database
+// transaction for atomic user + side-effect creation (04-REQ-3.1).
+func RegisterUserHandlers(g *echo.Group, database *sql.DB, hooks ...func(ctx context.Context, tx *sql.Tx, userID, username, email string) error) {
+	var hook func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
+	h := &userHandlers{db: database, afterUserCreate: hook}
 
 	// Admin user CRUD endpoints.
 	g.POST("/users", h.createUser)
@@ -168,14 +178,24 @@ func (h *userHandlers) createUser(c echo.Context) error {
 		UpdatedAt:  now,
 	}
 
-	// INSERT into users table.
-	_, err := h.db.Exec(
+	// Begin a transaction to wrap the user INSERT and optional hook call
+	// atomically (04-REQ-3.1). If the transaction cannot be started (e.g.
+	// database unavailable), return HTTP 500 immediately (04-REQ-3.E1).
+	ctx := c.Request().Context()
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// INSERT into users table within the transaction.
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		user.ID, user.Username, user.Email, user.FullName, user.Role, user.Status,
 		user.Provider, user.ProviderID, user.CreatedAt, user.UpdatedAt,
 	)
 	if err != nil {
+		tx.Rollback()
 		// Detect unique constraint violations (07-REQ-2.4, 07-REQ-2.5).
 		errStr := err.Error()
 		if strings.Contains(errStr, "UNIQUE constraint failed: users.username") {
@@ -185,6 +205,24 @@ func (h *userHandlers) createUser(c echo.Context) error {
 			return apiutil.WriteAPIError(c, http.StatusConflict, "provider identity already exists")
 		}
 		// Any unexpected DB error (07-REQ-2.E1).
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Call the after-user-create hook if registered (04-REQ-3.2).
+	// The hook runs within the transaction so that side effects (e.g. personal
+	// org creation) are atomic with the user INSERT. A non-nil error rolls
+	// back the entire transaction (04-REQ-3.3). The handler does not call
+	// os.Exit or panic from library code (04-REQ-3.E2).
+	if h.afterUserCreate != nil {
+		if hookErr := h.afterUserCreate(ctx, tx, user.ID, user.Username, user.Email); hookErr != nil {
+			tx.Rollback()
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+	}
+
+	// Commit the transaction — both the user INSERT and any hook side effects
+	// are persisted atomically.
+	if err := tx.Commit(); err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 

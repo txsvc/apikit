@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -24,9 +25,17 @@ type callbackRequest struct {
 // RegisterOAuthHandlers mounts the OAuth endpoints on the given Echo group:
 //   - GET  /auth/providers  — lists configured providers (cached 5 min)
 //   - POST /auth/callback   — exchanges an authorization code for a user + API key
-func RegisterOAuthHandlers(group *echo.Group, registry *Registry, database *db.DB, externalURL string) {
+//
+// An optional after-user-create hook may be passed as the last argument.
+// When provided, it is called within the transaction after a new user INSERT
+// in the OAuth callback. Existing callers that omit the hook are unaffected.
+func RegisterOAuthHandlers(group *echo.Group, registry *Registry, database *db.DB, externalURL string, hooks ...func(ctx context.Context, tx *sql.Tx, userID, username, email string) error) {
+	var hook func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
 	group.GET("/auth/providers", handleProviders(registry), cachePublicMiddleware)
-	group.POST("/auth/callback", handleCallback(registry, database, externalURL))
+	group.POST("/auth/callback", handleCallback(registry, database, externalURL, hook))
 }
 
 // cachePublicMiddleware sets Cache-Control: public, max-age=300 on the response.
@@ -47,7 +56,7 @@ func cachePublicMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 //  5. Retrieve user info from the identity provider
 //  6. Upsert user record and generate API key within a single transaction
 //  7. Return the user object and API key in the response
-func handleCallback(registry *Registry, database *db.DB, externalURL string) echo.HandlerFunc {
+func handleCallback(registry *Registry, database *db.DB, externalURL string, afterUserCreate func(ctx context.Context, tx *sql.Tx, userID, username, email string) error) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// --- 8.1: Request parsing and validation ---
 
@@ -223,6 +232,16 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string) ech
 				providerID = userInfo.ProviderID
 				createdAt = nowStr
 				updatedAt = nowStr
+
+				// Call the after-user-create hook if registered (04-REQ-2.1).
+				// The hook runs within the transaction so that any side effects
+				// (e.g. personal org creation) are atomic with the user INSERT.
+				// A non-nil error rolls back the entire transaction (04-REQ-2.2).
+				if afterUserCreate != nil {
+					if hookErr := afterUserCreate(ctx, tx, newID, userInfo.Username, userInfo.Email); hookErr != nil {
+						return hookErr
+					}
+				}
 			}
 
 			// --- 8.4: Key revocation and new key generation ---
