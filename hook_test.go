@@ -1105,3 +1105,296 @@ func TestOrgHook_AdminCreateUserFatalErrorNoPanic(t *testing.T) {
 	}
 }
 
+// ========================================================================
+// TS-04-35: Verify that apikit Server uses the hook reference captured at
+// MountHandlers call time; hooks registered after MountHandlers are not
+// guaranteed to be invoked, but the system does not panic.
+// (Requirement: 04-REQ-10.2)
+// ========================================================================
+
+// TestAfterUserCreate_HookAfterMountHandlersNoPanic verifies that when
+// hookA is registered before MountHandlers and hookB is registered after,
+// triggering a new user creation does not panic and at least one hook
+// fires. The PRD says hooks after MountHandlers are "not guaranteed" —
+// the test documents that hookB may or may not be invoked but ensures
+// the system remains operational.
+func TestAfterUserCreate_HookAfterMountHandlersNoPanic(t *testing.T) {
+	cfg := buildHookTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	calledA := false
+	calledB := false
+	var mu sync.Mutex
+
+	// Register hookA BEFORE MountHandlers.
+	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+		mu.Lock()
+		calledA = true
+		mu.Unlock()
+		return nil
+	})
+
+	database := openHookTestDB(t)
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	// Register hookB AFTER MountHandlers — behavior is undefined per spec.
+	srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+		mu.Lock()
+		calledB = true
+		mu.Unlock()
+		return nil
+	})
+
+	adminID := insertTestUser(t, database.SqlDB, "admin-hookorder", "admin-hookorder@test.com", "test", "admin-hookorder-pid")
+	if _, err := database.SqlDB.Exec("UPDATE users SET role = 'admin' WHERE id = ?", adminID); err != nil {
+		t.Fatalf("failed to promote admin: %v", err)
+	}
+	apiKey := insertTestAPIKey(t, database.SqlDB, adminID, "ordkey01", "ordsecret01234567890123456789ab")
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start() }()
+	addr := waitForHookServer(t, srv, 5*time.Second)
+	t.Cleanup(func() { srv.Shutdown(context.Background()); <-errCh })
+
+	// Trigger new user creation via admin endpoint.
+	didPanic := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				didPanic = true
+			}
+		}()
+
+		reqBody := `{"username":"hookorder-user","email":"hookorder@test.com","provider":"test","provider_id":"hookorder-pid"}`
+		httpReq, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/api/v1/users", addr), strings.NewReader(reqBody))
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
+		resp.Body.Close()
+	}()
+
+	// System must not panic regardless of hook ordering.
+	if didPanic {
+		t.Fatal("system should NOT panic when hooks are registered both before and after MountHandlers")
+	}
+
+	// At least one hook should fire without error.
+	// This will FAIL until the hook is wired into createUser (group 6).
+	mu.Lock()
+	a, b := calledA, calledB
+	mu.Unlock()
+
+	if !a && !b {
+		t.Error("at least one hook (A or B) should have been called during user creation")
+	}
+}
+
+// ========================================================================
+// TS-04-P4: Property test — the AfterUserCreateFunc hook is invoked
+// exactly once per new-user INSERT and never for returning users.
+// Property: 04-PROP-4
+// Validates: 04-REQ-2.1, 04-REQ-2.3, 04-REQ-3.2
+// ========================================================================
+
+// TestAfterUserCreate_PropertyHookInvocationCount verifies that for any
+// sequence of OAuth callbacks mixing new and returning users, the hook is
+// called exactly once per genuinely new user and zero times for returning
+// users.
+//
+// This is a property test: it generates multiple sequences and asserts the
+// invariant holds across all of them.
+func TestAfterUserCreate_PropertyHookInvocationCount(t *testing.T) {
+	// Each scenario defines a sequence of OAuth callbacks. Some users are
+	// pre-inserted (returning); others are new.
+	type userEntry struct {
+		username   string
+		email      string
+		providerID string
+		returning  bool // true if pre-inserted (returning user)
+	}
+
+	type scenario struct {
+		name  string
+		users []userEntry
+	}
+
+	scenarios := []scenario{
+		{
+			name: "all new users",
+			users: []userEntry{
+				{username: "new-a", email: "new-a@test.com", providerID: "pid-new-a", returning: false},
+				{username: "new-b", email: "new-b@test.com", providerID: "pid-new-b", returning: false},
+				{username: "new-c", email: "new-c@test.com", providerID: "pid-new-c", returning: false},
+			},
+		},
+		{
+			name: "all returning users",
+			users: []userEntry{
+				{username: "ret-a", email: "ret-a@test.com", providerID: "pid-ret-a", returning: true},
+				{username: "ret-b", email: "ret-b@test.com", providerID: "pid-ret-b", returning: true},
+			},
+		},
+		{
+			name: "mixed new and returning",
+			users: []userEntry{
+				{username: "mix-new-1", email: "mix-new-1@test.com", providerID: "pid-mix-new-1", returning: false},
+				{username: "mix-ret-1", email: "mix-ret-1@test.com", providerID: "pid-mix-ret-1", returning: true},
+				{username: "mix-new-2", email: "mix-new-2@test.com", providerID: "pid-mix-new-2", returning: false},
+				{username: "mix-ret-2", email: "mix-ret-2@test.com", providerID: "pid-mix-ret-2", returning: true},
+				{username: "mix-new-3", email: "mix-new-3@test.com", providerID: "pid-mix-new-3", returning: false},
+			},
+		},
+		{
+			name: "single new user",
+			users: []userEntry{
+				{username: "solo-new", email: "solo@test.com", providerID: "pid-solo-new", returning: false},
+			},
+		},
+		{
+			name: "single returning user",
+			users: []userEntry{
+				{username: "solo-ret", email: "solo-ret@test.com", providerID: "pid-solo-ret", returning: true},
+			},
+		},
+		{
+			name: "same user appears twice as returning",
+			users: []userEntry{
+				{username: "dup-ret", email: "dup-ret@test.com", providerID: "pid-dup-ret", returning: true},
+				{username: "dup-ret", email: "dup-ret@test.com", providerID: "pid-dup-ret", returning: true},
+			},
+		},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			// Track hook invocations per username.
+			hookCounts := make(map[string]int)
+			var mu sync.Mutex
+
+			// The callback index drives the provider's UserInfo response.
+			callbackIdx := 0
+			var idxMu sync.Mutex
+
+			provider := &hookTestProvider{
+				name: "github",
+				userInfoFn: func(ctx context.Context, accessToken string) (*oauth.UserInfo, error) {
+					idxMu.Lock()
+					idx := callbackIdx
+					idxMu.Unlock()
+					if idx >= len(sc.users) {
+						return nil, fmt.Errorf("unexpected callback index %d", idx)
+					}
+					u := sc.users[idx]
+					return &oauth.UserInfo{
+						Username:   u.username,
+						Email:      u.email,
+						ProviderID: u.providerID,
+					}, nil
+				},
+			}
+
+			e, database := setupOAuthTestEcho(t, provider)
+
+			// Register hook that counts invocations per username.
+			cfg := buildHookTestConfig(0)
+			srv := apikit.NewServer(cfg, nil)
+			srv.OnAfterUserCreate(func(ctx context.Context, tx *sql.Tx, userID, username, email string) error {
+				mu.Lock()
+				hookCounts[username]++
+				mu.Unlock()
+				return nil
+			})
+			// NOTE: hook is not wired into OAuth handler yet (group 6).
+			// The Server is created to register the hook, but the OAuth
+			// handlers from setupOAuthTestEcho don't call it. Test will
+			// FAIL until group 6 threads the hook through.
+			_ = srv
+
+			// Pre-insert returning users into the database.
+			for _, u := range sc.users {
+				if u.returning {
+					// Only insert if not already inserted (handles duplicates).
+					var count int
+					err := database.SqlDB.QueryRow(
+						"SELECT COUNT(*) FROM users WHERE provider = 'github' AND provider_id = ?",
+						u.providerID,
+					).Scan(&count)
+					if err != nil {
+						t.Fatalf("query returning user: %v", err)
+					}
+					if count == 0 {
+						insertTestUser(t, database.SqlDB, u.username, u.email, "github", u.providerID)
+					}
+				}
+			}
+
+			// Send OAuth callbacks for each user in sequence.
+			for i := range sc.users {
+				idxMu.Lock()
+				callbackIdx = i
+				idxMu.Unlock()
+
+				rec := postOAuthCallback(e, "github", fmt.Sprintf("code-%d", i), "http://localhost:9000/cb")
+
+				// We expect HTTP 200 for both new and returning users.
+				if rec.Code != http.StatusOK {
+					t.Logf("callback %d (%s) returned %d: %s",
+						i, sc.users[i].username, rec.Code, rec.Body.String())
+				}
+			}
+
+			// Calculate expected totals.
+			expectedNew := 0
+			newUsers := make(map[string]bool)
+			for _, u := range sc.users {
+				if !u.returning && !newUsers[u.username] {
+					expectedNew++
+					newUsers[u.username] = true
+				}
+			}
+
+			// Invariant check: for each callback, hook invocation count
+			// must match expectations.
+			mu.Lock()
+			counts := make(map[string]int)
+			for k, v := range hookCounts {
+				counts[k] = v
+			}
+			mu.Unlock()
+
+			totalInvocations := 0
+			for _, v := range counts {
+				totalInvocations += v
+			}
+
+			// For new users: hook must have been called exactly once.
+			for _, u := range sc.users {
+				if u.returning {
+					if counts[u.username] != 0 {
+						t.Errorf("returning user %q: hook called %d times, want 0",
+							u.username, counts[u.username])
+					}
+				}
+			}
+			for uname := range newUsers {
+				if counts[uname] != 1 {
+					t.Errorf("new user %q: hook called %d times, want 1",
+						uname, counts[uname])
+				}
+			}
+
+			// Total hook invocations must equal the number of genuinely new users.
+			if totalInvocations != expectedNew {
+				t.Errorf("total hook invocations = %d, want %d (number of genuinely new users)",
+					totalInvocations, expectedNew)
+			}
+		})
+	}
+}
+
