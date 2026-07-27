@@ -33,16 +33,17 @@ type HealthChecker func() error
 
 // Server wraps an Echo HTTP server with apikit configuration.
 type Server struct {
-	cfg      *Config
-	checker  HealthChecker
-	echo     *echo.Echo
-	once     sync.Once
-	addr     string
-	addrMu   sync.RWMutex
-	listener net.Listener
-	apiGroup *echo.Group
-	shutdown bool
-	done     chan struct{}
+	cfg                 *Config
+	checker             HealthChecker
+	echo                *echo.Echo
+	once                sync.Once
+	addr                string
+	addrMu              sync.RWMutex
+	listener            net.Listener
+	apiGroup            *echo.Group
+	shutdown            bool
+	done                chan struct{}
+	afterUserCreateHook AfterUserCreateFunc
 }
 
 // NewServer constructs a configured Echo HTTP server from a *Config.
