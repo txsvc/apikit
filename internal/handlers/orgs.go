@@ -18,13 +18,14 @@ import (
 
 // OrgResponse represents the JSON response shape for an organization resource.
 type OrgResponse struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Slug      string `json:"slug"`
-	URL       string `json:"url"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Slug      string  `json:"slug"`
+	URL       string  `json:"url"`
+	OwnerID   *string `json:"owner_id,omitempty"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 // OrgMemberResponse represents the JSON response shape for an organization
@@ -40,9 +41,10 @@ type OrgMemberResponse struct {
 
 // CreateOrgRequest represents the JSON request body for creating an organization.
 type CreateOrgRequest struct {
-	Name string `json:"name"`
-	Slug string `json:"slug"`
-	URL  string `json:"url"`
+	Name    string  `json:"name"`
+	Slug    string  `json:"slug"`
+	URL     string  `json:"url"`
+	OwnerID *string `json:"owner_id,omitempty"`
 }
 
 // UpdateOrgRequest represents the JSON request body for updating an organization.
@@ -134,16 +136,17 @@ func (h *orgHandlers) createOrg(c echo.Context) error {
 		Name:      req.Name,
 		Slug:      req.Slug,
 		URL:       req.URL,
+		OwnerID:   req.OwnerID,
 		Status:    "active",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	// INSERT into orgs table.
+	// INSERT into orgs table (04-REQ-4.4: owner_id is optional).
 	_, err := h.db.Exec(
-		`INSERT INTO orgs (id, name, slug, url, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		org.ID, org.Name, org.Slug, org.URL, org.Status, org.CreatedAt, org.UpdatedAt,
+		`INSERT INTO orgs (id, name, slug, url, owner_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		org.ID, org.Name, org.Slug, org.URL, org.OwnerID, org.Status, org.CreatedAt, org.UpdatedAt,
 	)
 	if err != nil {
 		// Detect UNIQUE constraint violations on name vs slug (08-REQ-2.5, 08-REQ-2.6).
@@ -175,7 +178,7 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 
 	// Build query with optional status filter (08-REQ-3.1, 08-REQ-3.2).
 	// Use COALESCE for url to handle potential NULL values defensively.
-	query := `SELECT id, name, slug, COALESCE(url, '') AS url,
+	query := `SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 	          status, created_at, updated_at FROM orgs`
 	if c.QueryParam("include_blocked") != "true" {
 		query += ` WHERE status = 'active'`
@@ -192,7 +195,7 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 	orgs := make([]OrgResponse, 0)
 	for rows.Next() {
 		var o OrgResponse
-		if err := rows.Scan(&o.ID, &o.Name, &o.Slug, &o.URL,
+		if err := rows.Scan(&o.ID, &o.Name, &o.Slug, &o.URL, &o.OwnerID,
 			&o.Status, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 		}
@@ -219,10 +222,10 @@ func (h *orgHandlers) getOrg(c echo.Context) error {
 	// Query the org from the database (08-REQ-4.4).
 	var org OrgResponse
 	err := h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -300,10 +303,10 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 	// Verify the org exists (08-REQ-5.5).
 	var org OrgResponse
 	err := h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -342,10 +345,10 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 
 	// Re-fetch the updated org to return (08-REQ-5.1).
 	err = h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
@@ -411,10 +414,10 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 	// Fetch current org state (08-REQ-7.3).
 	var org OrgResponse
 	err := h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -441,10 +444,10 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 
 	// Re-fetch updated org to return.
 	err = h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
@@ -473,10 +476,10 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 	// Fetch current org state (08-REQ-8.3).
 	var org OrgResponse
 	err := h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -503,10 +506,10 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 
 	// Re-fetch updated org to return.
 	err = h.db.QueryRow(
-		`SELECT id, name, slug, COALESCE(url, '') AS url,
+		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.URL, &org.OwnerID,
 		&org.Status, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")

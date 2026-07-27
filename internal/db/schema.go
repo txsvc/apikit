@@ -49,6 +49,7 @@ var schemaStatements = []string{
 	name TEXT NOT NULL UNIQUE,
 	slug TEXT NOT NULL UNIQUE,
 	url TEXT,
+	owner_id TEXT,
 	status TEXT NOT NULL DEFAULT 'active',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL

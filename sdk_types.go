@@ -57,6 +57,7 @@ type Organization struct {
 	Name      string     `json:"name"`
 	Slug      string     `json:"slug"`
 	URL       string     `json:"url,omitempty"`
+	OwnerID   *string    `json:"owner_id,omitempty"`
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`

@@ -661,7 +661,7 @@ func TestOpen_CascadeDelete(t *testing.T) {
 
 	// Insert an org.
 	_, err = db.SqlDB.Exec(
-		`INSERT INTO orgs VALUES ('org1','OrgName','org-slug',NULL,'active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
+		`INSERT INTO orgs VALUES ('org1','OrgName','org-slug',NULL,NULL,'active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
 	)
 	if err != nil {
 		t.Fatalf("insert org failed: %v", err)
