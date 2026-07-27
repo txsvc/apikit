@@ -86,6 +86,12 @@ func Load() (*Config, error) {
 	// Resolve database path.
 	cfg.Database.Path = resolveDataPath(cfg.Database.Path)
 
+	// Resolve workspace path and default workers.
+	cfg.Workspace.Path = resolveWorkspacePath(cfg.Workspace.Path)
+	if cfg.Workspace.Workers == 0 {
+		cfg.Workspace.Workers = 4
+	}
+
 	return cfg, nil
 }
 
@@ -101,6 +107,8 @@ func applyDefaults() *Config {
 	cfg.Server.maxBodyBytes = 1048576 // 1MB
 	cfg.Database.Path = resolveDataPath("")
 	cfg.Logging.Level = "info"
+	cfg.Workspace.Path = resolveWorkspacePath("")
+	cfg.Workspace.Workers = 4
 	return cfg
 }
 
@@ -239,6 +247,29 @@ func resolveDataPath(dbPath string) string {
 		return filepath.Join(xdg, "apikit.db")
 	}
 	return "./data/apikit.db"
+}
+
+// resolveWorkspacePath returns the workspace root path.
+//
+// Resolution order:
+//  1. If wsPath contains a directory component (e.g. "./workspace",
+//     "/abs/path/ws"), it is used as-is.
+//  2. If wsPath is a bare name (e.g. "workspaces") and XDG_DATA_HOME
+//     is set, the name is placed under $XDG_DATA_HOME.
+//  3. If wsPath is empty and XDG_DATA_HOME is set: $XDG_DATA_HOME/workspaces.
+//  4. If wsPath is empty and XDG_DATA_HOME is unset: ./data/workspaces.
+func resolveWorkspacePath(wsPath string) string {
+	xdg := os.Getenv("XDG_DATA_HOME")
+	if wsPath != "" {
+		if filepath.Base(wsPath) == wsPath && xdg != "" {
+			return filepath.Join(xdg, wsPath)
+		}
+		return wsPath
+	}
+	if xdg != "" {
+		return filepath.Join(xdg, "workspaces")
+	}
+	return "./data/workspaces"
 }
 
 // validateOAuthProviders validates the [[oauth.providers]] entries.

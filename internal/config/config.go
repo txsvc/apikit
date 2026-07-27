@@ -3,10 +3,17 @@ package config
 
 // Config holds all server configuration.
 type Config struct {
-	Server   ServerConfig   `toml:"server"`
-	Database DatabaseConfig `toml:"database"`
-	Logging  LoggingConfig  `toml:"logging"`
-	OAuth    OAuthConfig    `toml:"oauth"`
+	Server    ServerConfig    `toml:"server"`
+	Database  DatabaseConfig  `toml:"database"`
+	Logging   LoggingConfig   `toml:"logging"`
+	OAuth     OAuthConfig     `toml:"oauth"`
+	Workspace WorkspaceConfig `toml:"workspace"`
+}
+
+// WorkspaceConfig holds workspace checkout settings.
+type WorkspaceConfig struct {
+	Path    string `toml:"path"`
+	Workers int    `toml:"workers"`
 }
 
 // OAuthConfig holds the parsed [oauth] TOML configuration section.
