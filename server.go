@@ -304,6 +304,12 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
+// ExternalURL returns the configured external URL for this server.
+// Returns empty string if not configured.
+func (s *Server) ExternalURL() string {
+	return s.cfg.Server.ExternalURL
+}
+
 // Echo returns the underlying Echo HTTP server instance.
 // Use this to register routes directly on the Echo instance rather than
 // through the API group (e.g., for the git smart HTTP server which
