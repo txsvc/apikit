@@ -304,6 +304,14 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
+// Echo returns the underlying Echo HTTP server instance.
+// Use this to register routes directly on the Echo instance rather than
+// through the API group (e.g., for the git smart HTTP server which
+// mounts routes outside the API group prefix).
+func (s *Server) Echo() *echo.Echo {
+	return s.echo
+}
+
 // APIGroup returns the Echo route group at the configured mount point.
 // The group has CacheMiddleware(CacheNoStore) pre-applied.
 // Returns the same *echo.Group on every call.
