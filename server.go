@@ -111,19 +111,20 @@ func NewServer(cfg *Config, checker HealthChecker) *Server {
 		}
 	}
 	e.Use(bodySizeLimitMiddleware(maxBytes))
-	e.Use(contentTypeEnforcementMiddleware())
 
 	// Register health probe endpoints at the server root (not under mount_point)
 	e.GET("/healthz", s.healthzHandler, CacheMiddleware(CacheNoCache))
 	e.GET("/readyz", s.readyzHandler, CacheMiddleware(CacheNoCache))
 	e.GET("/version", s.versionHandler, CacheMiddleware(CachePublic))
 
-	// Pre-create the API group with CacheNoStore applied
+	// Pre-create the API group with CacheNoStore and Content-Type enforcement.
+	// Content-Type enforcement is scoped to the API group so that non-API
+	// routes (e.g. git smart HTTP) can use their own content types.
 	mp := cfg.Server.MountPoint
 	if mp == "" {
 		mp = "/api/v1"
 	}
-	s.apiGroup = e.Group(mp, CacheMiddleware(CacheNoStore))
+	s.apiGroup = e.Group(mp, CacheMiddleware(CacheNoStore), contentTypeEnforcementMiddleware())
 
 	return s
 }
