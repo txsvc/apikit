@@ -213,15 +213,18 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 // organizations they are a member of (checked via isOrgMember). Sets an
 // ETag header from updated_at and supports conditional GET via If-None-Match.
 func (h *orgHandlers) getOrg(c echo.Context) error {
-	// Validate :id path parameter (08-REQ-4.5).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Query the org from the database (08-REQ-4.4).
 	var org OrgResponse
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
@@ -274,10 +277,13 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-5.6).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Bind request body (08-REQ-5.3).
@@ -302,7 +308,7 @@ func (h *orgHandlers) updateOrg(c echo.Context) error {
 
 	// Verify the org exists (08-REQ-5.5).
 	var org OrgResponse
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
@@ -369,10 +375,13 @@ func (h *orgHandlers) deleteOrg(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-6.3).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Execute DELETE (08-REQ-6.1); ON DELETE CASCADE handles org_members.
@@ -405,15 +414,18 @@ func (h *orgHandlers) blockOrg(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-7.4).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch current org state (08-REQ-7.3).
 	var org OrgResponse
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
@@ -467,15 +479,18 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-8.4).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch current org state (08-REQ-8.3).
 	var org OrgResponse
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, name, slug, COALESCE(url, '') AS url, owner_id,
 		        status, created_at, updated_at
 		 FROM orgs WHERE id = ?`, id,
@@ -524,15 +539,8 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 // of OrgMemberResponse objects ordered alphabetically by username. Returns an
 // empty JSON array (not null) when the org has no members.
 func (h *orgHandlers) listOrgMembers(c echo.Context) error {
-	// Validate :id path parameter (08-REQ-9.6).
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
-	}
-
-	// Verify the org exists (08-REQ-9.4).
-	var exists int
-	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", id).Scan(&exists)
+	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
+	id, err := resolveOrgID(h.db, c.Param("id"))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
@@ -593,21 +601,8 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-10.5).
-	orgID := c.Param("id")
-	if _, err := uuid.Parse(orgID); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
-	}
-
-	// Validate :user_id path parameter (08-REQ-10.6).
-	userID := c.Param("user_id")
-	if _, err := uuid.Parse(userID); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
-	}
-
-	// Verify the org exists (08-REQ-10.3).
-	var orgExists int
-	err := h.db.QueryRow("SELECT 1 FROM orgs WHERE id = ?", orgID).Scan(&orgExists)
+	// Resolve :id path parameter via flexible selector (16-REQ-5.1).
+	orgID, err := resolveOrgID(h.db, c.Param("id"))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
@@ -615,9 +610,8 @@ func (h *orgHandlers) addOrgMember(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
-	// Verify the user exists (08-REQ-10.4).
-	var userExists int
-	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", userID).Scan(&userExists)
+	// Resolve :user_id path parameter via flexible selector (16-REQ-5.1).
+	userID, err := resolveUserID(h.db, c.Param("user_id"))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
@@ -655,16 +649,22 @@ func (h *orgHandlers) removeOrgMember(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	// Validate :id path parameter (08-REQ-11.3).
-	orgID := c.Param("id")
-	if _, err := uuid.Parse(orgID); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid organization id")
+	// Resolve :id path parameter via flexible selector (16-REQ-5.1).
+	orgID, err := resolveOrgID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
-	// Validate :user_id path parameter (08-REQ-11.4).
-	userID := c.Param("user_id")
-	if _, err := uuid.Parse(userID); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	// Resolve :user_id path parameter via flexible selector (16-REQ-5.1).
+	userID, err := resolveUserID(h.db, c.Param("user_id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// DELETE the membership row (08-REQ-11.1).

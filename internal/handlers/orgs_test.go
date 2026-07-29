@@ -1057,18 +1057,20 @@ func TestGetOrg_NotFound(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
-// TestGetOrg_InvalidID verifies that GET /orgs/:id with a path parameter
-// that is not a valid UUID returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestGetOrg_InvalidID verifies that GET /orgs/:id with a non-UUID selector
+// that matches no org record returns HTTP 404 with error message
+// 'organization not found'. After flexible selector integration (16-REQ-4),
+// non-UUID strings are treated as slug selectors, so an unmatched slug
+// returns 404 rather than the pre-change 400.
 //
-// Test Spec: TS-08-18
-// Requirement: 08-REQ-4.5
+// Test Spec: TS-08-18 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-4.5, 16-REQ-4.E3
 func TestGetOrg_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	rec := sendGet(t, e, "/orgs/not-a-uuid")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestGetOrg_ETag verifies that GET /orgs/:id with an If-None-Match header
@@ -1334,19 +1336,20 @@ func TestUpdateOrg_NotFound(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
-// TestUpdateOrg_InvalidID verifies that PATCH /orgs/:id with an invalid
-// UUID path parameter returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestUpdateOrg_InvalidID verifies that PATCH /orgs/:id with a non-UUID
+// selector that matches no org returns HTTP 404 with 'organization not found'.
+// After flexible selector integration (16-REQ-4), non-UUID strings are
+// treated as slug selectors.
 //
-// Test Spec: TS-08-25
-// Requirement: 08-REQ-5.6
+// Test Spec: TS-08-25 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-5.6, 16-REQ-4.E3
 func TestUpdateOrg_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	body := `{"name":"New Name"}`
 	rec := sendJSON(t, e, http.MethodPatch, "/orgs/not-a-uuid", body)
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestUpdateOrg_NonAdmin verifies that PATCH /orgs/:id from a non-admin
@@ -1567,18 +1570,19 @@ func TestDeleteOrg_NotFound(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
-// TestDeleteOrg_InvalidID verifies that DELETE /orgs/:id with an invalid
-// UUID path parameter returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestDeleteOrg_InvalidID verifies that DELETE /orgs/:id with a non-UUID
+// selector that matches no org returns HTTP 404 with 'organization not found'.
+// After flexible selector integration (16-REQ-4), non-UUID strings are
+// treated as slug selectors.
 //
-// Test Spec: TS-08-29
-// Requirement: 08-REQ-6.3
+// Test Spec: TS-08-29 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-6.3, 16-REQ-4.E3
 func TestDeleteOrg_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	rec := sendDelete(t, e, "/orgs/not-a-uuid")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestDeleteOrg_NonAdmin verifies that DELETE /orgs/:id from a non-admin
@@ -1764,18 +1768,19 @@ func TestBlockOrg_NotFound(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
-// TestBlockOrg_InvalidID verifies that POST /orgs/:id/block with an invalid
-// UUID path parameter returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestBlockOrg_InvalidID verifies that POST /orgs/:id/block with a non-UUID
+// selector that matches no org returns HTTP 404 with 'organization not found'.
+// After flexible selector integration (16-REQ-4), non-UUID strings are
+// treated as slug selectors.
 //
-// Test Spec: TS-08-34
-// Requirement: 08-REQ-7.4
+// Test Spec: TS-08-34 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-7.4, 16-REQ-4.E3
 func TestBlockOrg_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	rec := sendPost(t, e, "/orgs/not-a-uuid/block")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestBlockOrg_NonAdmin verifies that POST /orgs/:id/block from a non-admin
@@ -1931,18 +1936,19 @@ func TestUnblockOrg_NotFound(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
-// TestUnblockOrg_InvalidID verifies that POST /orgs/:id/unblock with an
-// invalid UUID path parameter returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestUnblockOrg_InvalidID verifies that POST /orgs/:id/unblock with a
+// non-UUID selector that matches no org returns HTTP 404 with
+// 'organization not found'. After flexible selector integration (16-REQ-4),
+// non-UUID strings are treated as slug selectors.
 //
-// Test Spec: TS-08-39
-// Requirement: 08-REQ-8.4
+// Test Spec: TS-08-39 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-8.4, 16-REQ-4.E3
 func TestUnblockOrg_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	rec := sendPost(t, e, "/orgs/not-a-uuid/unblock")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestUnblockOrg_NonAdmin verifies that POST /orgs/:id/unblock from a
@@ -2236,18 +2242,19 @@ func TestListMembers_Empty(t *testing.T) {
 	}
 }
 
-// TestListMembers_InvalidID verifies that GET /orgs/:id/members with an
-// invalid UUID path parameter returns HTTP 400 with error message
-// 'invalid organization id'.
+// TestListMembers_InvalidID verifies that GET /orgs/:id/members with a
+// non-UUID selector that matches no org returns HTTP 404 with
+// 'organization not found'. After flexible selector integration (16-REQ-4),
+// non-UUID strings are treated as slug selectors.
 //
-// Test Spec: TS-08-46
-// Requirement: 08-REQ-9.6
+// Test Spec: TS-08-46 (updated by 16-REQ-4.E3)
+// Requirement: 08-REQ-9.6, 16-REQ-4.E3
 func TestListMembers_InvalidID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	rec := sendGet(t, e, "/orgs/not-a-uuid/members")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestListMembers_IncludesUserDetails verifies that each member in the
@@ -2457,33 +2464,35 @@ func TestAddMember_UserNotFound(t *testing.T) {
 }
 
 // TestAddMember_InvalidOrgID verifies that PUT /orgs/:id/members/:user_id
-// with an invalid UUID for the org path parameter returns HTTP 400 with
-// error message 'invalid organization id'.
+// with a non-UUID org selector that matches no org returns HTTP 404 with
+// 'organization not found'. After flexible selector integration (16-REQ-5),
+// non-UUID strings are treated as slug selectors.
 //
-// Test Spec: TS-08-51
-// Requirement: 08-REQ-10.5
+// Test Spec: TS-08-51 (updated by 16-REQ-5.2)
+// Requirement: 08-REQ-10.5, 16-REQ-5.2
 func TestAddMember_InvalidOrgID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	validUserUUID := "00000000-0000-0000-0000-000000000001"
 	rec := sendPut(t, e, "/orgs/not-a-uuid/members/"+validUserUUID)
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestAddMember_InvalidUserID verifies that PUT /orgs/:id/members/:user_id
-// with an invalid UUID for the user_id path parameter returns HTTP 400 with
-// error message 'invalid user id'.
+// with a non-UUID user selector that matches no user returns HTTP 404 with
+// 'user not found'. After flexible selector integration (16-REQ-5), non-UUID
+// strings are treated as username selectors.
 //
-// Test Spec: TS-08-52
-// Requirement: 08-REQ-10.6
+// Test Spec: TS-08-52 (updated by 16-REQ-5.3)
+// Requirement: 08-REQ-10.6, 16-REQ-5.3
 func TestAddMember_InvalidUserID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	validOrgUUID := "00000000-0000-0000-0000-000000000001"
 	rec := sendPut(t, e, "/orgs/"+validOrgUUID+"/members/not-a-uuid")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid user id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestAddMember_NonAdmin verifies that PUT /orgs/:id/members/:user_id from
@@ -2626,33 +2635,36 @@ func TestRemoveMember_NotFound(t *testing.T) {
 }
 
 // TestRemoveMember_InvalidOrgID verifies that DELETE /orgs/:id/members/:user_id
-// with an invalid UUID for the org path parameter returns HTTP 400 with
-// error message 'invalid organization id'.
+// with a non-UUID org selector that matches no org returns HTTP 404 with
+// 'organization not found'. After flexible selector integration (16-REQ-5),
+// non-UUID strings are treated as slug selectors.
 //
-// Test Spec: TS-08-56
-// Requirement: 08-REQ-11.3
+// Test Spec: TS-08-56 (updated by 16-REQ-5.2)
+// Requirement: 08-REQ-11.3, 16-REQ-5.2
 func TestRemoveMember_InvalidOrgID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	validUserUUID := "00000000-0000-0000-0000-000000000001"
 	rec := sendDelete(t, e, "/orgs/not-a-uuid/members/"+validUserUUID)
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid organization id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestRemoveMember_InvalidUserID verifies that DELETE /orgs/:id/members/:user_id
-// with an invalid UUID for the user_id path parameter returns HTTP 400 with
-// error message 'invalid user id'.
+// with a non-UUID user selector that matches no user returns HTTP 404.
+// After flexible selector integration (16-REQ-5), non-UUID strings are
+// treated as username selectors. Since the org UUID also doesn't exist,
+// org resolution fails first with 'organization not found' (16-REQ-5.2).
 //
-// Test Spec: TS-08-57
-// Requirement: 08-REQ-11.4
+// Test Spec: TS-08-57 (updated by 16-REQ-5.2, 16-REQ-5.3)
+// Requirement: 08-REQ-11.4, 16-REQ-5.2
 func TestRemoveMember_InvalidUserID(t *testing.T) {
 	e, _ := setupOrgAdminTestServer(t)
 
 	validOrgUUID := "00000000-0000-0000-0000-000000000001"
 	rec := sendDelete(t, e, "/orgs/"+validOrgUUID+"/members/not-a-uuid")
 
-	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid user id")
+	assertErrorResponse(t, rec, http.StatusNotFound, "organization not found")
 }
 
 // TestRemoveMember_NonAdmin verifies that DELETE /orgs/:id/members/:user_id
