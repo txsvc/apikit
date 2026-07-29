@@ -1,0 +1,1217 @@
+{
+  "$schema": null,
+  "spec_id": "17",
+  "spec_name": "pat_permission_updates",
+  "schema_version": 1,
+  "introduction": "This spec defines the PAT Permission Updates feature for apikit, which adds three new API endpoints and corresponding CLI commands to replace, add, and remove permissions on an existing Personal Access Token (PAT) in-place, avoiding unnecessary secret rotation.",
+  "glossary": {
+    "DoRequest": "The HTTP helper function used by CLI commands to make authenticated HTTP requests to the apikit server, following the pattern established in tokens.go.",
+    "GetAuthInfo": "The auth middleware helper that retrieves the AuthInfo (credential type, permissions) for the current request from the Echo context.",
+    "GetUserID": "The auth middleware helper that retrieves the authenticated user's ID from the Echo context.",
+    "NewPermissionRegistry": "The constructor function that initializes the PermissionRegistry with all built-in permissions; tokens:write is added here.",
+    "PAT": "Personal Access Token — a user-created, fine-grained credential that grants scoped access to API resources via resource_type:action permission pairs.",
+    "PATHandler": "The Go struct in internal/handlers/pat.go that owns all PAT-related HTTP handler methods and route registration.",
+    "PATResponse": "The JSON response shape returned by PAT endpoints, defined in internal/handlers/pat.go, including fields such as id, name, permissions, revoked_at, and expires_at.",
+    "PermissionRegistry": "The registry of all valid built-in permissions in the system, used to validate permission strings supplied by callers.",
+    "RegisterRoutes": "The method on PATHandler that registers all PAT HTTP routes with the Echo router; modified in-place by this spec to add the three new permission endpoints.",
+    "RequirePermission": "The auth middleware helper that checks whether the authenticated caller holds a specific permission, returning HTTP 403 if not.",
+    "UpdatePATPermissionsRequest": "The Go struct representing the JSON request body for PUT, PATCH, and DELETE on /user/tokens/:token_id/permissions, containing a Permissions []string field.",
+    "auth_middleware": "The upstream spec (spec 05) that defines RequirePermission, GetAuthInfo, GetUserID, and PermissionRegistry.",
+    "auto-revoke": "The behavior of setting revoked_at to the current UTC timestamp when a replace or remove operation results in a token with zero permissions.",
+    "cli_user_commands": "The upstream spec (spec 15) that defines the CLI token command registration pattern, parsePermissions helper, and DoRequest HTTP call pattern.",
+    "db.WithTx": "The database helper that executes a function within a SQLite transaction, ensuring atomicity of read-modify-write operations.",
+    "expires_at": "The timestamp column on the pats table that, when non-NULL and in the past, indicates the token has expired.",
+    "parsePermissions": "The CLI helper function in tokens.go that splits a comma-separated permissions string and trims whitespace, reused by the three new CLI commands.",
+    "pat_lifecycle": "The upstream spec (spec 09) that defines PATHandler, PATResponse, and RegisterRoutes.",
+    "pats": "The SQLite table that stores Personal Access Token records, including a permissions TEXT column containing a JSON-serialized array.",
+    "privilege escalation": "The rule that a PAT-authenticated caller cannot grant permissions to a token that the caller's own PAT does not already hold.",
+    "resource_type:action": "The format for permission strings, consisting of a resource type and an action separated by exactly one colon (e.g., users:read, orgs:write).",
+    "revoked_at": "The timestamp column on the pats table that, when non-NULL, indicates the token has been revoked.",
+    "token_id": "The URL path parameter identifying the target PAT for permission modification operations.",
+    "tokens:manage": "An existing built-in permission that grants the ability to create, revoke, and modify PAT permissions in-place. It is a superset of tokens:write.",
+    "tokens:write": "A new built-in permission (the 7th) that grants the ability to modify PAT permissions in-place. It is a strict subset of tokens:manage."
+  },
+  "requirements": [
+    {
+      "id": "17-REQ-1",
+      "title": "Register tokens:write built-in permission",
+      "user_story": {
+        "role": "system administrator",
+        "goal": "have a dedicated tokens:write permission that grants in-place PAT permission modification without full tokens:manage access",
+        "benefit": "operators can grant minimal privilege to callers that only need to modify token permissions, not create or revoke tokens"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "PermissionRegistry",
+          "action": "register tokens:write as the 7th built-in permission alongside the existing 6 permissions",
+          "return_contract": "returns a PermissionRegistry containing exactly 7 built-in permissions including tokens:write",
+          "trigger": "NewPermissionRegistry() is called"
+        },
+        {
+          "id": "17-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "PermissionRegistry",
+          "action": "treat tokens:write as a strict subset of tokens:manage — a PAT holding tokens:manage satisfies any OR-check that includes tokens:write",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "PermissionRegistry",
+          "action": "panic or return an error at startup to prevent duplicate registration",
+          "return_contract": "returns an error or panics with a descriptive message indicating duplicate permission registration",
+          "error_condition": "tokens:write is registered more than once in NewPermissionRegistry()"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-2",
+      "title": "Register permission modification routes on PATHandler",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "call PUT, PATCH, and DELETE on /user/tokens/:token_id/permissions",
+        "benefit": "I can modify PAT permissions in-place without revoking and recreating the token"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "PATHandler",
+          "action": "register PUT /user/tokens/:token_id/permissions → replacePATPermissions, PATCH /user/tokens/:token_id/permissions → addPATPermissions, and DELETE /user/tokens/:token_id/permissions → removePATPermissions directly within the existing RegisterRoutes method",
+          "return_contract": "all three routes are reachable via the Echo router after registration",
+          "trigger": "RegisterRoutes is called"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "PATHandler",
+          "action": "panic with a descriptive message rather than silently registering broken routes",
+          "return_contract": "panics with a descriptive initialization error",
+          "error_condition": "RegisterRoutes is called on a nil or uninitialized PATHandler"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-3",
+      "title": "Common permission check for all three endpoints",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "be required to hold tokens:write or tokens:manage to call the permission modification endpoints",
+        "benefit": "unauthorized callers cannot modify PAT permissions"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-3.1",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "allow the request to proceed past the permission check",
+          "return_contract": "proceeds to token lookup; does not return HTTP 403",
+          "trigger": "a request arrives at any of the three permission endpoints",
+          "condition": "the caller is authenticated via PAT and holds tokens:write"
+        },
+        {
+          "id": "17-REQ-3.2",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "allow the request to proceed past the permission check",
+          "return_contract": "proceeds to token lookup; does not return HTTP 403",
+          "trigger": "a request arrives at any of the three permission endpoints",
+          "condition": "the caller is authenticated via PAT and holds tokens:manage but not tokens:write"
+        },
+        {
+          "id": "17-REQ-3.3",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "bypass the permission check and allow the request to proceed",
+          "return_contract": "proceeds to token lookup; does not return HTTP 403",
+          "trigger": "a request arrives at any of the three permission endpoints",
+          "condition": "the caller is authenticated via an API key"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "reject the request with HTTP 403",
+          "return_contract": "returns HTTP 403 with JSON body {error: \"insufficient permissions\"}",
+          "error_condition": "the caller is authenticated via PAT and holds neither tokens:write nor tokens:manage"
+        },
+        {
+          "id": "17-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "reject the request via auth middleware before reaching the handler",
+          "return_contract": "returns HTTP 401 as handled by auth middleware",
+          "error_condition": "the request arrives without any authentication credentials"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-4",
+      "title": "Common token lookup and guard checks",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "receive clear errors when attempting to modify a token that does not exist, is revoked, or is expired",
+        "benefit": "I get actionable feedback rather than silent failures"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "permission modification handler",
+          "action": "query the pats table by token_id AND user_id from auth context to enforce user isolation",
+          "return_contract": "proceeds to guard checks if found; returns HTTP 404 with JSON body {error: \"token not found\"} if not found or belongs to another user",
+          "trigger": "a permission modification request is received with a valid token_id"
+        },
+        {
+          "id": "17-REQ-4.2",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "reject the modification request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"token is revoked\"}",
+          "trigger": "the target token is found",
+          "condition": "the token's revoked_at is non-NULL"
+        },
+        {
+          "id": "17-REQ-4.3",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "reject the modification request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"token is expired\"}",
+          "trigger": "the target token is found and not revoked",
+          "condition": "the token's expires_at is non-NULL and in the past"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "return HTTP 404 to prevent user enumeration",
+          "return_contract": "returns HTTP 404 with JSON body {error: \"token not found\"}",
+          "error_condition": "the token_id in the URL path belongs to a different user than the authenticated caller"
+        },
+        {
+          "id": "17-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "return HTTP 500",
+          "return_contract": "returns HTTP 500 with JSON body {error: \"internal server error\"}",
+          "error_condition": "the database query for the token fails due to a database error"
+        },
+        {
+          "id": "17-REQ-4.E3",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "treat the token as expired and reject the modification",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"token is expired\"}",
+          "error_condition": "the token's expires_at is exactly equal to the current time (boundary)"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-5",
+      "title": "Common permission validation for replace and add",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "receive clear errors when I supply malformed or unregistered permission strings",
+        "benefit": "I can correct my request rather than silently setting invalid permissions"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "permission modification handler",
+          "action": "validate that each permission string contains exactly one colon (resource_type:action format)",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"invalid permission format: <permission>\"} for the first malformed string found",
+          "trigger": "a replace or add request is received with a permissions array"
+        },
+        {
+          "id": "17-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "permission modification handler",
+          "action": "validate that each permission string is registered in the PermissionRegistry",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"unknown permission: <permission>\"} for the first unregistered permission found",
+          "trigger": "a replace or add request passes format validation"
+        },
+        {
+          "id": "17-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "removePATPermissions handler",
+          "action": "validate that each permission string contains exactly one colon; silently ignore permissions not registered in the PermissionRegistry",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"invalid permission format: <permission>\"} for malformed strings; proceeds normally for unregistered but validly formatted permissions",
+          "trigger": "a remove request is received with a permissions array"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "reject with invalid format error",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"invalid permission format: usersread\"}",
+          "error_condition": "a permission string contains zero colons (e.g., \"usersread\")"
+        },
+        {
+          "id": "17-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "reject with invalid format error",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"invalid permission format: users:read:extra\"}",
+          "error_condition": "a permission string contains two or more colons (e.g., \"users:read:extra\")"
+        },
+        {
+          "id": "17-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "reject with unknown permission error",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"unknown permission: <permission>\"}",
+          "error_condition": "a permission string is validly formatted but not in the PermissionRegistry (replace or add only)"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-6",
+      "title": "Privilege escalation check for replace and add",
+      "user_story": {
+        "role": "PAT-authenticated caller",
+        "goal": "be prevented from granting permissions to a token that I do not myself hold",
+        "benefit": "PAT callers cannot escalate privileges beyond their own permission set"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-6.1",
+          "ears_pattern": "complex_event",
+          "system": "replacePATPermissions handler",
+          "action": "check that each permission in the new set that is NOT already present on the target token is also present in the caller's own PAT permissions; if any new permission is not held by the caller, reject the request",
+          "return_contract": "returns HTTP 403 with JSON body {error: \"cannot grant permission: <permission>\"} for the first escalating permission found",
+          "trigger": "a replace request passes validation",
+          "condition": "the caller is authenticated via PAT"
+        },
+        {
+          "id": "17-REQ-6.2",
+          "ears_pattern": "complex_event",
+          "system": "addPATPermissions handler",
+          "action": "check that each permission being added is also present in the caller's own PAT permissions; if any permission is not held by the caller, reject the request",
+          "return_contract": "returns HTTP 403 with JSON body {error: \"cannot grant permission: <permission>\"} for the first escalating permission found",
+          "trigger": "an add request passes validation",
+          "condition": "the caller is authenticated via PAT"
+        },
+        {
+          "id": "17-REQ-6.3",
+          "ears_pattern": "complex_event",
+          "system": "replacePATPermissions handler",
+          "action": "skip the privilege escalation check entirely and proceed with the replace operation",
+          "return_contract": "proceeds to database update without HTTP 403",
+          "trigger": "a replace request passes validation",
+          "condition": "the caller is authenticated via an API key"
+        },
+        {
+          "id": "17-REQ-6.4",
+          "ears_pattern": "complex_event",
+          "system": "removePATPermissions handler",
+          "action": "skip the privilege escalation check — removing permissions never grants new access",
+          "return_contract": "proceeds to database update without HTTP 403",
+          "trigger": "a remove request passes validation",
+          "condition": "the caller is authenticated via PAT"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-6.E1",
+          "ears_pattern": "complex_event",
+          "system": "replacePATPermissions handler",
+          "action": "allow the operation — keeping existing permissions is always permitted and never triggers the escalation guard",
+          "return_contract": "returns HTTP 200 with updated PATResponse",
+          "trigger": "a PAT caller replaces permissions on their own token",
+          "condition": "the new permissions set is a subset of the caller's current PAT permissions"
+        },
+        {
+          "id": "17-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "replacePATPermissions handler",
+          "action": "reject the request with HTTP 403 identifying the escalating permission",
+          "return_contract": "returns HTTP 403 with JSON body {error: \"cannot grant permission: <permission>\"}",
+          "error_condition": "a PAT caller attempts to add a permission to a token that the caller's own PAT does not hold"
+        },
+        {
+          "id": "17-REQ-6.E3",
+          "ears_pattern": "complex_event",
+          "system": "replacePATPermissions handler",
+          "action": "allow the operation without triggering the escalation guard",
+          "return_contract": "returns HTTP 200 with updated PATResponse",
+          "trigger": "a PAT caller replaces permissions on their own token",
+          "condition": "the new set contains only permissions already on the token (no new permissions being added)"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-7",
+      "title": "PUT /user/tokens/:token_id/permissions — replace all permissions",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "replace the entire permissions set on one of my PATs with a new set",
+        "benefit": "I can change a token's permissions in a single atomic operation without revoking and recreating it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "replacePATPermissions handler",
+          "action": "validate permissions, check privilege escalation if PAT caller, then update the pats table permissions column to the new set in a db.WithTx transaction, storing permissions in the order provided by the client",
+          "return_contract": "returns HTTP 200 with PATResponse showing the updated permissions set",
+          "trigger": "a PUT request is received at /user/tokens/:token_id/permissions with a non-empty permissions array"
+        },
+        {
+          "id": "17-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "replacePATPermissions handler",
+          "action": "set revoked_at to the current UTC timestamp and update the pats table in a single UPDATE within db.WithTx, setting both permissions to [] and revoked_at to now",
+          "return_contract": "returns HTTP 200 with PATResponse where revoked_at is set to the current UTC timestamp",
+          "trigger": "a PUT request is received with an empty permissions array ([])"
+        },
+        {
+          "id": "17-REQ-7.3",
+          "ears_pattern": "event_driven",
+          "system": "replacePATPermissions handler",
+          "action": "proceed with the update without special-casing — the update is idempotent",
+          "return_contract": "returns HTTP 200 with PATResponse showing the unchanged permissions set",
+          "trigger": "a PUT request is received where the new permissions set is identical to the current set"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "replacePATPermissions handler",
+          "action": "reject the request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"permissions are required\"}",
+          "error_condition": "the request body is absent, null, or the permissions field is absent or null"
+        },
+        {
+          "id": "17-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "replacePATPermissions handler",
+          "action": "reject the request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"invalid request body\"}",
+          "error_condition": "the request body is malformed JSON"
+        },
+        {
+          "id": "17-REQ-7.E3",
+          "ears_pattern": "unwanted",
+          "system": "replacePATPermissions handler",
+          "action": "roll back the db.WithTx transaction and return HTTP 500",
+          "return_contract": "returns HTTP 500 with JSON body {error: \"internal server error\"}",
+          "error_condition": "the database UPDATE fails during the replace operation"
+        },
+        {
+          "id": "17-REQ-7.E4",
+          "ears_pattern": "unwanted",
+          "system": "replacePATPermissions handler",
+          "action": "rely on SQLite's serialized write mode within db.WithTx to serialize the writes; last-write-wins semantics apply",
+          "return_contract": "both requests complete with HTTP 200; the final state reflects the last committed write",
+          "error_condition": "a concurrent replace request modifies the same token simultaneously"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-8",
+      "title": "PATCH /user/tokens/:token_id/permissions — add permissions",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "add new permissions to one of my PATs without affecting existing permissions",
+        "benefit": "I can expand a token's access incrementally without replacing the entire permissions set"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "addPATPermissions handler",
+          "action": "validate permissions, check privilege escalation if PAT caller, then merge new permissions into the existing set by appending only permissions not already present, and update the pats table in a db.WithTx transaction",
+          "return_contract": "returns HTTP 200 with PATResponse showing the merged permissions set with no duplicates",
+          "trigger": "a PATCH request is received at /user/tokens/:token_id/permissions with a non-empty permissions array"
+        },
+        {
+          "id": "17-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "addPATPermissions handler",
+          "action": "treat the operation as idempotent — no changes are made to the stored permissions",
+          "return_contract": "returns HTTP 200 with PATResponse showing the unchanged permissions set",
+          "trigger": "a PATCH request is received where all permissions in the request are already present on the token"
+        },
+        {
+          "id": "17-REQ-8.3",
+          "ears_pattern": "event_driven",
+          "system": "addPATPermissions handler",
+          "action": "append only the new permissions to the end of the existing list, preserving insertion order for existing permissions",
+          "return_contract": "returns HTTP 200 with PATResponse showing the combined permissions set with existing permissions first and new permissions appended",
+          "trigger": "a PATCH request is received with a mix of new and already-present permissions"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "addPATPermissions handler",
+          "action": "reject the request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"permissions are required\"}",
+          "error_condition": "the request body is absent, null, or the permissions field is absent, null, or an empty array"
+        },
+        {
+          "id": "17-REQ-8.E2",
+          "ears_pattern": "unwanted",
+          "system": "addPATPermissions handler",
+          "action": "roll back the db.WithTx transaction and return HTTP 500",
+          "return_contract": "returns HTTP 500 with JSON body {error: \"internal server error\"}",
+          "error_condition": "the database UPDATE fails during the add operation"
+        },
+        {
+          "id": "17-REQ-8.E3",
+          "ears_pattern": "unwanted",
+          "system": "addPATPermissions handler",
+          "action": "rely on SQLite's serialized write mode within db.WithTx; the second write sees the result of the first, so no duplicates are introduced",
+          "return_contract": "both requests complete with HTTP 200; the final permissions set contains no duplicates",
+          "error_condition": "a concurrent add request attempts to add the same permissions simultaneously"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-9",
+      "title": "DELETE /user/tokens/:token_id/permissions — remove permissions",
+      "user_story": {
+        "role": "authenticated user",
+        "goal": "remove specific permissions from one of my PATs without affecting other permissions",
+        "benefit": "I can reduce a token's access scope without revoking and recreating it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "removePATPermissions handler",
+          "action": "remove the specified permissions from the token's existing set (silently ignoring permissions not present), then update the pats table in a db.WithTx transaction",
+          "return_contract": "returns HTTP 200 with PATResponse showing the reduced permissions set",
+          "trigger": "a DELETE request is received at /user/tokens/:token_id/permissions with a non-empty permissions array"
+        },
+        {
+          "id": "17-REQ-9.2",
+          "ears_pattern": "event_driven",
+          "system": "removePATPermissions handler",
+          "action": "treat the operation as idempotent — no changes are made to the stored permissions",
+          "return_contract": "returns HTTP 200 with PATResponse showing the unchanged permissions set",
+          "trigger": "a DELETE request is received where none of the specified permissions are present on the token"
+        },
+        {
+          "id": "17-REQ-9.3",
+          "ears_pattern": "complex_event",
+          "system": "removePATPermissions handler",
+          "action": "set revoked_at to the current UTC timestamp and update both permissions and revoked_at in a single UPDATE within db.WithTx",
+          "return_contract": "returns HTTP 200 with PATResponse where revoked_at is set to the current UTC timestamp",
+          "trigger": "a DELETE request is received",
+          "condition": "removing the specified permissions results in an empty permissions set"
+        },
+        {
+          "id": "17-REQ-9.4",
+          "ears_pattern": "event_driven",
+          "system": "removePATPermissions handler",
+          "action": "silently ignore the unregistered permissions (they cannot exist on the token) and proceed",
+          "return_contract": "returns HTTP 200 with PATResponse showing the unchanged permissions set",
+          "trigger": "a DELETE request is received with permissions not registered in the PermissionRegistry but validly formatted"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "removePATPermissions handler",
+          "action": "reject the request",
+          "return_contract": "returns HTTP 400 with JSON body {error: \"permissions are required\"}",
+          "error_condition": "the request body is absent, null, or the permissions field is absent, null, or an empty array"
+        },
+        {
+          "id": "17-REQ-9.E2",
+          "ears_pattern": "unwanted",
+          "system": "removePATPermissions handler",
+          "action": "roll back the db.WithTx transaction and return HTTP 500",
+          "return_contract": "returns HTTP 500 with JSON body {error: \"internal server error\"}",
+          "error_condition": "the database UPDATE fails during the remove operation"
+        },
+        {
+          "id": "17-REQ-9.E3",
+          "ears_pattern": "unwanted",
+          "system": "removePATPermissions handler",
+          "action": "rely on SQLite's serialized write mode within db.WithTx; last-write-wins semantics apply",
+          "return_contract": "both requests complete with HTTP 200; the final permissions set reflects the last committed write",
+          "error_condition": "a concurrent remove request attempts to remove the same permissions simultaneously"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-10",
+      "title": "Auto-revocation when permissions become empty",
+      "user_story": {
+        "role": "system",
+        "goal": "automatically revoke a PAT when its permissions set becomes empty",
+        "benefit": "tokens with no permissions cannot be used to authenticate, preventing orphaned zero-permission tokens"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-10.1",
+          "ears_pattern": "complex_event",
+          "system": "permission modification handler",
+          "action": "set revoked_at to the current UTC timestamp in the same UPDATE statement within db.WithTx that updates the permissions column",
+          "return_contract": "returns HTTP 200 with PATResponse where revoked_at is non-null and permissions is an empty array",
+          "trigger": "a replace or remove operation completes",
+          "condition": "the resulting permissions set is empty"
+        },
+        {
+          "id": "17-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "addPATPermissions handler",
+          "action": "never trigger auto-revocation, because adding permissions to an existing set always results in a non-empty set",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-10.E1",
+          "ears_pattern": "unwanted",
+          "system": "permission modification handler",
+          "action": "roll back the entire db.WithTx transaction so neither the permissions change nor the revocation is persisted",
+          "return_contract": "returns HTTP 500 with JSON body {error: \"internal server error\"}; token state is unchanged",
+          "error_condition": "the auto-revocation UPDATE (setting revoked_at) fails after the permissions update succeeds within the same transaction"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-11",
+      "title": "akc tokens replace CLI command",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "replace a PAT's permissions from the command line",
+        "benefit": "I can manage token permissions without writing raw HTTP requests"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-11.1",
+          "ears_pattern": "event_driven",
+          "system": "akc tokens replace",
+          "action": "parse the comma-separated permissions using parsePermissions, send a PUT request to /user/tokens/<token_id>/permissions via DoRequest with the UpdatePATPermissionsRequest body, and print the PATResponse JSON to stdout",
+          "return_contract": "prints PATResponse JSON to stdout and exits with code 0 on success",
+          "trigger": "a user runs akc tokens replace <token_id> --permissions <perms>"
+        },
+        {
+          "id": "17-REQ-11.2",
+          "ears_pattern": "complex_event",
+          "system": "akc tokens replace",
+          "action": "print the revocation warning to stderr",
+          "return_contract": "prints \"Token <token_id> has been revoked (no permissions remaining)\" to stderr in addition to the PATResponse JSON on stdout",
+          "trigger": "the PUT request succeeds and the response PATResponse contains a non-null revoked_at",
+          "condition": "the token was auto-revoked because the new permissions set was empty"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-11.E1",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens replace",
+          "action": "print a usage error and exit non-zero",
+          "return_contract": "prints an error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the --permissions flag is omitted"
+        },
+        {
+          "id": "17-REQ-11.E2",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens replace",
+          "action": "print the error response to stderr and exit non-zero",
+          "return_contract": "prints the error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the server returns a non-200 HTTP status"
+        },
+        {
+          "id": "17-REQ-11.E3",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens replace",
+          "action": "print a usage error and exit non-zero",
+          "return_contract": "prints an error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the token_id positional argument is missing"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-12",
+      "title": "akc tokens add CLI command",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "add permissions to a PAT from the command line",
+        "benefit": "I can expand a token's access incrementally without replacing the entire permissions set"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-12.1",
+          "ears_pattern": "event_driven",
+          "system": "akc tokens add",
+          "action": "parse the comma-separated permissions using parsePermissions, send a PATCH request to /user/tokens/<token_id>/permissions via DoRequest with the UpdatePATPermissionsRequest body, and print the PATResponse JSON to stdout",
+          "return_contract": "prints PATResponse JSON to stdout and exits with code 0 on success",
+          "trigger": "a user runs akc tokens add <token_id> --permissions <perms>"
+        },
+        {
+          "id": "17-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "akc tokens add",
+          "action": "never print a revocation warning to stderr, because adding permissions cannot produce an empty permissions set",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-12.E1",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens add",
+          "action": "print a usage error and exit non-zero",
+          "return_contract": "prints an error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the --permissions flag is omitted"
+        },
+        {
+          "id": "17-REQ-12.E2",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens add",
+          "action": "print the error response to stderr and exit non-zero",
+          "return_contract": "prints the error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the server returns a non-200 HTTP status"
+        }
+      ]
+    },
+    {
+      "id": "17-REQ-13",
+      "title": "akc tokens remove CLI command",
+      "user_story": {
+        "role": "CLI user",
+        "goal": "remove specific permissions from a PAT from the command line",
+        "benefit": "I can reduce a token's access scope without revoking and recreating it"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "17-REQ-13.1",
+          "ears_pattern": "event_driven",
+          "system": "akc tokens remove",
+          "action": "parse the comma-separated permissions using parsePermissions, send a DELETE request to /user/tokens/<token_id>/permissions via DoRequest with the UpdatePATPermissionsRequest body, and print the PATResponse JSON to stdout",
+          "return_contract": "prints PATResponse JSON to stdout and exits with code 0 on success",
+          "trigger": "a user runs akc tokens remove <token_id> --permissions <perms>"
+        },
+        {
+          "id": "17-REQ-13.2",
+          "ears_pattern": "complex_event",
+          "system": "akc tokens remove",
+          "action": "print the revocation warning to stderr",
+          "return_contract": "prints \"Token <token_id> has been revoked (no permissions remaining)\" to stderr in addition to the PATResponse JSON on stdout",
+          "trigger": "the DELETE request succeeds and the response PATResponse contains a non-null revoked_at",
+          "condition": "the token was auto-revoked because all permissions were removed"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "17-REQ-13.E1",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens remove",
+          "action": "print a usage error and exit non-zero",
+          "return_contract": "prints an error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the --permissions flag is omitted"
+        },
+        {
+          "id": "17-REQ-13.E2",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens remove",
+          "action": "print the error response to stderr and exit non-zero",
+          "return_contract": "prints the error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the server returns a non-200 HTTP status"
+        },
+        {
+          "id": "17-REQ-13.E3",
+          "ears_pattern": "unwanted",
+          "system": "akc tokens remove",
+          "action": "print a usage error and exit non-zero",
+          "return_contract": "prints an error message to stderr and exits with a non-zero exit code",
+          "error_condition": "the token_id positional argument is missing"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "17-PROP-1",
+      "title": "Replace is idempotent for identical permission sets",
+      "for_any": "valid token_id and non-empty permissions array P",
+      "invariant": "calling PUT /user/tokens/:token_id/permissions with P twice in sequence results in the same PATResponse as calling it once",
+      "validates": [
+        "17-REQ-7.3"
+      ]
+    },
+    {
+      "id": "17-PROP-2",
+      "title": "Add never introduces duplicate permissions",
+      "for_any": "valid token_id and any sequence of PATCH requests with overlapping permissions",
+      "invariant": "the permissions array in the pats table never contains duplicate entries after any number of add operations",
+      "validates": [
+        "17-REQ-8.1",
+        "17-REQ-8.2",
+        "17-REQ-8.3"
+      ]
+    },
+    {
+      "id": "17-PROP-3",
+      "title": "Remove is idempotent",
+      "for_any": "valid token_id and permissions array P",
+      "invariant": "calling DELETE /user/tokens/:token_id/permissions with P twice in sequence results in the same PATResponse as calling it once",
+      "validates": [
+        "17-REQ-9.2"
+      ]
+    },
+    {
+      "id": "17-PROP-4",
+      "title": "Auto-revocation is triggered exactly when permissions become empty",
+      "for_any": "any replace or remove operation on a non-revoked, non-expired token",
+      "invariant": "revoked_at is set if and only if the resulting permissions array is empty",
+      "validates": [
+        "17-REQ-10.1",
+        "17-REQ-7.2",
+        "17-REQ-9.3"
+      ]
+    },
+    {
+      "id": "17-PROP-5",
+      "title": "User isolation — callers cannot modify other users' tokens",
+      "for_any": "any permission modification request with a token_id belonging to a different user",
+      "invariant": "the handler returns HTTP 404 and makes no changes to the pats table",
+      "validates": [
+        "17-REQ-4.1",
+        "17-REQ-4.E1"
+      ]
+    },
+    {
+      "id": "17-PROP-6",
+      "title": "Privilege escalation is enforced for PAT callers on replace and add",
+      "for_any": "any PAT-authenticated caller and any permission P not held by the caller's PAT",
+      "invariant": "a replace or add request that would grant P to the target token is rejected with HTTP 403",
+      "validates": [
+        "17-REQ-6.1",
+        "17-REQ-6.2",
+        "17-REQ-6.E2"
+      ]
+    },
+    {
+      "id": "17-PROP-7",
+      "title": "Revoked and expired tokens cannot be modified",
+      "for_any": "any token with non-null revoked_at or with expires_at in the past",
+      "invariant": "all three permission modification endpoints return HTTP 400 and make no changes to the pats table",
+      "validates": [
+        "17-REQ-4.2",
+        "17-REQ-4.3"
+      ]
+    },
+    {
+      "id": "17-PROP-8",
+      "title": "All stored permissions are registered and validly formatted",
+      "for_any": "any successful replace or add operation",
+      "invariant": "every permission string in the resulting pats.permissions JSON array is registered in the PermissionRegistry and contains exactly one colon",
+      "validates": [
+        "17-REQ-5.1",
+        "17-REQ-5.2",
+        "17-REQ-7.1",
+        "17-REQ-8.1"
+      ]
+    },
+    {
+      "id": "17-PROP-9",
+      "title": "tokens:write is the 7th built-in permission",
+      "for_any": "any call to NewPermissionRegistry()",
+      "invariant": "the returned PermissionRegistry contains exactly 7 built-in permissions including tokens:write",
+      "validates": [
+        "17-REQ-1.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "17-PATH-1",
+      "title": "Replace PAT permissions via API — happy path",
+      "steps": [
+        {
+          "actor": "API consumer",
+          "action": "sends PUT /user/tokens/:token_id/permissions with Authorization: Bearer <PAT> and JSON body {permissions: [\"users:read\", \"orgs:read\"]}"
+        },
+        {
+          "actor": "auth middleware",
+          "action": "validates the Bearer token, extracts AuthInfo and user ID from the pats table, and injects them into the Echo context"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "checks that the caller holds tokens:write or tokens:manage; returns HTTP 403 if neither is held"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "parses and validates the UpdatePATPermissionsRequest body; returns HTTP 400 for malformed JSON or missing permissions field"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "queries the pats table by token_id AND user_id; returns HTTP 404 if not found"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "checks revoked_at and expires_at guards; returns HTTP 400 if token is revoked or expired"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "validates each permission string format and registry membership; returns HTTP 400 for invalid or unknown permissions"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "checks privilege escalation for PAT callers — verifies each new permission is held by the caller; returns HTTP 403 if not"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "executes UPDATE on the pats table within db.WithTx, setting permissions to the new JSON-serialized array"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "returns HTTP 200 with PATResponse showing the updated permissions set"
+        }
+      ]
+    },
+    {
+      "id": "17-PATH-2",
+      "title": "Replace PAT permissions with empty array — auto-revocation",
+      "steps": [
+        {
+          "actor": "API consumer",
+          "action": "sends PUT /user/tokens/:token_id/permissions with JSON body {permissions: []}"
+        },
+        {
+          "actor": "auth middleware",
+          "action": "validates the Bearer token and injects AuthInfo into the Echo context"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "passes permission check, parses body, looks up token, passes revocation and expiry guards"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "detects empty permissions array — skips format/registry validation and privilege escalation"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "executes UPDATE on the pats table within db.WithTx, setting permissions to [] and revoked_at to current UTC timestamp"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "returns HTTP 200 with PATResponse where revoked_at is set"
+        }
+      ]
+    },
+    {
+      "id": "17-PATH-3",
+      "title": "Add permissions via API — happy path",
+      "steps": [
+        {
+          "actor": "API consumer",
+          "action": "sends PATCH /user/tokens/:token_id/permissions with Authorization: Bearer <PAT> and JSON body {permissions: [\"orgs:write\"]}"
+        },
+        {
+          "actor": "auth middleware",
+          "action": "validates the Bearer token and injects AuthInfo and user ID into the Echo context"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "checks that the caller holds tokens:write or tokens:manage"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "parses and validates the UpdatePATPermissionsRequest body; rejects if permissions is absent, null, or empty"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "queries the pats table by token_id AND user_id; returns HTTP 404 if not found"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "checks revoked_at and expires_at guards"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "validates each permission string format and registry membership"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "checks privilege escalation for PAT callers"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "computes the merged permissions set by appending only permissions not already present"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "executes UPDATE on the pats table within db.WithTx, setting permissions to the merged JSON-serialized array"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "returns HTTP 200 with PATResponse showing the merged permissions set"
+        }
+      ]
+    },
+    {
+      "id": "17-PATH-4",
+      "title": "Remove all permissions via API — auto-revocation",
+      "steps": [
+        {
+          "actor": "API consumer",
+          "action": "sends DELETE /user/tokens/:token_id/permissions with JSON body {permissions: [\"users:read\"]} where users:read is the only permission on the token"
+        },
+        {
+          "actor": "auth middleware",
+          "action": "validates the Bearer token and injects AuthInfo into the Echo context"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "checks that the caller holds tokens:write or tokens:manage"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "parses and validates the UpdatePATPermissionsRequest body"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "queries the pats table by token_id AND user_id"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "checks revoked_at and expires_at guards"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "validates format of each permission string; silently ignores unregistered permissions"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "computes the resulting permissions set after removal — detects it is empty"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "executes UPDATE on the pats table within db.WithTx, setting permissions to [] and revoked_at to current UTC timestamp"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "returns HTTP 200 with PATResponse where revoked_at is set"
+        }
+      ]
+    },
+    {
+      "id": "17-PATH-5",
+      "title": "akc tokens replace CLI — end-to-end flow",
+      "steps": [
+        {
+          "actor": "CLI user",
+          "action": "runs akc tokens replace <token_id> --permissions users:read,orgs:read"
+        },
+        {
+          "actor": "akc tokens replace command",
+          "action": "calls parsePermissions on the --permissions flag value to produce [\"users:read\", \"orgs:read\"]"
+        },
+        {
+          "actor": "akc tokens replace command",
+          "action": "calls DoRequest with method PUT, path /user/tokens/<token_id>/permissions, and UpdatePATPermissionsRequest body"
+        },
+        {
+          "actor": "auth middleware",
+          "action": "validates the Bearer token from CLI config and injects AuthInfo"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "processes the request through all validation, escalation, and database update steps"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "returns HTTP 200 with PATResponse"
+        },
+        {
+          "actor": "akc tokens replace command",
+          "action": "prints the PATResponse JSON to stdout; if revoked_at is non-null, prints revocation warning to stderr"
+        },
+        {
+          "actor": "CLI user",
+          "action": "observes the updated token state in stdout output"
+        }
+      ]
+    },
+    {
+      "id": "17-PATH-6",
+      "title": "Full PAT permission lifecycle — create, add, replace, remove",
+      "steps": [
+        {
+          "actor": "API consumer",
+          "action": "sends POST /user/tokens to create a PAT with permissions [\"users:read\"]"
+        },
+        {
+          "actor": "pat_lifecycle handler",
+          "action": "creates the PAT and returns PATResponse with permissions [\"users:read\"]"
+        },
+        {
+          "actor": "API consumer",
+          "action": "sends PATCH /user/tokens/:token_id/permissions with {permissions: [\"orgs:read\"]}"
+        },
+        {
+          "actor": "addPATPermissions handler",
+          "action": "merges permissions and returns PATResponse with permissions [\"users:read\", \"orgs:read\"]"
+        },
+        {
+          "actor": "API consumer",
+          "action": "sends PUT /user/tokens/:token_id/permissions with {permissions: [\"orgs:write\"]}"
+        },
+        {
+          "actor": "replacePATPermissions handler",
+          "action": "replaces permissions and returns PATResponse with permissions [\"orgs:write\"]"
+        },
+        {
+          "actor": "API consumer",
+          "action": "sends DELETE /user/tokens/:token_id/permissions with {permissions: [\"orgs:write\"]}"
+        },
+        {
+          "actor": "removePATPermissions handler",
+          "action": "removes all permissions, sets revoked_at, and returns PATResponse with empty permissions and non-null revoked_at"
+        },
+        {
+          "actor": "API consumer",
+          "action": "observes the token is now revoked via the revoked_at field in the final PATResponse"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "17-ERR-1",
+      "condition": "permissions field is absent or null in the request body",
+      "behavior": "return HTTP 400 with JSON body {error: \"permissions are required\"}",
+      "requirement_id": "17-REQ-7.E1"
+    },
+    {
+      "id": "17-ERR-2",
+      "condition": "permissions field is an empty array for PATCH or DELETE",
+      "behavior": "return HTTP 400 with JSON body {error: \"permissions are required\"}",
+      "requirement_id": "17-REQ-8.E1"
+    },
+    {
+      "id": "17-ERR-3",
+      "condition": "a permission string does not contain exactly one colon",
+      "behavior": "return HTTP 400 with JSON body {error: \"invalid permission format: <permission>\"}",
+      "requirement_id": "17-REQ-5.1"
+    },
+    {
+      "id": "17-ERR-4",
+      "condition": "a permission string is validly formatted but not registered in the PermissionRegistry (replace or add only)",
+      "behavior": "return HTTP 400 with JSON body {error: \"unknown permission: <permission>\"}",
+      "requirement_id": "17-REQ-5.2"
+    },
+    {
+      "id": "17-ERR-5",
+      "condition": "the target token's revoked_at is non-NULL",
+      "behavior": "return HTTP 400 with JSON body {error: \"token is revoked\"}",
+      "requirement_id": "17-REQ-4.2"
+    },
+    {
+      "id": "17-ERR-6",
+      "condition": "the target token's expires_at is non-NULL and in the past",
+      "behavior": "return HTTP 400 with JSON body {error: \"token is expired\"}",
+      "requirement_id": "17-REQ-4.3"
+    },
+    {
+      "id": "17-ERR-7",
+      "condition": "the caller is authenticated via PAT and holds neither tokens:write nor tokens:manage",
+      "behavior": "return HTTP 403 with JSON body {error: \"insufficient permissions\"}",
+      "requirement_id": "17-REQ-3.E1"
+    },
+    {
+      "id": "17-ERR-8",
+      "condition": "a PAT caller attempts to grant a permission not held by their own PAT (replace or add only)",
+      "behavior": "return HTTP 403 with JSON body {error: \"cannot grant permission: <permission>\"}",
+      "requirement_id": "17-REQ-6.E2"
+    },
+    {
+      "id": "17-ERR-9",
+      "condition": "the token_id does not exist in the pats table or belongs to a different user",
+      "behavior": "return HTTP 404 with JSON body {error: \"token not found\"}",
+      "requirement_id": "17-REQ-4.1"
+    },
+    {
+      "id": "17-ERR-10",
+      "condition": "the request body is malformed JSON",
+      "behavior": "return HTTP 400 with JSON body {error: \"invalid request body\"}",
+      "requirement_id": "17-REQ-7.E2"
+    },
+    {
+      "id": "17-ERR-11",
+      "condition": "a database error occurs during the UPDATE operation",
+      "behavior": "roll back the db.WithTx transaction and return HTTP 500 with JSON body {error: \"internal server error\"}",
+      "requirement_id": "17-REQ-7.E3"
+    },
+    {
+      "id": "17-ERR-12",
+      "condition": "the request arrives without authentication credentials",
+      "behavior": "auth middleware rejects the request with HTTP 401 before the handler is invoked",
+      "requirement_id": "17-REQ-3.E2"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/labstack/echo/v4",
+      "version": "v4",
+      "symbols": [
+        {
+          "name": "Context",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "type Context interface",
+          "notes": "Echo request context passed to all handler functions; used to extract path params, bind request body, and write responses"
+        },
+        {
+          "name": "Context.Param",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "func (c Context) Param(name string) string",
+          "notes": "Extracts URL path parameters such as token_id"
+        },
+        {
+          "name": "Context.Bind",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "func (c Context) Bind(i interface{}) error",
+          "notes": "Deserializes the JSON request body into the provided struct"
+        },
+        {
+          "name": "Context.JSON",
+          "import_path": "github.com/labstack/echo/v4",
+          "signature": "func (c Context) JSON(code int, i interface{}) error",
+          "notes": "Writes a JSON response with the given HTTP status code"
+        }
+      ]
+    },
+    {
+      "package": "github.com/spf13/cobra",
+      "version": "v1",
+      "symbols": [
+        {
+          "name": "Command",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "type Command struct",
+          "notes": "Cobra command struct used to define akc tokens replace, add, and remove subcommands"
+        },
+        {
+          "name": "Command.RunE",
+          "import_path": "github.com/spf13/cobra",
+          "signature": "RunE func(cmd *Command, args []string) error",
+          "notes": "The error-returning run function for a Cobra command; used by all three CLI subcommands"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1288 @@
+{
+  "$schema": null,
+  "spec_id": "17",
+  "spec_name": "pat_permission_updates",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "go test ./internal/handlers/... ./internal/auth/... ./internal/cli/... -count=1 -v",
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./..."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "09",
+      "from_group": 4,
+      "to_group": 1,
+      "relationship": "PATHandler struct, PATResponse type, RegisterRoutes method \u2014 extended in-place by this spec",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "05",
+      "from_group": 4,
+      "to_group": 1,
+      "relationship": "RequirePermission, GetAuthInfo, GetUserID, PermissionRegistry \u2014 used by handler helpers",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "15",
+      "from_group": 7,
+      "to_group": 3,
+      "relationship": "CLI token command registration pattern, parsePermissions helper, DoRequest HTTP call pattern",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: tokens:write permission registration and route wiring",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write unit tests for tokens:write registration in PermissionRegistry",
+          "details": [
+            "In internal/auth/permissions_test.go, add tests verifying NewPermissionRegistry() returns exactly 7 built-in permissions",
+            "Assert 'tokens:write' is present in the registry",
+            "Assert 'tokens:manage' is still present alongside 'tokens:write'",
+            "Assert total count of built-in permissions equals 7"
+          ],
+          "test_spec_refs": [
+            "TS-17-1",
+            "TS-17-2"
+          ],
+          "requirement_refs": [
+            "17-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write unit tests for route registration on PATHandler",
+          "details": [
+            "In internal/handlers/pat_test.go, add tests verifying RegisterRoutes registers PUT /user/tokens/:token_id/permissions",
+            "Verify PATCH /user/tokens/:token_id/permissions is registered",
+            "Verify DELETE /user/tokens/:token_id/permissions is registered",
+            "Use Echo's router inspection or send test requests to confirm 405 vs 404 behavior"
+          ],
+          "test_spec_refs": [
+            "TS-17-3"
+          ],
+          "requirement_refs": [
+            "17-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write unit tests for common permission check (tokens:write / tokens:manage OR-check)",
+          "details": [
+            "In internal/handlers/pat_test.go, add table-driven tests for all three endpoints",
+            "Test: PAT with tokens:write alone \u2192 HTTP 200 (or appropriate success)",
+            "Test: PAT with tokens:manage alone \u2192 HTTP 200",
+            "Test: PAT with neither permission \u2192 HTTP 403 'insufficient permissions'",
+            "Test: API key caller \u2192 bypasses permission check, proceeds to next guard",
+            "Mock auth context using GetAuthInfo/GetUserID test helpers"
+          ],
+          "test_spec_refs": [
+            "TS-17-4",
+            "TS-17-5",
+            "TS-17-6"
+          ],
+          "requirement_refs": [
+            "17-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write unit tests for common token lookup and guard checks",
+          "details": [
+            "Test: token not found by token_id+user_id \u2192 HTTP 404 'token not found'",
+            "Test: token belonging to another user \u2192 HTTP 404 'token not found'",
+            "Test: revoked token (revoked_at non-NULL) \u2192 HTTP 400 'token is revoked'",
+            "Test: expired token (expires_at in the past) \u2192 HTTP 400 'token is expired'",
+            "Apply these tests across all three handler variants (PUT, PATCH, DELETE)"
+          ],
+          "test_spec_refs": [
+            "TS-17-7",
+            "TS-17-8",
+            "TS-17-9"
+          ],
+          "requirement_refs": [
+            "17-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write unit tests for common permission validation (replace and add)",
+          "details": [
+            "Test: permission string with no colon \u2192 HTTP 400 'invalid permission format: <permission>'",
+            "Test: permission string with two colons \u2192 HTTP 400 'invalid permission format: <permission>'",
+            "Test: valid format but unregistered permission \u2192 HTTP 400 'unknown permission: <permission>'",
+            "Test: all permissions valid and registered \u2192 proceeds without error",
+            "Apply to both PUT (replacePATPermissions) and PATCH (addPATPermissions) handlers"
+          ],
+          "test_spec_refs": [
+            "TS-17-10",
+            "TS-17-11",
+            "TS-17-12"
+          ],
+          "requirement_refs": [
+            "17-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All new test files compile without errors: go build ./internal/auth/... ./internal/handlers/...",
+          "Test stubs (raise NotImplementedError equivalents) are in place so tests fail with 'not implemented' rather than compile errors",
+          "go vet ./internal/auth/... ./internal/handlers/... reports no issues",
+          "Requirements 17-REQ-1, 17-REQ-2, 17-REQ-3, 17-REQ-4, 17-REQ-5 have corresponding test coverage stubs"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: privilege escalation, replace handler, and add handler",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write unit tests for privilege escalation check (replace and add)",
+          "details": [
+            "Test: PAT caller adding a permission not in their own PAT \u2192 HTTP 403 'cannot grant permission: <permission>'",
+            "Test: API key caller adding any registered permission \u2192 no escalation block",
+            "Test: PAT caller replacing with permissions they already hold \u2192 HTTP 200 (no escalation)",
+            "Test: PAT caller modifying their own token, keeping existing permissions \u2192 HTTP 200 (never blocked)",
+            "Test: PAT caller replacing \u2014 only truly new permissions (not already on target) are checked for escalation",
+            "Verify DELETE handler has no escalation check (no 403 for remove operations)"
+          ],
+          "test_spec_refs": [
+            "TS-17-13",
+            "TS-17-14",
+            "TS-17-15",
+            "TS-17-16"
+          ],
+          "requirement_refs": [
+            "17-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write unit tests for PUT replacePATPermissions \u2014 success paths",
+          "details": [
+            "Test: valid non-empty permissions array \u2192 HTTP 200 with updated PATResponse showing new permissions",
+            "Test: replace with subset of current permissions \u2192 HTTP 200, fewer permissions in response",
+            "Test: replace with superset of current permissions \u2192 HTTP 200, more permissions in response",
+            "Test: replace with identical permissions (same elements, different order) \u2192 HTTP 200, update proceeds",
+            "Verify response shape matches PATResponse struct from pat_lifecycle spec"
+          ],
+          "test_spec_refs": [
+            "TS-17-17",
+            "TS-17-18",
+            "TS-17-19"
+          ],
+          "requirement_refs": [
+            "17-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write unit tests for PUT replacePATPermissions \u2014 empty/null/absent permissions",
+          "details": [
+            "Test: absent 'permissions' field (nil slice) \u2192 HTTP 400 'permissions are required'",
+            "Test: null 'permissions' field \u2192 HTTP 400 'permissions are required'",
+            "Test: empty array '[]' \u2192 HTTP 200 with auto-revoked PATResponse (revoked_at set)",
+            "Verify revoked_at is non-null in the response body when empty array triggers auto-revoke",
+            "Verify malformed JSON body \u2192 HTTP 400 'invalid request body'"
+          ],
+          "test_spec_refs": [
+            "TS-17-17",
+            "TS-17-27",
+            "TS-17-28"
+          ],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write unit tests for PATCH addPATPermissions \u2014 success paths",
+          "details": [
+            "Test: valid new permissions \u2192 HTTP 200 with merged permissions in PATResponse",
+            "Test: adding permissions already present \u2192 HTTP 200, no duplicates in response",
+            "Test: mix of new and existing permissions \u2192 HTTP 200, only new ones appended, no duplicates",
+            "Verify new permissions are appended after existing ones (insertion order preserved)",
+            "Verify PATCH never triggers auto-revocation (result always non-empty)"
+          ],
+          "test_spec_refs": [
+            "TS-17-20",
+            "TS-17-21",
+            "TS-17-22"
+          ],
+          "requirement_refs": [
+            "17-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write unit tests for PATCH addPATPermissions \u2014 error paths",
+          "details": [
+            "Test: absent 'permissions' field \u2192 HTTP 400 'permissions are required'",
+            "Test: empty array '[]' \u2192 HTTP 400 'permissions are required'",
+            "Test: revoked token \u2192 HTTP 400 'token is revoked'",
+            "Test: expired token \u2192 HTTP 400 'token is expired'",
+            "Test: PAT privilege escalation blocked \u2192 HTTP 403 'cannot grant permission: <permission>'"
+          ],
+          "test_spec_refs": [
+            "TS-17-20",
+            "TS-17-22"
+          ],
+          "requirement_refs": [
+            "17-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test functions in internal/handlers/pat_test.go compile: go build ./internal/handlers/...",
+          "go vet ./internal/handlers/... reports no issues",
+          "Requirements 17-REQ-6, 17-REQ-7, 17-REQ-8 have test coverage for both success and error paths",
+          "Test cases TS-17-13 through TS-17-22 are represented in the test file"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests: remove handler, auto-revocation, and CLI commands",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write unit tests for DELETE removePATPermissions handler",
+          "details": [
+            "Test: valid remove of present permissions \u2192 HTTP 200 with updated PATResponse (permissions removed)",
+            "Test: removing permissions not present on token \u2192 HTTP 200, idempotent (no error)",
+            "Test: removing all permissions \u2192 HTTP 200 with auto-revoked PATResponse (revoked_at set)",
+            "Test: absent/empty permissions field \u2192 HTTP 400 'permissions are required'",
+            "Test: unregistered permissions in request body \u2192 silently ignored (HTTP 200)",
+            "Test: permission string with no colon \u2192 HTTP 400 'invalid permission format: <permission>' (format check still applies)"
+          ],
+          "test_spec_refs": [
+            "TS-17-23",
+            "TS-17-24",
+            "TS-17-25",
+            "TS-17-26"
+          ],
+          "requirement_refs": [
+            "17-REQ-9",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write unit tests for DELETE removePATPermissions \u2014 guard and escalation",
+          "details": [
+            "Test: revoked token \u2192 HTTP 400 'token is revoked'",
+            "Test: expired token \u2192 HTTP 400 'token is expired'",
+            "Test: no privilege escalation check \u2014 PAT caller can remove any permission without 403",
+            "Test: unregistered permissions silently ignored even when mixed with valid ones"
+          ],
+          "test_spec_refs": [
+            "TS-17-25",
+            "TS-17-26"
+          ],
+          "requirement_refs": [
+            "17-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write unit tests for auto-revocation behavior",
+          "details": [
+            "Test: PUT with [] \u2192 revoked_at set to current UTC timestamp in DB and response",
+            "Test: DELETE removing all permissions \u2192 revoked_at set in same UPDATE transaction",
+            "Test: PATCH (add) never sets revoked_at",
+            "Test: PUT with non-empty result \u2192 revoked_at remains NULL",
+            "Verify revoked_at is included in PATResponse JSON when auto-revoked"
+          ],
+          "test_spec_refs": [
+            "TS-17-27",
+            "TS-17-28"
+          ],
+          "requirement_refs": [
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write unit tests for akc tokens replace CLI command",
+          "details": [
+            "Test: valid token_id and --permissions flag \u2192 sends PUT request, prints PATResponse JSON to stdout",
+            "Test: auto-revoked response \u2192 prints revocation warning to stderr",
+            "Test: missing --permissions flag \u2192 CLI error before HTTP call",
+            "Verify parsePermissions comma-split behavior (e.g. 'users:read, orgs:read' \u2192 ['users:read','orgs:read'])"
+          ],
+          "test_spec_refs": [
+            "TS-17-29",
+            "TS-17-30"
+          ],
+          "requirement_refs": [
+            "17-REQ-11"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.5",
+          "title": "Write unit tests for akc tokens add and akc tokens remove CLI commands",
+          "details": [
+            "Test akc tokens add: valid token_id and --permissions \u2192 sends PATCH request, prints PATResponse JSON to stdout",
+            "Test akc tokens add: no revocation warning printed (add cannot produce empty set)",
+            "Test akc tokens remove: valid token_id and --permissions \u2192 sends DELETE request, prints PATResponse JSON to stdout",
+            "Test akc tokens remove: auto-revoked response \u2192 prints revocation warning to stderr",
+            "Verify both commands use DoRequest pattern (not Go SDK) and parsePermissions helper"
+          ],
+          "test_spec_refs": [
+            "TS-17-31",
+            "TS-17-32",
+            "TS-17-33",
+            "TS-17-34"
+          ],
+          "requirement_refs": [
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All test functions in internal/handlers/pat_test.go and internal/cli/tokens_test.go compile: go build ./...",
+          "go vet ./internal/handlers/... ./internal/cli/... reports no issues",
+          "Requirements 17-REQ-9, 17-REQ-10, 17-REQ-11, 17-REQ-12, 17-REQ-13 have test coverage stubs",
+          "Test cases TS-17-23 through TS-17-34 are represented in the respective test files"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Implement tokens:write permission and UpdatePATPermissionsRequest type",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Add tokens:write to NewPermissionRegistry in internal/auth/permissions.go",
+          "details": [
+            "Open internal/auth/permissions.go and locate NewPermissionRegistry()",
+            "Add 'tokens:write' as the 7th built-in permission alongside the existing 6",
+            "Ensure the registry slice/map now contains exactly 7 entries",
+            "Do not modify the tokens:manage entry \u2014 it remains a separate, independent permission",
+            "Add a code comment explaining tokens:write is a strict subset of tokens:manage by convention"
+          ],
+          "test_spec_refs": [
+            "TS-17-1",
+            "TS-17-2"
+          ],
+          "requirement_refs": [
+            "17-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Define UpdatePATPermissionsRequest struct in internal/handlers/pat.go",
+          "details": [
+            "Add UpdatePATPermissionsRequest struct with Permissions []string `json:\"permissions\"` field",
+            "Place it alongside other request types in internal/handlers/pat.go",
+            "Ensure nil slice (absent/null JSON field) is distinguishable from empty slice ([]) at handler level",
+            "Add a brief doc comment explaining the nil vs empty distinction"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Implement shared helper: OR-check for tokens:write or tokens:manage",
+          "details": [
+            "Add a private helper function requireTokensWriteOrManage(c echo.Context) error in internal/handlers/pat.go",
+            "Call RequirePermission for 'tokens:write'; if it returns nil, return nil",
+            "Otherwise call RequirePermission for 'tokens:manage'; if it returns nil, return nil",
+            "If both fail, return HTTP 403 with message 'insufficient permissions'",
+            "API keys and admin tokens bypass this check via the existing RequirePermission behavior"
+          ],
+          "test_spec_refs": [
+            "TS-17-4",
+            "TS-17-5",
+            "TS-17-6"
+          ],
+          "requirement_refs": [
+            "17-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Implement shared helper: token lookup with user isolation and guard checks",
+          "details": [
+            "Add a private helper lookupAndGuardPAT(ctx context.Context, tokenID, userID string, db *db.DB) (*PAT, error) in internal/handlers/pat.go",
+            "Query pats table WHERE id = tokenID AND user_id = userID; return HTTP 404 'token not found' if missing",
+            "Check revoked_at: if non-NULL, return HTTP 400 'token is revoked'",
+            "Check expires_at: if non-NULL and before time.Now().UTC(), return HTTP 400 'token is expired'",
+            "Return the PAT record for further processing by the caller"
+          ],
+          "test_spec_refs": [
+            "TS-17-7",
+            "TS-17-8",
+            "TS-17-9"
+          ],
+          "requirement_refs": [
+            "17-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Implement shared helper: permission format and registry validation",
+          "details": [
+            "Add a private helper validatePermissions(perms []string, registry PermissionRegistry, ignoreUnknown bool) error",
+            "For each permission string, check it contains exactly one colon; if not, return HTTP 400 'invalid permission format: <permission>'",
+            "If ignoreUnknown is false (replace/add), check registry; if not found, return HTTP 400 'unknown permission: <permission>'",
+            "If ignoreUnknown is true (remove), skip registry check but still apply format validation",
+            "Return nil if all permissions pass validation"
+          ],
+          "test_spec_refs": [
+            "TS-17-10",
+            "TS-17-11",
+            "TS-17-12"
+          ],
+          "requirement_refs": [
+            "17-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.6",
+          "title": "Implement shared helper: privilege escalation check",
+          "details": [
+            "Add a private helper checkPrivilegeEscalation(callerPerms, existingPerms, requestedPerms []string, authInfo AuthInfo) error",
+            "If caller is API key or admin token, return nil immediately",
+            "For each permission in requestedPerms, skip if already in existingPerms (keeping existing is always allowed)",
+            "For truly new permissions, check if present in callerPerms; if not, return HTTP 403 'cannot grant permission: <permission>'",
+            "Return nil if all new permissions pass the check"
+          ],
+          "test_spec_refs": [
+            "TS-17-13",
+            "TS-17-14",
+            "TS-17-15",
+            "TS-17-16"
+          ],
+          "requirement_refs": [
+            "17-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "go build ./internal/auth/... ./internal/handlers/... succeeds with no errors",
+          "go vet ./internal/auth/... ./internal/handlers/... reports no issues",
+          "go test ./internal/auth/... -run TestPermissionRegistry -count=1 -v passes (TS-17-1, TS-17-2)",
+          "NewPermissionRegistry() returns exactly 7 built-in permissions including 'tokens:write'",
+          "Requirements 17-REQ-1, 17-REQ-3, 17-REQ-4, 17-REQ-5, 17-REQ-6 acceptance criteria met by helper implementations"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement replacePATPermissions and addPATPermissions handlers",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement replacePATPermissions handler (PUT /user/tokens/:token_id/permissions)",
+          "details": [
+            "Add func (h *PATHandler) replacePATPermissions(c echo.Context) error in internal/handlers/pat.go",
+            "Call requireTokensWriteOrManage; return on error",
+            "Parse token_id from path param; get userID via GetUserID(c)",
+            "Decode request body into UpdatePATPermissionsRequest; return HTTP 400 'invalid request body' on JSON error",
+            "If req.Permissions is nil, return HTTP 400 'permissions are required'",
+            "If req.Permissions is empty slice [], proceed to auto-revoke path (skip validation and escalation)",
+            "Otherwise: call validatePermissions(req.Permissions, registry, false); return on error",
+            "Call lookupAndGuardPAT to fetch current token; return on error",
+            "Call checkPrivilegeEscalation with caller perms, existing token perms, and requested perms; return on error",
+            "Within db.WithTx: UPDATE pats SET permissions=JSON(req.Permissions), revoked_at=NULL WHERE id=tokenID",
+            "If empty array: UPDATE pats SET permissions='[]', revoked_at=time.Now().UTC() WHERE id=tokenID",
+            "Return HTTP 200 with PATResponse including updated permissions and revoked_at if auto-revoked"
+          ],
+          "test_spec_refs": [
+            "TS-17-17",
+            "TS-17-18",
+            "TS-17-19",
+            "TS-17-27",
+            "TS-17-28"
+          ],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement addPATPermissions handler (PATCH /user/tokens/:token_id/permissions)",
+          "details": [
+            "Add func (h *PATHandler) addPATPermissions(c echo.Context) error in internal/handlers/pat.go",
+            "Call requireTokensWriteOrManage; return on error",
+            "Parse token_id from path param; get userID via GetUserID(c)",
+            "Decode request body into UpdatePATPermissionsRequest; return HTTP 400 'invalid request body' on JSON error",
+            "If req.Permissions is nil or empty slice, return HTTP 400 'permissions are required'",
+            "Call validatePermissions(req.Permissions, registry, false); return on error",
+            "Call lookupAndGuardPAT to fetch current token; return on error",
+            "Call checkPrivilegeEscalation with caller perms, existing token perms, and requested perms; return on error",
+            "Compute merged set: start with existing permissions, append only permissions not already present",
+            "Within db.WithTx: UPDATE pats SET permissions=JSON(mergedPerms) WHERE id=tokenID",
+            "Return HTTP 200 with PATResponse showing merged permissions (revoked_at always NULL for add)"
+          ],
+          "test_spec_refs": [
+            "TS-17-20",
+            "TS-17-21",
+            "TS-17-22"
+          ],
+          "requirement_refs": [
+            "17-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Register PUT and PATCH routes in PATHandler.RegisterRoutes",
+          "details": [
+            "In PATHandler.RegisterRoutes in internal/handlers/pat.go, add route registrations in-place",
+            "Add: g.PUT('/user/tokens/:token_id/permissions', h.replacePATPermissions)",
+            "Add: g.PATCH('/user/tokens/:token_id/permissions', h.addPATPermissions)",
+            "Ensure these are added within the same auth-protected group as existing PAT routes",
+            "Do not introduce a separate registration call or extension hook"
+          ],
+          "test_spec_refs": [
+            "TS-17-3"
+          ],
+          "requirement_refs": [
+            "17-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "go build ./internal/handlers/... succeeds with no errors",
+          "go vet ./internal/handlers/... reports no issues",
+          "go test ./internal/handlers/... -run TestReplacePATPermissions -count=1 -v passes (TS-17-17 through TS-17-19, TS-17-27, TS-17-28)",
+          "go test ./internal/handlers/... -run TestAddPATPermissions -count=1 -v passes (TS-17-20 through TS-17-22)",
+          "Requirements 17-REQ-7, 17-REQ-8, 17-REQ-2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement removePATPermissions handler and register DELETE route",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Implement removePATPermissions handler (DELETE /user/tokens/:token_id/permissions)",
+          "details": [
+            "Add func (h *PATHandler) removePATPermissions(c echo.Context) error in internal/handlers/pat.go",
+            "Call requireTokensWriteOrManage; return on error",
+            "Parse token_id from path param; get userID via GetUserID(c)",
+            "Decode request body into UpdatePATPermissionsRequest; return HTTP 400 'invalid request body' on JSON error",
+            "If req.Permissions is nil or empty slice, return HTTP 400 'permissions are required'",
+            "Call validatePermissions(req.Permissions, registry, true) \u2014 format check only, ignore unknown",
+            "Call lookupAndGuardPAT to fetch current token; return on error",
+            "No privilege escalation check for remove operations",
+            "Compute resulting set: filter existing permissions, removing any that appear in req.Permissions",
+            "If resulting set is empty, set revoked_at = time.Now().UTC() in the same UPDATE",
+            "Within db.WithTx: UPDATE pats SET permissions=JSON(resultPerms)[, revoked_at=...] WHERE id=tokenID",
+            "Return HTTP 200 with PATResponse showing updated permissions and revoked_at if auto-revoked"
+          ],
+          "test_spec_refs": [
+            "TS-17-23",
+            "TS-17-24",
+            "TS-17-25",
+            "TS-17-26",
+            "TS-17-27",
+            "TS-17-28"
+          ],
+          "requirement_refs": [
+            "17-REQ-9",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Register DELETE route in PATHandler.RegisterRoutes",
+          "details": [
+            "In PATHandler.RegisterRoutes, add: g.DELETE('/user/tokens/:token_id/permissions', h.removePATPermissions)",
+            "Ensure it is within the same auth-protected group as PUT and PATCH routes",
+            "Verify no conflict with existing DELETE /user/tokens/:token_id (revoke) route \u2014 different path"
+          ],
+          "test_spec_refs": [
+            "TS-17-3"
+          ],
+          "requirement_refs": [
+            "17-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Verify database transaction correctness for all three handlers",
+          "details": [
+            "Confirm all three handlers use db.WithTx for their UPDATE statements",
+            "Confirm auto-revoke sets revoked_at in the same UPDATE statement (not a separate query)",
+            "Confirm permissions are JSON-serialized as a TEXT array (e.g. '[\"users:read\",\"orgs:read\"]')",
+            "Confirm no SELECT ... FOR UPDATE or explicit row-level locking is used (SQLite serializes writers)",
+            "Review that the PATResponse returned after update reflects the committed DB state"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "go build ./internal/handlers/... succeeds with no errors",
+          "go vet ./internal/handlers/... reports no issues",
+          "go test ./internal/handlers/... -run TestRemovePATPermissions -count=1 -v passes (TS-17-23 through TS-17-26)",
+          "go test ./internal/handlers/... -run TestAutoRevoke -count=1 -v passes (TS-17-27, TS-17-28)",
+          "Requirements 17-REQ-9, 17-REQ-10 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement akc tokens replace, add, and remove CLI commands",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement akc tokens replace CLI subcommand",
+          "details": [
+            "In internal/cli/tokens.go, add NewReplaceTokenCmd() *cobra.Command",
+            "Accept exactly one positional arg: token_id",
+            "Add --permissions flag (required, string); parse with existing parsePermissions helper",
+            "Use DoRequest to send PUT /user/tokens/<token_id>/permissions with JSON body {\"permissions\": [...]}",
+            "On success, marshal PATResponse and print JSON to stdout",
+            "If response PATResponse.RevokedAt is non-nil, print 'Token <token_id> has been revoked (no permissions remaining)' to stderr",
+            "Register NewReplaceTokenCmd() under the tokens command group"
+          ],
+          "test_spec_refs": [
+            "TS-17-29",
+            "TS-17-30"
+          ],
+          "requirement_refs": [
+            "17-REQ-11"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement akc tokens add CLI subcommand",
+          "details": [
+            "In internal/cli/tokens.go, add NewAddTokenCmd() *cobra.Command",
+            "Accept exactly one positional arg: token_id",
+            "Add --permissions flag (required, string); parse with existing parsePermissions helper",
+            "Use DoRequest to send PATCH /user/tokens/<token_id>/permissions with JSON body {\"permissions\": [...]}",
+            "On success, marshal PATResponse and print JSON to stdout",
+            "Do NOT print any revocation warning (add cannot produce empty set)",
+            "Register NewAddTokenCmd() under the tokens command group"
+          ],
+          "test_spec_refs": [
+            "TS-17-31",
+            "TS-17-32"
+          ],
+          "requirement_refs": [
+            "17-REQ-12"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement akc tokens remove CLI subcommand",
+          "details": [
+            "In internal/cli/tokens.go, add NewRemoveTokenCmd() *cobra.Command",
+            "Accept exactly one positional arg: token_id",
+            "Add --permissions flag (required, string); parse with existing parsePermissions helper",
+            "Use DoRequest to send DELETE /user/tokens/<token_id>/permissions with JSON body {\"permissions\": [...]}",
+            "On success, marshal PATResponse and print JSON to stdout",
+            "If response PATResponse.RevokedAt is non-nil, print 'Token <token_id> has been revoked (no permissions remaining)' to stderr",
+            "Register NewRemoveTokenCmd() under the tokens command group"
+          ],
+          "test_spec_refs": [
+            "TS-17-33",
+            "TS-17-34"
+          ],
+          "requirement_refs": [
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Register all three new CLI subcommands in the tokens command group",
+          "details": [
+            "In internal/cli/tokens.go, locate the tokens command group registration (NewTokensCmd or equivalent)",
+            "Call AddCommand(NewReplaceTokenCmd(), NewAddTokenCmd(), NewRemoveTokenCmd())",
+            "Verify 'akc tokens --help' lists replace, add, and remove subcommands",
+            "Confirm parsePermissions is reused (not duplicated) for all three commands"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "go build ./internal/cli/... succeeds with no errors",
+          "go vet ./internal/cli/... reports no issues",
+          "go test ./internal/cli/... -run TestReplaceTokenCmd -count=1 -v passes (TS-17-29, TS-17-30)",
+          "go test ./internal/cli/... -run TestAddTokenCmd -count=1 -v passes (TS-17-31, TS-17-32)",
+          "go test ./internal/cli/... -run TestRemoveTokenCmd -count=1 -v passes (TS-17-33, TS-17-34)",
+          "Requirements 17-REQ-11, 17-REQ-12, 17-REQ-13 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "checkpoint",
+      "title": "Full unit test suite pass and integration test authoring",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Run full unit test suite and fix any failures",
+          "details": [
+            "Run: go test ./internal/auth/... ./internal/handlers/... ./internal/cli/... -count=1 -v",
+            "Fix any test failures introduced by the new implementation",
+            "Ensure no existing tests are broken by the tokens:write addition or route changes",
+            "Confirm all 34 test cases (TS-17-1 through TS-17-34) pass"
+          ],
+          "test_spec_refs": [
+            "TS-17-1",
+            "TS-17-2",
+            "TS-17-3",
+            "TS-17-4",
+            "TS-17-5",
+            "TS-17-6",
+            "TS-17-7",
+            "TS-17-8",
+            "TS-17-9",
+            "TS-17-10",
+            "TS-17-11",
+            "TS-17-12",
+            "TS-17-13",
+            "TS-17-14",
+            "TS-17-15"
+          ],
+          "requirement_refs": [
+            "17-REQ-1",
+            "17-REQ-2",
+            "17-REQ-3",
+            "17-REQ-4",
+            "17-REQ-5",
+            "17-REQ-6",
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-10",
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Run full unit test suite (continued) and confirm remaining test cases",
+          "details": [
+            "Confirm TS-17-16 through TS-17-34 all pass",
+            "Run: go test ./... -count=1 to verify no regressions in other packages",
+            "Address any flaky tests or race conditions (run with -race flag)"
+          ],
+          "test_spec_refs": [
+            "TS-17-16",
+            "TS-17-17",
+            "TS-17-18",
+            "TS-17-19",
+            "TS-17-20",
+            "TS-17-21",
+            "TS-17-22",
+            "TS-17-23",
+            "TS-17-24",
+            "TS-17-25",
+            "TS-17-26",
+            "TS-17-27",
+            "TS-17-28",
+            "TS-17-29",
+            "TS-17-30"
+          ],
+          "requirement_refs": [
+            "17-REQ-6",
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-10",
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Write integration tests for PAT permission modification lifecycle",
+          "details": [
+            "In internal/integration/ (or pat_test.go integration suite), write tests using a real SQLite DB",
+            "Test: create PAT \u2192 replace permissions \u2192 GET token \u2192 verify new permissions",
+            "Test: create PAT \u2192 add permissions \u2192 GET token \u2192 verify merged permissions",
+            "Test: create PAT \u2192 remove permissions \u2192 GET token \u2192 verify reduced permissions",
+            "Test: create PAT \u2192 remove all permissions \u2192 verify revoked_at is set in DB and response",
+            "Test: create PAT \u2192 PUT with [] \u2192 verify revoked_at set and response contains revoked_at",
+            "Test: full lifecycle: create \u2192 add \u2192 replace \u2192 remove \u2192 verify state at each step",
+            "Test: PAT caller modifies own token \u2014 can keep/reduce but cannot add permissions it doesn't hold"
+          ],
+          "test_spec_refs": [
+            "TS-17-31",
+            "TS-17-32",
+            "TS-17-33",
+            "TS-17-34"
+          ],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "go test ./... -count=1 passes with zero failures",
+          "go test ./... -race -count=1 passes with no data race warnings",
+          "go vet ./... reports no issues",
+          "All 34 unit test cases (TS-17-1 through TS-17-34) pass",
+          "Integration tests for full lifecycle pass against real SQLite DB"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Trace execution paths from route registration through handler chain",
+          "details": [
+            "Verify PATHandler.RegisterRoutes calls g.PUT, g.PATCH, g.DELETE for /user/tokens/:token_id/permissions",
+            "Verify each route handler calls requireTokensWriteOrManage \u2192 lookupAndGuardPAT \u2192 validatePermissions \u2192 checkPrivilegeEscalation \u2192 db.WithTx UPDATE \u2192 return PATResponse",
+            "Confirm no handler returns early with panic('not implemented') or bare 'return nil' in non-trivial paths",
+            "Confirm requireTokensWriteOrManage calls RequirePermission from auth_middleware (upstream spec 05)",
+            "Confirm GetAuthInfo and GetUserID are called from production handler code, not just tests"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-2",
+            "17-REQ-3",
+            "17-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Stub and dead-code audit across all new files",
+          "details": [
+            "Search internal/auth/permissions.go for panic('not implemented'), // TODO, or placeholder comments",
+            "Search internal/handlers/pat.go for panic('not implemented'), bare 'return nil' in handler bodies, or // TODO stubs",
+            "Search internal/cli/tokens.go for panic('not implemented'), // TODO, or unimplemented DoRequest calls",
+            "Confirm all helper functions (requireTokensWriteOrManage, lookupAndGuardPAT, validatePermissions, checkPrivilegeEscalation) have real implementations",
+            "Run: grep -rn 'panic(\"not implemented\")\\|// TODO' internal/auth/permissions.go internal/handlers/pat.go internal/cli/tokens.go \u2014 expect zero matches"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-1",
+            "17-REQ-2",
+            "17-REQ-3",
+            "17-REQ-4",
+            "17-REQ-5",
+            "17-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Verify return value propagation from DB through handler to HTTP response",
+          "details": [
+            "Confirm db.WithTx return value (error) is checked in all three handlers",
+            "Confirm PATResponse is constructed from the post-UPDATE DB state (not pre-update values)",
+            "Confirm revoked_at is included in PATResponse JSON when auto-revoke occurs",
+            "Confirm HTTP 200 is returned with the full PATResponse body (not just status code)",
+            "Confirm CLI commands correctly unmarshal PATResponse and check RevokedAt before printing warning"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-10",
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Cross-spec entry point verification",
+          "details": [
+            "Verify RequirePermission (from auth_middleware spec 05) is called from production handler code in pat.go",
+            "Verify GetAuthInfo and GetUserID (from auth_middleware spec 05) are called in production handler code",
+            "Verify parsePermissions (from cli_user_commands spec 15) is reused in tokens.go for all three CLI commands \u2014 not duplicated",
+            "Verify DoRequest (from cli_user_commands spec 15) is called in production CLI code for PUT, PATCH, DELETE",
+            "Verify PATHandler and PATResponse (from pat_lifecycle spec 09) are extended in-place, not redefined"
+          ],
+          "test_spec_refs": [],
+          "requirement_refs": [
+            "17-REQ-2",
+            "17-REQ-3",
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.5",
+          "title": "Run smoke tests and full integration test suite",
+          "details": [
+            "Run: go test ./internal/handlers/... -run TestSmoke -count=1 -v (if smoke tests defined)",
+            "Run: go test ./... -count=1 \u2014 all tests pass",
+            "Run: go vet ./... \u2014 no issues",
+            "Manually verify 'akc tokens replace <id> --permissions users:read' sends PUT and prints PATResponse",
+            "Manually verify 'akc tokens add <id> --permissions orgs:read' sends PATCH and prints PATResponse",
+            "Manually verify 'akc tokens remove <id> --permissions users:read' sends DELETE and prints PATResponse with revocation warning if applicable"
+          ],
+          "test_spec_refs": [
+            "TS-17-1",
+            "TS-17-2",
+            "TS-17-3",
+            "TS-17-17",
+            "TS-17-20",
+            "TS-17-23",
+            "TS-17-SMOKE-1"
+          ],
+          "requirement_refs": [
+            "17-REQ-7",
+            "17-REQ-8",
+            "17-REQ-9",
+            "17-REQ-11",
+            "17-REQ-12",
+            "17-REQ-13"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "go test ./... -count=1 passes with zero failures \u2014 all 34 test cases (TS-17-1 through TS-17-34) pass",
+          "go vet ./... reports no issues",
+          "grep -rn 'panic(\"not implemented\")' internal/auth/permissions.go internal/handlers/pat.go internal/cli/tokens.go returns zero matches (stub audit clean)",
+          "PUT /user/tokens/:token_id/permissions, PATCH /user/tokens/:token_id/permissions, DELETE /user/tokens/:token_id/permissions are all registered and reachable in the running server",
+          "NewPermissionRegistry() returns exactly 7 built-in permissions including 'tokens:write'",
+          "akc tokens replace, akc tokens add, akc tokens remove subcommands appear in 'akc tokens --help' output",
+          "Auto-revocation sets revoked_at in the same DB transaction as the permissions update (verified by integration test)",
+          "Cross-spec symbols RequirePermission, GetAuthInfo, GetUserID, parsePermissions, DoRequest, PATHandler, PATResponse are used from upstream specs without redefinition"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "17-REQ-1.1",
+      "test_spec_id": "TS-17-1",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-1.2",
+      "test_spec_id": "TS-17-2",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-2.1",
+      "test_spec_id": "TS-17-3",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-3.1",
+      "test_spec_id": "TS-17-4",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-3.2",
+      "test_spec_id": "TS-17-5",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-3.3",
+      "test_spec_id": "TS-17-6",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-4.1",
+      "test_spec_id": "TS-17-7",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-4.2",
+      "test_spec_id": "TS-17-8",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-4.3",
+      "test_spec_id": "TS-17-9",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-5.1",
+      "test_spec_id": "TS-17-10",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-5.2",
+      "test_spec_id": "TS-17-11",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-5.3",
+      "test_spec_id": "TS-17-12",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-6.1",
+      "test_spec_id": "TS-17-13",
+      "task_id": "4.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-6.2",
+      "test_spec_id": "TS-17-14",
+      "task_id": "4.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-6.3",
+      "test_spec_id": "TS-17-15",
+      "task_id": "4.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-6.4",
+      "test_spec_id": "TS-17-16",
+      "task_id": "4.6",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-7.1",
+      "test_spec_id": "TS-17-17",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-7.2",
+      "test_spec_id": "TS-17-18",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-7.3",
+      "test_spec_id": "TS-17-19",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-8.1",
+      "test_spec_id": "TS-17-20",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-8.2",
+      "test_spec_id": "TS-17-21",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-8.3",
+      "test_spec_id": "TS-17-22",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-9.1",
+      "test_spec_id": "TS-17-23",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-9.2",
+      "test_spec_id": "TS-17-24",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-9.3",
+      "test_spec_id": "TS-17-25",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-9.4",
+      "test_spec_id": "TS-17-26",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-10.1",
+      "test_spec_id": "TS-17-27",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-10.2",
+      "test_spec_id": "TS-17-28",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-11.1",
+      "test_spec_id": "TS-17-29",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-11.2",
+      "test_spec_id": "TS-17-30",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-12.1",
+      "test_spec_id": "TS-17-31",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-12.2",
+      "test_spec_id": "TS-17-32",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-13.1",
+      "test_spec_id": "TS-17-33",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "17-REQ-13.2",
+      "test_spec_id": "TS-17-34",
+      "task_id": "7.3",
+      "test_path": null
+    }
+  ]
+}

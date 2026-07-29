@@ -1,0 +1,222 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The PAT Permission Updates PRD is thorough and well-structured. It clearly defines intent, goals, non-goals, technical stack, functional requirements, error handling, and testing strategy at a high level of detail. The spec is nearly ready for artifact generation, but has a few gaps that should be addressed before proceeding: (1) a logical contradiction in the Replace endpoint's empty-array behavior, (2) missing OpenAPI specification update guidance given the active `openapi_specification` spec, (3) a potential overlap with `pat_lifecycle` that should be explicitly declared as an extension rather than a sibling, and (4) a missing Go SDK / Python SDK update plan given the active `go_sdk` and `python_sdk` specs. No external APIs are involved, so that dimension is not applicable.",
+      "gaps": [
+        "Logical contradiction in PUT (Replace) empty-permissions behavior: the spec simultaneously states 'permissions must be non-empty \u2014 if empty, return HTTP 400' AND 'if the provided permissions list is intentionally empty [], the token is auto-revoked.' These two rules are mutually exclusive for an empty array input. The correct behavior for [] must be unambiguously defined as exactly one of these paths.",
+        "No plan for updating the OpenAPI specification: the active `openapi_specification` spec is the single source of truth for the API contract. The three new endpoints (PUT/PATCH/DELETE /user/tokens/:token_id/permissions) must be added to api/openapi.yaml, but this PRD does not mention that artifact or who is responsible for it.",
+        "No Go SDK or Python SDK update plan: the active `go_sdk` and `python_sdk` specs wrap every built-in API endpoint. The three new endpoints need corresponding SDK methods; this spec does not reference those specs or declare a dependency/update obligation on them.",
+        "Missing `tokens:write` permission impact on existing permission enumeration: the spec adds a 7th built-in permission but does not address whether the OpenAPI schema, SDK enumerations, or CLI help text that enumerate built-in permissions need updating.",
+        "The dependency on `pat_lifecycle` is described as a sibling spec relationship, but there is no explicit statement that this spec *extends* (rather than modifies) the PATHandler registered in `pat_lifecycle`. It is unclear whether `RegisterRoutes` in `pat_lifecycle` is to be modified in-place or if `pat_permission_updates` adds routes in its own registration call.",
+        "No mention of ETag / conditional-request behavior: the existing GET /user/tokens/:token_id likely returns an ETag. It is unspecified whether the three mutating endpoints consume or produce ETags (If-Match precondition checks), which could be important for optimistic concurrency."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For PUT /user/tokens/:token_id/permissions, what is the correct behavior when the client sends an empty permissions array ([])?",
+          "context": "The spec currently states two contradictory rules: (a) 'permissions must be non-empty \u2014 if empty, return HTTP 400 with permissions are required' and (b) 'if the provided permissions list is intentionally empty [], the token is auto-revoked.' Only one of these can apply to the same input.",
+          "options": [
+            "Empty array [] returns HTTP 400 'permissions are required' \u2014 auto-revocation only happens as a side-effect of a non-empty replace that results in zero net permissions (which cannot happen with replace, so auto-revoke is effectively unreachable for replace).",
+            "Empty array [] triggers auto-revocation (sets revoked_at) and returns HTTP 200 with the revoked PATResponse \u2014 the 'non-empty' validation does not apply to [].",
+            "Empty array [] is rejected with HTTP 400; auto-revocation on replace is removed from scope (it only applies to remove)."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Should this spec include updating api/openapi.yaml (the active `openapi_specification` spec) with the three new endpoints, or is that handled separately?",
+          "context": "The `openapi_specification` spec is the single source of truth for the API contract. Adding PUT/PATCH/DELETE /user/tokens/:token_id/permissions without updating the OpenAPI document would leave the contract out of sync with the implementation.",
+          "options": [
+            "Yes \u2014 include api/openapi.yaml changes as a deliverable of this spec and add `openapi_specification` as a dependency.",
+            "No \u2014 a separate spec or PR will update the OpenAPI document; this spec only covers the Go implementation and CLI.",
+            "Yes \u2014 but only as a non-blocking note; the OpenAPI document will be updated in a follow-up."
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "Do the Go SDK and Python SDK need to be updated as part of this spec to expose the three new permission-management endpoints?",
+          "context": "The active `go_sdk` and `python_sdk` specs wrap every built-in API endpoint. If the three new endpoints are not added to those SDKs, the CLI (`cli_user_commands`) cannot delegate to the SDK as per the established pattern.",
+          "options": [
+            "Yes \u2014 add SDK methods to both go_sdk and python_sdk as deliverables of this spec and declare dependencies on those specs.",
+            "Yes \u2014 but only the Go SDK needs updating now; the Python SDK can follow later.",
+            "No \u2014 the CLI will call the HTTP endpoints directly for now; SDK updates are out of scope."
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "How should the three new routes be registered relative to the existing PATHandler in `pat_lifecycle`? Should RegisterRoutes in pat_lifecycle be modified in-place, or does pat_permission_updates add a new registration call?",
+          "context": "The `pat_lifecycle` spec owns PATHandler and its RegisterRoutes method. It is important for artifact generation to know whether this spec modifies that method directly or introduces a separate registration hook to avoid merge conflicts.",
+          "options": [
+            "Modify PATHandler.RegisterRoutes in pat_lifecycle in-place \u2014 this spec's handlers are added directly to the existing method.",
+            "Add a new RegisterPermissionRoutes method on PATHandler called separately during server setup.",
+            "Create a new PermissionHandler struct that registers its own routes independently of PATHandler."
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Should the mutating endpoints (PUT/PATCH/DELETE) support ETag-based optimistic concurrency (If-Match precondition checks), consistent with how other mutating endpoints in the project behave?",
+          "context": "Several existing specs (e.g., organization_management, user_management) use CheckETag for optimistic concurrency. Leaving this out of PAT permission updates could create inconsistency, but adding it changes the request contract.",
+          "options": [
+            "Yes \u2014 require If-Match with the current ETag; return HTTP 412 if it doesn't match.",
+            "No \u2014 optimistic concurrency is not needed for PAT permission updates; last-write-wins is acceptable.",
+            "Out of scope for now \u2014 can be added in a follow-up spec."
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a well-structured, highly detailed PRD covering three new PAT permission mutation endpoints and corresponding CLI commands. Intent is clear and single-paragraph. Goals are concrete and implementable. Non-Goals are explicit and well-scoped. The technical stack, repository layout, functional requirements, interfaces, error handling table, and testing strategy are all thorough. The Clarifications section resolves known ambiguities (e.g., the PUT + empty-array behavior contradiction). Only a few minor gaps remain around database schema assumptions, transaction/concurrency edge cases, and a subtle CLI behavior inconsistency.",
+      "gaps": [
+        "The PRD assumes the `pats` table has a `permissions` column storing a JSON-serialized array, but the schema is never explicitly defined or referenced. If the schema differs (e.g., a separate `pat_permissions` join table), implementation could diverge significantly.",
+        "The `tokens:write` permission is introduced but its intended scope relative to `tokens:manage` is not explained. It is unclear whether `tokens:write` is a strict subset of `tokens:manage`, and whether existing PATs holding `tokens:manage` automatically satisfy the OR-check (this is implied but not stated explicitly).",
+        "The privilege escalation check for PUT (replace) states that 'only permissions not already on the target token count as new' \u2014 but when the caller IS the owner of the target token (i.e., modifying their own token), keeping existing permissions is always allowed. The spec does not explicitly address whether a PAT caller can modify their own token, or only other tokens they own.",
+        "The CLI `akc tokens replace` and `akc tokens remove` commands print a revocation warning to stderr but the `akc tokens add` command does not \u2014 this is correct by design (add can't empty the set), but the asymmetry is not explicitly called out, which may cause a developer to add the check unnecessarily or overlook it.",
+        "There is no mention of how concurrent writes are handled at the database layer (e.g., two simultaneous PATCH requests). The spec says 'last-write-wins is acceptable' for ETag/optimistic concurrency, but does not confirm whether the UPDATE is atomic or if a read-modify-write race is possible within `db.WithTx`.",
+        "The `parsePermissions` CLI helper is referenced as an existing pattern from `15_cli_user_commands`, but it is not shown. If the helper doesn't split on commas or has different semantics, the CLI implementation could be incorrect.",
+        "No mention of maximum permissions count per token \u2014 it is unclear whether there is an upper bound on how many permissions a PAT can hold after repeated PATCH/add calls."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What is the `pats` table schema, specifically how are permissions stored? Is it a JSON column on the `pats` row, or a separate join table (e.g., `pat_permissions`)?",
+          "context": "The PRD instructs a single UPDATE statement on the `permissions` column, but if the actual schema uses a join table, the implementation approach changes substantially.",
+          "options": [
+            "JSON array column on the `pats` table (e.g., `permissions TEXT` storing a JSON array)",
+            "Separate `pat_permissions` join table with one row per permission",
+            "Other \u2014 please describe"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Is `tokens:write` intended to be a strict subset of `tokens:manage` (i.e., `tokens:manage` implies all capabilities of `tokens:write`), or are they independent permissions at the same level?",
+          "context": "This affects how the PermissionRegistry is documented and whether future tooling (e.g., permission inheritance) should treat one as implying the other.",
+          "options": [
+            "tokens:write is a subset \u2014 tokens:manage grants everything tokens:write does, plus additional capabilities (e.g., create/revoke)",
+            "They are independent and orthogonal permissions at the same level",
+            "tokens:write is the only permission needed; tokens:manage is being deprecated"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Can a PAT caller modify their own token's permissions? If so, does the privilege escalation check still apply (i.e., can they add permissions they already hold on that same token)?",
+          "context": "The escalation rule says a PAT caller can only grant permissions it already holds. If the caller is using the very token being modified, an edge case arises: can they 'keep' permissions they already have without triggering the escalation guard?",
+          "options": [
+            "Yes, a PAT caller can modify their own token; escalation applies \u2014 they can only keep or reduce permissions they already hold",
+            "Yes, a PAT caller can modify their own token; no escalation check when caller == target token owner",
+            "No \u2014 self-modification is blocked; callers must use a different token (e.g., one with tokens:manage) to modify a token"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Is there a maximum number of permissions a single PAT can hold? Should repeated PATCH/add calls be bounded?",
+          "context": "Without a cap, a client could theoretically add hundreds of permission strings to a token. Knowing whether a limit exists affects input validation logic.",
+          "options": [
+            "No maximum \u2014 any number of registered permissions is valid (the registry is bounded by design)",
+            "Yes, cap at the total number of registered permissions (currently 7 built-in)",
+            "Yes, a different explicit maximum \u2014 please specify"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "For the read-modify-write in the PATCH (add) and DELETE (remove) handlers \u2014 is it sufficient to rely on SQLite's serialized write mode within `db.WithTx`, or do you need explicit row-level locking (e.g., `SELECT ... FOR UPDATE` equivalent) to prevent a lost-update race between two concurrent requests?",
+          "context": "SQLite serializes writers by default, so concurrent writes are safe. However, if the database is ever migrated to Postgres, a lost-update race becomes possible. Clarifying intent now avoids a future bug.",
+          "options": [
+            "SQLite serialized writes are sufficient; no additional locking needed for now",
+            "Add a comment in the code noting the race if ever migrated to a concurrent DB",
+            "Implement explicit optimistic locking (e.g., a version/updated_at column check) now"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This PRD is exceptionally well-written and nearly implementation-ready. It covers intent, goals, non-goals, technical stack, repository layout, database schema, functional requirements, interfaces, error handling, testing strategy, and dependencies with a high degree of precision. All previously common ambiguities (empty-array behavior on PUT, privilege escalation on self-modification, ETag/concurrency, CLI revocation warning asymmetry, permission validation on remove) have been explicitly resolved in the Clarifications section. The spec is internally consistent and provides enough detail for a developer to implement without further clarification. Only a few minor gaps remain, none of which are blocking.",
+      "gaps": [
+        "No explicit test case for malformed JSON body (HTTP 400 'invalid request body') \u2014 mentioned in the error table but absent from the unit test list.",
+        "The 'permissions' field in UpdatePATPermissionsRequest uses []string with no `omitempty`; the spec does not clarify whether an explicitly serialized null vs. omitted field can be distinguished at the Go struct level \u2014 this may matter for the nil-vs-empty-slice distinction.",
+        "No mention of request body size limits or protection against extremely large permission arrays (though the registry-bounded design implicitly mitigates this).",
+        "The integration test list does not include a test for privilege escalation via PAT across the full HTTP stack (only unit tests cover this).",
+        "The ordering guarantee for stored permissions ('stored in the order provided by the client') is stated for PUT but not explicitly stated as a guarantee for PATCH (only 'appended to the end' is stated) \u2014 these are consistent but could be unified for clarity.",
+        "No explicit statement on whether the `tokens:write` permission can be granted to a PAT by a PAT caller that only holds `tokens:write` (i.e., can `tokens:write` be self-referentially assigned) \u2014 the escalation rules implicitly allow it but it is not called out."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should a malformed JSON body test case be added to the unit test list (returning HTTP 400 'invalid request body')?",
+          "context": "The error handling table lists this case but the unit test list in the Testing Strategy section does not include a corresponding test, which could lead to a gap in test coverage.",
+          "options": [
+            "Yes, add a unit test for malformed JSON body for all three handlers",
+            "Yes, add it for at least one handler as a representative case",
+            "No, it is covered implicitly by the framework and does not need an explicit test"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "How should the Go handler distinguish between an absent/null `permissions` field and an explicit empty array `[]` at the struct level?",
+          "context": "Go's encoding/json unmarshals both a missing field and an explicit null into a nil []string, making them indistinguishable from the struct alone. For PUT, null \u2192 400 but [] \u2192 200 (auto-revoke), so this distinction is critical. Should a *[]string pointer type or a custom unmarshaler be used?",
+          "options": [
+            "Use *[]string (pointer) so nil means absent/null and &[]string{} means empty array",
+            "Use a custom JSON unmarshaler on UpdatePATPermissionsRequest to track presence",
+            "Use json.RawMessage and decode manually in the handler",
+            "Treat absent/null and empty array identically (both \u2192 400 for PUT, removing the distinction)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the integration test suite include a privilege escalation test over the full HTTP stack (not just unit tests)?",
+          "context": "Privilege escalation is a security-critical feature. Currently only unit tests cover it; an integration test would provide higher confidence that the middleware and handler interact correctly.",
+          "options": [
+            "Yes, add a full-stack integration test for PAT-caller escalation on replace and add",
+            "No, unit tests are sufficient for escalation logic"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Empty array [] triggers auto-revocation (sets revoked_at) and returns HTTP 200 with the revoked PATResponse \u2014 the 'non-empty' validation does not apply to []. Absent or null permissions field returns HTTP 400.",
+        "q2": "No \u2014 a separate spec or PR will update the OpenAPI document; this spec only covers the Go implementation and CLI.",
+        "q3": "No \u2014 the CLI calls the HTTP endpoints directly via DoRequest (the existing pattern in tokens.go). SDK updates are out of scope.",
+        "q4": "Modify PATHandler.RegisterRoutes in pat_lifecycle in-place \u2014 this spec's handlers are added directly to the existing method.",
+        "q5": "No \u2014 optimistic concurrency is not needed for PAT permission updates; last-write-wins is acceptable. The existing PAT endpoints do not use ETags."
+      },
+      "timestamp": "2026-07-29T08:04:35.611372+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "JSON array column on the pats table \u2014 permissions TEXT storing a JSON array. Confirmed from internal/db/schema.go.",
+        "q2": "tokens:write is a subset \u2014 tokens:manage grants everything tokens:write does, plus create and revoke capabilities.",
+        "q3": "Yes, a PAT caller can modify their own token; escalation applies \u2014 they can only keep or reduce permissions, or add permissions they already hold on the calling PAT.",
+        "q4": "No maximum \u2014 any number of registered permissions is valid. The registry is bounded by design (currently 7 built-in).",
+        "q5": "SQLite serialized writes are sufficient; no additional locking needed."
+      },
+      "timestamp": "2026-07-29T08:08:41.839431+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

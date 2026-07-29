@@ -1,0 +1,1873 @@
+{
+  "$schema": null,
+  "spec_id": "17",
+  "spec_name": "pat_permission_updates",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-17-1",
+      "requirement_id": "17-REQ-1.1",
+      "kind": "unit",
+      "description": "NewPermissionRegistry() registers tokens:write as the 7th built-in permission, resulting in exactly 7 built-in permissions.",
+      "preconditions": [
+        "Go test environment is set up",
+        "internal/auth/permissions.go is compiled with the tokens:write addition"
+      ],
+      "input": "call NewPermissionRegistry()",
+      "expected": {
+        "contains_tokens_write": true,
+        "registry_size": 7
+      },
+      "assertion_pseudocode": "registry = NewPermissionRegistry(); assert len(registry.All()) == 7; assert registry.IsRegistered(\"tokens:write\") == true"
+    },
+    {
+      "id": "TS-17-2",
+      "requirement_id": "17-REQ-1.2",
+      "kind": "unit",
+      "description": "A PAT holding tokens:manage satisfies an OR-check that includes tokens:write, confirming tokens:manage is a superset of tokens:write.",
+      "preconditions": [
+        "Go test environment is set up",
+        "PermissionRegistry initialized with 7 built-in permissions"
+      ],
+      "input": "caller PAT has permissions [\"tokens:manage\"]; OR-check requires tokens:write OR tokens:manage",
+      "expected": {
+        "check_passes": true
+      },
+      "assertion_pseudocode": "callerPerms = [\"tokens:manage\"]; result = hasTokensWriteOrManage(callerPerms); assert result == true"
+    },
+    {
+      "id": "TS-17-3",
+      "requirement_id": "17-REQ-2.1",
+      "kind": "unit",
+      "description": "RegisterRoutes registers PUT, PATCH, and DELETE on /user/tokens/:token_id/permissions, making all three routes reachable via the Echo router.",
+      "preconditions": [
+        "Echo router instance is created",
+        "PATHandler is initialized with a valid db and PermissionRegistry",
+        "RegisterRoutes is called on the PATHandler"
+      ],
+      "input": "call PATHandler.RegisterRoutes(echoGroup)",
+      "expected": {
+        "routes_registered": [
+          "PUT /user/tokens/:token_id/permissions",
+          "PATCH /user/tokens/:token_id/permissions",
+          "DELETE /user/tokens/:token_id/permissions"
+        ]
+      },
+      "assertion_pseudocode": "routes = echoRouter.Routes(); routePaths = [r.Method + \" \" + r.Path for r in routes]; assert \"PUT /user/tokens/:token_id/permissions\" in routePaths; assert \"PATCH /user/tokens/:token_id/permissions\" in routePaths; assert \"DELETE /user/tokens/:token_id/permissions\" in routePaths"
+    },
+    {
+      "id": "TS-17-4",
+      "requirement_id": "17-REQ-3.1",
+      "kind": "unit",
+      "description": "A PAT caller holding tokens:write is allowed past the permission check on all three permission modification endpoints.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid non-revoked, non-expired PAT exists with tokens:write permission",
+        "A target PAT exists owned by the same user with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+targetTokenID+\"/permissions\", authHeader(patWithTokensWrite), body({permissions:[\"users:read\"]})); assert resp.status != 403"
+    },
+    {
+      "id": "TS-17-5",
+      "requirement_id": "17-REQ-3.2",
+      "kind": "unit",
+      "description": "A PAT caller holding tokens:manage but not tokens:write is allowed past the permission check on all three permission modification endpoints.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid non-revoked, non-expired PAT exists with tokens:manage permission",
+        "A target PAT exists owned by the same user with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:manage only",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+targetTokenID+\"/permissions\", authHeader(patWithTokensManageOnly), body({permissions:[\"users:read\"]})); assert resp.status != 403"
+    },
+    {
+      "id": "TS-17-6",
+      "requirement_id": "17-REQ-3.3",
+      "kind": "unit",
+      "description": "An API key caller bypasses the permission check and is allowed to proceed on all three permission modification endpoints.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid API key exists",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer API key",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+targetTokenID+\"/permissions\", authHeader(apiKey), body({permissions:[\"users:read\"]})); assert resp.status != 403"
+    },
+    {
+      "id": "TS-17-7",
+      "requirement_id": "17-REQ-4.1",
+      "kind": "unit",
+      "description": "Token lookup queries pats table by token_id AND user_id; returns HTTP 404 if the token is not found.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "No PAT with the given token_id exists for the authenticated user",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/nonexistent-token-id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "token not found"
+        },
+        "status": 404
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/nonexistent-id/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 404; assert resp.body.error == \"token not found\""
+    },
+    {
+      "id": "TS-17-8",
+      "requirement_id": "17-REQ-4.2",
+      "kind": "unit",
+      "description": "A modification request on a revoked token returns HTTP 400 with 'token is revoked'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A PAT exists with revoked_at set to a past timestamp",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "token is revoked"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+revokedTokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 400; assert resp.body.error == \"token is revoked\""
+    },
+    {
+      "id": "TS-17-9",
+      "requirement_id": "17-REQ-4.3",
+      "kind": "unit",
+      "description": "A modification request on an expired token returns HTTP 400 with 'token is expired'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A PAT exists with expires_at set to a past timestamp and revoked_at NULL",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "token is expired"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+expiredTokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 400; assert resp.body.error == \"token is expired\""
+    },
+    {
+      "id": "TS-17-10",
+      "requirement_id": "17-REQ-5.1",
+      "kind": "unit",
+      "description": "A replace request with a permission string containing no colon returns HTTP 400 with 'invalid permission format: <permission>'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid non-revoked, non-expired target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "usersread"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "invalid permission format: usersread"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"usersread\"]})); assert resp.status == 400; assert resp.body.error == \"invalid permission format: usersread\""
+    },
+    {
+      "id": "TS-17-11",
+      "requirement_id": "17-REQ-5.2",
+      "kind": "unit",
+      "description": "A replace request with a validly formatted but unregistered permission returns HTTP 400 with 'unknown permission: <permission>'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid non-revoked, non-expired target PAT exists",
+        "Caller has tokens:write permission",
+        "PermissionRegistry contains exactly 7 built-in permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "widgets:destroy"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "unknown permission: widgets:destroy"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"widgets:destroy\"]})); assert resp.status == 400; assert resp.body.error == \"unknown permission: widgets:destroy\""
+    },
+    {
+      "id": "TS-17-12",
+      "requirement_id": "17-REQ-5.3",
+      "kind": "unit",
+      "description": "A remove request with a validly formatted but unregistered permission silently ignores it and proceeds; a malformed permission (no colon) still returns HTTP 400.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid non-revoked, non-expired target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "widgets:destroy"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_contains_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"widgets:destroy\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-13",
+      "requirement_id": "17-REQ-6.1",
+      "kind": "unit",
+      "description": "A PAT caller attempting to replace with a permission not held by their own PAT is rejected with HTTP 403 'cannot grant permission: <permission>'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\", \"users:read\"]",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write and users:read",
+        "body": {
+          "permissions": [
+            "orgs:write"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "cannot grant permission: orgs:write"
+        },
+        "status": 403
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:write\"]})); assert resp.status == 403; assert resp.body.error == \"cannot grant permission: orgs:write\""
+    },
+    {
+      "id": "TS-17-14",
+      "requirement_id": "17-REQ-6.2",
+      "kind": "unit",
+      "description": "A PAT caller attempting to add a permission not held by their own PAT is rejected with HTTP 403 'cannot grant permission: <permission>'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\", \"users:read\"]",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write and users:read",
+        "body": {
+          "permissions": [
+            "orgs:write"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "cannot grant permission: orgs:write"
+        },
+        "status": 403
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:write\"]})); assert resp.status == 403; assert resp.body.error == \"cannot grant permission: orgs:write\""
+    },
+    {
+      "id": "TS-17-15",
+      "requirement_id": "17-REQ-6.3",
+      "kind": "unit",
+      "description": "An API key caller skips the privilege escalation check on replace and can set any registered permission.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A valid API key exists",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer API key",
+        "body": {
+          "permissions": [
+            "orgs:write",
+            "tokens:manage"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "orgs:write",
+          "tokens:manage"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(apiKey), body({permissions:[\"orgs:write\",\"tokens:manage\"]})); assert resp.status == 200; assert resp.body.permissions == [\"orgs:write\",\"tokens:manage\"]"
+    },
+    {
+      "id": "TS-17-16",
+      "requirement_id": "17-REQ-6.4",
+      "kind": "unit",
+      "description": "A PAT caller using the remove endpoint skips the privilege escalation check entirely and can remove any permission.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\"]",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:write\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write only",
+        "body": {
+          "permissions": [
+            "orgs:write"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:write\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-17",
+      "requirement_id": "17-REQ-7.1",
+      "kind": "unit",
+      "description": "A valid PUT request replaces the token's permissions with the new set and returns HTTP 200 with updated PATResponse.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "Caller has tokens:write and users:read and orgs:write permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:write"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "orgs:write"
+        ],
+        "revoked_at": null,
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:write\"]})); assert resp.status == 200; assert resp.body.permissions == [\"orgs:write\"]; assert resp.body.revoked_at == null"
+    },
+    {
+      "id": "TS-17-18",
+      "requirement_id": "17-REQ-7.2",
+      "kind": "unit",
+      "description": "A PUT request with an empty permissions array auto-revokes the token and returns HTTP 200 with revoked_at set.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"] and revoked_at NULL",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": []
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [],
+        "revoked_at_non_null": true,
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[]})); assert resp.status == 200; assert resp.body.permissions == []; assert resp.body.revoked_at != null"
+    },
+    {
+      "id": "TS-17-19",
+      "requirement_id": "17-REQ-7.3",
+      "kind": "unit",
+      "description": "A PUT request where the new permissions set is identical to the current set still proceeds and returns HTTP 200 with the unchanged permissions.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write and users:read permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"users:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-20",
+      "requirement_id": "17-REQ-8.1",
+      "kind": "unit",
+      "description": "A valid PATCH request adds new permissions to the existing set and returns HTTP 200 with the merged permissions.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write, users:read, and orgs:read permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read",
+          "orgs:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\",\"orgs:read\"]"
+    },
+    {
+      "id": "TS-17-21",
+      "requirement_id": "17-REQ-8.2",
+      "kind": "unit",
+      "description": "A PATCH request where all permissions are already present on the token is idempotent and returns HTTP 200 with unchanged permissions.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "Caller has tokens:write, users:read, and orgs:read permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read",
+          "orgs:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"users:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\",\"orgs:read\"]"
+    },
+    {
+      "id": "TS-17-22",
+      "requirement_id": "17-REQ-8.3",
+      "kind": "unit",
+      "description": "A PATCH request with a mix of new and already-present permissions appends only the new ones, preserving insertion order.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write, users:read, and orgs:read permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read",
+            "orgs:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read",
+          "orgs:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"users:read\",\"orgs:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\",\"orgs:read\"]; assert count(resp.body.permissions, \"users:read\") == 1"
+    },
+    {
+      "id": "TS-17-23",
+      "requirement_id": "17-REQ-9.1",
+      "kind": "unit",
+      "description": "A valid DELETE request removes the specified permissions from the token and returns HTTP 200 with the reduced permissions set.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:read"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-24",
+      "requirement_id": "17-REQ-9.2",
+      "kind": "unit",
+      "description": "A DELETE request where none of the specified permissions are present on the token is idempotent and returns HTTP 200 with unchanged permissions.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:read"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-25",
+      "requirement_id": "17-REQ-9.3",
+      "kind": "unit",
+      "description": "A DELETE request that removes all permissions auto-revokes the token and returns HTTP 200 with revoked_at set.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"] and revoked_at NULL",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [],
+        "revoked_at_non_null": true,
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"users:read\"]})); assert resp.status == 200; assert resp.body.permissions == []; assert resp.body.revoked_at != null"
+    },
+    {
+      "id": "TS-17-26",
+      "requirement_id": "17-REQ-9.4",
+      "kind": "unit",
+      "description": "A DELETE request with unregistered but validly formatted permissions silently ignores them and returns HTTP 200 with unchanged permissions.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "widgets:destroy"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"widgets:destroy\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-27",
+      "requirement_id": "17-REQ-10.1",
+      "kind": "unit",
+      "description": "When a replace or remove operation results in an empty permissions set, revoked_at is set to the current UTC timestamp in the same UPDATE within db.WithTx.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"] and revoked_at NULL",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": []
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [],
+        "db_revoked_at_set": true,
+        "revoked_at_non_null": true,
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[]})); assert resp.status == 200; assert resp.body.revoked_at != null; dbRow = queryDB(\"SELECT revoked_at FROM pats WHERE id = ?\", tokenID); assert dbRow.revoked_at != null"
+    },
+    {
+      "id": "TS-17-28",
+      "requirement_id": "17-REQ-10.2",
+      "kind": "unit",
+      "description": "The addPATPermissions handler never triggers auto-revocation because adding permissions always results in a non-empty set.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Caller has tokens:write and orgs:read permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "revoked_at": null,
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"orgs:read\"]})); assert resp.status == 200; assert resp.body.revoked_at == null"
+    },
+    {
+      "id": "TS-17-29",
+      "requirement_id": "17-REQ-11.1",
+      "kind": "unit",
+      "description": "akc tokens replace sends a PUT request with parsed permissions and prints PATResponse JSON to stdout on success.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens replace <token_id> --permissions users:read,orgs:read",
+      "expected": {
+        "exit_code": 0,
+        "http_method_used": "PUT",
+        "http_path": "/user/tokens/<token_id>/permissions",
+        "stdout_contains_pat_response_json": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"replace\", tokenID, \"--permissions\", \"users:read,orgs:read\"]); assert result.exitCode == 0; parsedOutput = parseJSON(result.stdout); assert parsedOutput.permissions != null"
+    },
+    {
+      "id": "TS-17-30",
+      "requirement_id": "17-REQ-11.2",
+      "kind": "unit",
+      "description": "akc tokens replace prints a revocation warning to stderr when the response PATResponse contains a non-null revoked_at.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens replace <token_id> --permissions [] (empty array triggers auto-revoke)",
+      "expected": {
+        "exit_code": 0,
+        "stderr_contains": "Token <token_id> has been revoked (no permissions remaining)"
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"replace\", tokenID, \"--permissions\", \"\"]); assert result.exitCode == 0; assert result.stderr contains \"Token \"+tokenID+\" has been revoked (no permissions remaining)\""
+    },
+    {
+      "id": "TS-17-31",
+      "requirement_id": "17-REQ-12.1",
+      "kind": "unit",
+      "description": "akc tokens add sends a PATCH request with parsed permissions and prints PATResponse JSON to stdout on success.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write and orgs:read",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens add <token_id> --permissions orgs:read",
+      "expected": {
+        "exit_code": 0,
+        "http_method_used": "PATCH",
+        "http_path": "/user/tokens/<token_id>/permissions",
+        "stdout_contains_pat_response_json": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"add\", tokenID, \"--permissions\", \"orgs:read\"]); assert result.exitCode == 0; parsedOutput = parseJSON(result.stdout); assert \"orgs:read\" in parsedOutput.permissions"
+    },
+    {
+      "id": "TS-17-32",
+      "requirement_id": "17-REQ-12.2",
+      "kind": "unit",
+      "description": "akc tokens add never prints a revocation warning to stderr because adding permissions cannot produce an empty set.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write and orgs:read",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens add <token_id> --permissions orgs:read",
+      "expected": {
+        "exit_code": 0,
+        "stderr_does_not_contain": "has been revoked"
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"add\", tokenID, \"--permissions\", \"orgs:read\"]); assert result.exitCode == 0; assert result.stderr does not contain \"has been revoked\""
+    },
+    {
+      "id": "TS-17-33",
+      "requirement_id": "17-REQ-13.1",
+      "kind": "unit",
+      "description": "akc tokens remove sends a DELETE request with parsed permissions and prints PATResponse JSON to stdout on success.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write",
+        "A target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens remove <token_id> --permissions orgs:read",
+      "expected": {
+        "exit_code": 0,
+        "http_method_used": "DELETE",
+        "http_path": "/user/tokens/<token_id>/permissions",
+        "stdout_contains_pat_response_json": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"remove\", tokenID, \"--permissions\", \"orgs:read\"]); assert result.exitCode == 0; parsedOutput = parseJSON(result.stdout); assert parsedOutput.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-34",
+      "requirement_id": "17-REQ-13.2",
+      "kind": "unit",
+      "description": "akc tokens remove prints a revocation warning to stderr when the response PATResponse contains a non-null revoked_at.",
+      "preconditions": [
+        "CLI binary is built",
+        "A running apikit server with a valid PAT having tokens:write",
+        "A target PAT exists with permissions [\"users:read\"]",
+        "CLI config points to the server endpoint"
+      ],
+      "input": "akc tokens remove <token_id> --permissions users:read (removes last permission)",
+      "expected": {
+        "exit_code": 0,
+        "stderr_contains": "Token <token_id> has been revoked (no permissions remaining)"
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"remove\", tokenID, \"--permissions\", \"users:read\"]); assert result.exitCode == 0; assert result.stderr contains \"Token \"+tokenID+\" has been revoked (no permissions remaining)\""
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-17-P1",
+      "property_id": "17-PROP-1",
+      "validates": [
+        "17-REQ-7.3"
+      ],
+      "description": "Calling PUT /user/tokens/:token_id/permissions with the same non-empty permissions array twice produces the same PATResponse as calling it once.",
+      "for_any_strategy": "Sample a valid token_id from the pats table and a non-empty subset of the 7 registered permissions (up to 7 elements, randomly chosen). Run 50 iterations with different permission subsets.",
+      "invariant_check": "resp1 = PUT(tokenID, perms); resp2 = PUT(tokenID, perms); assert resp1.body.permissions == resp2.body.permissions; assert resp1.body.revoked_at == resp2.body.revoked_at"
+    },
+    {
+      "id": "TS-17-P2",
+      "property_id": "17-PROP-2",
+      "validates": [
+        "17-REQ-8.1",
+        "17-REQ-8.2",
+        "17-REQ-8.3"
+      ],
+      "description": "After any sequence of PATCH add requests with overlapping permissions, the permissions array in the pats table never contains duplicate entries.",
+      "for_any_strategy": "Sample a valid token_id and generate sequences of 1-10 PATCH requests each with a random non-empty subset of the 7 registered permissions. Run 100 iterations.",
+      "invariant_check": "for each sequence of PATCH requests: execute all requests; dbPerms = queryDB(\"SELECT permissions FROM pats WHERE id = ?\", tokenID); parsed = parseJSON(dbPerms); assert len(parsed) == len(set(parsed))"
+    },
+    {
+      "id": "TS-17-P3",
+      "property_id": "17-PROP-3",
+      "validates": [
+        "17-REQ-9.2"
+      ],
+      "description": "Calling DELETE /user/tokens/:token_id/permissions with the same permissions array twice produces the same PATResponse as calling it once.",
+      "for_any_strategy": "Sample a valid non-revoked token_id with at least 2 permissions and a non-empty subset of those permissions to remove. Run 50 iterations.",
+      "invariant_check": "resp1 = DELETE(tokenID, perms); resp2 = DELETE(tokenID, perms); assert resp1.body.permissions == resp2.body.permissions; assert resp1.body.revoked_at == resp2.body.revoked_at"
+    },
+    {
+      "id": "TS-17-P4",
+      "property_id": "17-PROP-4",
+      "validates": [
+        "17-REQ-10.1",
+        "17-REQ-7.2",
+        "17-REQ-9.3"
+      ],
+      "description": "For any replace or remove operation on a non-revoked, non-expired token, revoked_at is set if and only if the resulting permissions array is empty.",
+      "for_any_strategy": "Sample a valid non-revoked, non-expired token_id and a random permissions array (including empty for PUT). For DELETE, sample a random subset of the token's current permissions. Run 100 iterations covering both PUT and DELETE.",
+      "invariant_check": "resp = operation(tokenID, perms); resultingPerms = resp.body.permissions; if len(resultingPerms) == 0: assert resp.body.revoked_at != null; else: assert resp.body.revoked_at == null"
+    },
+    {
+      "id": "TS-17-P5",
+      "property_id": "17-PROP-5",
+      "validates": [
+        "17-REQ-4.1",
+        "17-REQ-4.E1"
+      ],
+      "description": "For any permission modification request with a token_id belonging to a different user, the handler returns HTTP 404 and makes no changes to the pats table.",
+      "for_any_strategy": "Sample pairs of (userA_token, userB_token_id) where userA is the authenticated caller and userB_token_id belongs to a different user. Try all three HTTP methods (PUT, PATCH, DELETE). Run 30 iterations per method.",
+      "invariant_check": "permsBefore = queryDB(\"SELECT permissions FROM pats WHERE id = ?\", userBTokenID); resp = sendRequest(method, \"/user/tokens/\"+userBTokenID+\"/permissions\", authHeader(userAPAT), body({permissions:[\"users:read\"]})); assert resp.status == 404; permsAfter = queryDB(\"SELECT permissions FROM pats WHERE id = ?\", userBTokenID); assert permsBefore == permsAfter"
+    },
+    {
+      "id": "TS-17-P6",
+      "property_id": "17-PROP-6",
+      "validates": [
+        "17-REQ-6.1",
+        "17-REQ-6.2",
+        "17-REQ-6.E2"
+      ],
+      "description": "For any PAT-authenticated caller and any permission not held by the caller's PAT, a replace or add request that would grant that permission is rejected with HTTP 403.",
+      "for_any_strategy": "Sample a caller PAT with a random subset of the 7 permissions (always including tokens:write). Sample a target permission not in the caller's set. Try both PUT and PATCH. Run 50 iterations.",
+      "invariant_check": "resp = sendRequest(method, \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[escalatingPerm]})); assert resp.status == 403; assert resp.body.error == \"cannot grant permission: \"+escalatingPerm"
+    },
+    {
+      "id": "TS-17-P7",
+      "property_id": "17-PROP-7",
+      "validates": [
+        "17-REQ-4.2",
+        "17-REQ-4.3"
+      ],
+      "description": "For any token with non-null revoked_at or with expires_at in the past, all three permission modification endpoints return HTTP 400 and make no changes to the pats table.",
+      "for_any_strategy": "Sample tokens in two states: (a) revoked_at non-null, (b) expires_at in the past. Try all three HTTP methods with valid permission arrays. Run 30 iterations per state per method.",
+      "invariant_check": "permsBefore = queryDB(\"SELECT permissions FROM pats WHERE id = ?\", tokenID); resp = sendRequest(method, \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 400; permsAfter = queryDB(\"SELECT permissions FROM pats WHERE id = ?\", tokenID); assert permsBefore == permsAfter"
+    },
+    {
+      "id": "TS-17-P8",
+      "property_id": "17-PROP-8",
+      "validates": [
+        "17-REQ-5.1",
+        "17-REQ-5.2",
+        "17-REQ-7.1",
+        "17-REQ-8.1"
+      ],
+      "description": "After any successful replace or add operation, every permission string in the pats.permissions JSON array is registered in the PermissionRegistry and contains exactly one colon.",
+      "for_any_strategy": "Sample a valid token_id and a random non-empty subset of the 7 registered permissions. Try both PUT and PATCH. Run 100 iterations.",
+      "invariant_check": "resp = sendRequest(method, \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(apiKey), body({permissions:perms})); assert resp.status == 200; dbPerms = parseJSON(queryDB(\"SELECT permissions FROM pats WHERE id = ?\", tokenID)); for p in dbPerms: assert count(p, ':') == 1; assert registry.IsRegistered(p) == true"
+    },
+    {
+      "id": "TS-17-P9",
+      "property_id": "17-PROP-9",
+      "validates": [
+        "17-REQ-1.1"
+      ],
+      "description": "Every call to NewPermissionRegistry() returns a registry containing exactly 7 built-in permissions including tokens:write.",
+      "for_any_strategy": "Call NewPermissionRegistry() 20 times in independent goroutines to verify no race conditions or non-determinism in the count.",
+      "invariant_check": "for i in range(20): registry = NewPermissionRegistry(); assert len(registry.All()) == 7; assert registry.IsRegistered(\"tokens:write\") == true"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-17-E1",
+      "requirement_id": "17-REQ-1.E1",
+      "kind": "unit",
+      "description": "Registering tokens:write more than once in NewPermissionRegistry causes a panic or error at startup.",
+      "preconditions": [
+        "Go test environment is set up",
+        "internal/auth/permissions.go is modified to register tokens:write twice"
+      ],
+      "input": "call NewPermissionRegistry() with tokens:write registered twice",
+      "expected": {
+        "message_contains": "duplicate",
+        "panics_or_returns_error": true
+      },
+      "assertion_pseudocode": "assert panics(func() { NewPermissionRegistryWithDuplicate() }) OR err = NewPermissionRegistryWithDuplicate(); assert err != nil && err.Error() contains \"duplicate\""
+    },
+    {
+      "id": "TS-17-E2",
+      "requirement_id": "17-REQ-2.E1",
+      "kind": "unit",
+      "description": "Calling RegisterRoutes on a nil or uninitialized PATHandler panics with a descriptive message.",
+      "preconditions": [
+        "Go test environment is set up"
+      ],
+      "input": "var handler *PATHandler = nil; handler.RegisterRoutes(echoGroup)",
+      "expected": {
+        "panics": true
+      },
+      "assertion_pseudocode": "assert panics(func() { var h *PATHandler; h.RegisterRoutes(echoGroup) })"
+    },
+    {
+      "id": "TS-17-E3",
+      "requirement_id": "17-REQ-3.E1",
+      "kind": "unit",
+      "description": "A PAT caller holding neither tokens:write nor tokens:manage receives HTTP 403 with 'insufficient permissions'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"users:read\"] only",
+        "Target PAT exists",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with users:read only",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "insufficient permissions"
+        },
+        "status": 403
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(patWithUsersReadOnly), body({permissions:[\"users:read\"]})); assert resp.status == 403; assert resp.body.error == \"insufficient permissions\""
+    },
+    {
+      "id": "TS-17-E4",
+      "requirement_id": "17-REQ-3.E2",
+      "kind": "unit",
+      "description": "An unauthenticated request to any permission modification endpoint is rejected by auth middleware with HTTP 401.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "No Authorization header provided"
+      ],
+      "input": {
+        "auth": "none",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/some-token-id/permissions"
+      },
+      "expected": {
+        "status": 401
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/some-token-id/permissions\", noAuthHeader(), body({permissions:[\"users:read\"]})); assert resp.status == 401"
+    },
+    {
+      "id": "TS-17-E5",
+      "requirement_id": "17-REQ-4.E1",
+      "kind": "unit",
+      "description": "A token_id belonging to a different user returns HTTP 404 to prevent user enumeration.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "A PAT exists owned by user B",
+        "Caller is authenticated as user A with tokens:write",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT for user A with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/<user_b_token_id>/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "token not found"
+        },
+        "status": 404
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+userBTokenID+\"/permissions\", authHeader(userAPAT), body({permissions:[\"users:read\"]})); assert resp.status == 404; assert resp.body.error == \"token not found\""
+    },
+    {
+      "id": "TS-17-E6",
+      "requirement_id": "17-REQ-4.E2",
+      "kind": "unit",
+      "description": "A database error during token lookup returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "Database is configured to fail on SELECT queries (mock/stub)"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "internal server error"
+        },
+        "status": 500
+      },
+      "assertion_pseudocode": "injectDBError(selectFails=true); resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 500; assert resp.body.error == \"internal server error\""
+    },
+    {
+      "id": "TS-17-E7",
+      "requirement_id": "17-REQ-4.E3",
+      "kind": "unit",
+      "description": "A token whose expires_at equals exactly the current time is treated as expired and the modification is rejected with HTTP 400.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with expires_at set to exactly the current UTC time (boundary condition)",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "token is expired"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "setTokenExpiresAt(tokenID, now()); resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 400; assert resp.body.error == \"token is expired\""
+    },
+    {
+      "id": "TS-17-E8",
+      "requirement_id": "17-REQ-5.E1",
+      "kind": "unit",
+      "description": "A permission string with zero colons (e.g., 'usersread') returns HTTP 400 with 'invalid permission format: usersread'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "usersread"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "invalid permission format: usersread"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"usersread\"]})); assert resp.status == 400; assert resp.body.error == \"invalid permission format: usersread\""
+    },
+    {
+      "id": "TS-17-E9",
+      "requirement_id": "17-REQ-5.E2",
+      "kind": "unit",
+      "description": "A permission string with two or more colons (e.g., 'users:read:extra') returns HTTP 400 with 'invalid permission format: users:read:extra'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read:extra"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "invalid permission format: users:read:extra"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read:extra\"]})); assert resp.status == 400; assert resp.body.error == \"invalid permission format: users:read:extra\""
+    },
+    {
+      "id": "TS-17-E10",
+      "requirement_id": "17-REQ-5.E3",
+      "kind": "unit",
+      "description": "A validly formatted but unregistered permission in a replace or add request returns HTTP 400 with 'unknown permission: <permission>'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "PermissionRegistry contains exactly 7 built-in permissions",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "gadgets:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "unknown permission: gadgets:read"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"gadgets:read\"]})); assert resp.status == 400; assert resp.body.error == \"unknown permission: gadgets:read\""
+    },
+    {
+      "id": "TS-17-E11",
+      "requirement_id": "17-REQ-6.E1",
+      "kind": "unit",
+      "description": "A PAT caller replacing their own token's permissions with a subset of their own permissions is allowed without triggering the escalation guard.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\", \"users:read\", \"orgs:read\"]",
+        "Target PAT is the same token as the caller's PAT (self-modification)",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer own PAT with tokens:write, users:read, orgs:read",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:own_token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+ownTokenID+\"/permissions\", authHeader(ownPAT), body({permissions:[\"users:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-E12",
+      "requirement_id": "17-REQ-6.E2",
+      "kind": "unit",
+      "description": "A PAT caller attempting to add a permission to a token that the caller's own PAT does not hold is rejected with HTTP 403.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\", \"users:read\"]",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write and users:read",
+        "body": {
+          "permissions": [
+            "tokens:manage"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "cannot grant permission: tokens:manage"
+        },
+        "status": 403
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"tokens:manage\"]})); assert resp.status == 403; assert resp.body.error == \"cannot grant permission: tokens:manage\""
+    },
+    {
+      "id": "TS-17-E13",
+      "requirement_id": "17-REQ-6.E3",
+      "kind": "unit",
+      "description": "A PAT caller replacing a token's permissions with only permissions already on the token is allowed without triggering the escalation guard.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Caller PAT has permissions [\"tokens:write\"]",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer PAT with tokens:write only",
+        "body": {
+          "permissions": [
+            "users:read",
+            "orgs:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body_permissions": [
+          "users:read",
+          "orgs:read"
+        ],
+        "status": 200
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(callerPAT), body({permissions:[\"users:read\",\"orgs:read\"]})); assert resp.status == 200; assert resp.body.permissions == [\"users:read\",\"orgs:read\"]"
+    },
+    {
+      "id": "TS-17-E14",
+      "requirement_id": "17-REQ-7.E1",
+      "kind": "unit",
+      "description": "A PUT request with an absent or null permissions field returns HTTP 400 with 'permissions are required'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {},
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "permissions are required"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({})); assert resp.status == 400; assert resp.body.error == \"permissions are required\""
+    },
+    {
+      "id": "TS-17-E15",
+      "requirement_id": "17-REQ-7.E2",
+      "kind": "unit",
+      "description": "A PUT request with malformed JSON body returns HTTP 400 with 'invalid request body'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": "not-valid-json{",
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "invalid request body"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRawRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), rawBody(\"not-valid-json{\")); assert resp.status == 400; assert resp.body.error == \"invalid request body\""
+    },
+    {
+      "id": "TS-17-E16",
+      "requirement_id": "17-REQ-7.E3",
+      "kind": "unit",
+      "description": "A database UPDATE failure during replace rolls back the transaction and returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "Database is configured to fail on UPDATE queries (mock/stub)",
+        "Target PAT exists and passes all guards"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "internal server error"
+        },
+        "db_unchanged": true,
+        "status": 500
+      },
+      "assertion_pseudocode": "injectDBError(updateFails=true); resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 500; assert resp.body.error == \"internal server error\""
+    },
+    {
+      "id": "TS-17-E17",
+      "requirement_id": "17-REQ-7.E4",
+      "kind": "unit",
+      "description": "Concurrent replace requests on the same token both complete with HTTP 200; the final state reflects the last committed write (last-write-wins).",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Two goroutines ready to send concurrent PUT requests",
+        "Echo test server running with auth middleware"
+      ],
+      "input": "two concurrent PUT /user/tokens/:token_id/permissions requests with different permissions arrays",
+      "expected": {
+        "both_status": 200,
+        "final_permissions_is_one_of_the_two_sets": true
+      },
+      "assertion_pseudocode": "results = concurrentRequests([PUT(tokenID, [\"users:read\"]), PUT(tokenID, [\"orgs:read\"])]); assert all(r.status == 200 for r in results); finalPerms = getTokenPermissions(tokenID); assert finalPerms == [\"users:read\"] OR finalPerms == [\"orgs:read\"]"
+    },
+    {
+      "id": "TS-17-E18",
+      "requirement_id": "17-REQ-8.E1",
+      "kind": "unit",
+      "description": "A PATCH request with an absent, null, or empty permissions field returns HTTP 400 with 'permissions are required'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": []
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "permissions are required"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[]})); assert resp.status == 400; assert resp.body.error == \"permissions are required\""
+    },
+    {
+      "id": "TS-17-E19",
+      "requirement_id": "17-REQ-8.E2",
+      "kind": "unit",
+      "description": "A database UPDATE failure during add rolls back the transaction and returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "Database is configured to fail on UPDATE queries (mock/stub)",
+        "Target PAT exists and passes all guards"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "orgs:read"
+          ]
+        },
+        "method": "PATCH",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "internal server error"
+        },
+        "db_unchanged": true,
+        "status": 500
+      },
+      "assertion_pseudocode": "injectDBError(updateFails=true); resp = sendRequest(\"PATCH\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"orgs:read\"]})); assert resp.status == 500; assert resp.body.error == \"internal server error\""
+    },
+    {
+      "id": "TS-17-E20",
+      "requirement_id": "17-REQ-8.E3",
+      "kind": "unit",
+      "description": "Concurrent add requests for the same permissions result in no duplicates in the final permissions set.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\"]",
+        "Two goroutines ready to send concurrent PATCH requests",
+        "Echo test server running with auth middleware"
+      ],
+      "input": "two concurrent PATCH /user/tokens/:token_id/permissions requests both adding [\"orgs:read\"]",
+      "expected": {
+        "both_status": 200,
+        "final_permissions_no_duplicates": true
+      },
+      "assertion_pseudocode": "results = concurrentRequests([PATCH(tokenID, [\"orgs:read\"]), PATCH(tokenID, [\"orgs:read\"])]); assert all(r.status == 200 for r in results); finalPerms = getTokenPermissions(tokenID); assert count(finalPerms, \"orgs:read\") == 1"
+    },
+    {
+      "id": "TS-17-E21",
+      "requirement_id": "17-REQ-9.E1",
+      "kind": "unit",
+      "description": "A DELETE request with an absent, null, or empty permissions field returns HTTP 400 with 'permissions are required'.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists",
+        "Caller has tokens:write permission",
+        "Echo test server running with auth middleware"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": []
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "permissions are required"
+        },
+        "status": 400
+      },
+      "assertion_pseudocode": "resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[]})); assert resp.status == 400; assert resp.body.error == \"permissions are required\""
+    },
+    {
+      "id": "TS-17-E22",
+      "requirement_id": "17-REQ-9.E2",
+      "kind": "unit",
+      "description": "A database UPDATE failure during remove rolls back the transaction and returns HTTP 500 with 'internal server error'.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "Database is configured to fail on UPDATE queries (mock/stub)",
+        "Target PAT exists and passes all guards"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": [
+            "users:read"
+          ]
+        },
+        "method": "DELETE",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "internal server error"
+        },
+        "db_unchanged": true,
+        "status": 500
+      },
+      "assertion_pseudocode": "injectDBError(updateFails=true); resp = sendRequest(\"DELETE\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[\"users:read\"]})); assert resp.status == 500; assert resp.body.error == \"internal server error\""
+    },
+    {
+      "id": "TS-17-E23",
+      "requirement_id": "17-REQ-9.E3",
+      "kind": "unit",
+      "description": "Concurrent remove requests for the same permissions both complete with HTTP 200; the final state reflects the last committed write.",
+      "preconditions": [
+        "SQLite in-memory database initialized with pats table",
+        "Target PAT exists with permissions [\"users:read\", \"orgs:read\"]",
+        "Two goroutines ready to send concurrent DELETE requests",
+        "Echo test server running with auth middleware"
+      ],
+      "input": "two concurrent DELETE /user/tokens/:token_id/permissions requests both removing [\"orgs:read\"]",
+      "expected": {
+        "both_status": 200,
+        "final_permissions": [
+          "users:read"
+        ]
+      },
+      "assertion_pseudocode": "results = concurrentRequests([DELETE(tokenID, [\"orgs:read\"]), DELETE(tokenID, [\"orgs:read\"])]); assert all(r.status == 200 for r in results); finalPerms = getTokenPermissions(tokenID); assert finalPerms == [\"users:read\"]"
+    },
+    {
+      "id": "TS-17-E24",
+      "requirement_id": "17-REQ-10.E1",
+      "kind": "unit",
+      "description": "If the auto-revocation UPDATE fails within db.WithTx, the entire transaction is rolled back and HTTP 500 is returned; token state is unchanged.",
+      "preconditions": [
+        "Echo test server running with auth middleware",
+        "Database is configured to fail on the second UPDATE within a transaction (mock/stub)",
+        "Target PAT exists with permissions [\"users:read\"]"
+      ],
+      "input": {
+        "auth": "Bearer valid PAT with tokens:write",
+        "body": {
+          "permissions": []
+        },
+        "method": "PUT",
+        "path": "/user/tokens/:token_id/permissions"
+      },
+      "expected": {
+        "body": {
+          "error": "internal server error"
+        },
+        "db_permissions_unchanged": true,
+        "db_revoked_at_unchanged": true,
+        "status": 500
+      },
+      "assertion_pseudocode": "injectDBError(secondUpdateFails=true); resp = sendRequest(\"PUT\", \"/user/tokens/\"+tokenID+\"/permissions\", authHeader(validPAT), body({permissions:[]})); assert resp.status == 500; assert resp.body.error == \"internal server error\"; dbRow = queryDB(\"SELECT revoked_at, permissions FROM pats WHERE id = ?\", tokenID); assert dbRow.revoked_at == null; assert dbRow.permissions == '[\"users:read\"]'"
+    },
+    {
+      "id": "TS-17-E25",
+      "requirement_id": "17-REQ-11.E1",
+      "kind": "unit",
+      "description": "akc tokens replace without the --permissions flag prints a usage error to stderr and exits non-zero.",
+      "preconditions": [
+        "CLI binary is built"
+      ],
+      "input": "akc tokens replace <token_id> (no --permissions flag)",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"replace\", tokenID]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E26",
+      "requirement_id": "17-REQ-11.E2",
+      "kind": "unit",
+      "description": "akc tokens replace prints the server error response to stderr and exits non-zero when the server returns a non-200 HTTP status.",
+      "preconditions": [
+        "CLI binary is built",
+        "Server is configured to return HTTP 404 for the token"
+      ],
+      "input": "akc tokens replace nonexistent-token-id --permissions users:read",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"replace\", \"nonexistent-token-id\", \"--permissions\", \"users:read\"]); assert result.exitCode != 0; assert result.stderr contains \"token not found\" OR result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E27",
+      "requirement_id": "17-REQ-11.E3",
+      "kind": "unit",
+      "description": "akc tokens replace without the token_id positional argument prints a usage error to stderr and exits non-zero.",
+      "preconditions": [
+        "CLI binary is built"
+      ],
+      "input": "akc tokens replace --permissions users:read (no token_id)",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"replace\", \"--permissions\", \"users:read\"]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E28",
+      "requirement_id": "17-REQ-12.E1",
+      "kind": "unit",
+      "description": "akc tokens add without the --permissions flag prints a usage error to stderr and exits non-zero.",
+      "preconditions": [
+        "CLI binary is built"
+      ],
+      "input": "akc tokens add <token_id> (no --permissions flag)",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"add\", tokenID]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E29",
+      "requirement_id": "17-REQ-12.E2",
+      "kind": "unit",
+      "description": "akc tokens add prints the server error response to stderr and exits non-zero when the server returns a non-200 HTTP status.",
+      "preconditions": [
+        "CLI binary is built",
+        "Server is configured to return HTTP 404 for the token"
+      ],
+      "input": "akc tokens add nonexistent-token-id --permissions orgs:read",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"add\", \"nonexistent-token-id\", \"--permissions\", \"orgs:read\"]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E30",
+      "requirement_id": "17-REQ-13.E1",
+      "kind": "unit",
+      "description": "akc tokens remove without the --permissions flag prints a usage error to stderr and exits non-zero.",
+      "preconditions": [
+        "CLI binary is built"
+      ],
+      "input": "akc tokens remove <token_id> (no --permissions flag)",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"remove\", tokenID]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E31",
+      "requirement_id": "17-REQ-13.E2",
+      "kind": "unit",
+      "description": "akc tokens remove prints the server error response to stderr and exits non-zero when the server returns a non-200 HTTP status.",
+      "preconditions": [
+        "CLI binary is built",
+        "Server is configured to return HTTP 404 for the token"
+      ],
+      "input": "akc tokens remove nonexistent-token-id --permissions users:read",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"remove\", \"nonexistent-token-id\", \"--permissions\", \"users:read\"]); assert result.exitCode != 0; assert result.stderr != \"\""
+    },
+    {
+      "id": "TS-17-E32",
+      "requirement_id": "17-REQ-13.E3",
+      "kind": "unit",
+      "description": "akc tokens remove without the token_id positional argument prints a usage error to stderr and exits non-zero.",
+      "preconditions": [
+        "CLI binary is built"
+      ],
+      "input": "akc tokens remove --permissions users:read (no token_id)",
+      "expected": {
+        "exit_code_non_zero": true,
+        "stderr_contains_error": true
+      },
+      "assertion_pseudocode": "result = runCLI([\"tokens\", \"remove\", \"--permissions\", \"users:read\"]); assert result.exitCode != 0; assert result.stderr != \"\""
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-17-SMOKE-1",
+      "execution_path_id": "17-PATH-1",
+      "description": "End-to-end smoke test for the replace PAT permissions happy path: a PAT caller with tokens:write replaces a token's permissions and receives HTTP 200 with updated PATResponse.",
+      "trigger": "Send PUT /user/tokens/:token_id/permissions with Authorization: Bearer <PAT with tokens:write> and body {permissions: [\"users:read\", \"orgs:read\"]}",
+      "real_components": [
+        "auth middleware (internal/auth/)",
+        "replacePATPermissions handler (internal/handlers/pat.go)",
+        "PermissionRegistry (internal/auth/permissions.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response with PATResponse JSON body",
+        "PATResponse.permissions equals [\"users:read\", \"orgs:read\"]",
+        "PATResponse.revoked_at is null",
+        "pats table row for token_id has permissions column updated to '[\"users:read\",\"orgs:read\"]'",
+        "pats table row revoked_at remains NULL"
+      ]
+    },
+    {
+      "id": "TS-17-SMOKE-2",
+      "execution_path_id": "17-PATH-2",
+      "description": "End-to-end smoke test for replace with empty array triggering auto-revocation: PUT with [] results in HTTP 200 with revoked_at set in the response and database.",
+      "trigger": "Send PUT /user/tokens/:token_id/permissions with Authorization: Bearer <PAT with tokens:write> and body {permissions: []}",
+      "real_components": [
+        "auth middleware (internal/auth/)",
+        "replacePATPermissions handler (internal/handlers/pat.go)",
+        "PermissionRegistry (internal/auth/permissions.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response with PATResponse JSON body",
+        "PATResponse.permissions equals []",
+        "PATResponse.revoked_at is non-null and a valid UTC timestamp",
+        "pats table row for token_id has permissions column set to '[]'",
+        "pats table row revoked_at is non-null"
+      ]
+    },
+    {
+      "id": "TS-17-SMOKE-3",
+      "execution_path_id": "17-PATH-3",
+      "description": "End-to-end smoke test for the add permissions happy path: a PAT caller with tokens:write adds a new permission and receives HTTP 200 with merged permissions.",
+      "trigger": "Send PATCH /user/tokens/:token_id/permissions with Authorization: Bearer <PAT with tokens:write and orgs:write> and body {permissions: [\"orgs:write\"]}",
+      "real_components": [
+        "auth middleware (internal/auth/)",
+        "addPATPermissions handler (internal/handlers/pat.go)",
+        "PermissionRegistry (internal/auth/permissions.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response with PATResponse JSON body",
+        "PATResponse.permissions contains both the original permission and orgs:write",
+        "PATResponse.revoked_at is null",
+        "pats table row permissions column contains the merged set with no duplicates"
+      ]
+    },
+    {
+      "id": "TS-17-SMOKE-4",
+      "execution_path_id": "17-PATH-4",
+      "description": "End-to-end smoke test for remove all permissions triggering auto-revocation: DELETE removes the last permission, resulting in HTTP 200 with revoked_at set.",
+      "trigger": "Send DELETE /user/tokens/:token_id/permissions with Authorization: Bearer <PAT with tokens:write> and body {permissions: [\"users:read\"]} where users:read is the only permission on the target token",
+      "real_components": [
+        "auth middleware (internal/auth/)",
+        "removePATPermissions handler (internal/handlers/pat.go)",
+        "PermissionRegistry (internal/auth/permissions.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP 200 response with PATResponse JSON body",
+        "PATResponse.permissions equals []",
+        "PATResponse.revoked_at is non-null and a valid UTC timestamp",
+        "pats table row for token_id has permissions column set to '[]'",
+        "pats table row revoked_at is non-null"
+      ]
+    },
+    {
+      "id": "TS-17-SMOKE-5",
+      "execution_path_id": "17-PATH-5",
+      "description": "End-to-end smoke test for the akc tokens replace CLI command: the CLI parses permissions, sends PUT via DoRequest, prints PATResponse JSON to stdout, and prints revocation warning to stderr if auto-revoked.",
+      "trigger": "Run: akc tokens replace <token_id> --permissions users:read,orgs:read",
+      "real_components": [
+        "akc tokens replace CLI command (internal/cli/tokens.go)",
+        "parsePermissions helper (internal/cli/tokens.go)",
+        "DoRequest HTTP client (internal/cli/tokens.go)",
+        "auth middleware (internal/auth/)",
+        "replacePATPermissions handler (internal/handlers/pat.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "CLI exits with code 0",
+        "stdout contains valid PATResponse JSON with permissions [\"users:read\",\"orgs:read\"]",
+        "stderr is empty (no revocation, since permissions are non-empty)",
+        "pats table row permissions column updated to '[\"users:read\",\"orgs:read\"]'"
+      ]
+    },
+    {
+      "id": "TS-17-SMOKE-6",
+      "execution_path_id": "17-PATH-6",
+      "description": "End-to-end smoke test for the full PAT permission lifecycle: create → add → replace → remove, verifying state at each step and confirming auto-revocation at the end.",
+      "trigger": "Execute the full lifecycle sequence: POST /user/tokens (create with users:read), PATCH (add orgs:read), PUT (replace with orgs:write), DELETE (remove orgs:write → auto-revoke)",
+      "real_components": [
+        "auth middleware (internal/auth/)",
+        "pat_lifecycle handlers (internal/handlers/pat.go) — create handler",
+        "addPATPermissions handler (internal/handlers/pat.go)",
+        "replacePATPermissions handler (internal/handlers/pat.go)",
+        "removePATPermissions handler (internal/handlers/pat.go)",
+        "PermissionRegistry (internal/auth/permissions.go)",
+        "db.WithTx (internal/db/)",
+        "pats SQLite table"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "After create: PATResponse.permissions == [\"users:read\"], revoked_at == null",
+        "After add: PATResponse.permissions == [\"users:read\", \"orgs:read\"], revoked_at == null",
+        "After replace: PATResponse.permissions == [\"orgs:write\"], revoked_at == null",
+        "After remove: PATResponse.permissions == [], revoked_at is non-null",
+        "pats table row for token_id has revoked_at set after the final DELETE"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}
