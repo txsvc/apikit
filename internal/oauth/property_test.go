@@ -295,9 +295,9 @@ func TestProperty_SecretNonPersistence(t *testing.T) {
 func TestProperty_AdminAutoGrantFiresOnce(t *testing.T) {
 	database := openTestDB(t)
 
-	// Set admin_email.
+	// Seed admin_email with the first user's email.
 	_, err := database.SqlDB.Exec(
-		"INSERT INTO admin_config (key, value) VALUES ('admin_email', 'admin-prop@example.com')",
+		"INSERT INTO admin_config (key, value) VALUES ('admin_email', 'p4-admin-0@example.com')",
 	)
 	if err != nil {
 		t.Fatalf("insert admin_config: %v", err)
@@ -307,7 +307,18 @@ func TestProperty_AdminAutoGrantFiresOnce(t *testing.T) {
 	for i := range K {
 		providerID := fmt.Sprintf("p4-user-%d", i)
 		username := fmt.Sprintf("p4user%d", i)
-		p := propTestProvider(providerID, username, "admin-prop@example.com")
+		email := fmt.Sprintf("p4-admin-%d@example.com", i)
+
+		// Update admin_email to match this user's email so
+		// ShouldAutoPromote returns true for every iteration.
+		_, updateErr := database.SqlDB.Exec(
+			"UPDATE admin_config SET value = ? WHERE key = 'admin_email'", email,
+		)
+		if updateErr != nil {
+			t.Fatalf("update admin_email for user %d: %v", i, updateErr)
+		}
+
+		p := propTestProvider(providerID, username, email)
 		e := propSetupEcho(t, p, database, "")
 
 		rec := propPostCallback(e, "github")

@@ -41,8 +41,8 @@ func insertTestUser(t *testing.T, sqlDB *sql.DB, userID string) {
 	t.Helper()
 	_, err := sqlDB.Exec(
 		`INSERT INTO users (id, username, email, role, status, provider, provider_id, created_at, updated_at)
-		 VALUES (?, ?, 'test@example.com', 'user', 'active', 'github', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
-		userID, "user_"+userID, "gh_"+userID,
+		 VALUES (?, ?, ?, 'user', 'active', 'github', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+		userID, "user_"+userID, userID+"@example.com", "gh_"+userID,
 	)
 	if err != nil {
 		t.Fatalf("insertTestUser(%q) failed: %v", userID, err)

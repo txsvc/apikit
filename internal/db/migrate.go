@@ -8,10 +8,29 @@ import (
 	"strings"
 )
 
+// usersTableExists returns true if the users table is present in the database.
+func usersTableExists(sqlDB *sql.DB) (bool, error) {
+	var name string
+	err := sqlDB.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='users'",
+	).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // MigrateEmailIndex creates the idx_users_email unique index on the
-// users.email column. It is called during server startup after initDB.
+// users.email column. It is called during server startup before initDB
+// (via db.Open) to detect duplicate emails with an operator-friendly error
+// message before the schema statements attempt to create the index.
 //
 // Behavior:
+//  0. If the users table does not exist (fresh database), returns nil — initDB
+//     will create both the table and the index via schemaStatements.
 //  1. Checks for duplicate email values in the users table.
 //  2. If duplicates exist, writes a FATAL log message listing each offending
 //     email address and its row count to logWriter, then returns a non-nil error.
@@ -22,6 +41,17 @@ import (
 // The logWriter receives diagnostic output including FATAL messages. Callers
 // pass os.Stderr in production; tests pass a bytes.Buffer.
 func MigrateEmailIndex(sqlDB *sql.DB, logWriter io.Writer) error {
+	// Step 0: Check if the users table exists. On a fresh database (before
+	// initDB has run), there is nothing to migrate — initDB will create both
+	// the table and the unique index via schemaStatements.
+	exists, err := usersTableExists(sqlDB)
+	if err != nil {
+		return fmt.Errorf("migration: failed to check users table existence: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
 	// Step 1: Check for duplicate email values before attempting the index.
 	duplicates, err := findDuplicateEmails(sqlDB)
 	if err != nil {

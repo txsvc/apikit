@@ -847,7 +847,7 @@
             "16-REQ-4",
             "16-REQ-5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -870,7 +870,7 @@
             "16-REQ-3",
             "16-REQ-4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -890,7 +890,7 @@
           "requirement_refs": [
             "16-REQ-9"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -919,7 +919,7 @@
             "16-REQ-5",
             "16-REQ-6"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -944,7 +944,7 @@
             "16-REQ-6",
             "16-REQ-7"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],

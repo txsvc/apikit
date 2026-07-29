@@ -41,6 +41,14 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
+	// Pre-flight migration: detect duplicate emails in existing databases
+	// before initDB applies the schema (which includes the unique index).
+	// On a fresh database (no users table yet), this is a no-op.
+	if err := MigrateEmailIndex(sqlDB, os.Stderr); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("db: failed to open database at %q: %w", path, err)
+	}
+
 	// Initialize: pool, WAL, foreign keys, schema.
 	if err := initDB(sqlDB, false); err != nil {
 		sqlDB.Close()
