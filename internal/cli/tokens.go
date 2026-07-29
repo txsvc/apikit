@@ -8,7 +8,7 @@ import (
 )
 
 // NewTokensCmd returns the Cobra parent command for `akc tokens`.
-// It registers list, create, show, and revoke subcommands.
+// It registers list, create, show, revoke, replace, add, and remove subcommands.
 func NewTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokens",
@@ -20,6 +20,9 @@ func NewTokensCmd() *cobra.Command {
 		newTokensCreateCmd(),
 		newTokensShowCmd(),
 		newTokensRevokeCmd(),
+		newTokensReplaceCmd(),
+		newTokensAddCmd(),
+		newTokensRemoveCmd(),
 	)
 
 	return cmd
@@ -124,6 +127,181 @@ func newTokensCreateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&expires, "expires", 90, "Token expiry in days (0, 30, 60, or 90)")
 
 	return cmd
+}
+
+// newTokensReplaceCmd returns the `akc tokens replace` subcommand.
+// Takes exactly one positional argument: token_id.
+// Requires --permissions flag. Parses with parsePermissions, sends a PUT
+// request to /user/tokens/<token_id>/permissions, prints PATResponse JSON
+// to stdout. If revoked_at is non-null in the response, prints a
+// revocation warning to stderr.
+func newTokensReplaceCmd() *cobra.Command {
+	var permissions string
+
+	cmd := &cobra.Command{
+		Use:   "replace <token_id>",
+		Short: "Replace all permissions on a Personal Access Token",
+		Long:  "Replace the entire permissions set on a PAT with the specified permissions.",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"auth":   "api_key",
+			"method": "PUT",
+			"path":   "/user/tokens/:token_id/permissions",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			perms, err := parsePermissions(permissions)
+			if err != nil {
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
+			}
+
+			client, err := NewAuthenticatedCmdClient(cmd)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			tokenID := args[0]
+			body := map[string]any{
+				"permissions": perms,
+			}
+			result, err := client.DoRequest(cmd.Context(), http.MethodPut, "/user/tokens/"+tokenID+"/permissions", body)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			if err := CmdPrintJSON(cmd, result); err != nil {
+				return err
+			}
+
+			if isAutoRevoked(result) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Token %s has been revoked (no permissions remaining)\n", tokenID)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&permissions, "permissions", "", "Comma-separated permissions (e.g., users:read,orgs:read)")
+	_ = cmd.MarkFlagRequired("permissions")
+
+	return cmd
+}
+
+// newTokensAddCmd returns the `akc tokens add` subcommand.
+// Takes exactly one positional argument: token_id.
+// Requires --permissions flag. Parses with parsePermissions, sends a PATCH
+// request to /user/tokens/<token_id>/permissions, prints PATResponse JSON
+// to stdout. Never prints a revocation warning (adding permissions cannot
+// produce an empty set).
+func newTokensAddCmd() *cobra.Command {
+	var permissions string
+
+	cmd := &cobra.Command{
+		Use:   "add <token_id>",
+		Short: "Add permissions to a Personal Access Token",
+		Long:  "Add one or more permissions to an existing PAT without replacing the current set.",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"auth":   "api_key",
+			"method": "PATCH",
+			"path":   "/user/tokens/:token_id/permissions",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			perms, err := parsePermissions(permissions)
+			if err != nil {
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
+			}
+
+			client, err := NewAuthenticatedCmdClient(cmd)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			tokenID := args[0]
+			body := map[string]any{
+				"permissions": perms,
+			}
+			result, err := client.DoRequest(cmd.Context(), http.MethodPatch, "/user/tokens/"+tokenID+"/permissions", body)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			return CmdPrintJSON(cmd, result)
+		},
+	}
+
+	cmd.Flags().StringVar(&permissions, "permissions", "", "Comma-separated permissions (e.g., orgs:read)")
+	_ = cmd.MarkFlagRequired("permissions")
+
+	return cmd
+}
+
+// newTokensRemoveCmd returns the `akc tokens remove` subcommand.
+// Takes exactly one positional argument: token_id.
+// Requires --permissions flag. Parses with parsePermissions, sends a DELETE
+// request to /user/tokens/<token_id>/permissions, prints PATResponse JSON
+// to stdout. If revoked_at is non-null in the response, prints a
+// revocation warning to stderr.
+func newTokensRemoveCmd() *cobra.Command {
+	var permissions string
+
+	cmd := &cobra.Command{
+		Use:   "remove <token_id>",
+		Short: "Remove permissions from a Personal Access Token",
+		Long:  "Remove one or more permissions from an existing PAT without revoking it entirely.",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"auth":   "api_key",
+			"method": "DELETE",
+			"path":   "/user/tokens/:token_id/permissions",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			perms, err := parsePermissions(permissions)
+			if err != nil {
+				return CmdHandleError(cmd, &CmdError{code: 2, message: err.Error()})
+			}
+
+			client, err := NewAuthenticatedCmdClient(cmd)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			tokenID := args[0]
+			body := map[string]any{
+				"permissions": perms,
+			}
+			result, err := client.DoRequest(cmd.Context(), http.MethodDelete, "/user/tokens/"+tokenID+"/permissions", body)
+			if err != nil {
+				return CmdHandleError(cmd, err)
+			}
+
+			if err := CmdPrintJSON(cmd, result); err != nil {
+				return err
+			}
+
+			if isAutoRevoked(result) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Token %s has been revoked (no permissions remaining)\n", tokenID)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&permissions, "permissions", "", "Comma-separated permissions (e.g., users:read)")
+	_ = cmd.MarkFlagRequired("permissions")
+
+	return cmd
+}
+
+// isAutoRevoked checks whether a DoRequest result (expected to be a
+// map[string]any PATResponse) contains a non-null revoked_at field,
+// indicating the token was auto-revoked due to empty permissions.
+func isAutoRevoked(result any) bool {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return false
+	}
+	v, exists := m["revoked_at"]
+	return exists && v != nil
 }
 
 // newTokensShowCmd returns the `akc tokens show` subcommand.
