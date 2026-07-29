@@ -114,22 +114,22 @@ func TestBlockedUser_InvalidSecret(t *testing.T) {
 // ========================================================================
 
 // TestPermissionRegistry_BuiltIns verifies that NewPermissionRegistry returns
-// a registry pre-populated with exactly the 6 built-in permissions in sorted
-// ascending order.
+// a registry pre-populated with exactly the 7 built-in permissions in sorted
+// ascending order. (Updated from 6 to 7 after spec 17 added tokens:write.)
 //
 // Test Spec: TS-05-39
-// Requirement: 05-REQ-9.1
+// Requirement: 05-REQ-9.1, 17-REQ-1.1
 func TestPermissionRegistry_BuiltIns(t *testing.T) {
 	registry := NewPermissionRegistry()
 	list := registry.List()
 
 	expected := []string{
-		"keys:manage", "keys:read", "orgs:read",
-		"tokens:manage", "tokens:read", "users:read",
+		"keys:manage", "keys:read", "orgs:read", "orgs:write",
+		"tokens:manage", "tokens:read", "tokens:write", "users:read",
 	}
 
-	if len(list) != 6 {
-		t.Fatalf("expected 6 built-in permissions, got %d: %v", len(list), list)
+	if len(list) != 8 {
+		t.Fatalf("expected 8 built-in permissions, got %d: %v", len(list), list)
 	}
 
 	for i, perm := range expected {

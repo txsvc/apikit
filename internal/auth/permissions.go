@@ -19,8 +19,13 @@ type PermissionRegistry struct {
 }
 
 // NewPermissionRegistry returns a PermissionRegistry pre-populated with the
-// 6 built-in permissions: users:read, orgs:read, keys:read, keys:manage,
-// tokens:read, tokens:manage.
+// 8 built-in permissions: users:read, orgs:read, orgs:write, keys:read,
+// keys:manage, tokens:read, tokens:manage, tokens:write.
+//
+// tokens:write is a strict subset of tokens:manage by convention — a caller
+// holding tokens:manage implicitly satisfies any OR-check that includes
+// tokens:write. This convention is enforced at the handler level (via an
+// OR-check), not within the registry itself.
 func NewPermissionRegistry() *PermissionRegistry {
 	r := &PermissionRegistry{
 		perms: make(map[string]struct{}),
@@ -28,10 +33,12 @@ func NewPermissionRegistry() *PermissionRegistry {
 	builtins := []string{
 		"users:read",
 		"orgs:read",
+		"orgs:write",
 		"keys:read",
 		"keys:manage",
 		"tokens:read",
 		"tokens:manage",
+		"tokens:write",
 	}
 	for _, p := range builtins {
 		r.perms[p] = struct{}{}

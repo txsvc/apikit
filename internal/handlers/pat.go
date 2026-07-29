@@ -80,14 +80,44 @@ type PATResponse struct {
 	RevokedAt   *string  `json:"revoked_at"`
 }
 
+// UpdatePATPermissionsRequest represents the JSON request body for
+// PUT, PATCH, and DELETE on /user/tokens/:token_id/permissions.
+//
+// A nil Permissions slice (absent/null JSON field) is distinguishable from an
+// empty slice (JSON []) at the handler level: nil means the field was not
+// provided, while empty means an explicit empty array was sent. PUT treats
+// an empty array as "clear all permissions and auto-revoke"; PATCH and DELETE
+// treat it as an error ("permissions are required").
+type UpdatePATPermissionsRequest struct {
+	Permissions *[]string `json:"permissions"`
+}
+
+// patRecord holds the fields read from the pats table by lookupAndGuardPAT.
+// It is an internal type used to pass data between helper functions and
+// handler methods; it is never serialized to JSON directly.
+type patRecord struct {
+	tokenID     string
+	name        string
+	permissions []string
+	createdAt   string
+	expiresAt   *string
+	revokedAt   *string
+}
+
 // RegisterRoutes registers POST /user/tokens, GET /user/tokens,
-// GET /user/tokens/:token_id, and DELETE /user/tokens/:token_id
+// GET /user/tokens/:token_id, DELETE /user/tokens/:token_id,
+// PUT /user/tokens/:token_id/permissions,
+// PATCH /user/tokens/:token_id/permissions, and
+// DELETE /user/tokens/:token_id/permissions
 // on the provided Echo group.
 func (h *PATHandler) RegisterRoutes(g *echo.Group) {
 	g.POST("/user/tokens", h.createPAT)
 	g.GET("/user/tokens", h.listPATs)
 	g.GET("/user/tokens/:token_id", h.getPAT)
 	g.DELETE("/user/tokens/:token_id", h.revokePAT)
+	g.PUT("/user/tokens/:token_id/permissions", h.replacePATPermissions)
+	g.PATCH("/user/tokens/:token_id/permissions", h.addPATPermissions)
+	g.DELETE("/user/tokens/:token_id/permissions", h.removePATPermissions)
 }
 
 // createPAT handles POST /user/tokens — creates a new personal access token.
@@ -437,6 +467,438 @@ func (h *PATHandler) revokePAT(c echo.Context) error {
 
 	// Row exists but revoked_at is already set (09-REQ-8.2).
 	return apiutil.WriteAPIError(c, http.StatusBadRequest, "token already revoked")
+}
+
+// ========================================================================
+// Permission modification helpers (spec 17)
+// ========================================================================
+
+// requireTokensWriteOrManage checks that the caller holds either
+// tokens:write or tokens:manage. API key and admin token credentials
+// bypass this check (they have implicit full permissions). Returns true
+// if authorized. On failure, writes HTTP 403 to the response and returns false.
+func requireTokensWriteOrManage(c echo.Context) bool {
+	authInfo := auth.GetAuthInfo(c)
+	if authInfo == nil {
+		apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+		return false
+	}
+	// API keys and admin tokens have implicit full permissions.
+	if authInfo.CredentialType == "admin_token" || authInfo.CredentialType == "api_key" {
+		return true
+	}
+	// PAT credentials must hold tokens:write or tokens:manage.
+	for _, p := range authInfo.Permissions {
+		if p == "tokens:write" || p == "tokens:manage" {
+			return true
+		}
+	}
+	apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	return false
+}
+
+// lookupAndGuardPAT queries the pats table by token_id and user_id (enforcing
+// user isolation), then checks the revoked_at and expires_at guards.
+//
+// Returns the patRecord and true on success. On failure, writes the
+// appropriate HTTP error to the response and returns nil, false:
+//   - HTTP 404 "token not found" if not found or belongs to another user
+//   - HTTP 400 "token is revoked" if revoked_at is non-NULL
+//   - HTTP 400 "token is expired" if expires_at is non-NULL and <= now
+//   - HTTP 500 "internal server error" on database errors
+func (h *PATHandler) lookupAndGuardPAT(c echo.Context, tokenID, userID string) (*patRecord, bool) {
+	var (
+		name      string
+		permsJSON string
+		createdAt string
+		expiresAt sql.NullString
+		revokedAt sql.NullString
+	)
+
+	err := h.database.SqlDB.QueryRowContext(c.Request().Context(),
+		`SELECT name, permissions, created_at, expires_at, revoked_at
+		 FROM pats WHERE token_id = ? AND user_id = ?`, tokenID, userID,
+	).Scan(&name, &permsJSON, &createdAt, &expiresAt, &revokedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			apiutil.WriteAPIError(c, http.StatusNotFound, "token not found")
+			return nil, false
+		}
+		apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return nil, false
+	}
+
+	// Guard: revoked token.
+	if revokedAt.Valid {
+		apiutil.WriteAPIError(c, http.StatusBadRequest, "token is revoked")
+		return nil, false
+	}
+
+	// Guard: expired token (expires_at <= now is treated as expired).
+	if expiresAt.Valid {
+		ea, parseErr := db.ParseTime(expiresAt.String)
+		if parseErr != nil {
+			apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+			return nil, false
+		}
+		if !ea.After(time.Now().UTC()) {
+			apiutil.WriteAPIError(c, http.StatusBadRequest, "token is expired")
+			return nil, false
+		}
+	}
+
+	// Parse permissions JSON.
+	var permissions []string
+	if err := json.Unmarshal([]byte(permsJSON), &permissions); err != nil {
+		apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		return nil, false
+	}
+
+	rec := &patRecord{
+		tokenID:     tokenID,
+		name:        name,
+		permissions: permissions,
+		createdAt:   createdAt,
+	}
+	if expiresAt.Valid {
+		rec.expiresAt = &expiresAt.String
+	}
+
+	return rec, true
+}
+
+// validatePermissions checks that each permission string contains exactly one
+// colon (resource_type:action format). If ignoreUnknown is false (for replace
+// and add operations), it also checks that each permission is registered in
+// the PermissionRegistry. If ignoreUnknown is true (for remove operations),
+// unregistered but validly formatted permissions are silently accepted.
+//
+// Returns true if all permissions pass. On failure, writes an HTTP 400 error
+// to the response and returns false.
+func (h *PATHandler) validatePermissions(c echo.Context, perms []string, ignoreUnknown bool) bool {
+	for _, p := range perms {
+		if strings.Count(p, ":") != 1 {
+			apiutil.WriteAPIError(c, http.StatusBadRequest,
+				fmt.Sprintf("invalid permission format: %s", p))
+			return false
+		}
+		if !ignoreUnknown {
+			parts := strings.SplitN(p, ":", 2)
+			if !h.registry.IsValid(parts[0], parts[1]) {
+				apiutil.WriteAPIError(c, http.StatusBadRequest,
+					fmt.Sprintf("unknown permission: %s", p))
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// checkPrivilegeEscalation verifies that a PAT-authenticated caller does not
+// grant permissions to a token that the caller's own PAT does not hold.
+// Permissions already present on the target token are always permitted (keeping
+// existing permissions never triggers escalation). API key and admin token
+// credentials skip this check entirely.
+//
+// Returns true if the check passes. On failure, writes HTTP 403 to the
+// response and returns false.
+func checkPrivilegeEscalation(c echo.Context, existingPerms, requestedPerms []string) bool {
+	authInfo := auth.GetAuthInfo(c)
+	// API key and admin token credentials skip escalation check.
+	if authInfo == nil || authInfo.CredentialType != "pat" {
+		return true
+	}
+
+	// Build lookup sets.
+	callerPermSet := make(map[string]bool, len(authInfo.Permissions))
+	for _, p := range authInfo.Permissions {
+		callerPermSet[p] = true
+	}
+
+	existingPermSet := make(map[string]bool, len(existingPerms))
+	for _, p := range existingPerms {
+		existingPermSet[p] = true
+	}
+
+	// Check each requested permission: skip if already on the target,
+	// otherwise verify the caller holds it.
+	for _, p := range requestedPerms {
+		if existingPermSet[p] {
+			continue // Keeping existing permissions is always allowed.
+		}
+		if !callerPermSet[p] {
+			apiutil.WriteAPIError(c, http.StatusForbidden,
+				fmt.Sprintf("cannot grant permission: %s", p))
+			return false
+		}
+	}
+	return true
+}
+
+// buildPATResponse constructs a PATResponse from a patRecord and a
+// permissions slice. This avoids duplicating response-building logic
+// across the three permission modification handlers.
+func buildPATResponse(rec *patRecord, permissions []string, revokedAt *string) PATResponse {
+	resp := PATResponse{
+		TokenID:     rec.tokenID,
+		Name:        rec.name,
+		Permissions: permissions,
+		CreatedAt:   rec.createdAt,
+		RevokedAt:   revokedAt,
+	}
+	if rec.expiresAt != nil {
+		resp.ExpiresAt = rec.expiresAt
+	}
+	return resp
+}
+
+// ========================================================================
+// Permission modification handlers (spec 17)
+// ========================================================================
+
+// replacePATPermissions handles PUT /user/tokens/:token_id/permissions —
+// replaces all permissions on a PAT with the provided set. An empty
+// permissions array triggers auto-revocation. A nil/absent permissions field
+// returns HTTP 400 "permissions are required".
+func (h *PATHandler) replacePATPermissions(c echo.Context) error {
+	// Step 1: Permission check — require tokens:write or tokens:manage.
+	if !requireTokensWriteOrManage(c) {
+		return nil // Error already written to response.
+	}
+
+	// Step 2: Parse request body.
+	var req UpdatePATPermissionsRequest
+	if err := c.Bind(&req); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Nil means absent/null — permissions field is required for PUT.
+	if req.Permissions == nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
+	}
+	perms := *req.Permissions
+
+	// Step 3: Token lookup with user isolation and guard checks.
+	tokenID := c.Param("token_id")
+	userID := auth.GetUserID(c)
+	rec, ok := h.lookupAndGuardPAT(c, tokenID, userID)
+	if !ok {
+		return nil // Error already written.
+	}
+
+	// Step 4: Validate permissions (format + registry) — skip for empty array.
+	if len(perms) > 0 {
+		if !h.validatePermissions(c, perms, false) {
+			return nil
+		}
+		// Step 5: Privilege escalation check for PAT callers.
+		if !checkPrivilegeEscalation(c, rec.permissions, perms) {
+			return nil
+		}
+	}
+
+	// Step 6: Database update within a transaction.
+	permsJSON, marshalErr := json.Marshal(perms)
+	if marshalErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	now := time.Now().UTC()
+	var revokedAtStr *string
+
+	// Auto-revoke if permissions are empty.
+	if len(perms) == 0 {
+		ra := db.FormatTime(now)
+		revokedAtStr = &ra
+	}
+
+	txErr := h.database.WithTx(c.Request().Context(), func(tx *sql.Tx) error {
+		if revokedAtStr != nil {
+			_, execErr := tx.Exec(
+				`UPDATE pats SET permissions = ?, revoked_at = ? WHERE token_id = ? AND user_id = ?`,
+				string(permsJSON), *revokedAtStr, tokenID, userID,
+			)
+			return execErr
+		}
+		_, execErr := tx.Exec(
+			`UPDATE pats SET permissions = ? WHERE token_id = ? AND user_id = ?`,
+			string(permsJSON), tokenID, userID,
+		)
+		return execErr
+	})
+	if txErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Ensure empty permissions serializes as [] not null.
+	if perms == nil {
+		perms = []string{}
+	}
+
+	resp := buildPATResponse(rec, perms, revokedAtStr)
+	return c.JSON(http.StatusOK, resp)
+}
+
+// addPATPermissions handles PATCH /user/tokens/:token_id/permissions —
+// merges new permissions into the existing set by appending only permissions
+// not already present. Existing permissions retain their order.
+func (h *PATHandler) addPATPermissions(c echo.Context) error {
+	// Step 1: Permission check — require tokens:write or tokens:manage.
+	if !requireTokensWriteOrManage(c) {
+		return nil
+	}
+
+	// Step 2: Parse request body.
+	var req UpdatePATPermissionsRequest
+	if err := c.Bind(&req); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Nil or empty means error for PATCH.
+	if req.Permissions == nil || len(*req.Permissions) == 0 {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
+	}
+	perms := *req.Permissions
+
+	// Step 3: Token lookup with user isolation and guard checks.
+	tokenID := c.Param("token_id")
+	userID := auth.GetUserID(c)
+	rec, ok := h.lookupAndGuardPAT(c, tokenID, userID)
+	if !ok {
+		return nil
+	}
+
+	// Step 4: Validate permissions (format + registry).
+	if !h.validatePermissions(c, perms, false) {
+		return nil
+	}
+
+	// Step 5: Privilege escalation check for PAT callers.
+	// For add, all requested permissions are "new" — no existing-set exemption.
+	if !checkPrivilegeEscalation(c, rec.permissions, perms) {
+		return nil
+	}
+
+	// Step 6: Merge — append only permissions not already present.
+	existingSet := make(map[string]bool, len(rec.permissions))
+	for _, p := range rec.permissions {
+		existingSet[p] = true
+	}
+	merged := make([]string, len(rec.permissions))
+	copy(merged, rec.permissions)
+	for _, p := range perms {
+		if !existingSet[p] {
+			merged = append(merged, p)
+			existingSet[p] = true
+		}
+	}
+
+	// Step 7: Database update within a transaction.
+	mergedJSON, marshalErr := json.Marshal(merged)
+	if marshalErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	txErr := h.database.WithTx(c.Request().Context(), func(tx *sql.Tx) error {
+		_, execErr := tx.Exec(
+			`UPDATE pats SET permissions = ? WHERE token_id = ? AND user_id = ?`,
+			string(mergedJSON), tokenID, userID,
+		)
+		return execErr
+	})
+	if txErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	resp := buildPATResponse(rec, merged, nil)
+	return c.JSON(http.StatusOK, resp)
+}
+
+// removePATPermissions handles DELETE /user/tokens/:token_id/permissions —
+// removes specified permissions from the token's existing set. Unregistered
+// but validly formatted permissions are silently ignored. If removal results
+// in an empty set, the token is auto-revoked.
+func (h *PATHandler) removePATPermissions(c echo.Context) error {
+	// Step 1: Permission check — require tokens:write or tokens:manage.
+	if !requireTokensWriteOrManage(c) {
+		return nil
+	}
+
+	// Step 2: Parse request body.
+	var req UpdatePATPermissionsRequest
+	if err := c.Bind(&req); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	// Nil or empty means error for DELETE.
+	if req.Permissions == nil || len(*req.Permissions) == 0 {
+		return apiutil.WriteAPIError(c, http.StatusBadRequest, "permissions are required")
+	}
+	perms := *req.Permissions
+
+	// Step 3: Token lookup with user isolation and guard checks.
+	tokenID := c.Param("token_id")
+	userID := auth.GetUserID(c)
+	rec, ok := h.lookupAndGuardPAT(c, tokenID, userID)
+	if !ok {
+		return nil
+	}
+
+	// Step 4: Validate permission format only (ignoreUnknown = true for remove).
+	if !h.validatePermissions(c, perms, true) {
+		return nil
+	}
+
+	// Step 5: No privilege escalation check for remove (17-REQ-6.4).
+
+	// Step 6: Compute remaining permissions after removal.
+	removeSet := make(map[string]bool, len(perms))
+	for _, p := range perms {
+		removeSet[p] = true
+	}
+	remaining := make([]string, 0, len(rec.permissions))
+	for _, p := range rec.permissions {
+		if !removeSet[p] {
+			remaining = append(remaining, p)
+		}
+	}
+
+	// Step 7: Database update within a transaction.
+	remainingJSON, marshalErr := json.Marshal(remaining)
+	if marshalErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	now := time.Now().UTC()
+	var revokedAtStr *string
+
+	// Auto-revoke if remaining permissions are empty.
+	if len(remaining) == 0 {
+		ra := db.FormatTime(now)
+		revokedAtStr = &ra
+	}
+
+	txErr := h.database.WithTx(c.Request().Context(), func(tx *sql.Tx) error {
+		if revokedAtStr != nil {
+			_, execErr := tx.Exec(
+				`UPDATE pats SET permissions = ?, revoked_at = ? WHERE token_id = ? AND user_id = ?`,
+				string(remainingJSON), *revokedAtStr, tokenID, userID,
+			)
+			return execErr
+		}
+		_, execErr := tx.Exec(
+			`UPDATE pats SET permissions = ? WHERE token_id = ? AND user_id = ?`,
+			string(remainingJSON), tokenID, userID,
+		)
+		return execErr
+	})
+	if txErr != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	resp := buildPATResponse(rec, remaining, revokedAtStr)
+	return c.JSON(http.StatusOK, resp)
 }
 
 // generateTokenID generates a cryptographically random 8-character string

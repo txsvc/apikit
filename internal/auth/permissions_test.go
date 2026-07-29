@@ -14,8 +14,8 @@ import (
 
 // TestNewPermissionRegistry_ContainsTokensWrite verifies that
 // NewPermissionRegistry() returns a registry containing tokens:write
-// as the 7th built-in permission, resulting in exactly 7 built-in
-// permissions total.
+// as a built-in permission, resulting in exactly 8 built-in
+// permissions total (orgs:write was added alongside tokens:write).
 //
 // Test Spec: TS-17-1
 // Requirement: 17-REQ-1.1
@@ -24,9 +24,9 @@ func TestNewPermissionRegistry_ContainsTokensWrite(t *testing.T) {
 
 	allPerms := registry.List()
 
-	// Assert exactly 7 built-in permissions.
-	if len(allPerms) != 7 {
-		t.Fatalf("expected 7 built-in permissions, got %d: %v", len(allPerms), allPerms)
+	// Assert exactly 8 built-in permissions (includes orgs:write).
+	if len(allPerms) != 8 {
+		t.Fatalf("expected 8 built-in permissions, got %d: %v", len(allPerms), allPerms)
 	}
 
 	// Assert tokens:write is present.
@@ -50,9 +50,9 @@ func TestNewPermissionRegistry_StillContainsTokensManage(t *testing.T) {
 }
 
 // TestNewPermissionRegistry_AllSevenPermissions verifies that
-// NewPermissionRegistry() returns exactly the expected 7 built-in
-// permissions: users:read, orgs:read, keys:read, keys:manage,
-// tokens:read, tokens:manage, tokens:write.
+// NewPermissionRegistry() returns exactly the expected 8 built-in
+// permissions: users:read, orgs:read, orgs:write, keys:read,
+// keys:manage, tokens:read, tokens:manage, tokens:write.
 //
 // Test Spec: TS-17-1
 // Requirement: 17-REQ-1.1
@@ -62,6 +62,7 @@ func TestNewPermissionRegistry_AllSevenPermissions(t *testing.T) {
 	expected := map[string]bool{
 		"users:read":     true,
 		"orgs:read":      true,
+		"orgs:write":     true,
 		"keys:read":      true,
 		"keys:manage":    true,
 		"tokens:read":    true,
