@@ -1155,8 +1155,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
         - name: If-None-Match
           in: header
           description: ETag value for conditional request. If it matches, 304 is returned.
@@ -1205,8 +1204,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       requestBody:
         required: true
         content:
@@ -1257,8 +1255,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: User promoted to admin.
@@ -1293,8 +1290,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: User demoted from admin.
@@ -1330,8 +1326,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: User blocked.
@@ -1365,8 +1360,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: User unblocked.
@@ -1400,8 +1394,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: List of API key metadata.
@@ -1437,8 +1430,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
         - name: key_id
           in: path
           required: true
@@ -1474,8 +1466,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
       responses:
         '200':
           description: List of PAT metadata.
@@ -1511,8 +1502,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID.
+          description: UUID, username, or email address of the user.
         - name: token_id
           in: path
           required: true
@@ -1635,8 +1625,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
         - name: If-None-Match
           in: header
           description: ETag value for conditional request. If it matches, 304 is returned.
@@ -1685,8 +1674,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
       requestBody:
         required: true
         content:
@@ -1738,8 +1726,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
       responses:
         '204':
           description: Organization deleted. Memberships cascaded. No body.
@@ -1770,8 +1757,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
       responses:
         '200':
           description: Organization blocked.
@@ -1806,8 +1792,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
       responses:
         '200':
           description: Organization unblocked.
@@ -1842,8 +1827,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
       responses:
         '200':
           description: List of organization members.
@@ -1880,15 +1864,13 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
         - name: user_id
           in: path
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID to add as a member.
+          description: UUID, username, or email address of the user to add as a member.
       responses:
         '204':
           description: Member added. No body.
@@ -1917,15 +1899,13 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Organization ID.
+          description: UUID or slug of the organization.
         - name: user_id
           in: path
           required: true
           schema:
             type: string
-            format: uuid
-          description: User ID to remove.
+          description: UUID, username, or email address of the user to remove.
       responses:
         '204':
           description: Member removed. No body.

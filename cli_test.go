@@ -84,42 +84,6 @@ func TestNewCLIError(t *testing.T) {
 	}
 }
 
-func TestCLIResolveOrgSlug_Found(t *testing.T) {
-	id, err := resolveOrgSlugFromJSON(
-		[]byte(`[{"id":"uuid-1","slug":"acme"},{"id":"uuid-2","slug":"beta"}]`),
-		"acme",
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if id != "uuid-1" {
-		t.Errorf("id = %q, want %q", id, "uuid-1")
-	}
-}
-
-func TestCLIResolveOrgSlug_NotFound(t *testing.T) {
-	_, err := resolveOrgSlugFromJSON(
-		[]byte(`[{"id":"uuid-1","slug":"acme"}]`),
-		"nonexistent",
-	)
-	if err == nil {
-		t.Fatal("expected error for missing slug")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error = %q, want to contain 'not found'", err.Error())
-	}
-}
-
-func TestCLIResolveOrgSlug_EmptyID(t *testing.T) {
-	_, err := resolveOrgSlugFromJSON(
-		[]byte(`[{"id":"","slug":"acme"}]`),
-		"acme",
-	)
-	if err == nil {
-		t.Fatal("expected error for empty UUID")
-	}
-}
-
 func TestCLIClientFromCmd_NoClient(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.SetContext(context.Background())

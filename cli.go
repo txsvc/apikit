@@ -1,8 +1,6 @@
 package apikit
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
 	"github.com/txsvc/apikit/internal/cli"
 )
@@ -96,17 +94,3 @@ func CLIHandleError(cmd *cobra.Command, err error) error {
 	return cli.CmdHandleError(cmd, err)
 }
 
-// CLIResolveOrgSlug resolves an organization slug to its UUID by listing
-// the authenticated user's organizations and matching on slug. Useful for
-// custom commands that accept org slugs as user-friendly identifiers.
-func CLIResolveOrgSlug(ctx context.Context, client *CLIClient, slug string) (string, error) {
-	respBody, status, err := client.DoRequestRaw(ctx, "GET", "/user/orgs", nil)
-	if err != nil {
-		return "", err
-	}
-	if status >= 400 {
-		return "", NewCLIError(status, "failed to list organizations")
-	}
-
-	return resolveOrgSlugFromJSON(respBody, slug)
-}
