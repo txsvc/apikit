@@ -11,7 +11,7 @@ build:
 	
 test:
 	go test ./... -count=1
-	rm apikit db.test
+	-rm apikit db.test
 
 lint:
 	go vet ./...
