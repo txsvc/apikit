@@ -49,10 +49,11 @@ func newAdminUsersCmd() *cobra.Command {
 	}
 	listCmd.Flags().Bool("include-blocked", false, "Include blocked users in the response")
 
-	// show subcommand — requires exactly one positional arg (user ID).
+	// show subcommand — requires exactly one positional arg (user selector).
 	showCmd := &cobra.Command{
-		Use:   "show",
-		Short: "Show a user by ID",
+		Use:   "show <id|username|email>",
+		Short: "Show a user by ID, username, or email",
+		Long:  "Retrieve and display a user by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "GET",
@@ -134,10 +135,11 @@ func newAdminUsersCmd() *cobra.Command {
 	createCmd.Flags().String("provider", "", "OAuth provider name")
 	createCmd.Flags().String("provider-id", "", "Provider-specific user ID")
 
-	// update subcommand — requires exactly one positional arg (user ID); --full-name flag.
+	// update subcommand — requires exactly one positional arg (user selector); --full-name flag.
 	updateCmd := &cobra.Command{
-		Use:   "update",
-		Short: "Update a user by ID",
+		Use:   "update <id|username|email>",
+		Short: "Update a user by ID, username, or email",
+		Long:  "Update a user identified by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "PATCH",
@@ -173,10 +175,11 @@ func newAdminUsersCmd() *cobra.Command {
 	}
 	updateCmd.Flags().String("full-name", "", "Full name of the user")
 
-	// promote subcommand — requires exactly one positional arg (user ID).
+	// promote subcommand — requires exactly one positional arg (user selector).
 	promoteCmd := &cobra.Command{
-		Use:   "promote",
+		Use:   "promote <id|username|email>",
 		Short: "Grant admin role to a user",
+		Long:  "Promote a user to admin by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",
@@ -205,10 +208,11 @@ func newAdminUsersCmd() *cobra.Command {
 		},
 	}
 
-	// demote subcommand — requires exactly one positional arg (user ID).
+	// demote subcommand — requires exactly one positional arg (user selector).
 	demoteCmd := &cobra.Command{
-		Use:   "demote",
+		Use:   "demote <id|username|email>",
 		Short: "Revoke admin role from a user",
+		Long:  "Demote a user from admin by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",
@@ -237,10 +241,11 @@ func newAdminUsersCmd() *cobra.Command {
 		},
 	}
 
-	// block subcommand — requires exactly one positional arg (user ID).
+	// block subcommand — requires exactly one positional arg (user selector).
 	blockCmd := &cobra.Command{
-		Use:   "block",
+		Use:   "block <id|username|email>",
 		Short: "Block a user",
+		Long:  "Block a user by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",
@@ -269,10 +274,11 @@ func newAdminUsersCmd() *cobra.Command {
 		},
 	}
 
-	// unblock subcommand — requires exactly one positional arg (user ID).
+	// unblock subcommand — requires exactly one positional arg (user selector).
 	unblockCmd := &cobra.Command{
-		Use:   "unblock",
+		Use:   "unblock <id|username|email>",
 		Short: "Unblock a user",
+		Long:  "Unblock a user by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",

@@ -100,10 +100,11 @@ func newAdminOrgsCmd() *cobra.Command {
 	createCmd.Flags().String("slug", "", "Organization slug")
 	createCmd.Flags().String("url", "", "Organization URL")
 
-	// update subcommand — requires exactly one positional arg (org ID); --name and --url optional.
+	// update subcommand — requires exactly one positional arg (org selector); --name and --url optional.
 	updateCmd := &cobra.Command{
-		Use:   "update",
-		Short: "Update an organization by ID",
+		Use:   "update <id|slug>",
+		Short: "Update an organization by ID or slug",
+		Long:  "Update an organization identified by UUID or slug.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "PATCH",
@@ -152,10 +153,11 @@ func newAdminOrgsCmd() *cobra.Command {
 	updateCmd.Flags().String("name", "", "Organization name")
 	updateCmd.Flags().String("url", "", "Organization URL")
 
-	// delete subcommand — requires exactly one positional arg (org ID).
+	// delete subcommand — requires exactly one positional arg (org selector).
 	deleteCmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Delete an organization by ID",
+		Use:   "delete <id|slug>",
+		Short: "Delete an organization by ID or slug",
+		Long:  "Delete an organization identified by UUID or slug.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "DELETE",
@@ -183,10 +185,11 @@ func newAdminOrgsCmd() *cobra.Command {
 		},
 	}
 
-	// block subcommand — requires exactly one positional arg (org ID).
+	// block subcommand — requires exactly one positional arg (org selector).
 	blockCmd := &cobra.Command{
-		Use:   "block",
+		Use:   "block <id|slug>",
 		Short: "Block an organization",
+		Long:  "Block an organization identified by UUID or slug.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",
@@ -215,10 +218,11 @@ func newAdminOrgsCmd() *cobra.Command {
 		},
 	}
 
-	// unblock subcommand — requires exactly one positional arg (org ID).
+	// unblock subcommand — requires exactly one positional arg (org selector).
 	unblockCmd := &cobra.Command{
-		Use:   "unblock",
+		Use:   "unblock <id|slug>",
 		Short: "Unblock an organization",
+		Long:  "Unblock an organization identified by UUID or slug.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "POST",
@@ -269,10 +273,11 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 		Short: "Manage organization members (admin)",
 	}
 
-	// list subcommand — requires exactly one positional arg (org ID).
+	// list subcommand — requires exactly one positional arg (org selector).
 	listCmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list <id|slug>",
 		Short: "List members of an organization",
+		Long:  "List all members of an organization identified by UUID or slug.",
 		Args:  adminCheckMissingArg("id"),
 		Annotations: map[string]string{
 			"method": "GET",
@@ -301,10 +306,11 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 		},
 	}
 
-	// add subcommand — requires exactly two positional args (org ID, user ID).
+	// add subcommand — requires exactly two positional args (org selector, user selector).
 	addCmd := &cobra.Command{
-		Use:   "add",
+		Use:   "add <org_id|slug> <user_id|username|email>",
 		Short: "Add a member to an organization",
+		Long:  "Add a user to an organization. The organization can be specified by UUID or slug. The user can be specified by UUID, username, or email address.",
 		Args:  adminCheckTwoArgs("org_id", "user_id"),
 		Annotations: map[string]string{
 			"method": "PUT",
@@ -333,10 +339,11 @@ func newAdminOrgsMembersCmd() *cobra.Command {
 		},
 	}
 
-	// remove subcommand — requires exactly two positional args (org ID, user ID).
+	// remove subcommand — requires exactly two positional args (org selector, user selector).
 	removeCmd := &cobra.Command{
-		Use:   "remove",
+		Use:   "remove <org_id|slug> <user_id|username|email>",
 		Short: "Remove a member from an organization",
+		Long:  "Remove a user from an organization. The organization can be specified by UUID or slug. The user can be specified by UUID, username, or email address.",
 		Args:  adminCheckTwoArgs("org_id", "user_id"),
 		Annotations: map[string]string{
 			"method": "DELETE",

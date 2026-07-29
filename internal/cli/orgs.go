@@ -54,13 +54,13 @@ func newOrgsListCmd() *cobra.Command {
 }
 
 // newOrgsShowCmd returns the `akc orgs show` subcommand.
-// Takes exactly one positional argument: org id (UUID).
+// Takes exactly one positional argument: org selector (UUID or slug).
 // Calls GET /orgs/{id} and prints Organization JSON to stdout.
 func newOrgsShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "show <id>",
+		Use:   "show <id|slug>",
 		Short: "Show organization details",
-		Long:  "Retrieve and display details for a specific organization.",
+		Long:  "Retrieve and display details for an organization identified by UUID or slug.",
 		Args:  cobra.ExactArgs(1),
 		Annotations: map[string]string{
 			"auth":   "api_key",
@@ -85,13 +85,13 @@ func newOrgsShowCmd() *cobra.Command {
 }
 
 // newOrgsMembersCmd returns the `akc orgs members` subcommand.
-// Takes exactly one positional argument: org id (UUID).
+// Takes exactly one positional argument: org selector (UUID or slug).
 // Calls GET /orgs/{id}/members and prints []*User JSON array to stdout.
 func newOrgsMembersCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "members <id>",
+		Use:   "members <id|slug>",
 		Short: "List organization members",
-		Long:  "List all members of a specific organization.",
+		Long:  "List all members of an organization identified by UUID or slug.",
 		Args:  cobra.ExactArgs(1),
 		Annotations: map[string]string{
 			"auth":   "api_key",

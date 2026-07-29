@@ -9,7 +9,8 @@ import (
 // Admin user endpoints
 // ---------------------------------------------------------------------------
 
-// GetUserByID calls GET /users/:id to fetch a user by ID.
+// GetUserByID calls GET /users/:id to fetch a user.
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) GetUserByID(ctx context.Context, userID string, opts ...RequestOption) (*Response[User], error) {
 	return doJSON[User](c, ctx, "GET", c.apiURL("/users/"+userID), nil, opts...)
 }
@@ -35,7 +36,8 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	return &resp.Data, nil
 }
 
-// UpdateUserByID calls PATCH /users/:id to update a user by ID (admin).
+// UpdateUserByID calls PATCH /users/:id to update a user (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateUserRequest) (*User, error) {
 	resp, err := doJSON[User](c, ctx, "PATCH", c.apiURL("/users/"+userID), req)
 	if err != nil {
@@ -45,6 +47,7 @@ func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateU
 }
 
 // PromoteUser calls POST /users/:id/promote to promote a user to admin (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) PromoteUser(ctx context.Context, userID string) (*User, error) {
 	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/promote"), nil)
 	if err != nil {
@@ -54,6 +57,7 @@ func (c *Client) PromoteUser(ctx context.Context, userID string) (*User, error) 
 }
 
 // DemoteUser calls POST /users/:id/demote to demote an admin to user (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) DemoteUser(ctx context.Context, userID string) (*User, error) {
 	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/demote"), nil)
 	if err != nil {
@@ -63,6 +67,7 @@ func (c *Client) DemoteUser(ctx context.Context, userID string) (*User, error) {
 }
 
 // BlockUser calls POST /users/:id/block to block a user (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) BlockUser(ctx context.Context, userID string) (*User, error) {
 	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/block"), nil)
 	if err != nil {
@@ -72,6 +77,7 @@ func (c *Client) BlockUser(ctx context.Context, userID string) (*User, error) {
 }
 
 // UnblockUser calls POST /users/:id/unblock to unblock a user (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) UnblockUser(ctx context.Context, userID string) (*User, error) {
 	resp, err := doJSON[User](c, ctx, "POST", c.apiURL("/users/"+userID+"/unblock"), nil)
 	if err != nil {
@@ -81,23 +87,25 @@ func (c *Client) UnblockUser(ctx context.Context, userID string) (*User, error) 
 }
 
 // ListUserKeys calls GET /users/:userID/keys to list a user's API keys (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) ListUserKeys(ctx context.Context, userID string) ([]*APIKeyMeta, error) {
 	return doList[APIKeyMeta](c, ctx, c.apiURL("/users/"+userID+"/keys"))
 }
 
 // RevokeUserKey calls DELETE /users/:userID/keys/:keyID to revoke a user's
-// API key (admin).
+// API key (admin). The userID parameter accepts a UUID, username, or email address.
 func (c *Client) RevokeUserKey(ctx context.Context, userID, keyID string) error {
 	return c.doEmpty(ctx, "DELETE", c.apiURL("/users/"+userID+"/keys/"+keyID), nil)
 }
 
 // ListUserTokens calls GET /users/:userID/tokens to list a user's PATs (admin).
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) ListUserTokens(ctx context.Context, userID string) ([]*PAT, error) {
 	return doList[PAT](c, ctx, c.apiURL("/users/"+userID+"/tokens"))
 }
 
 // RevokeUserToken calls DELETE /users/:userID/tokens/:tokenID to revoke a
-// user's PAT (admin).
+// user's PAT (admin). The userID parameter accepts a UUID, username, or email address.
 func (c *Client) RevokeUserToken(ctx context.Context, userID, tokenID string) error {
 	return c.doEmpty(ctx, "DELETE", c.apiURL("/users/"+userID+"/tokens/"+tokenID), nil)
 }
@@ -127,12 +135,14 @@ func (c *Client) ListOrgs(ctx context.Context, opts *ListOrgsOptions) ([]*Organi
 	return doList[Organization](c, ctx, c.apiURL(path))
 }
 
-// GetOrg calls GET /orgs/:id to fetch an organization by ID.
+// GetOrg calls GET /orgs/:id to fetch an organization.
+// The orgID parameter accepts a UUID or slug.
 func (c *Client) GetOrg(ctx context.Context, orgID string, opts ...RequestOption) (*Response[Organization], error) {
 	return doJSON[Organization](c, ctx, "GET", c.apiURL("/orgs/"+orgID), nil, opts...)
 }
 
 // UpdateOrg calls PATCH /orgs/:id to update an organization (admin).
+// The orgID parameter accepts a UUID or slug.
 func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequest) (*Organization, error) {
 	resp, err := doJSON[Organization](c, ctx, "PATCH", c.apiURL("/orgs/"+orgID), req)
 	if err != nil {
@@ -142,11 +152,13 @@ func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequ
 }
 
 // DeleteOrg calls DELETE /orgs/:id to delete an organization (admin).
+// The orgID parameter accepts a UUID or slug.
 func (c *Client) DeleteOrg(ctx context.Context, orgID string) error {
 	return c.doEmpty(ctx, "DELETE", c.apiURL("/orgs/"+orgID), nil)
 }
 
 // BlockOrg calls POST /orgs/:id/block to block an organization (admin).
+// The orgID parameter accepts a UUID or slug.
 func (c *Client) BlockOrg(ctx context.Context, orgID string) (*Organization, error) {
 	resp, err := doJSON[Organization](c, ctx, "POST", c.apiURL("/orgs/"+orgID+"/block"), nil)
 	if err != nil {
@@ -156,6 +168,7 @@ func (c *Client) BlockOrg(ctx context.Context, orgID string) (*Organization, err
 }
 
 // UnblockOrg calls POST /orgs/:id/unblock to unblock an organization (admin).
+// The orgID parameter accepts a UUID or slug.
 func (c *Client) UnblockOrg(ctx context.Context, orgID string) (*Organization, error) {
 	resp, err := doJSON[Organization](c, ctx, "POST", c.apiURL("/orgs/"+orgID+"/unblock"), nil)
 	if err != nil {
@@ -165,17 +178,22 @@ func (c *Client) UnblockOrg(ctx context.Context, orgID string) (*Organization, e
 }
 
 // ListOrgMembers calls GET /orgs/:id/members to list organization members.
+// The orgID parameter accepts a UUID or slug.
 // Returns []*User directly -- OrgMember is not a distinct Go type.
 func (c *Client) ListOrgMembers(ctx context.Context, orgID string) ([]*User, error) {
 	return doList[User](c, ctx, c.apiURL("/orgs/"+orgID+"/members"))
 }
 
 // AddOrgMember calls PUT /orgs/:orgID/members/:userID to add a member.
+// The orgID parameter accepts a UUID or slug.
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) AddOrgMember(ctx context.Context, orgID, userID string) error {
 	return c.doEmpty(ctx, "PUT", c.apiURL("/orgs/"+orgID+"/members/"+userID), nil)
 }
 
 // RemoveOrgMember calls DELETE /orgs/:orgID/members/:userID to remove a member.
+// The orgID parameter accepts a UUID or slug.
+// The userID parameter accepts a UUID, username, or email address.
 func (c *Client) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
 	return c.doEmpty(ctx, "DELETE", c.apiURL("/orgs/"+orgID+"/members/"+userID), nil)
 }

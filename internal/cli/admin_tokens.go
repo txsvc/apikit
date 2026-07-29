@@ -16,10 +16,11 @@ func newAdminTokensCmd() *cobra.Command {
 		Short: "Manage user personal access tokens (admin)",
 	}
 
-	// list subcommand — requires exactly one positional arg (user ID).
+	// list subcommand — requires exactly one positional arg (user selector).
 	listCmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list <user_id|username|email>",
 		Short: "List a user's personal access tokens",
+		Long:  "List all personal access tokens for a user identified by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("user_id"),
 		Annotations: map[string]string{
 			"method": "GET",
@@ -48,10 +49,11 @@ func newAdminTokensCmd() *cobra.Command {
 		},
 	}
 
-	// revoke subcommand — requires exactly two positional args (user ID, token ID).
+	// revoke subcommand — requires exactly two positional args (user selector, token ID).
 	revokeCmd := &cobra.Command{
-		Use:   "revoke",
+		Use:   "revoke <user_id|username|email> <token_id>",
 		Short: "Revoke a user's personal access token",
+		Long:  "Revoke a personal access token for a user identified by UUID, username, or email address.",
 		Args:  adminCheckTwoArgs("user_id", "token_id"),
 		Annotations: map[string]string{
 			"method": "DELETE",

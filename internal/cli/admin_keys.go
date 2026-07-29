@@ -16,10 +16,11 @@ func newAdminKeysCmd() *cobra.Command {
 		Short: "Manage user API keys (admin)",
 	}
 
-	// list subcommand — requires exactly one positional arg (user ID).
+	// list subcommand — requires exactly one positional arg (user selector).
 	listCmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list <user_id|username|email>",
 		Short: "List a user's API keys",
+		Long:  "List all API keys for a user identified by UUID, username, or email address.",
 		Args:  adminCheckMissingArg("user_id"),
 		Annotations: map[string]string{
 			"method": "GET",
@@ -48,10 +49,11 @@ func newAdminKeysCmd() *cobra.Command {
 		},
 	}
 
-	// revoke subcommand — requires exactly two positional args (user ID, key ID).
+	// revoke subcommand — requires exactly two positional args (user selector, key ID).
 	revokeCmd := &cobra.Command{
-		Use:   "revoke",
+		Use:   "revoke <user_id|username|email> <key_id>",
 		Short: "Revoke a user's API key",
+		Long:  "Revoke an API key for a user identified by UUID, username, or email address.",
 		Args:  adminCheckTwoArgs("user_id", "key_id"),
 		Annotations: map[string]string{
 			"method": "DELETE",
