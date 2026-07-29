@@ -13,14 +13,14 @@
       "depends_on_spec": "09",
       "from_group": 4,
       "to_group": 1,
-      "relationship": "PATHandler struct, PATResponse type, RegisterRoutes method \u2014 extended in-place by this spec",
+      "relationship": "PATHandler struct, PATResponse type, RegisterRoutes method — extended in-place by this spec",
       "sentinel": false
     },
     {
       "depends_on_spec": "05",
       "from_group": 4,
       "to_group": 1,
-      "relationship": "RequirePermission, GetAuthInfo, GetUserID, PermissionRegistry \u2014 used by handler helpers",
+      "relationship": "RequirePermission, GetAuthInfo, GetUserID, PermissionRegistry — used by handler helpers",
       "sentinel": false
     },
     {
@@ -53,7 +53,7 @@
           "requirement_refs": [
             "17-REQ-1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -71,7 +71,7 @@
           "requirement_refs": [
             "17-REQ-2"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -79,10 +79,10 @@
           "title": "Write unit tests for common permission check (tokens:write / tokens:manage OR-check)",
           "details": [
             "In internal/handlers/pat_test.go, add table-driven tests for all three endpoints",
-            "Test: PAT with tokens:write alone \u2192 HTTP 200 (or appropriate success)",
-            "Test: PAT with tokens:manage alone \u2192 HTTP 200",
-            "Test: PAT with neither permission \u2192 HTTP 403 'insufficient permissions'",
-            "Test: API key caller \u2192 bypasses permission check, proceeds to next guard",
+            "Test: PAT with tokens:write alone → HTTP 200 (or appropriate success)",
+            "Test: PAT with tokens:manage alone → HTTP 200",
+            "Test: PAT with neither permission → HTTP 403 'insufficient permissions'",
+            "Test: API key caller → bypasses permission check, proceeds to next guard",
             "Mock auth context using GetAuthInfo/GetUserID test helpers"
           ],
           "test_spec_refs": [
@@ -93,17 +93,17 @@
           "requirement_refs": [
             "17-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "1.4",
           "title": "Write unit tests for common token lookup and guard checks",
           "details": [
-            "Test: token not found by token_id+user_id \u2192 HTTP 404 'token not found'",
-            "Test: token belonging to another user \u2192 HTTP 404 'token not found'",
-            "Test: revoked token (revoked_at non-NULL) \u2192 HTTP 400 'token is revoked'",
-            "Test: expired token (expires_at in the past) \u2192 HTTP 400 'token is expired'",
+            "Test: token not found by token_id+user_id → HTTP 404 'token not found'",
+            "Test: token belonging to another user → HTTP 404 'token not found'",
+            "Test: revoked token (revoked_at non-NULL) → HTTP 400 'token is revoked'",
+            "Test: expired token (expires_at in the past) → HTTP 400 'token is expired'",
             "Apply these tests across all three handler variants (PUT, PATCH, DELETE)"
           ],
           "test_spec_refs": [
@@ -114,17 +114,17 @@
           "requirement_refs": [
             "17-REQ-4"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "1.5",
           "title": "Write unit tests for common permission validation (replace and add)",
           "details": [
-            "Test: permission string with no colon \u2192 HTTP 400 'invalid permission format: <permission>'",
-            "Test: permission string with two colons \u2192 HTTP 400 'invalid permission format: <permission>'",
-            "Test: valid format but unregistered permission \u2192 HTTP 400 'unknown permission: <permission>'",
-            "Test: all permissions valid and registered \u2192 proceeds without error",
+            "Test: permission string with no colon → HTTP 400 'invalid permission format: <permission>'",
+            "Test: permission string with two colons → HTTP 400 'invalid permission format: <permission>'",
+            "Test: valid format but unregistered permission → HTTP 400 'unknown permission: <permission>'",
+            "Test: all permissions valid and registered → proceeds without error",
             "Apply to both PUT (replacePATPermissions) and PATCH (addPATPermissions) handlers"
           ],
           "test_spec_refs": [
@@ -135,7 +135,7 @@
           "requirement_refs": [
             "17-REQ-5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
@@ -158,11 +158,11 @@
           "id": "2.1",
           "title": "Write unit tests for privilege escalation check (replace and add)",
           "details": [
-            "Test: PAT caller adding a permission not in their own PAT \u2192 HTTP 403 'cannot grant permission: <permission>'",
-            "Test: API key caller adding any registered permission \u2192 no escalation block",
-            "Test: PAT caller replacing with permissions they already hold \u2192 HTTP 200 (no escalation)",
-            "Test: PAT caller modifying their own token, keeping existing permissions \u2192 HTTP 200 (never blocked)",
-            "Test: PAT caller replacing \u2014 only truly new permissions (not already on target) are checked for escalation",
+            "Test: PAT caller adding a permission not in their own PAT → HTTP 403 'cannot grant permission: <permission>'",
+            "Test: API key caller adding any registered permission → no escalation block",
+            "Test: PAT caller replacing with permissions they already hold → HTTP 200 (no escalation)",
+            "Test: PAT caller modifying their own token, keeping existing permissions → HTTP 200 (never blocked)",
+            "Test: PAT caller replacing — only truly new permissions (not already on target) are checked for escalation",
             "Verify DELETE handler has no escalation check (no 403 for remove operations)"
           ],
           "test_spec_refs": [
@@ -179,12 +179,12 @@
         },
         {
           "id": "2.2",
-          "title": "Write unit tests for PUT replacePATPermissions \u2014 success paths",
+          "title": "Write unit tests for PUT replacePATPermissions — success paths",
           "details": [
-            "Test: valid non-empty permissions array \u2192 HTTP 200 with updated PATResponse showing new permissions",
-            "Test: replace with subset of current permissions \u2192 HTTP 200, fewer permissions in response",
-            "Test: replace with superset of current permissions \u2192 HTTP 200, more permissions in response",
-            "Test: replace with identical permissions (same elements, different order) \u2192 HTTP 200, update proceeds",
+            "Test: valid non-empty permissions array → HTTP 200 with updated PATResponse showing new permissions",
+            "Test: replace with subset of current permissions → HTTP 200, fewer permissions in response",
+            "Test: replace with superset of current permissions → HTTP 200, more permissions in response",
+            "Test: replace with identical permissions (same elements, different order) → HTTP 200, update proceeds",
             "Verify response shape matches PATResponse struct from pat_lifecycle spec"
           ],
           "test_spec_refs": [
@@ -200,13 +200,13 @@
         },
         {
           "id": "2.3",
-          "title": "Write unit tests for PUT replacePATPermissions \u2014 empty/null/absent permissions",
+          "title": "Write unit tests for PUT replacePATPermissions — empty/null/absent permissions",
           "details": [
-            "Test: absent 'permissions' field (nil slice) \u2192 HTTP 400 'permissions are required'",
-            "Test: null 'permissions' field \u2192 HTTP 400 'permissions are required'",
-            "Test: empty array '[]' \u2192 HTTP 200 with auto-revoked PATResponse (revoked_at set)",
+            "Test: absent 'permissions' field (nil slice) → HTTP 400 'permissions are required'",
+            "Test: null 'permissions' field → HTTP 400 'permissions are required'",
+            "Test: empty array '[]' → HTTP 200 with auto-revoked PATResponse (revoked_at set)",
             "Verify revoked_at is non-null in the response body when empty array triggers auto-revoke",
-            "Verify malformed JSON body \u2192 HTTP 400 'invalid request body'"
+            "Verify malformed JSON body → HTTP 400 'invalid request body'"
           ],
           "test_spec_refs": [
             "TS-17-17",
@@ -222,11 +222,11 @@
         },
         {
           "id": "2.4",
-          "title": "Write unit tests for PATCH addPATPermissions \u2014 success paths",
+          "title": "Write unit tests for PATCH addPATPermissions — success paths",
           "details": [
-            "Test: valid new permissions \u2192 HTTP 200 with merged permissions in PATResponse",
-            "Test: adding permissions already present \u2192 HTTP 200, no duplicates in response",
-            "Test: mix of new and existing permissions \u2192 HTTP 200, only new ones appended, no duplicates",
+            "Test: valid new permissions → HTTP 200 with merged permissions in PATResponse",
+            "Test: adding permissions already present → HTTP 200, no duplicates in response",
+            "Test: mix of new and existing permissions → HTTP 200, only new ones appended, no duplicates",
             "Verify new permissions are appended after existing ones (insertion order preserved)",
             "Verify PATCH never triggers auto-revocation (result always non-empty)"
           ],
@@ -243,13 +243,13 @@
         },
         {
           "id": "2.5",
-          "title": "Write unit tests for PATCH addPATPermissions \u2014 error paths",
+          "title": "Write unit tests for PATCH addPATPermissions — error paths",
           "details": [
-            "Test: absent 'permissions' field \u2192 HTTP 400 'permissions are required'",
-            "Test: empty array '[]' \u2192 HTTP 400 'permissions are required'",
-            "Test: revoked token \u2192 HTTP 400 'token is revoked'",
-            "Test: expired token \u2192 HTTP 400 'token is expired'",
-            "Test: PAT privilege escalation blocked \u2192 HTTP 403 'cannot grant permission: <permission>'"
+            "Test: absent 'permissions' field → HTTP 400 'permissions are required'",
+            "Test: empty array '[]' → HTTP 400 'permissions are required'",
+            "Test: revoked token → HTTP 400 'token is revoked'",
+            "Test: expired token → HTTP 400 'token is expired'",
+            "Test: PAT privilege escalation blocked → HTTP 403 'cannot grant permission: <permission>'"
           ],
           "test_spec_refs": [
             "TS-17-20",
@@ -281,12 +281,12 @@
           "id": "3.1",
           "title": "Write unit tests for DELETE removePATPermissions handler",
           "details": [
-            "Test: valid remove of present permissions \u2192 HTTP 200 with updated PATResponse (permissions removed)",
-            "Test: removing permissions not present on token \u2192 HTTP 200, idempotent (no error)",
-            "Test: removing all permissions \u2192 HTTP 200 with auto-revoked PATResponse (revoked_at set)",
-            "Test: absent/empty permissions field \u2192 HTTP 400 'permissions are required'",
-            "Test: unregistered permissions in request body \u2192 silently ignored (HTTP 200)",
-            "Test: permission string with no colon \u2192 HTTP 400 'invalid permission format: <permission>' (format check still applies)"
+            "Test: valid remove of present permissions → HTTP 200 with updated PATResponse (permissions removed)",
+            "Test: removing permissions not present on token → HTTP 200, idempotent (no error)",
+            "Test: removing all permissions → HTTP 200 with auto-revoked PATResponse (revoked_at set)",
+            "Test: absent/empty permissions field → HTTP 400 'permissions are required'",
+            "Test: unregistered permissions in request body → silently ignored (HTTP 200)",
+            "Test: permission string with no colon → HTTP 400 'invalid permission format: <permission>' (format check still applies)"
           ],
           "test_spec_refs": [
             "TS-17-23",
@@ -303,11 +303,11 @@
         },
         {
           "id": "3.2",
-          "title": "Write unit tests for DELETE removePATPermissions \u2014 guard and escalation",
+          "title": "Write unit tests for DELETE removePATPermissions — guard and escalation",
           "details": [
-            "Test: revoked token \u2192 HTTP 400 'token is revoked'",
-            "Test: expired token \u2192 HTTP 400 'token is expired'",
-            "Test: no privilege escalation check \u2014 PAT caller can remove any permission without 403",
+            "Test: revoked token → HTTP 400 'token is revoked'",
+            "Test: expired token → HTTP 400 'token is expired'",
+            "Test: no privilege escalation check — PAT caller can remove any permission without 403",
             "Test: unregistered permissions silently ignored even when mixed with valid ones"
           ],
           "test_spec_refs": [
@@ -324,10 +324,10 @@
           "id": "3.3",
           "title": "Write unit tests for auto-revocation behavior",
           "details": [
-            "Test: PUT with [] \u2192 revoked_at set to current UTC timestamp in DB and response",
-            "Test: DELETE removing all permissions \u2192 revoked_at set in same UPDATE transaction",
+            "Test: PUT with [] → revoked_at set to current UTC timestamp in DB and response",
+            "Test: DELETE removing all permissions → revoked_at set in same UPDATE transaction",
             "Test: PATCH (add) never sets revoked_at",
-            "Test: PUT with non-empty result \u2192 revoked_at remains NULL",
+            "Test: PUT with non-empty result → revoked_at remains NULL",
             "Verify revoked_at is included in PATResponse JSON when auto-revoked"
           ],
           "test_spec_refs": [
@@ -344,10 +344,10 @@
           "id": "3.4",
           "title": "Write unit tests for akc tokens replace CLI command",
           "details": [
-            "Test: valid token_id and --permissions flag \u2192 sends PUT request, prints PATResponse JSON to stdout",
-            "Test: auto-revoked response \u2192 prints revocation warning to stderr",
-            "Test: missing --permissions flag \u2192 CLI error before HTTP call",
-            "Verify parsePermissions comma-split behavior (e.g. 'users:read, orgs:read' \u2192 ['users:read','orgs:read'])"
+            "Test: valid token_id and --permissions flag → sends PUT request, prints PATResponse JSON to stdout",
+            "Test: auto-revoked response → prints revocation warning to stderr",
+            "Test: missing --permissions flag → CLI error before HTTP call",
+            "Verify parsePermissions comma-split behavior (e.g. 'users:read, orgs:read' → ['users:read','orgs:read'])"
           ],
           "test_spec_refs": [
             "TS-17-29",
@@ -363,10 +363,10 @@
           "id": "3.5",
           "title": "Write unit tests for akc tokens add and akc tokens remove CLI commands",
           "details": [
-            "Test akc tokens add: valid token_id and --permissions \u2192 sends PATCH request, prints PATResponse JSON to stdout",
+            "Test akc tokens add: valid token_id and --permissions → sends PATCH request, prints PATResponse JSON to stdout",
             "Test akc tokens add: no revocation warning printed (add cannot produce empty set)",
-            "Test akc tokens remove: valid token_id and --permissions \u2192 sends DELETE request, prints PATResponse JSON to stdout",
-            "Test akc tokens remove: auto-revoked response \u2192 prints revocation warning to stderr",
+            "Test akc tokens remove: valid token_id and --permissions → sends DELETE request, prints PATResponse JSON to stdout",
+            "Test akc tokens remove: auto-revoked response → prints revocation warning to stderr",
             "Verify both commands use DoRequest pattern (not Go SDK) and parsePermissions helper"
           ],
           "test_spec_refs": [
@@ -405,7 +405,7 @@
             "Open internal/auth/permissions.go and locate NewPermissionRegistry()",
             "Add 'tokens:write' as the 7th built-in permission alongside the existing 6",
             "Ensure the registry slice/map now contains exactly 7 entries",
-            "Do not modify the tokens:manage entry \u2014 it remains a separate, independent permission",
+            "Do not modify the tokens:manage entry — it remains a separate, independent permission",
             "Add a code comment explaining tokens:write is a strict subset of tokens:manage by convention"
           ],
           "test_spec_refs": [
@@ -641,7 +641,7 @@
             "Parse token_id from path param; get userID via GetUserID(c)",
             "Decode request body into UpdatePATPermissionsRequest; return HTTP 400 'invalid request body' on JSON error",
             "If req.Permissions is nil or empty slice, return HTTP 400 'permissions are required'",
-            "Call validatePermissions(req.Permissions, registry, true) \u2014 format check only, ignore unknown",
+            "Call validatePermissions(req.Permissions, registry, true) — format check only, ignore unknown",
             "Call lookupAndGuardPAT to fetch current token; return on error",
             "No privilege escalation check for remove operations",
             "Compute resulting set: filter existing permissions, removing any that appear in req.Permissions",
@@ -670,7 +670,7 @@
           "details": [
             "In PATHandler.RegisterRoutes, add: g.DELETE('/user/tokens/:token_id/permissions', h.removePATPermissions)",
             "Ensure it is within the same auth-protected group as PUT and PATCH routes",
-            "Verify no conflict with existing DELETE /user/tokens/:token_id (revoke) route \u2014 different path"
+            "Verify no conflict with existing DELETE /user/tokens/:token_id (revoke) route — different path"
           ],
           "test_spec_refs": [
             "TS-17-3"
@@ -907,13 +907,13 @@
           "title": "Write integration tests for PAT permission modification lifecycle",
           "details": [
             "In internal/integration/ (or pat_test.go integration suite), write tests using a real SQLite DB",
-            "Test: create PAT \u2192 replace permissions \u2192 GET token \u2192 verify new permissions",
-            "Test: create PAT \u2192 add permissions \u2192 GET token \u2192 verify merged permissions",
-            "Test: create PAT \u2192 remove permissions \u2192 GET token \u2192 verify reduced permissions",
-            "Test: create PAT \u2192 remove all permissions \u2192 verify revoked_at is set in DB and response",
-            "Test: create PAT \u2192 PUT with [] \u2192 verify revoked_at set and response contains revoked_at",
-            "Test: full lifecycle: create \u2192 add \u2192 replace \u2192 remove \u2192 verify state at each step",
-            "Test: PAT caller modifies own token \u2014 can keep/reduce but cannot add permissions it doesn't hold"
+            "Test: create PAT → replace permissions → GET token → verify new permissions",
+            "Test: create PAT → add permissions → GET token → verify merged permissions",
+            "Test: create PAT → remove permissions → GET token → verify reduced permissions",
+            "Test: create PAT → remove all permissions → verify revoked_at is set in DB and response",
+            "Test: create PAT → PUT with [] → verify revoked_at set and response contains revoked_at",
+            "Test: full lifecycle: create → add → replace → remove → verify state at each step",
+            "Test: PAT caller modifies own token — can keep/reduce but cannot add permissions it doesn't hold"
           ],
           "test_spec_refs": [
             "TS-17-31",
@@ -952,7 +952,7 @@
           "title": "Trace execution paths from route registration through handler chain",
           "details": [
             "Verify PATHandler.RegisterRoutes calls g.PUT, g.PATCH, g.DELETE for /user/tokens/:token_id/permissions",
-            "Verify each route handler calls requireTokensWriteOrManage \u2192 lookupAndGuardPAT \u2192 validatePermissions \u2192 checkPrivilegeEscalation \u2192 db.WithTx UPDATE \u2192 return PATResponse",
+            "Verify each route handler calls requireTokensWriteOrManage → lookupAndGuardPAT → validatePermissions → checkPrivilegeEscalation → db.WithTx UPDATE → return PATResponse",
             "Confirm no handler returns early with panic('not implemented') or bare 'return nil' in non-trivial paths",
             "Confirm requireTokensWriteOrManage calls RequirePermission from auth_middleware (upstream spec 05)",
             "Confirm GetAuthInfo and GetUserID are called from production handler code, not just tests"
@@ -974,7 +974,7 @@
             "Search internal/handlers/pat.go for panic('not implemented'), bare 'return nil' in handler bodies, or // TODO stubs",
             "Search internal/cli/tokens.go for panic('not implemented'), // TODO, or unimplemented DoRequest calls",
             "Confirm all helper functions (requireTokensWriteOrManage, lookupAndGuardPAT, validatePermissions, checkPrivilegeEscalation) have real implementations",
-            "Run: grep -rn 'panic(\"not implemented\")\\|// TODO' internal/auth/permissions.go internal/handlers/pat.go internal/cli/tokens.go \u2014 expect zero matches"
+            "Run: grep -rn 'panic(\"not implemented\")\\|// TODO' internal/auth/permissions.go internal/handlers/pat.go internal/cli/tokens.go — expect zero matches"
           ],
           "test_spec_refs": [],
           "requirement_refs": [
@@ -1017,7 +1017,7 @@
           "details": [
             "Verify RequirePermission (from auth_middleware spec 05) is called from production handler code in pat.go",
             "Verify GetAuthInfo and GetUserID (from auth_middleware spec 05) are called in production handler code",
-            "Verify parsePermissions (from cli_user_commands spec 15) is reused in tokens.go for all three CLI commands \u2014 not duplicated",
+            "Verify parsePermissions (from cli_user_commands spec 15) is reused in tokens.go for all three CLI commands — not duplicated",
             "Verify DoRequest (from cli_user_commands spec 15) is called in production CLI code for PUT, PATCH, DELETE",
             "Verify PATHandler and PATResponse (from pat_lifecycle spec 09) are extended in-place, not redefined"
           ],
@@ -1037,8 +1037,8 @@
           "title": "Run smoke tests and full integration test suite",
           "details": [
             "Run: go test ./internal/handlers/... -run TestSmoke -count=1 -v (if smoke tests defined)",
-            "Run: go test ./... -count=1 \u2014 all tests pass",
-            "Run: go vet ./... \u2014 no issues",
+            "Run: go test ./... -count=1 — all tests pass",
+            "Run: go vet ./... — no issues",
             "Manually verify 'akc tokens replace <id> --permissions users:read' sends PUT and prints PATResponse",
             "Manually verify 'akc tokens add <id> --permissions orgs:read' sends PATCH and prints PATResponse",
             "Manually verify 'akc tokens remove <id> --permissions users:read' sends DELETE and prints PATResponse with revocation warning if applicable"
@@ -1067,7 +1067,7 @@
       "verification": {
         "id": "9.V",
         "checks": [
-          "go test ./... -count=1 passes with zero failures \u2014 all 34 test cases (TS-17-1 through TS-17-34) pass",
+          "go test ./... -count=1 passes with zero failures — all 34 test cases (TS-17-1 through TS-17-34) pass",
           "go vet ./... reports no issues",
           "grep -rn 'panic(\"not implemented\")' internal/auth/permissions.go internal/handlers/pat.go internal/cli/tokens.go returns zero matches (stub audit clean)",
           "PUT /user/tokens/:token_id/permissions, PATCH /user/tokens/:token_id/permissions, DELETE /user/tokens/:token_id/permissions are all registered and reachable in the running server",
