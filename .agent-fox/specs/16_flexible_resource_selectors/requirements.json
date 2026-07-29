@@ -1,0 +1,1005 @@
+{
+  "$schema": null,
+  "spec_id": "16",
+  "spec_name": "flexible_resource_selectors",
+  "schema_version": 1,
+  "introduction": "The Flexible Resource Selectors spec adds a cross-cutting resolver layer to the apikit project that allows API endpoints and CLI commands to accept human-friendly identifiers (username, email, org slug) in addition to UUIDs for user and organization resources, resolving them transparently to canonical UUIDs before delegating to existing handlers.",
+  "glossary": {
+    "Executor": "The db interface type already defined in internal/handlers/ that both resolveUserID and resolveOrgID accept as their database parameter",
+    "OpenMemory": "A helper function from the database_layer spec that opens an in-memory SQLite database for use in tests",
+    "WriteAPIError": "A helper function used by handlers to write a structured JSON error response with a given HTTP status code and message",
+    "akc": "The apikit CLI binary built with Cobra that wraps the Go SDK",
+    "cli_resolve.go": "A file in the root apikit package containing the now-redundant resolveOrgSlugFromJSON function and its tests, not owned by any active spec",
+    "detection heuristic": "The three-step logic used to classify a selector: (1) if it parses as a UUID, query by id; (2) if it contains '@', query by email; (3) otherwise, query by username or slug",
+    "idx_users_email": "The UNIQUE index added to the users.email column by the schema migration introduced in this spec",
+    "orgs": "The SQLite table storing organization records including id, slug, and other org fields",
+    "resolveOrgID": "Helper function in internal/handlers/ that accepts a selector string and returns the canonical org UUID by querying the database using the detection heuristic",
+    "resolveOrgSlugFromJSON": "A client-side org slug resolution function in the root apikit package's cli_resolve.go file that becomes redundant once server-side resolution is implemented and must be deleted",
+    "resolveUserID": "Helper function in internal/handlers/ that accepts a selector string and returns the canonical user UUID by querying the database using the detection heuristic",
+    "schema.go": "The Go source file in the database layer package that contains the SQL schema creation statement used when initializing a new database",
+    "selector": "A string value passed as a path parameter that may be a UUID, username, email address, or org slug — the resolver determines which type it is and returns the canonical UUID",
+    "slug": "A human-readable, URL-safe string identifier for an organization (e.g. 'acme-corp'), stored in the orgs table",
+    "two-ID endpoint": "An API endpoint that contains two path parameters identifying different resource types, such as PUT /orgs/{id}/members/{user_id}",
+    "users": "The SQLite table storing user records including id, username, email, and other profile fields"
+  },
+  "requirements": [
+    {
+      "id": "16-REQ-1",
+      "title": "User selector resolver function",
+      "user_story": {
+        "role": "API handler",
+        "goal": "resolve a user selector string (UUID, email, or username) to a canonical UUID",
+        "benefit": "all user-targeting handlers can accept human-friendly identifiers without duplicating lookup logic"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "query the users table by the id column and return the UUID unchanged if a matching row exists",
+          "return_contract": "returns (uuidString, nil) where uuidString is the canonical user UUID",
+          "trigger": "called with a selector string that parses successfully as a UUID"
+        },
+        {
+          "id": "16-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "query the users table by the email column and return the matching user's UUID",
+          "return_contract": "returns (uuidString, nil) where uuidString is the canonical user UUID",
+          "trigger": "called with a selector string that contains the '@' character and is not a UUID"
+        },
+        {
+          "id": "16-REQ-1.3",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "query the users table by the username column and return the matching user's UUID",
+          "return_contract": "returns (uuidString, nil) where uuidString is the canonical user UUID",
+          "trigger": "called with a selector string that is neither a UUID nor contains '@'"
+        },
+        {
+          "id": "16-REQ-1.4",
+          "ears_pattern": "unwanted",
+          "system": "resolveUserID",
+          "action": "return sql.ErrNoRows to the caller without logging",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "error_condition": "no row in the users table matches the resolved query"
+        },
+        {
+          "id": "16-REQ-1.5",
+          "ears_pattern": "unwanted",
+          "system": "resolveUserID",
+          "action": "return the database error to the caller",
+          "return_contract": "returns (\"\", err) where err is the underlying database error",
+          "error_condition": "the database query returns an error other than sql.ErrNoRows"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "resolveUserID",
+          "action": "treat as a username fallback query, which returns sql.ErrNoRows since no user has an empty username",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "error_condition": "the selector is an empty string"
+        },
+        {
+          "id": "16-REQ-1.E2",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "query by id column, find no match, and return sql.ErrNoRows",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "trigger": "called with a valid UUID string that does not correspond to any row in the users table"
+        },
+        {
+          "id": "16-REQ-1.E3",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "return sql.ErrNoRows without falling back to username lookup",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "trigger": "called with a selector containing '@' that matches no row in the users table by email"
+        },
+        {
+          "id": "16-REQ-1.E4",
+          "ears_pattern": "event_driven",
+          "system": "resolveUserID",
+          "action": "return sql.ErrNoRows",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "trigger": "called with a plain string (no '@', not UUID) that matches no row in the users table by username"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-2",
+      "title": "Organization selector resolver function",
+      "user_story": {
+        "role": "API handler",
+        "goal": "resolve an org selector string (UUID or slug) to a canonical UUID",
+        "benefit": "all org-targeting handlers can accept human-friendly slug identifiers without duplicating lookup logic"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "resolveOrgID",
+          "action": "query the orgs table by the id column and return the UUID if a matching row exists",
+          "return_contract": "returns (uuidString, nil) where uuidString is the canonical org UUID",
+          "trigger": "called with a selector string that parses successfully as a UUID"
+        },
+        {
+          "id": "16-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "resolveOrgID",
+          "action": "query the orgs table by the slug column and return the matching org's UUID",
+          "return_contract": "returns (uuidString, nil) where uuidString is the canonical org UUID",
+          "trigger": "called with a selector string that is not a UUID (including strings containing '@')"
+        },
+        {
+          "id": "16-REQ-2.3",
+          "ears_pattern": "unwanted",
+          "system": "resolveOrgID",
+          "action": "return sql.ErrNoRows to the caller",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "error_condition": "no row in the orgs table matches the resolved query"
+        },
+        {
+          "id": "16-REQ-2.4",
+          "ears_pattern": "unwanted",
+          "system": "resolveOrgID",
+          "action": "return the database error to the caller",
+          "return_contract": "returns (\"\", err) where err is the underlying database error",
+          "error_condition": "the database query returns an error other than sql.ErrNoRows"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-2.E1",
+          "ears_pattern": "event_driven",
+          "system": "resolveOrgID",
+          "action": "treat the value as a slug (fallback path) rather than applying email heuristic, since orgs do not have email addresses",
+          "return_contract": "returns (\"\", sql.ErrNoRows) if no org slug matches the string, or (uuidString, nil) if one does",
+          "trigger": "called with a selector string containing '@'"
+        },
+        {
+          "id": "16-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "resolveOrgID",
+          "action": "treat as a slug fallback query, which returns sql.ErrNoRows since no org has an empty slug",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "error_condition": "the selector is an empty string"
+        },
+        {
+          "id": "16-REQ-2.E3",
+          "ears_pattern": "event_driven",
+          "system": "resolveOrgID",
+          "action": "query by id column, find no match, and return sql.ErrNoRows",
+          "return_contract": "returns (\"\", sql.ErrNoRows)",
+          "trigger": "called with a valid UUID string that does not correspond to any row in the orgs table"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-3",
+      "title": "User handler integration with resolveUserID",
+      "user_story": {
+        "role": "API caller",
+        "goal": "pass a UUID, username, or email as the {id} path parameter on any user endpoint",
+        "benefit": "I can reference users by identifiers I know without performing a prior UUID lookup"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "user handler",
+          "action": "call resolveUserID with the {id} path parameter value, obtain the canonical UUID, and proceed with all subsequent database queries using that UUID",
+          "return_contract": "returns the same HTTP response as the existing handler would return for a UUID-based request",
+          "trigger": "an HTTP request arrives at any user endpoint (GET /users/{id}, PATCH /users/{id}, POST /users/{id}/promote, POST /users/{id}/demote, POST /users/{id}/block, POST /users/{id}/unblock, GET /users/{id}/keys, DELETE /users/{id}/keys/{key_id}, GET /users/{id}/tokens, DELETE /users/{id}/tokens/{token_id})"
+        },
+        {
+          "id": "16-REQ-3.2",
+          "ears_pattern": "unwanted",
+          "system": "user handler",
+          "action": "call WriteAPIError with status 404 and message 'user not found'",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'user not found'}",
+          "error_condition": "resolveUserID returns sql.ErrNoRows"
+        },
+        {
+          "id": "16-REQ-3.3",
+          "ears_pattern": "unwanted",
+          "system": "user handler",
+          "action": "call WriteAPIError with status 500 and message 'internal server error'",
+          "return_contract": "returns HTTP 500 with JSON body {error: 'internal server error'}",
+          "error_condition": "resolveUserID returns a non-nil error that is not sql.ErrNoRows"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-3.E1",
+          "ears_pattern": "event_driven",
+          "system": "user handler",
+          "action": "resolveUserID returns the same UUID, handler proceeds identically to the pre-change behavior",
+          "return_contract": "returns the same HTTP 200 response as before this spec was implemented (backward compatibility)",
+          "trigger": "an HTTP request arrives at a user endpoint with a UUID selector that is valid and exists"
+        },
+        {
+          "id": "16-REQ-3.E2",
+          "ears_pattern": "event_driven",
+          "system": "user handler",
+          "action": "resolveUserID resolves the email to a UUID, handler proceeds with that UUID",
+          "return_contract": "returns HTTP 200 with the user resource body",
+          "trigger": "an HTTP request arrives at a user endpoint with an email selector"
+        },
+        {
+          "id": "16-REQ-3.E3",
+          "ears_pattern": "event_driven",
+          "system": "user handler",
+          "action": "resolveUserID resolves the username to a UUID, handler proceeds with that UUID",
+          "return_contract": "returns HTTP 200 with the user resource body",
+          "trigger": "an HTTP request arrives at a user endpoint with a username selector"
+        },
+        {
+          "id": "16-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "user handler",
+          "action": "return 404 rather than 400, since the selector format is valid but the resource does not exist",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'user not found'}",
+          "error_condition": "the selector is syntactically valid but matches no user record"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-4",
+      "title": "Organization handler integration with resolveOrgID",
+      "user_story": {
+        "role": "API caller",
+        "goal": "pass a UUID or slug as the {id} path parameter on any org endpoint",
+        "benefit": "I can reference organizations by their slug without performing a prior UUID lookup"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "org handler",
+          "action": "call resolveOrgID with the {id} path parameter value, obtain the canonical UUID, and proceed with all subsequent database queries using that UUID",
+          "return_contract": "returns the same HTTP response as the existing handler would return for a UUID-based request",
+          "trigger": "an HTTP request arrives at any org endpoint (GET /orgs/{id}, PATCH /orgs/{id}, DELETE /orgs/{id}, POST /orgs/{id}/block, POST /orgs/{id}/unblock, GET /orgs/{id}/members)"
+        },
+        {
+          "id": "16-REQ-4.2",
+          "ears_pattern": "unwanted",
+          "system": "org handler",
+          "action": "call WriteAPIError with status 404 and message 'organization not found'",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'organization not found'}",
+          "error_condition": "resolveOrgID returns sql.ErrNoRows"
+        },
+        {
+          "id": "16-REQ-4.3",
+          "ears_pattern": "unwanted",
+          "system": "org handler",
+          "action": "call WriteAPIError with status 500 and message 'internal server error'",
+          "return_contract": "returns HTTP 500 with JSON body {error: 'internal server error'}",
+          "error_condition": "resolveOrgID returns a non-nil error that is not sql.ErrNoRows"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-4.E1",
+          "ears_pattern": "event_driven",
+          "system": "org handler",
+          "action": "resolveOrgID returns the same UUID, handler proceeds identically to the pre-change behavior",
+          "return_contract": "returns the same HTTP 200 response as before this spec was implemented (backward compatibility)",
+          "trigger": "an HTTP request arrives at an org endpoint with a UUID selector that is valid and exists"
+        },
+        {
+          "id": "16-REQ-4.E2",
+          "ears_pattern": "event_driven",
+          "system": "org handler",
+          "action": "resolveOrgID resolves the slug to a UUID, handler proceeds with that UUID",
+          "return_contract": "returns HTTP 200 with the org resource body",
+          "trigger": "an HTTP request arrives at an org endpoint with a slug selector"
+        },
+        {
+          "id": "16-REQ-4.E3",
+          "ears_pattern": "unwanted",
+          "system": "org handler",
+          "action": "return 404 rather than 400, since the selector format is valid but the resource does not exist",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'organization not found'}",
+          "error_condition": "the selector is syntactically valid but matches no org record"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-5",
+      "title": "Two-ID endpoint dual resolution",
+      "user_story": {
+        "role": "API caller",
+        "goal": "pass selectors for both the org and user parameters on two-ID member endpoints",
+        "benefit": "I can manage org membership using human-friendly identifiers for both the org and the user"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "org member handler",
+          "action": "call resolveOrgID with the {id} path parameter and resolveUserID with the {user_id} path parameter independently, then proceed with both resolved UUIDs",
+          "return_contract": "returns the same HTTP response as the existing handler would return for UUID-based requests",
+          "trigger": "an HTTP request arrives at PUT /orgs/{id}/members/{user_id} or DELETE /orgs/{id}/members/{user_id}"
+        },
+        {
+          "id": "16-REQ-5.2",
+          "ears_pattern": "unwanted",
+          "system": "org member handler",
+          "action": "call WriteAPIError with status 404 and message 'organization not found' without attempting to resolve the user selector",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'organization not found'}",
+          "error_condition": "resolveOrgID returns sql.ErrNoRows"
+        },
+        {
+          "id": "16-REQ-5.3",
+          "ears_pattern": "unwanted",
+          "system": "org member handler",
+          "action": "call WriteAPIError with status 404 and message 'user not found'",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'user not found'}",
+          "error_condition": "the org resolves successfully but resolveUserID returns sql.ErrNoRows"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-5.E1",
+          "ears_pattern": "event_driven",
+          "system": "org member handler",
+          "action": "resolve both selectors independently and proceed with both canonical UUIDs",
+          "return_contract": "returns HTTP 200 or 204 as appropriate for the operation",
+          "trigger": "an HTTP request arrives at a two-ID member endpoint with a slug for {id} and a username for {user_id}"
+        },
+        {
+          "id": "16-REQ-5.E2",
+          "ears_pattern": "event_driven",
+          "system": "org member handler",
+          "action": "resolve org by slug and user by email, then proceed with both canonical UUIDs",
+          "return_contract": "returns HTTP 200 or 204 as appropriate for the operation",
+          "trigger": "an HTTP request arrives at a two-ID member endpoint with a slug for {id} and an email for {user_id}"
+        },
+        {
+          "id": "16-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "org member handler",
+          "action": "return 404 for the org (checked first) without attempting user resolution",
+          "return_contract": "returns HTTP 404 with JSON body {error: 'organization not found'}",
+          "error_condition": "both the org and user selectors match no records"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-6",
+      "title": "Database migration: unique index on users.email",
+      "user_story": {
+        "role": "server operator",
+        "goal": "have the server enforce uniqueness of email addresses at the database level",
+        "benefit": "email can serve as an unambiguous selector for user resolution"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-6.1",
+          "ears_pattern": "event_driven",
+          "system": "database migration",
+          "action": "execute CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) and update the schema creation statement in schema.go to include this index for new databases",
+          "return_contract": "migration completes without error; server proceeds to start normally",
+          "trigger": "the server starts and runs the schema migration"
+        },
+        {
+          "id": "16-REQ-6.2",
+          "ears_pattern": "unwanted",
+          "system": "database migration",
+          "action": "query for all email values appearing more than once, log a FATAL message listing each offending email address and its row count, then exit with a non-zero exit code",
+          "return_contract": "server exits with non-zero code; log output contains each duplicate email and its count in the format 'FATAL migration failed: duplicate emails detected — deduplicate before restarting: <email> (<N> rows)'",
+          "error_condition": "the users table contains rows with duplicate email values, causing the CREATE UNIQUE INDEX statement to fail"
+        },
+        {
+          "id": "16-REQ-6.3",
+          "ears_pattern": "ubiquitous",
+          "system": "database migration",
+          "action": "never automatically deduplicate or modify user rows to resolve duplicate email conflicts — the operator must resolve duplicates manually",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-6.E1",
+          "ears_pattern": "event_driven",
+          "system": "database migration",
+          "action": "create the idx_users_email unique index without error and proceed with startup",
+          "return_contract": "migration succeeds; server starts normally",
+          "trigger": "the server starts on a fresh database with no existing users"
+        },
+        {
+          "id": "16-REQ-6.E2",
+          "ears_pattern": "event_driven",
+          "system": "database migration",
+          "action": "the IF NOT EXISTS clause allows the statement to succeed even if the index already exists; server proceeds normally",
+          "return_contract": "migration succeeds; server starts normally",
+          "trigger": "the server starts on an existing database where all email values are already unique"
+        },
+        {
+          "id": "16-REQ-6.E3",
+          "ears_pattern": "unwanted",
+          "system": "database migration",
+          "action": "log all offending email addresses in a single FATAL message before exiting",
+          "return_contract": "server exits with non-zero code; all duplicate emails are listed in the log output",
+          "error_condition": "multiple distinct email addresses are duplicated (e.g. both alice@example.com and bob@example.com appear more than once)"
+        },
+        {
+          "id": "16-REQ-6.E4",
+          "ears_pattern": "unwanted",
+          "system": "database migration",
+          "action": "log the error and exit with a non-zero exit code",
+          "return_contract": "server exits with non-zero code; error is logged",
+          "error_condition": "the migration query itself fails due to a database error unrelated to duplicate emails"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-7",
+      "title": "OpenAPI specification updates for flexible selectors",
+      "user_story": {
+        "role": "API consumer",
+        "goal": "see accurate documentation in api/openapi.yaml that describes accepted selector formats for {id} and {user_id} parameters",
+        "benefit": "I know I can pass a UUID, username, email, or slug without consulting internal documentation"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-7.1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "describe the {id} parameter for all user endpoints as accepting a UUID, username, or email address, and remove the format: uuid constraint from those parameters",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-7.2",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "describe the {id} parameter for all org endpoints as accepting a UUID or slug, and remove the format: uuid constraint from those parameters",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "describe the {user_id} parameter in org member endpoints as accepting a UUID, username, or email address, and remove the format: uuid constraint from that parameter",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-7.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "api/openapi.yaml",
+          "action": "ensure that removing format: uuid from selector parameters does not affect other parameters (such as key_id or token_id) that remain UUID-only",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-8",
+      "title": "CLI command help text and Use string updates",
+      "user_story": {
+        "role": "CLI operator",
+        "goal": "see updated Use strings and Long help text in akc commands that reflect accepted selector formats",
+        "benefit": "I know I can pass a slug, username, or email instead of a UUID when running CLI commands"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "akc admin commands",
+          "action": "update Use strings for all admin commands that accept a user or org positional argument to document accepted selector formats (e.g. 'show <id|username|email>' for user commands, 'show <id|slug>' for org commands)",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-8.2",
+          "ears_pattern": "ubiquitous",
+          "system": "akc user commands",
+          "action": "update Use strings and Long help text for all user-facing commands that accept a user or org positional argument to document accepted selector formats",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-8.3",
+          "ears_pattern": "ubiquitous",
+          "system": "akc admin commands",
+          "action": "update Use strings for two-ID member commands (e.g. members add) to document that both positional arguments accept selectors (e.g. 'add <org_id|slug> <user_id|username|email>')",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-8.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "akc commands",
+          "action": "ensure that no functional CLI code is changed — only Use strings and Long help text are modified; existing UUID-based invocations continue to work identically",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-9",
+      "title": "Remove redundant client-side org slug resolver",
+      "user_story": {
+        "role": "developer",
+        "goal": "have the resolveOrgSlugFromJSON function and its tests removed from cli_resolve.go",
+        "benefit": "the codebase has no redundant client-side resolution logic now that the server resolves selectors natively"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-9.1",
+          "ears_pattern": "ubiquitous",
+          "system": "root apikit package",
+          "action": "delete the resolveOrgSlugFromJSON function and all associated tests from cli_resolve.go; if cli_resolve.go becomes empty after deletion, delete the file entirely",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "root apikit package",
+          "action": "ensure no other file in the codebase references resolveOrgSlugFromJSON after deletion — all call sites must be removed or replaced with server-side resolution",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "root apikit package",
+          "action": "the Go compiler will produce a compile error; the build must not succeed until all references are removed",
+          "return_contract": "go build fails with an 'undefined: resolveOrgSlugFromJSON' compile error until all references are cleaned up",
+          "error_condition": "cli_resolve.go is deleted but another file still imports or calls resolveOrgSlugFromJSON"
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-10",
+      "title": "Go SDK documentation updates for selector parameters",
+      "user_story": {
+        "role": "Go SDK consumer",
+        "goal": "see updated parameter documentation in SDK methods that accept user or org identifiers",
+        "benefit": "I know I can pass a UUID, username, email, or slug to SDK methods without changing method signatures"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "Go SDK",
+          "action": "update godoc comments on all SDK methods that accept a user identifier parameter to document that the parameter accepts a UUID, username, or email address; no signature changes are made",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "Go SDK",
+          "action": "update godoc comments on all SDK methods that accept an org identifier parameter to document that the parameter accepts a UUID or slug; no signature changes are made",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-10.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "Go SDK",
+          "action": "ensure that no SDK method signatures, parameter types, or return types are changed — only documentation is updated; existing callers passing UUIDs continue to compile and work without modification",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-11",
+      "title": "Resolver unit tests",
+      "user_story": {
+        "role": "developer",
+        "goal": "have comprehensive unit tests for resolveUserID and resolveOrgID in internal/handlers/resolve_test.go",
+        "benefit": "the detection heuristic and error contracts are verified in isolation without requiring a full HTTP stack"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-11.1",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_test.go",
+          "action": "include test cases for all three detection heuristic paths for resolveUserID (UUID, email, username fallback) using an in-memory SQLite database via OpenMemory",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-11.2",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_test.go",
+          "action": "include test cases verifying that resolveUserID and resolveOrgID return sql.ErrNoRows for unknown selectors of each type (unknown email, unknown username, unknown slug, valid UUID not in DB)",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-11.3",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_test.go",
+          "action": "include a test case verifying that resolveOrgID treats a selector containing '@' as a slug lookup rather than an email lookup",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-11.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_test.go",
+          "action": "all tests use the Go standard testing package and testify assertions, consistent with existing specs; no external test frameworks are introduced",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-12",
+      "title": "Resolver integration tests",
+      "user_story": {
+        "role": "developer",
+        "goal": "have HTTP-level integration tests in internal/handlers/resolve_integration_test.go that exercise the full request flow for each endpoint family",
+        "benefit": "the end-to-end wiring between HTTP routing, resolver functions, and database queries is verified"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-12.1",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_integration_test.go",
+          "action": "cover each user endpoint family with HTTP requests using UUID, username, and email selectors, verifying 200 OK responses for valid selectors and 404 responses for unknown selectors",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-12.2",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_integration_test.go",
+          "action": "cover each org endpoint family with HTTP requests using UUID and slug selectors, verifying 200 OK responses for valid selectors and 404 responses for unknown selectors",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-12.3",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_integration_test.go",
+          "action": "cover two-ID member endpoints with all combinations of selector types for both path parameters, verifying correct resolution and 404 behavior when either selector is unknown",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-12.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_integration_test.go",
+          "action": "all integration tests use an in-memory SQLite database via OpenMemory and do not require a running server process; tests are runnable with 'go test ./internal/handlers/...'",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "16-REQ-13",
+      "title": "Migration unit tests",
+      "user_story": {
+        "role": "developer",
+        "goal": "have unit tests in internal/db/migrate_test.go covering the idx_users_email migration happy path and failure behavior",
+        "benefit": "the migration logic is verified independently of the full server startup sequence"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "16-REQ-13.1",
+          "ears_pattern": "ubiquitous",
+          "system": "migrate_test.go",
+          "action": "include a test case verifying that the migration succeeds on a clean schema with no existing users",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-13.2",
+          "ears_pattern": "ubiquitous",
+          "system": "migrate_test.go",
+          "action": "include a test case verifying that the migration returns an error and logs all offending email addresses when the users table contains duplicate email values",
+          "return_contract": null
+        },
+        {
+          "id": "16-REQ-13.3",
+          "ears_pattern": "ubiquitous",
+          "system": "migrate_test.go",
+          "action": "include a test case verifying that the migration succeeds when all existing email values are unique, producing no false positives",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "16-REQ-13.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "migrate_test.go",
+          "action": "all migration tests use the Go standard testing package and testify, consistent with database_layer conventions; tests are runnable with 'go test ./internal/db/...'",
+          "return_contract": null
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "16-PROP-1",
+      "title": "UUID selectors are always identity-resolved",
+      "for_any": "valid UUID string that exists in the users or orgs table",
+      "invariant": "resolveUserID or resolveOrgID returns that exact UUID unchanged, producing the same result as the pre-change inline uuid.Parse() + WHERE id = ? pattern",
+      "validates": [
+        "16-REQ-1.1",
+        "16-REQ-2.1",
+        "16-REQ-3.E1",
+        "16-REQ-4.E1"
+      ]
+    },
+    {
+      "id": "16-PROP-2",
+      "title": "Detection heuristic is unambiguous and deterministic",
+      "for_any": "any selector string",
+      "invariant": "the detection heuristic assigns exactly one classification (UUID, email, or fallback) and always queries exactly one column — there is no case where two columns are queried for the same selector",
+      "validates": [
+        "16-REQ-1.1",
+        "16-REQ-1.2",
+        "16-REQ-1.3",
+        "16-REQ-2.1",
+        "16-REQ-2.2"
+      ]
+    },
+    {
+      "id": "16-PROP-3",
+      "title": "Not-found always returns sql.ErrNoRows, never a different error",
+      "for_any": "selector string that matches no row in the relevant table",
+      "invariant": "resolveUserID and resolveOrgID return sql.ErrNoRows (not nil, not a wrapped error, not a custom error type) so that handler error-branching logic is consistent",
+      "validates": [
+        "16-REQ-1.4",
+        "16-REQ-2.3",
+        "16-REQ-3.2",
+        "16-REQ-4.2"
+      ]
+    },
+    {
+      "id": "16-PROP-4",
+      "title": "Org resolver ignores email heuristic",
+      "for_any": "selector string containing '@'",
+      "invariant": "resolveOrgID always queries the orgs table by slug, never by email, regardless of whether the selector contains '@'",
+      "validates": [
+        "16-REQ-2.2",
+        "16-REQ-2.E1"
+      ]
+    },
+    {
+      "id": "16-PROP-5",
+      "title": "Migration is idempotent on clean data",
+      "for_any": "database where all email values in the users table are unique",
+      "invariant": "running the idx_users_email migration any number of times succeeds without error due to the IF NOT EXISTS clause",
+      "validates": [
+        "16-REQ-6.1",
+        "16-REQ-6.E2"
+      ]
+    },
+    {
+      "id": "16-PROP-6",
+      "title": "Duplicate email migration failure is exhaustive",
+      "for_any": "database with one or more duplicate email values",
+      "invariant": "the migration failure log message lists every email address that appears more than once — no offending address is silently omitted",
+      "validates": [
+        "16-REQ-6.2",
+        "16-REQ-6.E3"
+      ]
+    },
+    {
+      "id": "16-PROP-7",
+      "title": "Backward compatibility: UUID callers are unaffected",
+      "for_any": "existing API call or CLI invocation that passes a valid UUID as the {id} or {user_id} parameter",
+      "invariant": "the HTTP response is identical to the response that would have been returned before this spec was implemented",
+      "validates": [
+        "16-REQ-3.E1",
+        "16-REQ-4.E1",
+        "16-REQ-8.E1",
+        "16-REQ-10.E1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "16-PATH-1",
+      "title": "User endpoint resolved by username end-to-end",
+      "steps": [
+        {
+          "actor": "CLI operator",
+          "action": "runs 'akc admin users show alice' where 'alice' is a username"
+        },
+        {
+          "actor": "akc CLI (cli_admin_commands)",
+          "action": "passes the string 'alice' as the user identifier to the Go SDK GetUserByID method"
+        },
+        {
+          "actor": "Go SDK (go_sdk)",
+          "action": "sends GET /users/alice to the apikit server"
+        },
+        {
+          "actor": "Echo router (server_core)",
+          "action": "routes the request to the user handler, extracting 'alice' as the {id} path parameter"
+        },
+        {
+          "actor": "user handler (user_management)",
+          "action": "calls resolveUserID(h.db, 'alice'); the detection heuristic determines 'alice' is not a UUID and contains no '@', so it queries the users table by username"
+        },
+        {
+          "actor": "resolveUserID (16-REQ-1)",
+          "action": "executes SELECT id FROM users WHERE username = 'alice', finds a matching row, and returns the canonical UUID"
+        },
+        {
+          "actor": "user handler (user_management)",
+          "action": "uses the returned UUID for all subsequent queries and returns the user resource as JSON"
+        },
+        {
+          "actor": "Go SDK (go_sdk)",
+          "action": "deserializes the HTTP 200 response and returns the User struct to the CLI"
+        },
+        {
+          "actor": "akc CLI (cli_admin_commands)",
+          "action": "prints the user details to stdout"
+        }
+      ]
+    },
+    {
+      "id": "16-PATH-2",
+      "title": "Org member endpoint resolved by slug and email end-to-end",
+      "steps": [
+        {
+          "actor": "CLI operator",
+          "action": "runs 'akc admin orgs members add acme-corp alice@example.com' where 'acme-corp' is an org slug and 'alice@example.com' is a user email"
+        },
+        {
+          "actor": "akc CLI (cli_admin_commands)",
+          "action": "passes 'acme-corp' and 'alice@example.com' as positional arguments to the Go SDK AddOrgMember method"
+        },
+        {
+          "actor": "Go SDK (go_sdk)",
+          "action": "sends PUT /orgs/acme-corp/members/alice@example.com to the apikit server"
+        },
+        {
+          "actor": "Echo router (server_core)",
+          "action": "routes the request to the org member handler, extracting 'acme-corp' as {id} and 'alice@example.com' as {user_id}"
+        },
+        {
+          "actor": "org member handler (organization_management)",
+          "action": "calls resolveOrgID(h.db, 'acme-corp'); the detection heuristic determines 'acme-corp' is not a UUID, so it queries the orgs table by slug"
+        },
+        {
+          "actor": "resolveOrgID (16-REQ-2)",
+          "action": "executes SELECT id FROM orgs WHERE slug = 'acme-corp', finds a matching row, and returns the canonical org UUID"
+        },
+        {
+          "actor": "org member handler (organization_management)",
+          "action": "calls resolveUserID(h.db, 'alice@example.com'); the detection heuristic finds '@' and queries the users table by email"
+        },
+        {
+          "actor": "resolveUserID (16-REQ-1)",
+          "action": "executes SELECT id FROM users WHERE email = 'alice@example.com', finds a matching row, and returns the canonical user UUID"
+        },
+        {
+          "actor": "org member handler (organization_management)",
+          "action": "uses both resolved UUIDs to insert the membership record and returns HTTP 200"
+        },
+        {
+          "actor": "akc CLI (cli_admin_commands)",
+          "action": "prints success confirmation to stdout"
+        }
+      ]
+    },
+    {
+      "id": "16-PATH-3",
+      "title": "Server startup migration with duplicate emails — failure path",
+      "steps": [
+        {
+          "actor": "server operator",
+          "action": "starts the apikit server against a database that contains duplicate email values in the users table"
+        },
+        {
+          "actor": "database migration (database_layer)",
+          "action": "attempts to execute CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)"
+        },
+        {
+          "actor": "database migration (database_layer)",
+          "action": "the statement fails; migration code queries SELECT email, COUNT(*) FROM users GROUP BY email HAVING COUNT(*) > 1 to identify offending addresses"
+        },
+        {
+          "actor": "database migration (database_layer)",
+          "action": "logs a FATAL message listing each duplicate email and its row count"
+        },
+        {
+          "actor": "server process",
+          "action": "exits with a non-zero exit code; the server does not start"
+        }
+      ]
+    },
+    {
+      "id": "16-PATH-4",
+      "title": "Unknown selector returns 404",
+      "steps": [
+        {
+          "actor": "API caller",
+          "action": "sends GET /users/nobody@example.com to the apikit server where no user has that email"
+        },
+        {
+          "actor": "Echo router (server_core)",
+          "action": "routes the request to the user handler, extracting 'nobody@example.com' as the {id} path parameter"
+        },
+        {
+          "actor": "user handler (user_management)",
+          "action": "calls resolveUserID(h.db, 'nobody@example.com'); the detection heuristic finds '@' and queries the users table by email"
+        },
+        {
+          "actor": "resolveUserID (16-REQ-1)",
+          "action": "executes SELECT id FROM users WHERE email = 'nobody@example.com', finds no matching row, and returns sql.ErrNoRows"
+        },
+        {
+          "actor": "user handler (user_management)",
+          "action": "detects sql.ErrNoRows and calls WriteAPIError with status 404 and message 'user not found'"
+        },
+        {
+          "actor": "Echo router (server_core)",
+          "action": "returns HTTP 404 with JSON body {error: 'user not found'} to the caller"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "16-ERR-1",
+      "condition": "resolveUserID or resolveOrgID finds no matching row for the given selector",
+      "behavior": "the calling handler invokes WriteAPIError with HTTP 404 and the message 'user not found' or 'organization not found' respectively",
+      "requirement_id": "16-REQ-3.2"
+    },
+    {
+      "id": "16-ERR-2",
+      "condition": "resolveUserID or resolveOrgID returns a database error that is not sql.ErrNoRows",
+      "behavior": "the calling handler invokes WriteAPIError with HTTP 500 and the message 'internal server error'",
+      "requirement_id": "16-REQ-3.3"
+    },
+    {
+      "id": "16-ERR-3",
+      "condition": "the idx_users_email migration fails because the users table contains duplicate email values",
+      "behavior": "the server queries for all duplicate emails, logs a FATAL message listing each offending email and its row count, and exits with a non-zero exit code without starting",
+      "requirement_id": "16-REQ-6.2"
+    },
+    {
+      "id": "16-ERR-4",
+      "condition": "the idx_users_email migration fails due to a database error unrelated to duplicate emails",
+      "behavior": "the server logs the error and exits with a non-zero exit code",
+      "requirement_id": "16-REQ-6.E4"
+    },
+    {
+      "id": "16-ERR-5",
+      "condition": "on a two-ID member endpoint, resolveOrgID returns sql.ErrNoRows",
+      "behavior": "the handler returns HTTP 404 with 'organization not found' without attempting to resolve the user selector",
+      "requirement_id": "16-REQ-5.2"
+    },
+    {
+      "id": "16-ERR-6",
+      "condition": "on a two-ID member endpoint, the org resolves successfully but resolveUserID returns sql.ErrNoRows",
+      "behavior": "the handler returns HTTP 404 with 'user not found'",
+      "requirement_id": "16-REQ-5.3"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "github.com/google/uuid",
+      "version": "v1.x",
+      "symbols": [
+        {
+          "name": "Parse",
+          "import_path": "github.com/google/uuid",
+          "signature": "func Parse(s string) (UUID, error)",
+          "notes": "Used in the detection heuristic to determine if a selector is a UUID; returns a non-nil error if the string is not a valid UUID"
+        }
+      ]
+    },
+    {
+      "package": "database/sql",
+      "version": "Go standard library",
+      "symbols": [
+        {
+          "name": "ErrNoRows",
+          "import_path": "database/sql",
+          "signature": "var ErrNoRows = errors.New(\"sql: no rows in result set\")",
+          "notes": "Sentinel error returned by resolveUserID and resolveOrgID when no matching row is found; handlers branch on this value to return HTTP 404"
+        }
+      ]
+    }
+  ]
+}

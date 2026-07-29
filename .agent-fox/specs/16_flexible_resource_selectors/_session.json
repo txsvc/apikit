@@ -1,0 +1,168 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The \"flexible_resource_selectors\" PRD is well-structured and covers the core design in considerable detail \u2014 problem statement, detection heuristic, resolver design, handler change pattern, DB migration, SDK/CLI impacts, error handling, and backward compatibility are all clearly articulated. The tech stack is named. However, several gaps prevent it from being \"ready\": (1) No testing strategy is specified for the new resolver logic or the migration. (2) The database migration strategy for pre-existing duplicate emails is acknowledged but left unresolved. (3) There is overlap with multiple active specs (user_management, organization_management, openapi_specification, cli_admin_commands, cli_user_commands, go_sdk, python_sdk, database_layer) that must be explicitly coordinated. (4) The `resolveOrgSlugFromJSON` removal implies a currently-active client-side resolution path whose spec home is unidentified. (5) No non-goals or explicit rollout/migration failure behavior is documented beyond a brief note. (6) The Python SDK impact is omitted despite being an active spec.",
+      "gaps": [
+        "No test strategy or test tooling specified \u2014 resolver functions, detection heuristic edge cases, and the DB migration all require unit and integration test coverage, but the PRD names no test framework or expected test file locations.",
+        "Duplicate-email migration strategy is unresolved \u2014 the PRD notes 'migration must handle deduplication (or fail with a clear error)' but provides no concrete approach, SQL, or operator runbook for handling legacy data with duplicate emails.",
+        "Python SDK impact is omitted \u2014 the active `python_sdk` spec exposes the same user/org ID parameters; the PRD only addresses the Go SDK. It is unclear whether the Python SDK needs documentation/parameter-name updates too.",
+        "The `resolveOrgSlugFromJSON` removal and its tests are described, but no spec or file path ownership is identified for that function \u2014 it is unclear which active spec currently owns `cli_resolve.go` and whether removing it needs a corresponding change to that spec.",
+        "Overlap with active specs is not declared \u2014 this PRD modifies artifacts owned by at least seven active specs (user_management, organization_management, openapi_specification, cli_admin_commands, cli_user_commands, go_sdk, database_layer) but has no `## Dependencies` section declaring these relationships.",
+        "Non-goals section is missing as a formal section \u2014 exclusions are embedded in 'Out of scope' inside 'Scope' but there is no dedicated Non-Goals section per the standard PRD format.",
+        "No rollback or migration failure behavior defined \u2014 if the UNIQUE index creation fails due to duplicate emails on a live database, the PRD does not specify whether the server should refuse to start, emit a warning, or provide a remediation script.",
+        "Goals section lacks measurable success criteria \u2014 the Goal is qualitative ('allow human-friendly selectors'); there are no measurable outcomes (e.g., zero regression in existing UUID-based test suite, P99 latency budget for the extra resolver DB query)."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "This PRD modifies artifacts owned by at least seven active specs (user_management, organization_management, openapi_specification, cli_admin_commands, cli_user_commands, go_sdk, database_layer). Should this spec declare formal dependencies on all of them, or is it intended to supersede / be merged into some of them?",
+          "context": "Without explicit dependency or supersession declarations, artifact generation may produce conflicting or duplicate changes across specs.",
+          "options": [
+            "Declare dependencies on all affected specs; this spec adds a cross-cutting layer on top of them",
+            "Merge the resolver logic into each affected spec individually rather than having a standalone spec",
+            "This spec supersedes the ID-handling sections of the listed specs"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "What is the concrete strategy for handling pre-existing duplicate emails in the database before the UNIQUE index can be applied?",
+          "context": "The PRD acknowledges the problem but leaves it open. A migration that fails silently or crashes on startup without operator guidance is a production risk.",
+          "options": [
+            "Fail the migration with a clear error message listing duplicate emails and require operator deduplication before restart",
+            "Automatically deduplicate by appending a suffix (e.g., user+1@example.com) to older duplicates",
+            "Log a warning and skip the UNIQUE index if duplicates exist, disabling email-as-selector until resolved",
+            "Provide a CLI subcommand (e.g., `akc admin dedupe-emails`) that operators run before upgrading"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "What test framework and test file locations should be used to verify the resolver functions, detection heuristic edge cases, and the DB migration?",
+          "context": "The PRD names no test tooling. The existing specs use Go's standard `testing` package with testify; confirming this ensures generated artifacts are consistent.",
+          "options": [
+            "Go standard `testing` package + testify (consistent with existing specs), tests in `internal/handlers/` alongside handler files",
+            "Go standard `testing` package + testify, tests in a dedicated `internal/resolvers/` package",
+            "Integration tests only via the existing `api/api_test.go` pattern"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Does the Python SDK (`python_sdk` spec) also need parameter-name or documentation updates to reflect that user/org ID fields now accept selectors?",
+          "context": "The PRD addresses Go SDK documentation updates but is silent on the Python SDK, which is an active spec exposing the same parameters.",
+          "options": [
+            "Yes \u2014 update Python SDK docstrings and parameter names analogously to the Go SDK",
+            "No \u2014 the Python SDK is out of scope for this spec; it will be handled separately",
+            "The Python SDK passes strings through transparently; only a documentation note in the README is needed"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Which active spec owns `cli_resolve.go` and the `resolveOrgSlugFromJSON` function that this PRD proposes to remove?",
+          "context": "If that function is documented or tested in another spec, removing it here without updating the owning spec would leave stale artifacts.",
+          "options": [
+            "cli_user_commands",
+            "cli_admin_commands",
+            "cli_core",
+            "It is not owned by any existing spec \u2014 it is ad-hoc code that can be deleted freely"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Are there measurable performance or correctness goals for the resolver queries? For example, is there a latency budget for the extra DB round-trip added to every handler invocation?",
+          "context": "Adding a resolver query to every handler increases DB load. Without a stated budget, it is impossible to verify the implementation meets expectations.",
+          "options": [
+            "No latency budget required \u2014 SQLite is local and the overhead is acceptable",
+            "Resolver queries must complete in < 1 ms P99 (covered by index on UUID/email/username/slug columns)",
+            "A caching layer should be introduced for repeated lookups within the same request"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD. It clearly defines intent, scope, design decisions, error handling, backward compatibility, and testing strategy. The detection heuristic is unambiguous and well-reasoned. Dependencies on other specs are explicitly declared. The document is nearly complete and ready for implementation with only minor gaps identified.",
+      "gaps": [
+        "The 'Goal' section describes intent clearly but is split across a Problem + Goal structure rather than a single '## Intent' heading \u2014 though this is a formatting convention issue rather than a content gap.",
+        "The 21 CLI commands that receive `Use:` and help-text updates are referenced in aggregate but not enumerated \u2014 an implementer must cross-reference external specs to know exactly which commands are affected.",
+        "The `resolveOrgID` resolver's behavior when an org `{id}` contains `@` is mentioned only in the unit test table (as 'fallback to slug') but not explicitly stated in the Detection Heuristic or Design sections.",
+        "The `db Executor` interface used by resolver functions is referenced but not defined or cited \u2014 it is implied to already exist, but the exact interface shape (e.g., `QueryRowContext`) is not documented.",
+        "No explicit contract is stated for what happens when `resolveUserID` is called with a valid UUID that exists in the DB \u2014 the test table covers it, but the Design section only describes the not-found error path.",
+        "The OpenAPI parameter-name change from `format: uuid` removal is noted, but there is no mention of whether the OpenAPI `pattern` field or `example` values for these parameters need updating to reflect the new accepted formats."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Can you enumerate the 21 CLI commands (or provide their cobra `Use:` strings) that require `Use:` and help-text updates?",
+          "context": "The PRD references '21 commands' from a project analysis but does not list them. An implementer generating CLI artifacts needs the exact command names to avoid guessing or cross-referencing external documents.",
+          "options": [
+            "Provide the full list inline in the PRD",
+            "Reference a specific external document or spec ID that lists them",
+            "Leave as-is and rely on implementer to derive from CLI specs"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Should the `db Executor` interface used by `resolveUserID` and `resolveOrgID` be defined in this spec, or is it already documented in a dependency spec (e.g., `database_layer` or `user_management`)?",
+          "context": "The Design section states the resolvers share the `db Executor` interface 'already available in that package', but the interface shape is not cited. If it's defined elsewhere, a cross-reference would remove ambiguity for implementers.",
+          "options": [
+            "Add the interface definition (or a snippet) to this spec",
+            "Add a cross-reference to the spec/file that defines it",
+            "Leave as-is \u2014 implementers can infer it from existing handler code"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Should the Detection Heuristic section explicitly state that the `@` check is skipped for org selectors (i.e., orgs never use email-based resolution)?",
+          "context": "The unit test table mentions 'Email selector on org resolver \u2192 fallback to slug', but this rule is not stated in the Detection Heuristic or Design sections. Making it explicit prevents misimplementation.",
+          "options": [
+            "Yes, add an explicit note to the Detection Heuristic section",
+            "Yes, add it to the resolveOrgID description in the Design section",
+            "No, the test case is sufficient documentation"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should the OpenAPI spec updates include changes to `pattern` fields or `example` values for the affected `{id}` parameters, in addition to removing `format: uuid` and updating descriptions?",
+          "context": "Removing `format: uuid` leaves the parameter schema without any format hint. Adding a pattern (e.g., a regex covering UUID, slug, username, and email) or updating examples would make the spec more self-documenting for API consumers.",
+          "options": [
+            "Add a pattern regex covering all accepted selector formats",
+            "Add representative examples only (one UUID, one slug/username, one email)",
+            "No additional changes needed beyond description updates and format removal"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Declare dependencies on all affected specs; this spec adds a cross-cutting layer on top of them. The affected specs (07 through 15) are all fully implemented \u2014 this spec adds resolver logic that modifies the existing handler/SDK/CLI code they produced.",
+        "q2": "Fail the migration with a clear error message listing duplicate emails and require operator deduplication before restart. The database is a server-local SQLite file, so migrations run at startup. If duplicates exist, the CREATE UNIQUE INDEX statement will fail and the server should log the offending emails and refuse to start.",
+        "q3": "Go standard testing package + testify, consistent with existing specs. Resolver functions live in internal/handlers/ (since they use the db Executor interface already available there) with tests in the same package. Integration tests exercise the full flow via HTTP requests.",
+        "q4": "No \u2014 the Python SDK is out of scope for this spec; it will be handled separately if needed.",
+        "q5": "It is not owned by any existing spec \u2014 it is ad-hoc code in the root apikit package (cli_resolve.go) that can be deleted freely.",
+        "q6": "No latency budget required \u2014 SQLite is local and the unique-indexed columns (id, username, email, slug) make resolver queries sub-millisecond. No caching layer needed."
+      },
+      "timestamp": "2026-07-29T05:39:34.794648+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

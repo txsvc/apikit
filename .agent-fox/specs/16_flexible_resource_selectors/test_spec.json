@@ -1,0 +1,1070 @@
+{
+  "$schema": null,
+  "spec_id": "16",
+  "spec_name": "flexible_resource_selectors",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-16-1",
+      "requirement_id": "16-REQ-1.1",
+      "kind": "unit",
+      "description": "resolveUserID returns the UUID unchanged when called with a valid UUID that exists in the users table.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "A user row exists with id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'"
+      ],
+      "input": "selector = '550e8400-e29b-41d4-a716-446655440000'",
+      "expected": "resolveUserID returns ('550e8400-e29b-41d4-a716-446655440000', nil) \u2014 the exact UUID passed in, no error",
+      "assertion_pseudocode": "db = OpenMemory(); insertUser(db, id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'); result, err = resolveUserID(db, '550e8400-e29b-41d4-a716-446655440000'); assert err == nil; assert result == '550e8400-e29b-41d4-a716-446655440000'"
+    },
+    {
+      "id": "TS-16-2",
+      "requirement_id": "16-REQ-1.2",
+      "kind": "unit",
+      "description": "resolveUserID queries by email column and returns the matching user's UUID when the selector contains '@'.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "A user row exists with id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'"
+      ],
+      "input": "selector = 'alice@example.com'",
+      "expected": "resolveUserID returns ('550e8400-e29b-41d4-a716-446655440000', nil) \u2014 the canonical UUID for the email, no error",
+      "assertion_pseudocode": "db = OpenMemory(); insertUser(db, id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'); result, err = resolveUserID(db, 'alice@example.com'); assert err == nil; assert result == '550e8400-e29b-41d4-a716-446655440000'"
+    },
+    {
+      "id": "TS-16-3",
+      "requirement_id": "16-REQ-1.3",
+      "kind": "unit",
+      "description": "resolveUserID queries by username column and returns the matching user's UUID when the selector is a plain string with no '@' and is not a UUID.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "A user row exists with id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'"
+      ],
+      "input": "selector = 'alice'",
+      "expected": "resolveUserID returns ('550e8400-e29b-41d4-a716-446655440000', nil) \u2014 the canonical UUID for the username, no error",
+      "assertion_pseudocode": "db = OpenMemory(); insertUser(db, id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'); result, err = resolveUserID(db, 'alice'); assert err == nil; assert result == '550e8400-e29b-41d4-a716-446655440000'"
+    },
+    {
+      "id": "TS-16-4",
+      "requirement_id": "16-REQ-1.4",
+      "kind": "unit",
+      "description": "resolveUserID returns sql.ErrNoRows when no row in the users table matches the resolved query.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "No user rows exist in the database"
+      ],
+      "input": "selector = 'nonexistent-user'",
+      "expected": "resolveUserID returns ('', sql.ErrNoRows) \u2014 empty string and the sentinel not-found error",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveUserID(db, 'nonexistent-user'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-5",
+      "requirement_id": "16-REQ-1.5",
+      "kind": "unit",
+      "description": "resolveUserID returns the underlying database error when the query fails with an error other than sql.ErrNoRows.",
+      "preconditions": [
+        "A mock or broken db Executor that returns a non-ErrNoRows error (e.g. 'database is locked') on any query"
+      ],
+      "input": "selector = 'alice'",
+      "expected": "resolveUserID returns ('', dbErr) where dbErr is the underlying database error, not sql.ErrNoRows and not nil",
+      "assertion_pseudocode": "db = newBrokenExecutor(returnErr=errors.New('database is locked')); result, err = resolveUserID(db, 'alice'); assert err != nil; assert err != sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-6",
+      "requirement_id": "16-REQ-2.1",
+      "kind": "unit",
+      "description": "resolveOrgID returns the UUID unchanged when called with a valid UUID that exists in the orgs table.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "An org row exists with id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'"
+      ],
+      "input": "selector = '660e8400-e29b-41d4-a716-446655440001'",
+      "expected": "resolveOrgID returns ('660e8400-e29b-41d4-a716-446655440001', nil) \u2014 the exact UUID passed in, no error",
+      "assertion_pseudocode": "db = OpenMemory(); insertOrg(db, id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'); result, err = resolveOrgID(db, '660e8400-e29b-41d4-a716-446655440001'); assert err == nil; assert result == '660e8400-e29b-41d4-a716-446655440001'"
+    },
+    {
+      "id": "TS-16-7",
+      "requirement_id": "16-REQ-2.2",
+      "kind": "unit",
+      "description": "resolveOrgID queries by slug column and returns the matching org's UUID when the selector is not a UUID.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "An org row exists with id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'"
+      ],
+      "input": "selector = 'acme-corp'",
+      "expected": "resolveOrgID returns ('660e8400-e29b-41d4-a716-446655440001', nil) \u2014 the canonical UUID for the slug, no error",
+      "assertion_pseudocode": "db = OpenMemory(); insertOrg(db, id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'); result, err = resolveOrgID(db, 'acme-corp'); assert err == nil; assert result == '660e8400-e29b-41d4-a716-446655440001'"
+    },
+    {
+      "id": "TS-16-8",
+      "requirement_id": "16-REQ-2.3",
+      "kind": "unit",
+      "description": "resolveOrgID returns sql.ErrNoRows when no row in the orgs table matches the resolved query.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "No org rows exist in the database"
+      ],
+      "input": "selector = 'nonexistent-org'",
+      "expected": "resolveOrgID returns ('', sql.ErrNoRows) \u2014 empty string and the sentinel not-found error",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveOrgID(db, 'nonexistent-org'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-9",
+      "requirement_id": "16-REQ-2.4",
+      "kind": "unit",
+      "description": "resolveOrgID returns the underlying database error when the query fails with an error other than sql.ErrNoRows.",
+      "preconditions": [
+        "A mock or broken db Executor that returns a non-ErrNoRows error on any query"
+      ],
+      "input": "selector = 'acme-corp'",
+      "expected": "resolveOrgID returns ('', dbErr) where dbErr is the underlying database error, not sql.ErrNoRows and not nil",
+      "assertion_pseudocode": "db = newBrokenExecutor(returnErr=errors.New('database is locked')); result, err = resolveOrgID(db, 'acme-corp'); assert err != nil; assert err != sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-10",
+      "requirement_id": "16-REQ-3.1",
+      "kind": "integration",
+      "description": "User handler calls resolveUserID with the {id} path parameter and returns the same HTTP response as a UUID-based request when given a username selector.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table populated",
+        "A user row exists with id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP server configured with user handlers registered"
+      ],
+      "input": "GET /users/alice (username selector)",
+      "expected": "HTTP 200 response with JSON body containing the user resource for alice, identical to GET /users/550e8400-e29b-41d4-a716-446655440000",
+      "assertion_pseudocode": "resp = httpGet('/users/alice'); assert resp.status == 200; assert resp.body.id == '550e8400-e29b-41d4-a716-446655440000'; assert resp.body.username == 'alice'"
+    },
+    {
+      "id": "TS-16-11",
+      "requirement_id": "16-REQ-3.2",
+      "kind": "integration",
+      "description": "User handler returns HTTP 404 with 'user not found' when resolveUserID returns sql.ErrNoRows.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created but empty",
+        "Echo HTTP server configured with user handlers registered"
+      ],
+      "input": "GET /users/nobody@example.com (email selector matching no user)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"user not found\"}",
+      "assertion_pseudocode": "resp = httpGet('/users/nobody@example.com'); assert resp.status == 404; assert resp.body.error == 'user not found'"
+    },
+    {
+      "id": "TS-16-12",
+      "requirement_id": "16-REQ-3.3",
+      "kind": "integration",
+      "description": "User handler returns HTTP 500 with 'internal server error' when resolveUserID returns a non-ErrNoRows database error.",
+      "preconditions": [
+        "Echo HTTP server configured with user handlers registered",
+        "db Executor configured to return a non-ErrNoRows error on queries"
+      ],
+      "input": "GET /users/alice (username selector, db returns error)",
+      "expected": "HTTP 500 response with JSON body {\"error\": \"internal server error\"}",
+      "assertion_pseudocode": "resp = httpGet('/users/alice'); assert resp.status == 500; assert resp.body.error == 'internal server error'"
+    },
+    {
+      "id": "TS-16-13",
+      "requirement_id": "16-REQ-4.1",
+      "kind": "integration",
+      "description": "Org handler calls resolveOrgID with the {id} path parameter and returns the same HTTP response as a UUID-based request when given a slug selector.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table populated",
+        "An org row exists with id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "Echo HTTP server configured with org handlers registered"
+      ],
+      "input": "GET /orgs/acme-corp (slug selector)",
+      "expected": "HTTP 200 response with JSON body containing the org resource for acme-corp, identical to GET /orgs/660e8400-e29b-41d4-a716-446655440001",
+      "assertion_pseudocode": "resp = httpGet('/orgs/acme-corp'); assert resp.status == 200; assert resp.body.id == '660e8400-e29b-41d4-a716-446655440001'; assert resp.body.slug == 'acme-corp'"
+    },
+    {
+      "id": "TS-16-14",
+      "requirement_id": "16-REQ-4.2",
+      "kind": "integration",
+      "description": "Org handler returns HTTP 404 with 'organization not found' when resolveOrgID returns sql.ErrNoRows.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created but empty",
+        "Echo HTTP server configured with org handlers registered"
+      ],
+      "input": "GET /orgs/nonexistent-slug (slug selector matching no org)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"organization not found\"}",
+      "assertion_pseudocode": "resp = httpGet('/orgs/nonexistent-slug'); assert resp.status == 404; assert resp.body.error == 'organization not found'"
+    },
+    {
+      "id": "TS-16-15",
+      "requirement_id": "16-REQ-4.3",
+      "kind": "integration",
+      "description": "Org handler returns HTTP 500 with 'internal server error' when resolveOrgID returns a non-ErrNoRows database error.",
+      "preconditions": [
+        "Echo HTTP server configured with org handlers registered",
+        "db Executor configured to return a non-ErrNoRows error on queries"
+      ],
+      "input": "GET /orgs/acme-corp (slug selector, db returns error)",
+      "expected": "HTTP 500 response with JSON body {\"error\": \"internal server error\"}",
+      "assertion_pseudocode": "resp = httpGet('/orgs/acme-corp'); assert resp.status == 500; assert resp.body.error == 'internal server error'"
+    },
+    {
+      "id": "TS-16-16",
+      "requirement_id": "16-REQ-5.1",
+      "kind": "integration",
+      "description": "Org member handler resolves both {id} and {user_id} independently and returns the correct HTTP response when both selectors are valid.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs and users tables populated",
+        "Org row exists with id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "User row exists with id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP server configured with org member handlers registered"
+      ],
+      "input": "PUT /orgs/acme-corp/members/alice@example.com (slug for org, email for user)",
+      "expected": "HTTP 200 response indicating membership was added; both selectors resolved to their canonical UUIDs",
+      "assertion_pseudocode": "resp = httpPut('/orgs/acme-corp/members/alice@example.com', body={}); assert resp.status == 200; verifyMembershipExists(db, orgID='660e8400-e29b-41d4-a716-446655440001', userID='550e8400-e29b-41d4-a716-446655440000')"
+    },
+    {
+      "id": "TS-16-17",
+      "requirement_id": "16-REQ-5.2",
+      "kind": "integration",
+      "description": "Org member handler returns HTTP 404 with 'organization not found' without attempting user resolution when resolveOrgID returns sql.ErrNoRows.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table empty, users table has a valid user",
+        "Echo HTTP server configured with org member handlers registered"
+      ],
+      "input": "PUT /orgs/nonexistent-org/members/alice (org slug matches no org, user exists)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"organization not found\"}; user resolution is never attempted",
+      "assertion_pseudocode": "resp = httpPut('/orgs/nonexistent-org/members/alice', body={}); assert resp.status == 404; assert resp.body.error == 'organization not found'"
+    },
+    {
+      "id": "TS-16-18",
+      "requirement_id": "16-REQ-5.3",
+      "kind": "integration",
+      "description": "Org member handler returns HTTP 404 with 'user not found' when the org resolves successfully but resolveUserID returns sql.ErrNoRows.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table populated, users table empty",
+        "Org row exists with id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "Echo HTTP server configured with org member handlers registered"
+      ],
+      "input": "PUT /orgs/acme-corp/members/nobody (org slug valid, user selector matches no user)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"user not found\"}",
+      "assertion_pseudocode": "resp = httpPut('/orgs/acme-corp/members/nobody', body={}); assert resp.status == 404; assert resp.body.error == 'user not found'"
+    },
+    {
+      "id": "TS-16-19",
+      "requirement_id": "16-REQ-6.1",
+      "kind": "unit",
+      "description": "Database migration executes CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email successfully on a clean schema and updates schema.go for new databases.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created and no existing rows",
+        "Migration function available from internal/db package"
+      ],
+      "input": "Run migration on clean database",
+      "expected": "Migration returns nil error; idx_users_email unique index exists on users.email column; server startup proceeds normally",
+      "assertion_pseudocode": "db = OpenMemory(); err = runMigration(db); assert err == nil; indexExists = queryIndexExists(db, 'idx_users_email'); assert indexExists == true"
+    },
+    {
+      "id": "TS-16-20",
+      "requirement_id": "16-REQ-6.2",
+      "kind": "unit",
+      "description": "Database migration logs a FATAL message listing all duplicate email addresses and exits with non-zero code when the users table contains duplicate email values.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table containing duplicate email values",
+        "Users table has rows: (id1, 'alice@example.com'), (id2, 'alice@example.com'), (id3, 'bob@example.com'), (id4, 'bob@example.com')"
+      ],
+      "input": "Run migration on database with duplicate emails",
+      "expected": "Migration returns a non-nil error; log output contains 'FATAL migration failed: duplicate emails detected' and lists 'alice@example.com (2 rows)' and 'bob@example.com (2 rows)'; server exits with non-zero code",
+      "assertion_pseudocode": "db = OpenMemory(); insertDuplicateEmails(db); logBuf = captureLog(); err = runMigration(db); assert err != nil; assert logBuf contains 'FATAL migration failed: duplicate emails detected'; assert logBuf contains 'alice@example.com (2 rows)'; assert logBuf contains 'bob@example.com (2 rows)'"
+    },
+    {
+      "id": "TS-16-21",
+      "requirement_id": "16-REQ-6.3",
+      "kind": "unit",
+      "description": "Database migration never automatically deduplicates or modifies user rows \u2014 the operator must resolve duplicates manually.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table containing duplicate email values",
+        "Users table has rows: (id1, 'alice@example.com'), (id2, 'alice@example.com')"
+      ],
+      "input": "Run migration on database with duplicate emails",
+      "expected": "After migration failure, both duplicate rows still exist in the users table unchanged; no rows were deleted or modified by the migration",
+      "assertion_pseudocode": "db = OpenMemory(); insertDuplicateEmails(db); runMigration(db); rowCount = queryCount(db, 'SELECT COUNT(*) FROM users WHERE email = ?', 'alice@example.com'); assert rowCount == 2"
+    },
+    {
+      "id": "TS-16-22",
+      "requirement_id": "16-REQ-7.1",
+      "kind": "unit",
+      "description": "api/openapi.yaml describes the {id} parameter for all user endpoints as accepting UUID, username, or email, and does not include format: uuid for those parameters.",
+      "preconditions": [
+        "api/openapi.yaml file exists and is parseable as valid OpenAPI 3.1 YAML"
+      ],
+      "input": "Parse api/openapi.yaml and inspect user endpoint {id} parameter definitions",
+      "expected": "All user endpoint {id} parameter descriptions mention UUID, username, and email as accepted formats; none of these parameters have 'format: uuid' set",
+      "assertion_pseudocode": "spec = parseOpenAPI('api/openapi.yaml'); userIdParams = extractParamsNamed(spec, 'id', paths=['/users/{id}', '/users/{id}/promote', '/users/{id}/demote', '/users/{id}/block', '/users/{id}/unblock', '/users/{id}/keys', '/users/{id}/tokens']); for param in userIdParams: assert param.description contains 'UUID' and 'username' and 'email'; assert param.schema.format != 'uuid'"
+    },
+    {
+      "id": "TS-16-23",
+      "requirement_id": "16-REQ-7.2",
+      "kind": "unit",
+      "description": "api/openapi.yaml describes the {id} parameter for all org endpoints as accepting UUID or slug, and does not include format: uuid for those parameters.",
+      "preconditions": [
+        "api/openapi.yaml file exists and is parseable as valid OpenAPI 3.1 YAML"
+      ],
+      "input": "Parse api/openapi.yaml and inspect org endpoint {id} parameter definitions",
+      "expected": "All org endpoint {id} parameter descriptions mention UUID and slug as accepted formats; none of these parameters have 'format: uuid' set",
+      "assertion_pseudocode": "spec = parseOpenAPI('api/openapi.yaml'); orgIdParams = extractParamsNamed(spec, 'id', paths=['/orgs/{id}', '/orgs/{id}/block', '/orgs/{id}/unblock', '/orgs/{id}/members']); for param in orgIdParams: assert param.description contains 'UUID' and 'slug'; assert param.schema.format != 'uuid'"
+    },
+    {
+      "id": "TS-16-24",
+      "requirement_id": "16-REQ-7.3",
+      "kind": "unit",
+      "description": "api/openapi.yaml describes the {user_id} parameter in org member endpoints as accepting UUID, username, or email, and does not include format: uuid.",
+      "preconditions": [
+        "api/openapi.yaml file exists and is parseable as valid OpenAPI 3.1 YAML"
+      ],
+      "input": "Parse api/openapi.yaml and inspect {user_id} parameter in org member endpoint definitions",
+      "expected": "The {user_id} parameter in PUT /orgs/{id}/members/{user_id} and DELETE /orgs/{id}/members/{user_id} descriptions mention UUID, username, and email; format: uuid is absent",
+      "assertion_pseudocode": "spec = parseOpenAPI('api/openapi.yaml'); userIdParams = extractParamsNamed(spec, 'user_id', paths=['/orgs/{id}/members/{user_id}']); for param in userIdParams: assert param.description contains 'UUID' and 'username' and 'email'; assert param.schema.format != 'uuid'"
+    },
+    {
+      "id": "TS-16-25",
+      "requirement_id": "16-REQ-8.1",
+      "kind": "unit",
+      "description": "Admin CLI commands that accept a user or org positional argument have updated Use strings documenting accepted selector formats.",
+      "preconditions": [
+        "akc admin command tree is initialized via cobra command registration"
+      ],
+      "input": "Inspect Use strings of admin user and org commands",
+      "expected": "User admin commands have Use strings like 'show <id|username|email>'; org admin commands have Use strings like 'show <id|slug>'",
+      "assertion_pseudocode": "cmds = initAdminCommands(); userShowCmd = findCommand(cmds, 'admin users show'); assert userShowCmd.Use contains '<id|username|email>'; orgShowCmd = findCommand(cmds, 'admin orgs show'); assert orgShowCmd.Use contains '<id|slug>'"
+    },
+    {
+      "id": "TS-16-26",
+      "requirement_id": "16-REQ-8.2",
+      "kind": "unit",
+      "description": "User-facing CLI commands that accept a user or org positional argument have updated Use strings and Long help text documenting accepted selector formats.",
+      "preconditions": [
+        "akc user command tree is initialized via cobra command registration"
+      ],
+      "input": "Inspect Use strings and Long help text of user-facing commands",
+      "expected": "User-facing commands that accept user or org IDs have Use strings and Long descriptions that mention UUID, username, email, or slug as accepted formats",
+      "assertion_pseudocode": "cmds = initUserCommands(); orgsShowCmd = findCommand(cmds, 'orgs show'); assert orgsShowCmd.Use contains '<id|slug>'; assert orgsShowCmd.Long contains 'slug' or 'UUID'"
+    },
+    {
+      "id": "TS-16-27",
+      "requirement_id": "16-REQ-8.3",
+      "kind": "unit",
+      "description": "Admin CLI two-ID member commands have Use strings documenting that both positional arguments accept selectors.",
+      "preconditions": [
+        "akc admin command tree is initialized via cobra command registration"
+      ],
+      "input": "Inspect Use string of 'admin orgs members add' command",
+      "expected": "The 'members add' command Use string is 'add <org_id|slug> <user_id|username|email>' or equivalent documenting both selector types",
+      "assertion_pseudocode": "cmds = initAdminCommands(); membersAddCmd = findCommand(cmds, 'admin orgs members add'); assert membersAddCmd.Use contains '<org_id|slug>' or 'slug'; assert membersAddCmd.Use contains '<user_id|username|email>' or 'username' or 'email'"
+    },
+    {
+      "id": "TS-16-28",
+      "requirement_id": "16-REQ-9.1",
+      "kind": "unit",
+      "description": "The resolveOrgSlugFromJSON function and all associated tests are deleted from cli_resolve.go; if the file is empty it is deleted entirely.",
+      "preconditions": [
+        "Go source tree is accessible for inspection"
+      ],
+      "input": "Inspect root apikit package source files",
+      "expected": "No file in the root apikit package defines resolveOrgSlugFromJSON; cli_resolve.go either does not exist or does not contain the function",
+      "assertion_pseudocode": "files = listGoFiles(rootPackage); for f in files: src = readFile(f); assert 'resolveOrgSlugFromJSON' not in src"
+    },
+    {
+      "id": "TS-16-29",
+      "requirement_id": "16-REQ-9.2",
+      "kind": "unit",
+      "description": "No file in the codebase references resolveOrgSlugFromJSON after deletion \u2014 all call sites are removed.",
+      "preconditions": [
+        "Go source tree is accessible for inspection",
+        "cli_resolve.go has been deleted or emptied"
+      ],
+      "input": "Search all Go source files for references to resolveOrgSlugFromJSON",
+      "expected": "Zero occurrences of 'resolveOrgSlugFromJSON' found in any Go source file in the repository",
+      "assertion_pseudocode": "allGoFiles = findAllGoFiles(repoRoot); occurrences = grepAll(allGoFiles, 'resolveOrgSlugFromJSON'); assert len(occurrences) == 0"
+    },
+    {
+      "id": "TS-16-30",
+      "requirement_id": "16-REQ-10.1",
+      "kind": "unit",
+      "description": "Go SDK methods that accept a user identifier parameter have godoc comments documenting that the parameter accepts UUID, username, or email; no signature changes are made.",
+      "preconditions": [
+        "Go SDK source files are accessible for inspection"
+      ],
+      "input": "Inspect godoc comments on SDK methods such as GetUserByID, BlockUser, DemoteUser",
+      "expected": "Each user-identifier parameter's godoc comment mentions UUID, username, and email as accepted values; method signatures are unchanged from before this spec",
+      "assertion_pseudocode": "sdkSrc = readFile('sdk/client.go'); assert sdkSrc contains 'UUID, username, or email' near GetUserByID; assert methodSignature(GetUserByID) == 'func (c *Client) GetUserByID(ctx context.Context, user string) (*User, error)'"
+    },
+    {
+      "id": "TS-16-31",
+      "requirement_id": "16-REQ-10.2",
+      "kind": "unit",
+      "description": "Go SDK methods that accept an org identifier parameter have godoc comments documenting that the parameter accepts UUID or slug; no signature changes are made.",
+      "preconditions": [
+        "Go SDK source files are accessible for inspection"
+      ],
+      "input": "Inspect godoc comments on SDK methods such as GetOrgByID, BlockOrg, DeleteOrg",
+      "expected": "Each org-identifier parameter's godoc comment mentions UUID and slug as accepted values; method signatures are unchanged from before this spec",
+      "assertion_pseudocode": "sdkSrc = readFile('sdk/client.go'); assert sdkSrc contains 'UUID or slug' near GetOrgByID; assert methodSignature(GetOrgByID) == 'func (c *Client) GetOrgByID(ctx context.Context, org string) (*Org, error)'"
+    },
+    {
+      "id": "TS-16-32",
+      "requirement_id": "16-REQ-11.1",
+      "kind": "unit",
+      "description": "resolve_test.go includes test cases for all three detection heuristic paths for resolveUserID using an in-memory SQLite database via OpenMemory.",
+      "preconditions": [
+        "internal/handlers/resolve_test.go exists",
+        "Go test toolchain available"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' and inspect test coverage",
+      "expected": "Tests pass; coverage includes UUID path, email path, and username fallback path for resolveUserID",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...'); assert result.exitCode == 0; assert testNamed('TestResolveUserID_UUID') in result.tests; assert testNamed('TestResolveUserID_Email') in result.tests; assert testNamed('TestResolveUserID_Username') in result.tests"
+    },
+    {
+      "id": "TS-16-33",
+      "requirement_id": "16-REQ-11.2",
+      "kind": "unit",
+      "description": "resolve_test.go includes test cases verifying that resolveUserID and resolveOrgID return sql.ErrNoRows for unknown selectors of each type.",
+      "preconditions": [
+        "internal/handlers/resolve_test.go exists",
+        "Go test toolchain available"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' and inspect not-found test cases",
+      "expected": "Tests pass; coverage includes unknown email, unknown username, unknown slug, and valid-UUID-not-in-DB cases all returning sql.ErrNoRows",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...'); assert result.exitCode == 0; assert testNamed('TestResolveUserID_UnknownEmail') in result.tests; assert testNamed('TestResolveUserID_UnknownUsername') in result.tests; assert testNamed('TestResolveOrgID_UnknownSlug') in result.tests; assert testNamed('TestResolveUserID_ValidUUIDNotInDB') in result.tests"
+    },
+    {
+      "id": "TS-16-34",
+      "requirement_id": "16-REQ-11.3",
+      "kind": "unit",
+      "description": "resolve_test.go includes a test case verifying that resolveOrgID treats a selector containing '@' as a slug lookup rather than an email lookup.",
+      "preconditions": [
+        "internal/handlers/resolve_test.go exists",
+        "In-memory SQLite database with an org whose slug contains '@' or no org matching the '@' string"
+      ],
+      "input": "Call resolveOrgID with selector 'weird@slug'",
+      "expected": "resolveOrgID queries by slug column (not email column); returns sql.ErrNoRows if no org has slug='weird@slug'",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveOrgID(db, 'weird@slug'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-35",
+      "requirement_id": "16-REQ-12.1",
+      "kind": "integration",
+      "description": "resolve_integration_test.go covers each user endpoint family with HTTP requests using UUID, username, and email selectors, verifying 200 OK for valid selectors and 404 for unknown selectors.",
+      "preconditions": [
+        "internal/handlers/resolve_integration_test.go exists",
+        "In-memory SQLite database via OpenMemory with a test user seeded",
+        "Echo HTTP test server configured with all user handlers"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' targeting integration test file",
+      "expected": "All integration tests pass; GET /users/{uuid}, GET /users/{username}, GET /users/{email} return 200; GET /users/{unknown} returns 404",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...'); assert result.exitCode == 0; assert testNamed('TestUserEndpoint_UUIDSelector') passes; assert testNamed('TestUserEndpoint_UsernameSelector') passes; assert testNamed('TestUserEndpoint_EmailSelector') passes; assert testNamed('TestUserEndpoint_UnknownSelector') passes"
+    },
+    {
+      "id": "TS-16-36",
+      "requirement_id": "16-REQ-12.2",
+      "kind": "integration",
+      "description": "resolve_integration_test.go covers each org endpoint family with HTTP requests using UUID and slug selectors, verifying 200 OK for valid selectors and 404 for unknown selectors.",
+      "preconditions": [
+        "internal/handlers/resolve_integration_test.go exists",
+        "In-memory SQLite database via OpenMemory with a test org seeded",
+        "Echo HTTP test server configured with all org handlers"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' targeting org integration tests",
+      "expected": "All org integration tests pass; GET /orgs/{uuid} and GET /orgs/{slug} return 200; GET /orgs/{unknown} returns 404",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...'); assert result.exitCode == 0; assert testNamed('TestOrgEndpoint_UUIDSelector') passes; assert testNamed('TestOrgEndpoint_SlugSelector') passes; assert testNamed('TestOrgEndpoint_UnknownSelector') passes"
+    },
+    {
+      "id": "TS-16-37",
+      "requirement_id": "16-REQ-12.3",
+      "kind": "integration",
+      "description": "resolve_integration_test.go covers two-ID member endpoints with all combinations of selector types for both path parameters, verifying correct resolution and 404 behavior when either selector is unknown.",
+      "preconditions": [
+        "internal/handlers/resolve_integration_test.go exists",
+        "In-memory SQLite database via OpenMemory with test org and user seeded",
+        "Echo HTTP test server configured with org member handlers"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' targeting two-ID member endpoint integration tests",
+      "expected": "Tests pass for slug+username, slug+email, uuid+uuid combinations returning 200; unknown org returns 404 'organization not found'; unknown user returns 404 'user not found'",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...'); assert result.exitCode == 0; assert testNamed('TestMemberEndpoint_SlugAndUsername') passes; assert testNamed('TestMemberEndpoint_SlugAndEmail') passes; assert testNamed('TestMemberEndpoint_UnknownOrg') passes; assert testNamed('TestMemberEndpoint_UnknownUser') passes"
+    },
+    {
+      "id": "TS-16-38",
+      "requirement_id": "16-REQ-13.1",
+      "kind": "unit",
+      "description": "migrate_test.go includes a test case verifying that the idx_users_email migration succeeds on a clean schema with no existing users.",
+      "preconditions": [
+        "internal/db/migrate_test.go exists",
+        "In-memory SQLite database via OpenMemory with users table created and no rows"
+      ],
+      "input": "Run migration on clean database",
+      "expected": "Migration returns nil error; idx_users_email index exists; test passes when run with 'go test ./internal/db/...'",
+      "assertion_pseudocode": "result = runGoTest('./internal/db/...'); assert result.exitCode == 0; assert testNamed('TestMigration_CleanSchema') passes"
+    },
+    {
+      "id": "TS-16-39",
+      "requirement_id": "16-REQ-13.2",
+      "kind": "unit",
+      "description": "migrate_test.go includes a test case verifying that the migration returns an error and logs all offending email addresses when the users table contains duplicate email values.",
+      "preconditions": [
+        "internal/db/migrate_test.go exists",
+        "In-memory SQLite database via OpenMemory with users table containing duplicate emails"
+      ],
+      "input": "Run migration on database with duplicate emails",
+      "expected": "Migration returns non-nil error; log output contains all duplicate email addresses; test passes when run with 'go test ./internal/db/...'",
+      "assertion_pseudocode": "result = runGoTest('./internal/db/...'); assert result.exitCode == 0; assert testNamed('TestMigration_DuplicateEmails') passes"
+    },
+    {
+      "id": "TS-16-40",
+      "requirement_id": "16-REQ-13.3",
+      "kind": "unit",
+      "description": "migrate_test.go includes a test case verifying that the migration succeeds when all existing email values are unique, producing no false positives.",
+      "preconditions": [
+        "internal/db/migrate_test.go exists",
+        "In-memory SQLite database via OpenMemory with users table containing rows with unique emails"
+      ],
+      "input": "Run migration on database with unique emails",
+      "expected": "Migration returns nil error; idx_users_email index created; no error logged; test passes when run with 'go test ./internal/db/...'",
+      "assertion_pseudocode": "result = runGoTest('./internal/db/...'); assert result.exitCode == 0; assert testNamed('TestMigration_UniqueEmails') passes"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-16-P1",
+      "property_id": "16-PROP-1",
+      "validates": [
+        "16-REQ-1.1",
+        "16-REQ-2.1",
+        "16-REQ-3.E1",
+        "16-REQ-4.E1"
+      ],
+      "description": "For any valid UUID string that exists in the users or orgs table, the resolver returns that exact UUID unchanged.",
+      "for_any_strategy": "Generate 100 random valid UUIDs using uuid.New(); insert each as a user or org row in an in-memory SQLite database; call resolveUserID or resolveOrgID with the UUID string",
+      "invariant_check": "for each generated uuid: result, err = resolveUserID(db, uuid.String()); assert err == nil; assert result == uuid.String()"
+    },
+    {
+      "id": "TS-16-P2",
+      "property_id": "16-PROP-2",
+      "validates": [
+        "16-REQ-1.1",
+        "16-REQ-1.2",
+        "16-REQ-1.3",
+        "16-REQ-2.1",
+        "16-REQ-2.2"
+      ],
+      "description": "The detection heuristic assigns exactly one classification to any selector string and queries exactly one column \u2014 never two columns for the same selector.",
+      "for_any_strategy": "Generate a mix of 50 valid UUIDs, 50 strings containing '@', and 50 plain alphanumeric strings; instrument the db Executor to count queries per call",
+      "invariant_check": "for each selector: queryCount = 0; instrumentedDB = countingExecutor(db); resolveUserID(instrumentedDB, selector); assert queryCount == 1"
+    },
+    {
+      "id": "TS-16-P3",
+      "property_id": "16-PROP-3",
+      "validates": [
+        "16-REQ-1.4",
+        "16-REQ-2.3",
+        "16-REQ-3.2",
+        "16-REQ-4.2"
+      ],
+      "description": "For any selector string that matches no row in the relevant table, resolveUserID and resolveOrgID return exactly sql.ErrNoRows \u2014 not nil, not a wrapped error, not a custom error type.",
+      "for_any_strategy": "Generate 50 random strings that are guaranteed not to match any row (use UUIDs not inserted, random usernames with prefix 'NOTEXIST_', emails with prefix 'notexist_'); call resolveUserID and resolveOrgID on an empty in-memory SQLite database",
+      "invariant_check": "for each selector: result, err = resolveUserID(db, selector); assert err == sql.ErrNoRows; assert result == ''; assert errors.Is(err, sql.ErrNoRows)"
+    },
+    {
+      "id": "TS-16-P4",
+      "property_id": "16-PROP-4",
+      "validates": [
+        "16-REQ-2.2",
+        "16-REQ-2.E1"
+      ],
+      "description": "resolveOrgID always queries the orgs table by slug for any selector containing '@', never by email.",
+      "for_any_strategy": "Generate 50 strings containing '@' at various positions (e.g. 'a@b', 'x@y.z', 'foo@bar.baz'); instrument the db Executor to record which column is queried",
+      "invariant_check": "for each selector containing '@': instrumentedDB = columnTrackingExecutor(db); resolveOrgID(instrumentedDB, selector); assert instrumentedDB.queriedColumn == 'slug'; assert instrumentedDB.queriedColumn != 'email'"
+    },
+    {
+      "id": "TS-16-P5",
+      "property_id": "16-PROP-5",
+      "validates": [
+        "16-REQ-6.1",
+        "16-REQ-6.E2"
+      ],
+      "description": "Running the idx_users_email migration any number of times on a database with unique emails always succeeds without error.",
+      "for_any_strategy": "For N in [1, 2, 3, 5, 10]: open a fresh in-memory SQLite database via OpenMemory, insert 10 users with unique emails, run the migration N times",
+      "invariant_check": "for each N: db = OpenMemory(); insertUniqueEmailUsers(db, count=10); for i in range(N): err = runMigration(db); assert err == nil"
+    },
+    {
+      "id": "TS-16-P6",
+      "property_id": "16-PROP-6",
+      "validates": [
+        "16-REQ-6.2",
+        "16-REQ-6.E3"
+      ],
+      "description": "The migration failure log message lists every email address that appears more than once \u2014 no offending address is silently omitted.",
+      "for_any_strategy": "Generate sets of 2\u201310 distinct email addresses, each duplicated 2\u20135 times; insert all rows into an in-memory SQLite database; run migration and capture log output",
+      "invariant_check": "for each generated set: logBuf = captureLog(); runMigration(db); for each duplicateEmail in set: assert logBuf contains duplicateEmail"
+    },
+    {
+      "id": "TS-16-P7",
+      "property_id": "16-PROP-7",
+      "validates": [
+        "16-REQ-3.E1",
+        "16-REQ-4.E1",
+        "16-REQ-8.E1",
+        "16-REQ-10.E1"
+      ],
+      "description": "For any existing API call passing a valid UUID as {id} or {user_id}, the HTTP response is identical to the pre-change response.",
+      "for_any_strategy": "Generate 20 random valid UUIDs; for each, insert a user and org row; send GET /users/{uuid} and GET /orgs/{uuid} requests to the Echo test server",
+      "invariant_check": "for each uuid: resp = httpGet('/users/' + uuid); assert resp.status == 200; assert resp.body.id == uuid; resp2 = httpGet('/orgs/' + uuid); assert resp2.status == 200; assert resp2.body.id == uuid"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-16-E1",
+      "requirement_id": "16-REQ-1.E1",
+      "kind": "unit",
+      "description": "resolveUserID treats an empty string selector as a username fallback query and returns sql.ErrNoRows since no user has an empty username.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "No user row has an empty username"
+      ],
+      "input": "selector = ''",
+      "expected": "resolveUserID returns ('', sql.ErrNoRows) \u2014 empty string result and sentinel not-found error",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveUserID(db, ''); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E2",
+      "requirement_id": "16-REQ-1.E2",
+      "kind": "unit",
+      "description": "resolveUserID queries by id column for a valid UUID that does not exist in the users table and returns sql.ErrNoRows without falling back to other columns.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "No user row with id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' exists"
+      ],
+      "input": "selector = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'",
+      "expected": "resolveUserID returns ('', sql.ErrNoRows) \u2014 the UUID was recognized and queried by id, found no match",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveUserID(db, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E3",
+      "requirement_id": "16-REQ-1.E3",
+      "kind": "unit",
+      "description": "resolveUserID returns sql.ErrNoRows without falling back to username lookup when a selector containing '@' matches no row by email.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "No user row has email='ghost@example.com'"
+      ],
+      "input": "selector = 'ghost@example.com'",
+      "expected": "resolveUserID returns ('', sql.ErrNoRows) \u2014 email heuristic applied, no match, no username fallback attempted",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveUserID(db, 'ghost@example.com'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E4",
+      "requirement_id": "16-REQ-1.E4",
+      "kind": "unit",
+      "description": "resolveUserID returns sql.ErrNoRows when a plain string (no '@', not UUID) matches no row in the users table by username.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with users table created",
+        "No user row has username='ghostuser'"
+      ],
+      "input": "selector = 'ghostuser'",
+      "expected": "resolveUserID returns ('', sql.ErrNoRows) \u2014 username fallback applied, no match found",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveUserID(db, 'ghostuser'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E5",
+      "requirement_id": "16-REQ-2.E1",
+      "kind": "unit",
+      "description": "resolveOrgID treats a selector containing '@' as a slug lookup (not email lookup) since orgs do not have email addresses.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "No org row has slug='weird@slug'"
+      ],
+      "input": "selector = 'weird@slug'",
+      "expected": "resolveOrgID returns ('', sql.ErrNoRows) \u2014 slug fallback applied (not email), no match found",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveOrgID(db, 'weird@slug'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E6",
+      "requirement_id": "16-REQ-2.E2",
+      "kind": "unit",
+      "description": "resolveOrgID treats an empty string selector as a slug fallback query and returns sql.ErrNoRows since no org has an empty slug.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "No org row has an empty slug"
+      ],
+      "input": "selector = ''",
+      "expected": "resolveOrgID returns ('', sql.ErrNoRows) \u2014 empty string treated as slug, no match found",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveOrgID(db, ''); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E7",
+      "requirement_id": "16-REQ-2.E3",
+      "kind": "unit",
+      "description": "resolveOrgID queries by id column for a valid UUID that does not exist in the orgs table and returns sql.ErrNoRows.",
+      "preconditions": [
+        "In-memory SQLite database opened via OpenMemory with orgs table created",
+        "No org row with id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' exists"
+      ],
+      "input": "selector = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'",
+      "expected": "resolveOrgID returns ('', sql.ErrNoRows) \u2014 UUID recognized, queried by id, no match found",
+      "assertion_pseudocode": "db = OpenMemory(); result, err = resolveOrgID(db, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'); assert err == sql.ErrNoRows; assert result == ''"
+    },
+    {
+      "id": "TS-16-E8",
+      "requirement_id": "16-REQ-3.E1",
+      "kind": "integration",
+      "description": "User handler with a UUID selector that is valid and exists returns the same HTTP 200 response as before this spec was implemented (backward compatibility).",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with a user row seeded",
+        "User row: id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP test server with user handlers registered"
+      ],
+      "input": "GET /users/550e8400-e29b-41d4-a716-446655440000 (UUID selector)",
+      "expected": "HTTP 200 response with JSON body containing the user resource; response is identical to what the pre-change handler would return",
+      "assertion_pseudocode": "resp = httpGet('/users/550e8400-e29b-41d4-a716-446655440000'); assert resp.status == 200; assert resp.body.id == '550e8400-e29b-41d4-a716-446655440000'; assert resp.body.username == 'alice'"
+    },
+    {
+      "id": "TS-16-E9",
+      "requirement_id": "16-REQ-3.E2",
+      "kind": "integration",
+      "description": "User handler resolves an email selector to a UUID and returns HTTP 200 with the user resource body.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with a user row seeded",
+        "User row: id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP test server with user handlers registered"
+      ],
+      "input": "GET /users/alice@example.com (email selector)",
+      "expected": "HTTP 200 response with JSON body containing the user resource for alice",
+      "assertion_pseudocode": "resp = httpGet('/users/alice@example.com'); assert resp.status == 200; assert resp.body.id == '550e8400-e29b-41d4-a716-446655440000'; assert resp.body.email == 'alice@example.com'"
+    },
+    {
+      "id": "TS-16-E10",
+      "requirement_id": "16-REQ-3.E3",
+      "kind": "integration",
+      "description": "User handler resolves a username selector to a UUID and returns HTTP 200 with the user resource body.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with a user row seeded",
+        "User row: id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP test server with user handlers registered"
+      ],
+      "input": "GET /users/alice (username selector)",
+      "expected": "HTTP 200 response with JSON body containing the user resource for alice",
+      "assertion_pseudocode": "resp = httpGet('/users/alice'); assert resp.status == 200; assert resp.body.id == '550e8400-e29b-41d4-a716-446655440000'; assert resp.body.username == 'alice'"
+    },
+    {
+      "id": "TS-16-E11",
+      "requirement_id": "16-REQ-3.E4",
+      "kind": "integration",
+      "description": "User handler returns HTTP 404 (not 400) when the selector is syntactically valid but matches no user record.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with users table empty",
+        "Echo HTTP test server with user handlers registered"
+      ],
+      "input": "GET /users/valid-but-missing-username (plain string selector, no match)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"user not found\"} \u2014 not HTTP 400",
+      "assertion_pseudocode": "resp = httpGet('/users/valid-but-missing-username'); assert resp.status == 404; assert resp.body.error == 'user not found'; assert resp.status != 400"
+    },
+    {
+      "id": "TS-16-E12",
+      "requirement_id": "16-REQ-4.E1",
+      "kind": "integration",
+      "description": "Org handler with a UUID selector that is valid and exists returns the same HTTP 200 response as before this spec was implemented (backward compatibility).",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with an org row seeded",
+        "Org row: id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "Echo HTTP test server with org handlers registered"
+      ],
+      "input": "GET /orgs/660e8400-e29b-41d4-a716-446655440001 (UUID selector)",
+      "expected": "HTTP 200 response with JSON body containing the org resource; response is identical to what the pre-change handler would return",
+      "assertion_pseudocode": "resp = httpGet('/orgs/660e8400-e29b-41d4-a716-446655440001'); assert resp.status == 200; assert resp.body.id == '660e8400-e29b-41d4-a716-446655440001'; assert resp.body.slug == 'acme-corp'"
+    },
+    {
+      "id": "TS-16-E13",
+      "requirement_id": "16-REQ-4.E2",
+      "kind": "integration",
+      "description": "Org handler resolves a slug selector to a UUID and returns HTTP 200 with the org resource body.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with an org row seeded",
+        "Org row: id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "Echo HTTP test server with org handlers registered"
+      ],
+      "input": "GET /orgs/acme-corp (slug selector)",
+      "expected": "HTTP 200 response with JSON body containing the org resource for acme-corp",
+      "assertion_pseudocode": "resp = httpGet('/orgs/acme-corp'); assert resp.status == 200; assert resp.body.id == '660e8400-e29b-41d4-a716-446655440001'; assert resp.body.slug == 'acme-corp'"
+    },
+    {
+      "id": "TS-16-E14",
+      "requirement_id": "16-REQ-4.E3",
+      "kind": "integration",
+      "description": "Org handler returns HTTP 404 (not 400) when the selector is syntactically valid but matches no org record.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with orgs table empty",
+        "Echo HTTP test server with org handlers registered"
+      ],
+      "input": "GET /orgs/nonexistent-slug (slug selector, no match)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"organization not found\"} \u2014 not HTTP 400",
+      "assertion_pseudocode": "resp = httpGet('/orgs/nonexistent-slug'); assert resp.status == 404; assert resp.body.error == 'organization not found'; assert resp.status != 400"
+    },
+    {
+      "id": "TS-16-E15",
+      "requirement_id": "16-REQ-5.E1",
+      "kind": "integration",
+      "description": "Org member handler resolves both a slug for {id} and a username for {user_id} independently and returns HTTP 200 or 204.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with org and user rows seeded",
+        "Org row: id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "User row: id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP test server with org member handlers registered"
+      ],
+      "input": "PUT /orgs/acme-corp/members/alice (slug for org, username for user)",
+      "expected": "HTTP 200 or 204 response; membership record created using both canonical UUIDs",
+      "assertion_pseudocode": "resp = httpPut('/orgs/acme-corp/members/alice', body={}); assert resp.status in [200, 204]; verifyMembershipExists(db, orgID='660e8400-e29b-41d4-a716-446655440001', userID='550e8400-e29b-41d4-a716-446655440000')"
+    },
+    {
+      "id": "TS-16-E16",
+      "requirement_id": "16-REQ-5.E2",
+      "kind": "integration",
+      "description": "Org member handler resolves a slug for {id} and an email for {user_id} and returns HTTP 200 or 204.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with org and user rows seeded",
+        "Org row: id='660e8400-e29b-41d4-a716-446655440001', slug='acme-corp'",
+        "User row: id='550e8400-e29b-41d4-a716-446655440000', username='alice', email='alice@example.com'",
+        "Echo HTTP test server with org member handlers registered"
+      ],
+      "input": "PUT /orgs/acme-corp/members/alice@example.com (slug for org, email for user)",
+      "expected": "HTTP 200 or 204 response; membership record created using both canonical UUIDs",
+      "assertion_pseudocode": "resp = httpPut('/orgs/acme-corp/members/alice@example.com', body={}); assert resp.status in [200, 204]; verifyMembershipExists(db, orgID='660e8400-e29b-41d4-a716-446655440001', userID='550e8400-e29b-41d4-a716-446655440000')"
+    },
+    {
+      "id": "TS-16-E17",
+      "requirement_id": "16-REQ-5.E3",
+      "kind": "integration",
+      "description": "Org member handler returns HTTP 404 for the org (checked first) without attempting user resolution when both selectors match no records.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with orgs and users tables empty",
+        "Echo HTTP test server with org member handlers registered"
+      ],
+      "input": "PUT /orgs/nonexistent-org/members/nonexistent-user (both selectors unknown)",
+      "expected": "HTTP 404 response with JSON body {\"error\": \"organization not found\"} \u2014 org checked first, user resolution not attempted",
+      "assertion_pseudocode": "resp = httpPut('/orgs/nonexistent-org/members/nonexistent-user', body={}); assert resp.status == 404; assert resp.body.error == 'organization not found'"
+    },
+    {
+      "id": "TS-16-E18",
+      "requirement_id": "16-REQ-6.E1",
+      "kind": "unit",
+      "description": "Database migration creates the idx_users_email unique index without error on a fresh database with no existing users.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with users table created and no rows"
+      ],
+      "input": "Run migration on fresh database",
+      "expected": "Migration returns nil error; idx_users_email index exists; server startup proceeds normally",
+      "assertion_pseudocode": "db = OpenMemory(); err = runMigration(db); assert err == nil; assert queryIndexExists(db, 'idx_users_email') == true"
+    },
+    {
+      "id": "TS-16-E19",
+      "requirement_id": "16-REQ-6.E2",
+      "kind": "unit",
+      "description": "Database migration succeeds idempotently when run on an existing database where all email values are already unique (IF NOT EXISTS clause).",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with users table containing rows with unique emails",
+        "idx_users_email index already exists from a prior migration run"
+      ],
+      "input": "Run migration again on already-migrated database",
+      "expected": "Migration returns nil error; server proceeds normally; no duplicate-email error is raised",
+      "assertion_pseudocode": "db = OpenMemory(); insertUniqueEmailUsers(db); runMigration(db); err = runMigration(db); assert err == nil"
+    },
+    {
+      "id": "TS-16-E20",
+      "requirement_id": "16-REQ-6.E3",
+      "kind": "unit",
+      "description": "Migration failure log message lists all offending email addresses when multiple distinct emails are duplicated.",
+      "preconditions": [
+        "In-memory SQLite database via OpenMemory with users table containing rows where both alice@example.com and bob@example.com appear more than once"
+      ],
+      "input": "Run migration on database with multiple distinct duplicate emails",
+      "expected": "Migration returns non-nil error; log output contains both 'alice@example.com' and 'bob@example.com' with their respective row counts; no offending address is omitted",
+      "assertion_pseudocode": "db = OpenMemory(); insertRows(db, emails=['alice@example.com','alice@example.com','bob@example.com','bob@example.com']); logBuf = captureLog(); err = runMigration(db); assert err != nil; assert logBuf contains 'alice@example.com'; assert logBuf contains 'bob@example.com'"
+    },
+    {
+      "id": "TS-16-E21",
+      "requirement_id": "16-REQ-6.E4",
+      "kind": "unit",
+      "description": "Migration logs the error and exits with non-zero code when the migration query fails due to a database error unrelated to duplicate emails.",
+      "preconditions": [
+        "A mock db that returns a generic database error when CREATE UNIQUE INDEX is executed"
+      ],
+      "input": "Run migration against a db that returns a non-duplicate-email error",
+      "expected": "Migration returns non-nil error; error is logged; server exits with non-zero code",
+      "assertion_pseudocode": "db = newBrokenExecutor(returnErr=errors.New('disk I/O error')); logBuf = captureLog(); err = runMigration(db); assert err != nil; assert logBuf contains 'disk I/O error' or 'migration failed'"
+    },
+    {
+      "id": "TS-16-E22",
+      "requirement_id": "16-REQ-7.E1",
+      "kind": "unit",
+      "description": "Removing format: uuid from selector parameters in api/openapi.yaml does not affect other parameters such as key_id or token_id that remain UUID-only.",
+      "preconditions": [
+        "api/openapi.yaml file exists and is parseable as valid OpenAPI 3.1 YAML"
+      ],
+      "input": "Parse api/openapi.yaml and inspect key_id and token_id parameter definitions",
+      "expected": "key_id and token_id parameters still have format: uuid or are otherwise unchanged; only user/org {id} and {user_id} parameters had format: uuid removed",
+      "assertion_pseudocode": "spec = parseOpenAPI('api/openapi.yaml'); keyIdParam = extractParamNamed(spec, 'key_id'); assert keyIdParam.schema.format == 'uuid'; tokenIdParam = extractParamNamed(spec, 'token_id'); assert tokenIdParam.schema.format == 'uuid'"
+    },
+    {
+      "id": "TS-16-E23",
+      "requirement_id": "16-REQ-8.E1",
+      "kind": "unit",
+      "description": "No functional CLI code is changed \u2014 only Use strings and Long help text are modified; existing UUID-based invocations continue to work identically.",
+      "preconditions": [
+        "akc CLI binary built from updated source",
+        "API server running with a test user accessible by UUID"
+      ],
+      "input": "Run 'akc admin users show 550e8400-e29b-41d4-a716-446655440000' (UUID-based invocation)",
+      "expected": "Command exits with code 0 and prints user details to stdout, identical to pre-change behavior",
+      "assertion_pseudocode": "result = execCLI('akc admin users show 550e8400-e29b-41d4-a716-446655440000'); assert result.exitCode == 0; assert result.stdout contains 'alice'"
+    },
+    {
+      "id": "TS-16-E24",
+      "requirement_id": "16-REQ-9.E1",
+      "kind": "unit",
+      "description": "Go build fails with a compile error if cli_resolve.go is deleted but another file still references resolveOrgSlugFromJSON.",
+      "preconditions": [
+        "Go source tree with cli_resolve.go deleted",
+        "A hypothetical file still calling resolveOrgSlugFromJSON (simulated by temporarily adding a reference)"
+      ],
+      "input": "Run 'go build ./...' with a dangling reference to resolveOrgSlugFromJSON",
+      "expected": "go build exits with non-zero code and error message containing 'undefined: resolveOrgSlugFromJSON'",
+      "assertion_pseudocode": "addDanglingReference(file='cmd/test_ref.go', symbol='resolveOrgSlugFromJSON'); result = runGoBuild('./...'); assert result.exitCode != 0; assert result.stderr contains 'undefined' and 'resolveOrgSlugFromJSON'; removeDanglingReference()"
+    },
+    {
+      "id": "TS-16-E25",
+      "requirement_id": "16-REQ-10.E1",
+      "kind": "unit",
+      "description": "No SDK method signatures, parameter types, or return types are changed \u2014 only documentation is updated; existing callers passing UUIDs continue to compile and work without modification.",
+      "preconditions": [
+        "Go SDK source files updated with documentation changes only",
+        "Existing caller code that passes UUID strings to SDK methods"
+      ],
+      "input": "Run 'go build ./...' on existing caller code that uses UUID strings with SDK methods",
+      "expected": "Build succeeds with exit code 0; no compilation errors; SDK method signatures are unchanged",
+      "assertion_pseudocode": "result = runGoBuild('./...'); assert result.exitCode == 0; assert result.stderr == ''"
+    },
+    {
+      "id": "TS-16-E26",
+      "requirement_id": "16-REQ-11.E1",
+      "kind": "unit",
+      "description": "All resolver unit tests use the Go standard testing package and testify assertions; no external test frameworks are introduced.",
+      "preconditions": [
+        "internal/handlers/resolve_test.go exists"
+      ],
+      "input": "Inspect imports in resolve_test.go",
+      "expected": "File imports only 'testing', 'github.com/stretchr/testify/assert' or 'require', and project-internal packages; no other test frameworks present",
+      "assertion_pseudocode": "src = readFile('internal/handlers/resolve_test.go'); imports = parseImports(src); assert 'testing' in imports; assert any('testify' in imp for imp in imports); assert not any(externalFramework in imports for externalFramework in ['ginkgo', 'gomega', 'gocheck'])"
+    },
+    {
+      "id": "TS-16-E27",
+      "requirement_id": "16-REQ-12.E1",
+      "kind": "unit",
+      "description": "All integration tests use an in-memory SQLite database via OpenMemory and do not require a running server process; tests are runnable with 'go test ./internal/handlers/...'.",
+      "preconditions": [
+        "internal/handlers/resolve_integration_test.go exists"
+      ],
+      "input": "Run 'go test ./internal/handlers/...' without any external server process running",
+      "expected": "All integration tests pass with exit code 0; no external server or network connection required",
+      "assertion_pseudocode": "result = runGoTest('./internal/handlers/...', env={NO_EXTERNAL_SERVER: true}); assert result.exitCode == 0"
+    },
+    {
+      "id": "TS-16-E28",
+      "requirement_id": "16-REQ-13.E1",
+      "kind": "unit",
+      "description": "All migration tests use the Go standard testing package and testify, consistent with database_layer conventions; tests are runnable with 'go test ./internal/db/...'.",
+      "preconditions": [
+        "internal/db/migrate_test.go exists"
+      ],
+      "input": "Run 'go test ./internal/db/...'",
+      "expected": "All migration tests pass with exit code 0; file uses only standard testing and testify packages",
+      "assertion_pseudocode": "result = runGoTest('./internal/db/...'); assert result.exitCode == 0; src = readFile('internal/db/migrate_test.go'); imports = parseImports(src); assert 'testing' in imports; assert any('testify' in imp for imp in imports)"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-16-SMOKE-1",
+      "execution_path_id": "16-PATH-1",
+      "description": "End-to-end smoke test: CLI operator runs 'akc admin users show alice' and the server resolves the username to a UUID, returning the user resource.",
+      "trigger": "Execute 'akc admin users show alice' from the CLI against a running apikit server with user 'alice' seeded in the database",
+      "real_components": [
+        "akc CLI (cli_admin_commands)",
+        "Go SDK (go_sdk)",
+        "Echo router (server_core)",
+        "user handler (user_management)",
+        "resolveUserID (internal/handlers/)",
+        "SQLite database (database_layer)"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "CLI exits with code 0",
+        "stdout contains the user details for alice including her UUID and username",
+        "Server logs show GET /users/alice resolved to the canonical UUID via username lookup",
+        "No HTTP 404 or 500 response is returned"
+      ]
+    },
+    {
+      "id": "TS-16-SMOKE-2",
+      "execution_path_id": "16-PATH-2",
+      "description": "End-to-end smoke test: CLI operator runs 'akc admin orgs members add acme-corp alice@example.com' and the server resolves both the slug and email to UUIDs, creating the membership.",
+      "trigger": "Execute 'akc admin orgs members add acme-corp alice@example.com' from the CLI against a running apikit server with org 'acme-corp' and user 'alice@example.com' seeded",
+      "real_components": [
+        "akc CLI (cli_admin_commands)",
+        "Go SDK (go_sdk)",
+        "Echo router (server_core)",
+        "org member handler (organization_management)",
+        "resolveOrgID (internal/handlers/)",
+        "resolveUserID (internal/handlers/)",
+        "SQLite database (database_layer)"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "CLI exits with code 0",
+        "stdout contains success confirmation of membership addition",
+        "Membership record exists in the database linking the canonical org UUID and user UUID",
+        "Server logs show PUT /orgs/acme-corp/members/alice@example.com resolved both selectors successfully"
+      ]
+    },
+    {
+      "id": "TS-16-SMOKE-3",
+      "execution_path_id": "16-PATH-3",
+      "description": "End-to-end smoke test: Server startup against a database with duplicate emails fails with a FATAL log listing all offending addresses and exits with non-zero code.",
+      "trigger": "Start the apikit server binary against a SQLite database file containing duplicate email values in the users table",
+      "real_components": [
+        "server process",
+        "database migration (database_layer)",
+        "SQLite database (database_layer)"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "Server process exits with non-zero exit code",
+        "Log output contains 'FATAL migration failed: duplicate emails detected'",
+        "Log output lists each duplicate email address and its row count",
+        "Server does not bind to any port or accept any HTTP connections",
+        "No rows are modified or deleted in the users table"
+      ]
+    },
+    {
+      "id": "TS-16-SMOKE-4",
+      "execution_path_id": "16-PATH-4",
+      "description": "End-to-end smoke test: API caller sends GET /users/nobody@example.com and receives HTTP 404 with 'user not found' when no user has that email.",
+      "trigger": "Send HTTP GET /users/nobody@example.com to a running apikit server with no user having email 'nobody@example.com'",
+      "real_components": [
+        "Echo router (server_core)",
+        "user handler (user_management)",
+        "resolveUserID (internal/handlers/)",
+        "SQLite database (database_layer)"
+      ],
+      "mockable": [],
+      "expected_effects": [
+        "HTTP response status is 404",
+        "HTTP response body is JSON {\"error\": \"user not found\"}",
+        "No 500 error is returned",
+        "Server logs show the email selector was queried against the users.email column with no match"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}
