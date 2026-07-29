@@ -3530,6 +3530,503 @@ func TestPATPermissionCheck_Manage(t *testing.T) {
 // Requirement: 09-REQ-5.3
 // ========================================================================
 
+// ========================================================================
+// Spec 17 — PAT Permission Updates
+// Task Group 1: Failing tests for tokens:write, route wiring,
+// permission checks, token guards, and permission validation.
+// ========================================================================
+
+// setupPermissionUpdateServer creates an Echo instance with PAT handler routes
+// registered, the specified auth middleware injected, and CacheMiddleware
+// applied. A test user is inserted with a target PAT already present in the
+// database. Returns the Echo instance, the database handle, and the target
+// PAT's token_id.
+func setupPermissionUpdateServer(t *testing.T, userID string, middleware echo.MiddlewareFunc) (*echo.Echo, *db.DB, string) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(middleware)
+	handler.RegisterRoutes(g)
+
+	// Insert a target PAT owned by the user with a known set of permissions.
+	targetTokenID := "tgt12345"
+	insertTestPAT(t, database.SqlDB, targetTokenID, userID, "target-pat",
+		"hash-tgt", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	return e, database, targetTokenID
+}
+
+// ========================================================================
+// Task 1.2: Unit tests for route registration on PATHandler
+// Test Spec: TS-17-3
+// Requirements: 17-REQ-2.1
+// ========================================================================
+
+// TestRegisterRoutes_PermissionEndpoints verifies that RegisterRoutes
+// registers PUT, PATCH, and DELETE on /user/tokens/:token_id/permissions,
+// making all three routes reachable via the Echo router.
+//
+// Test Spec: TS-17-3
+// Requirement: 17-REQ-2.1
+func TestRegisterRoutes_PermissionEndpoints(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil; cannot test RegisterRoutes")
+	}
+
+	e := echo.New()
+	g := e.Group("")
+	handler.RegisterRoutes(g)
+
+	// Expected new routes that must be registered.
+	expected := map[string]bool{
+		"PUT /user/tokens/:token_id/permissions":    false,
+		"PATCH /user/tokens/:token_id/permissions":  false,
+		"DELETE /user/tokens/:token_id/permissions": false,
+	}
+
+	routes := e.Routes()
+	for _, r := range routes {
+		key := r.Method + " " + r.Path
+		if _, ok := expected[key]; ok {
+			expected[key] = true
+		}
+	}
+
+	for key, registered := range expected {
+		if !registered {
+			t.Errorf("expected route %q was not registered", key)
+		}
+	}
+}
+
+// ========================================================================
+// Task 1.3: Unit tests for common permission check
+// Test Spec: TS-17-4, TS-17-5, TS-17-6
+// Requirements: 17-REQ-3.1, 17-REQ-3.2, 17-REQ-3.3, 17-REQ-3.E1
+// ========================================================================
+
+// TestPermUpdate_PATWithTokensWrite_Allowed verifies that a PAT caller
+// holding tokens:write is allowed past the permission check on all three
+// permission modification endpoints.
+//
+// Test Spec: TS-17-4
+// Requirement: 17-REQ-3.1
+func TestPermUpdate_PATWithTokensWrite_Allowed(t *testing.T) {
+	userID := testUUID("perm-update-tw")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["users:read"]}`)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s: expected to pass permission check (not 403), got 403; body: %s",
+					method, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestPermUpdate_PATWithTokensManageOnly_Allowed verifies that a PAT
+// caller holding tokens:manage (but not tokens:write) is allowed past
+// the permission check on all three permission modification endpoints.
+//
+// Test Spec: TS-17-5
+// Requirement: 17-REQ-3.2
+func TestPermUpdate_PATWithTokensManageOnly_Allowed(t *testing.T) {
+	userID := testUUID("perm-update-tm")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:manage", "users:read"}))
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["users:read"]}`)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s: expected to pass permission check (not 403), got 403; body: %s",
+					method, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestPermUpdate_APIKey_Allowed verifies that an API key caller bypasses
+// the permission check and is allowed to proceed on all three permission
+// modification endpoints.
+//
+// Test Spec: TS-17-6
+// Requirement: 17-REQ-3.3
+func TestPermUpdate_APIKey_Allowed(t *testing.T) {
+	userID := testUUID("perm-update-apikey")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		nonAdminAuthMiddleware(userID))
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["users:read"]}`)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s: API key caller should not get 403, got 403; body: %s",
+					method, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestPermUpdate_PATWithNeitherPermission_Forbidden verifies that a PAT
+// caller holding neither tokens:write nor tokens:manage receives HTTP 403
+// on all three permission modification endpoints.
+//
+// Test Spec: 17-REQ-3.E1
+// Requirement: 17-REQ-3.E1
+func TestPermUpdate_PATWithNeitherPermission_Forbidden(t *testing.T) {
+	userID := testUUID("perm-update-noperm")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"users:read", "orgs:read"}))
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["users:read"]}`)
+			assertErrorResponse(t, rec, http.StatusForbidden, "insufficient permissions")
+		})
+	}
+}
+
+// ========================================================================
+// Task 1.4: Unit tests for common token lookup and guard checks
+// Test Spec: TS-17-7, TS-17-8, TS-17-9
+// Requirements: 17-REQ-4.1, 17-REQ-4.2, 17-REQ-4.3, 17-REQ-4.E1
+// ========================================================================
+
+// TestPermUpdate_TokenNotFound verifies that a modification request
+// with a nonexistent token_id returns HTTP 404 with
+// {error: {code: 404, message: "token not found"}}.
+//
+// Test Spec: TS-17-7
+// Requirement: 17-REQ-4.1
+func TestPermUpdate_TokenNotFound(t *testing.T) {
+	userID := testUUID("perm-update-notfound")
+	e, _, _ := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/nonexistent-token-id/permissions",
+				`{"permissions": ["users:read"]}`)
+			assertErrorResponse(t, rec, http.StatusNotFound, "token not found")
+		})
+	}
+}
+
+// TestPermUpdate_OtherUserToken verifies that a modification request
+// for a token belonging to another user returns HTTP 404 (not 403)
+// to prevent user enumeration.
+//
+// Test Spec: TS-17-7
+// Requirement: 17-REQ-4.E1
+func TestPermUpdate_OtherUserToken(t *testing.T) {
+	user1ID := testUUID("perm-update-user1")
+	user2ID := testUUID("perm-update-user2")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, user1ID, "user1", "user1@example.com", "github", "gh-1")
+	insertTestUser(t, database.SqlDB, user2ID, "user2", "user2@example.com", "github", "gh-2")
+
+	// Insert a PAT belonging to user-2.
+	insertTestPAT(t, database.SqlDB, "u2token1", user2ID, "user2-pat",
+		"hash-u2", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Server authenticated as user-1.
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(user1ID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/u2token1/permissions",
+				`{"permissions": ["users:read"]}`)
+			assertErrorResponse(t, rec, http.StatusNotFound, "token not found")
+		})
+	}
+}
+
+// TestPermUpdate_RevokedToken verifies that a modification request on
+// a revoked token returns HTTP 400 with "token is revoked".
+//
+// Test Spec: TS-17-8
+// Requirement: 17-REQ-4.2
+func TestPermUpdate_RevokedToken(t *testing.T) {
+	userID := testUUID("perm-update-revoked")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	// Insert a revoked PAT.
+	insertTestPAT(t, database.SqlDB, "revtok01", userID, "revoked-pat",
+		"hash-rev", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStr("2024-06-15T00:00:00Z"), "2024-06-01T00:00:00Z")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/revtok01/permissions",
+				`{"permissions": ["users:read"]}`)
+			assertErrorResponse(t, rec, http.StatusBadRequest, "token is revoked")
+		})
+	}
+}
+
+// TestPermUpdate_ExpiredToken verifies that a modification request on
+// an expired token (expires_at in the past) returns HTTP 400 with
+// "token is expired".
+//
+// Test Spec: TS-17-9
+// Requirement: 17-REQ-4.3
+func TestPermUpdate_ExpiredToken(t *testing.T) {
+	userID := testUUID("perm-update-expired")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	// Insert an expired PAT (expires_at in the past, not revoked).
+	insertTestPAT(t, database.SqlDB, "exptok01", userID, "expired-pat",
+		"hash-exp", `["users:read"]`, 30,
+		nullStr("2020-01-01T00:00:00Z"), nullStrEmpty(), "2019-12-01T00:00:00Z")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	methods := []string{http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/exptok01/permissions",
+				`{"permissions": ["users:read"]}`)
+			assertErrorResponse(t, rec, http.StatusBadRequest, "token is expired")
+		})
+	}
+}
+
+// ========================================================================
+// Task 1.5: Unit tests for common permission validation (replace, add, remove)
+// Test Spec: TS-17-10, TS-17-11, TS-17-12
+// Requirements: 17-REQ-5.1, 17-REQ-5.2, 17-REQ-5.3
+// ========================================================================
+
+// TestPermUpdate_InvalidPermissionFormat_NoColon verifies that a replace
+// request with a permission string containing no colon returns HTTP 400
+// with "invalid permission format: usersread".
+//
+// Test Spec: TS-17-10, 17-REQ-5.E1
+// Requirement: 17-REQ-5.1
+func TestPermUpdate_InvalidPermissionFormat_NoColon(t *testing.T) {
+	userID := testUUID("perm-update-nocolon")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	// Test on PUT (replace) and PATCH (add) — both should reject.
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["usersread"]}`)
+			assertErrorResponse(t, rec, http.StatusBadRequest, "invalid permission format: usersread")
+		})
+	}
+}
+
+// TestPermUpdate_InvalidPermissionFormat_TwoColons verifies that a replace
+// request with a permission string containing two colons returns HTTP 400
+// with "invalid permission format: users:read:extra".
+//
+// Test Spec: 17-REQ-5.E2
+// Requirement: 17-REQ-5.1
+func TestPermUpdate_InvalidPermissionFormat_TwoColons(t *testing.T) {
+	userID := testUUID("perm-update-twocolon")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["users:read:extra"]}`)
+			assertErrorResponse(t, rec, http.StatusBadRequest, "invalid permission format: users:read:extra")
+		})
+	}
+}
+
+// TestPermUpdate_UnknownPermission verifies that a replace or add request
+// with a validly formatted but unregistered permission returns HTTP 400
+// with "unknown permission: widgets:destroy".
+//
+// Test Spec: TS-17-11, 17-REQ-5.E3
+// Requirement: 17-REQ-5.2
+func TestPermUpdate_UnknownPermission(t *testing.T) {
+	userID := testUUID("perm-update-unknown")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			rec := sendJSON(t, e, method,
+				"/user/tokens/"+targetTokenID+"/permissions",
+				`{"permissions": ["widgets:destroy"]}`)
+			assertErrorResponse(t, rec, http.StatusBadRequest, "unknown permission: widgets:destroy")
+		})
+	}
+}
+
+// TestPermUpdate_Remove_UnregisteredPermission_Ignored verifies that a
+// DELETE (remove) request with a validly formatted but unregistered
+// permission silently ignores it and proceeds successfully, leaving the
+// target token's existing permissions unchanged.
+//
+// Test Spec: TS-17-12
+// Requirement: 17-REQ-5.3
+func TestPermUpdate_Remove_UnregisteredPermission_Ignored(t *testing.T) {
+	userID := testUUID("perm-update-rem-unreg")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": ["widgets:destroy"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 when removing unregistered permission (silently ignore), got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	// Verify the response still contains the original permissions.
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// TestPermUpdate_Remove_MalformedPermission_Rejected verifies that a
+// DELETE (remove) request with a malformed permission string (no colon)
+// returns HTTP 400 even though unregistered permissions are silently
+// ignored.
+//
+// Test Spec: TS-17-12
+// Requirement: 17-REQ-5.3
+func TestPermUpdate_Remove_MalformedPermission_Rejected(t *testing.T) {
+	userID := testUUID("perm-update-rem-malformed")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": ["usersread"]}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid permission format: usersread")
+}
+
 // TestPermissionsInsertionOrder_Property is a property-based test that creates
 // PATs with all permutations of ['users:read', 'orgs:read', 'tokens:read'] and
 // verifies that the permissions array order is preserved through the full
