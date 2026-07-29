@@ -67,12 +67,12 @@
       "subtasks": [
         {
           "id": "1.1",
-          "title": "Write resolveUserID unit tests \u2014 UUID and email selectors",
+          "title": "Write resolveUserID unit tests — UUID and email selectors",
           "details": [
             "Create internal/handlers/resolve_test.go",
-            "Test UUID selector: valid UUID string \u2192 resolveUserID returns same UUID unchanged (heuristic path 1)",
-            "Test email selector: string containing '@' \u2192 resolveUserID queries by email column and returns UUID",
-            "Test unknown email \u2192 resolveUserID returns sql.ErrNoRows",
+            "Test UUID selector: valid UUID string → resolveUserID returns same UUID unchanged (heuristic path 1)",
+            "Test email selector: string containing '@' → resolveUserID queries by email column and returns UUID",
+            "Test unknown email → resolveUserID returns sql.ErrNoRows",
             "Use testify/assert for assertions; use an in-memory SQLite DB via OpenMemory helper"
           ],
           "test_spec_refs": [
@@ -84,17 +84,17 @@
             "16-REQ-1",
             "16-REQ-11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "1.2",
-          "title": "Write resolveUserID unit tests \u2014 fallback and not-found cases",
+          "title": "Write resolveUserID unit tests — fallback and not-found cases",
           "details": [
             "In internal/handlers/resolve_test.go, add tests for fallback selector path",
-            "Test fallback selector: plain string (no '@', not UUID format) \u2192 resolveUserID queries by username column",
-            "Test unknown username \u2192 resolveUserID returns sql.ErrNoRows",
-            "Test valid UUID that does not exist in DB \u2192 resolveUserID returns sql.ErrNoRows",
+            "Test fallback selector: plain string (no '@', not UUID format) → resolveUserID queries by username column",
+            "Test unknown username → resolveUserID returns sql.ErrNoRows",
+            "Test valid UUID that does not exist in DB → resolveUserID returns sql.ErrNoRows",
             "Use testify/assert; seed test DB with known rows to distinguish found vs not-found"
           ],
           "test_spec_refs": [
@@ -106,18 +106,18 @@
             "16-REQ-1",
             "16-REQ-11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "1.3",
-          "title": "Write resolveOrgID unit tests \u2014 UUID, slug, and not-found cases",
+          "title": "Write resolveOrgID unit tests — UUID, slug, and not-found cases",
           "details": [
             "In internal/handlers/resolve_test.go, add resolveOrgID test cases",
-            "Test UUID selector: valid UUID \u2192 resolveOrgID returns same UUID unchanged",
-            "Test slug selector: plain string (no '@', not UUID) \u2192 resolveOrgID queries by slug column",
-            "Test email-like string passed to resolveOrgID \u2192 treated as slug fallback (org resolver ignores '@' heuristic)",
-            "Test unknown slug \u2192 resolveOrgID returns sql.ErrNoRows",
+            "Test UUID selector: valid UUID → resolveOrgID returns same UUID unchanged",
+            "Test slug selector: plain string (no '@', not UUID) → resolveOrgID queries by slug column",
+            "Test email-like string passed to resolveOrgID → treated as slug fallback (org resolver ignores '@' heuristic)",
+            "Test unknown slug → resolveOrgID returns sql.ErrNoRows",
             "Use testify/assert; seed orgs table with known rows"
           ],
           "test_spec_refs": [
@@ -131,12 +131,12 @@
             "16-REQ-2",
             "16-REQ-11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "1.4",
-          "title": "Write resolver unit tests \u2014 duplicate email guard",
+          "title": "Write resolver unit tests — duplicate email guard",
           "details": [
             "In internal/handlers/resolve_test.go, add a test that seeds the users table with duplicate email values before the unique index is applied",
             "Verify that the migration helper detects duplicate emails and returns an error listing offending addresses",
@@ -150,7 +150,7 @@
             "16-REQ-6",
             "16-REQ-11"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
@@ -171,10 +171,10 @@
       "subtasks": [
         {
           "id": "2.1",
-          "title": "Write HTTP integration tests for user endpoints \u2014 selector variants",
+          "title": "Write HTTP integration tests for user endpoints — selector variants",
           "details": [
             "Create internal/handlers/resolve_integration_test.go",
-            "For user endpoints (GET /users/:id, PATCH /users/:id, POST /users/:id/promote, etc.), write table-driven tests covering: UUID selector \u2192 200 OK, username selector \u2192 200 OK, email selector \u2192 200 OK",
+            "For user endpoints (GET /users/:id, PATCH /users/:id, POST /users/:id/promote, etc.), write table-driven tests covering: UUID selector → 200 OK, username selector → 200 OK, email selector → 200 OK",
             "Use OpenMemory to create an in-memory SQLite DB; seed with a test user",
             "Spin up an Echo test server with the registered user handlers",
             "Use net/http/httptest and testify/assert"
@@ -194,13 +194,13 @@
         },
         {
           "id": "2.2",
-          "title": "Write HTTP integration tests for user endpoints \u2014 not-found and error cases",
+          "title": "Write HTTP integration tests for user endpoints — not-found and error cases",
           "details": [
             "In resolve_integration_test.go, add not-found and error cases for user endpoints",
-            "Unknown UUID selector \u2192 404 with 'user not found' message",
-            "Unknown username selector \u2192 404 with 'user not found' message",
-            "Unknown email selector \u2192 404 with 'user not found' message",
-            "Malformed selector that cannot resolve \u2192 404",
+            "Unknown UUID selector → 404 with 'user not found' message",
+            "Unknown username selector → 404 with 'user not found' message",
+            "Unknown email selector → 404 with 'user not found' message",
+            "Malformed selector that cannot resolve → 404",
             "Assert response body JSON contains expected error message using testify/assert"
           ],
           "test_spec_refs": [
@@ -215,11 +215,11 @@
         },
         {
           "id": "2.3",
-          "title": "Write HTTP integration tests for org endpoints \u2014 selector variants",
+          "title": "Write HTTP integration tests for org endpoints — selector variants",
           "details": [
             "In resolve_integration_test.go, add org endpoint integration tests",
-            "For org endpoints (GET /orgs/:id, PATCH /orgs/:id, DELETE /orgs/:id, etc.), cover: UUID selector \u2192 200 OK, slug selector \u2192 200 OK",
-            "Unknown slug selector \u2192 404 with 'organization not found' message",
+            "For org endpoints (GET /orgs/:id, PATCH /orgs/:id, DELETE /orgs/:id, etc.), cover: UUID selector → 200 OK, slug selector → 200 OK",
+            "Unknown slug selector → 404 with 'organization not found' message",
             "Seed in-memory DB with a test org; use Echo test server with registered org handlers"
           ],
           "test_spec_refs": [
@@ -240,10 +240,10 @@
           "title": "Write HTTP integration tests for two-ID member endpoints",
           "details": [
             "In resolve_integration_test.go, add tests for PUT /orgs/:id/members/:user_id and DELETE /orgs/:id/members/:user_id",
-            "Test: org UUID + user UUID \u2192 200 OK",
-            "Test: org slug + username \u2192 200 OK",
-            "Test: org slug + user email \u2192 200 OK",
-            "Test: unknown org slug \u2192 404; unknown user email \u2192 404",
+            "Test: org UUID + user UUID → 200 OK",
+            "Test: org slug + username → 200 OK",
+            "Test: org slug + user email → 200 OK",
+            "Test: unknown org slug → 404; unknown user email → 404",
             "Seed DB with org and user; verify both resolvers are invoked independently"
           ],
           "test_spec_refs": [
@@ -279,9 +279,9 @@
           "title": "Write migration unit tests for idx_users_email unique index",
           "details": [
             "Create or extend internal/db/migrate_test.go",
-            "Test: clean schema with unique emails \u2192 CREATE UNIQUE INDEX succeeds, server proceeds (TS-16-19, TS-16-21)",
-            "Test: schema with duplicate emails \u2192 migration returns error; error message lists all offending email addresses with row counts (TS-16-20)",
-            "Test: verify no false positives \u2014 unique emails do not trigger failure",
+            "Test: clean schema with unique emails → CREATE UNIQUE INDEX succeeds, server proceeds (TS-16-19, TS-16-21)",
+            "Test: schema with duplicate emails → migration returns error; error message lists all offending email addresses with row counts (TS-16-20)",
+            "Test: verify no false positives — unique emails do not trigger failure",
             "Use OpenMemory helper; use testify/assert and testify/require"
           ],
           "test_spec_refs": [
@@ -447,7 +447,7 @@
             "In the same resolve.go file, implement resolveOrgID(db Executor, selector string) (string, error)",
             "Step 1: if uuid.Parse(selector) succeeds, execute SELECT id FROM orgs WHERE id = ? and return result or sql.ErrNoRows",
             "Step 2 (fallback, no email heuristic): execute SELECT id FROM orgs WHERE slug = ? and return result or sql.ErrNoRows",
-            "Note: org resolver does NOT apply the '@' email heuristic \u2014 any non-UUID string falls through to slug lookup"
+            "Note: org resolver does NOT apply the '@' email heuristic — any non-UUID string falls through to slug lookup"
           ],
           "test_spec_refs": [
             "TS-16-6",
@@ -483,8 +483,8 @@
           "details": [
             "In internal/handlers/users.go, update handlers for: GET /users/:id, POST /users/:id/promote, POST /users/:id/demote, POST /users/:id/block, POST /users/:id/unblock",
             "Replace inline uuid.Parse(c.Param('id')) + WHERE id = ? pattern with: id, err := resolveUserID(h.db, c.Param('id'))",
-            "On sql.ErrNoRows \u2192 return WriteAPIError(c, 404, 'user not found')",
-            "On other errors \u2192 return WriteAPIError(c, 500, 'internal server error')",
+            "On sql.ErrNoRows → return WriteAPIError(c, 404, 'user not found')",
+            "On other errors → return WriteAPIError(c, 500, 'internal server error')",
             "All subsequent DB queries use the resolved UUID id unchanged"
           ],
           "test_spec_refs": [
@@ -539,8 +539,8 @@
           "details": [
             "In internal/handlers/orgs.go, update handlers for: GET /orgs/:id, PATCH /orgs/:id, DELETE /orgs/:id, POST /orgs/:id/block, POST /orgs/:id/unblock, GET /orgs/:id/members",
             "Replace inline uuid.Parse(c.Param('id')) pattern with: id, err := resolveOrgID(h.db, c.Param('id'))",
-            "On sql.ErrNoRows \u2192 return WriteAPIError(c, 404, 'organization not found')",
-            "On other errors \u2192 return WriteAPIError(c, 500, 'internal server error')"
+            "On sql.ErrNoRows → return WriteAPIError(c, 404, 'organization not found')",
+            "On other errors → return WriteAPIError(c, 500, 'internal server error')"
           ],
           "test_spec_refs": [
             "TS-16-13",
@@ -593,7 +593,7 @@
       "subtasks": [
         {
           "id": "8.1",
-          "title": "Update api/openapi.yaml \u2014 remove format: uuid from user and org {id} parameters",
+          "title": "Update api/openapi.yaml — remove format: uuid from user and org {id} parameters",
           "details": [
             "In api/openapi.yaml, find all {id} parameter definitions for user endpoints and remove 'format: uuid'",
             "Update parameter descriptions to document accepted selectors: 'UUID, username, or email address of the user'",
@@ -612,7 +612,7 @@
         },
         {
           "id": "8.2",
-          "title": "Update api/openapi.yaml \u2014 remove format: uuid from {user_id} in member endpoints",
+          "title": "Update api/openapi.yaml — remove format: uuid from {user_id} in member endpoints",
           "details": [
             "In api/openapi.yaml, find {user_id} parameter definitions in /orgs/{id}/members/{user_id} endpoints",
             "Remove 'format: uuid' from {user_id} parameter",
@@ -691,7 +691,7 @@
             "In all non-admin cobra commands that take an org ID positional argument, update Use: strings to include '|slug' variant",
             "Update Long: descriptions to document accepted selector formats",
             "Ensure all 21 commands listed in the PRD that take positional ID arguments are updated",
-            "No functional code changes \u2014 CLI already passes raw strings to SDK/API"
+            "No functional code changes — CLI already passes raw strings to SDK/API"
           ],
           "test_spec_refs": [
             "TS-16-27"
@@ -736,7 +736,7 @@
     {
       "id": 10,
       "kind": "checkpoint",
-      "title": "Full test suite checkpoint \u2014 all spec tests green",
+      "title": "Full test suite checkpoint — all spec tests green",
       "subtasks": [
         {
           "id": "10.1",
@@ -784,7 +784,7 @@
         },
         {
           "id": "10.2",
-          "title": "Confirm backward compatibility \u2014 existing UUID-based calls unchanged",
+          "title": "Confirm backward compatibility — existing UUID-based calls unchanged",
           "details": [
             "Verify that all existing tests that pass UUID values to user/org endpoints continue to pass without modification",
             "Confirm that the SDK method signatures are unchanged (no breaking changes)",
@@ -826,7 +826,7 @@
     {
       "id": 11,
       "kind": "wiring_verification",
-      "title": "Wiring verification \u2014 end-to-end integration and stub audit",
+      "title": "Wiring verification — end-to-end integration and stub audit",
       "subtasks": [
         {
           "id": "11.1",
@@ -877,9 +877,9 @@
           "id": "11.3",
           "title": "Stub and dead-code audit",
           "details": [
-            "Search for panic(\"not implemented\") in internal/handlers/resolve.go and internal/db/migrate.go \u2014 none should exist",
-            "Search for bare 'return nil' in non-trivial resolver paths \u2014 confirm all paths return a value or propagate an error",
-            "Search for // TODO comments in resolve.go and migration code \u2014 resolve or document any found",
+            "Search for panic(\"not implemented\") in internal/handlers/resolve.go and internal/db/migrate.go — none should exist",
+            "Search for bare 'return nil' in non-trivial resolver paths — confirm all paths return a value or propagate an error",
+            "Search for // TODO comments in resolve.go and migration code — resolve or document any found",
             "Confirm resolveOrgSlugFromJSON does not appear anywhere: grep -r 'resolveOrgSlugFromJSON' . returns no results",
             "Confirm cli_resolve.go does not exist in the root package"
           ],
@@ -895,7 +895,7 @@
         },
         {
           "id": "11.4",
-          "title": "Run smoke tests \u2014 full end-to-end selector resolution",
+          "title": "Run smoke tests — full end-to-end selector resolution",
           "details": [
             "Run all spec tests including smoke tests: go test ./internal/handlers/... ./internal/db/... -count=1 -v",
             "Confirm UUID selectors, username/email selectors, and slug selectors all return 200 OK in integration tests",
@@ -924,7 +924,7 @@
         },
         {
           "id": "11.5",
-          "title": "Cross-spec entry point verification \u2014 confirm resolvers are called from production handlers",
+          "title": "Cross-spec entry point verification — confirm resolvers are called from production handlers",
           "details": [
             "Verify resolveUserID is called from production handler code in internal/handlers/users.go (not only from tests)",
             "Verify resolveOrgID is called from production handler code in internal/handlers/orgs.go (not only from tests)",

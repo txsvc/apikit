@@ -30,3 +30,9 @@ const TokenAlphabet = tokenAlphabet
 var SetRandReader = func(r io.Reader) {
 	randReader = r
 }
+
+// ResolveUserID exposes resolveUserID for external tests.
+var ResolveUserID = resolveUserID
+
+// ResolveOrgID exposes resolveOrgID for external tests.
+var ResolveOrgID = resolveOrgID
