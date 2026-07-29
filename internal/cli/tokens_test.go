@@ -479,3 +479,602 @@ func TestTokensRevoke_Property_AlwaysEmitsEmptyJSON(t *testing.T) {
 		})
 	}
 }
+
+// ========================================================================
+// Spec 17 — PAT Permission Updates
+// Task Group 3: Failing tests for CLI commands:
+// akc tokens replace, add, and remove.
+// ========================================================================
+
+// ========================================================================
+// Task 3.4: Unit tests for akc tokens replace CLI command
+// Test Spec: TS-17-29, TS-17-30
+// Requirements: 17-REQ-11.1, 17-REQ-11.2
+// ========================================================================
+
+// TestTokensReplace_HappyPath verifies that `akc tokens replace <token_id>
+// --permissions users:read,orgs:read` sends a PUT request to
+// /user/tokens/<token_id>/permissions with the parsed permissions and prints
+// PATResponse JSON to stdout.
+//
+// Test Spec: TS-17-29
+// Requirement: 17-REQ-11.1
+func TestTokensReplace_HappyPath(t *testing.T) {
+	var capturedMethod string
+	var capturedPath string
+	var capturedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/permissions") {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &capturedBody)
+
+			resp := map[string]any{
+				"token_id":    "tok-replace1",
+				"name":        "ci-bot",
+				"permissions": []string{"users:read", "orgs:read"},
+				"created_at":  "2024-01-01T00:00:00Z",
+				"revoked_at":  nil,
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeTokensCmdWithClient(client,
+		"replace", "tok-replace1", "--permissions", "users:read,orgs:read")
+
+	if err != nil {
+		t.Errorf("tokens replace returned error: %v, want nil (exit 0)", err)
+	}
+
+	if capturedMethod != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", capturedMethod)
+	}
+
+	if !strings.Contains(capturedPath, "/user/tokens/tok-replace1/permissions") {
+		t.Errorf("request path = %q, want to contain /user/tokens/tok-replace1/permissions",
+			capturedPath)
+	}
+
+	if capturedBody != nil {
+		perms, ok := capturedBody["permissions"].([]any)
+		if !ok {
+			t.Fatalf("captured permissions is not an array: %T", capturedBody["permissions"])
+		}
+		expectedPerms := []string{"users:read", "orgs:read"}
+		if len(perms) != len(expectedPerms) {
+			t.Errorf("captured permissions length = %d, want %d", len(perms), len(expectedPerms))
+		}
+		for i, p := range expectedPerms {
+			if i < len(perms) && perms[i] != p {
+				t.Errorf("captured permissions[%d] = %v, want %q", i, perms[i], p)
+			}
+		}
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Fatal("stdout is empty; expected PATResponse JSON")
+	}
+
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %s", stdout)
+	}
+
+	var pat map[string]any
+	if err := json.Unmarshal([]byte(stdout), &pat); err != nil {
+		t.Fatalf("failed to parse stdout as JSON: %v", err)
+	}
+	if pat["token_id"] != "tok-replace1" {
+		t.Errorf("stdout token_id = %v, want %q", pat["token_id"], "tok-replace1")
+	}
+}
+
+// TestTokensReplace_AutoRevokeWarning verifies that when the server returns
+// a PATResponse with a non-null revoked_at, the CLI prints a revocation
+// warning to stderr.
+//
+// Test Spec: TS-17-30
+// Requirement: 17-REQ-11.2
+func TestTokensReplace_AutoRevokeWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/permissions") {
+			resp := map[string]any{
+				"token_id":    "tok-autorev",
+				"name":        "auto-revoked",
+				"permissions": []string{},
+				"created_at":  "2024-01-01T00:00:00Z",
+				"revoked_at":  "2024-06-15T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, stderr, err := executeTokensCmdWithClient(client,
+		"replace", "tok-autorev", "--permissions", "users:read")
+
+	if err != nil {
+		t.Errorf("tokens replace returned error: %v, want nil (exit 0)", err)
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Fatal("stdout is empty; expected PATResponse JSON")
+	}
+
+	expectedMsg := "Token tok-autorev has been revoked (no permissions remaining)"
+	if !strings.Contains(stderr, expectedMsg) {
+		t.Errorf("stderr = %q, want to contain %q", stderr, expectedMsg)
+	}
+}
+
+// TestTokensReplace_MissingPermissionsFlag verifies that `akc tokens replace
+// <token_id>` without --permissions flag exits with a non-zero code.
+//
+// Requirement: 17-REQ-11.E1
+func TestTokensReplace_MissingPermissionsFlag(t *testing.T) {
+	_, _, err := executeTokensCmd("replace", "tok-123")
+
+	if err == nil {
+		t.Fatal("tokens replace without --permissions returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensReplace_MissingTokenID verifies that `akc tokens replace`
+// without a token_id positional argument exits with a non-zero code.
+//
+// Requirement: 17-REQ-11.E3
+func TestTokensReplace_MissingTokenID(t *testing.T) {
+	_, _, err := executeTokensCmd("replace", "--permissions", "users:read")
+
+	if err == nil {
+		t.Fatal("tokens replace without token_id returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensReplace_ServerError verifies that when the server returns a
+// non-200 HTTP status, tokens replace exits non-zero.
+//
+// Requirement: 17-REQ-11.E2
+func TestTokensReplace_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		resp := map[string]any{
+			"error": map[string]any{
+				"code":    403,
+				"message": "insufficient permissions",
+			},
+		}
+		respJSON, _ := json.Marshal(resp)
+		w.Write(respJSON)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	_, _, err := executeTokensCmdWithClient(client,
+		"replace", "tok-123", "--permissions", "users:read")
+
+	if err == nil {
+		t.Fatal("tokens replace with server error returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensReplace_ParsePermissions verifies the comma-split behavior
+// of parsePermissions used by the replace command.
+//
+// Requirement: 17-REQ-11.1
+func TestTokensReplace_ParsePermissions(t *testing.T) {
+	var capturedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &capturedBody)
+			resp := map[string]any{
+				"token_id":    "tok-parse",
+				"name":        "parse-test",
+				"permissions": []string{"users:read", "orgs:read"},
+				"created_at":  "2024-01-01T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	_, _, err := executeTokensCmdWithClient(client,
+		"replace", "tok-parse", "--permissions", "users:read, orgs:read")
+
+	if err != nil {
+		t.Fatalf("tokens replace returned error: %v", err)
+	}
+
+	if capturedBody == nil {
+		t.Fatal("mock server did not receive request body")
+	}
+
+	perms, ok := capturedBody["permissions"].([]any)
+	if !ok {
+		t.Fatalf("captured permissions is not an array: %T", capturedBody["permissions"])
+	}
+
+	expectedPerms := []string{"users:read", "orgs:read"}
+	if len(perms) != len(expectedPerms) {
+		t.Errorf("captured permissions length = %d, want %d", len(perms), len(expectedPerms))
+	}
+	for i, p := range expectedPerms {
+		if i < len(perms) && perms[i] != p {
+			t.Errorf("captured permissions[%d] = %v, want %q", i, perms[i], p)
+		}
+	}
+}
+
+// ========================================================================
+// Task 3.5: Unit tests for akc tokens add and akc tokens remove CLI commands
+// Test Spec: TS-17-31, TS-17-32, TS-17-33, TS-17-34
+// Requirements: 17-REQ-12.1, 17-REQ-12.2, 17-REQ-13.1, 17-REQ-13.2
+// ========================================================================
+
+// TestTokensAdd_HappyPath verifies that `akc tokens add <token_id>
+// --permissions orgs:read` sends a PATCH request to
+// /user/tokens/<token_id>/permissions and prints PATResponse JSON to stdout.
+//
+// Test Spec: TS-17-31
+// Requirement: 17-REQ-12.1
+func TestTokensAdd_HappyPath(t *testing.T) {
+	var capturedMethod string
+	var capturedPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/permissions") {
+			resp := map[string]any{
+				"token_id":    "tok-add1",
+				"name":        "ci-bot",
+				"permissions": []string{"users:read", "orgs:read"},
+				"created_at":  "2024-01-01T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeTokensCmdWithClient(client,
+		"add", "tok-add1", "--permissions", "orgs:read")
+
+	if err != nil {
+		t.Errorf("tokens add returned error: %v, want nil (exit 0)", err)
+	}
+
+	if capturedMethod != http.MethodPatch {
+		t.Errorf("HTTP method = %q, want PATCH", capturedMethod)
+	}
+
+	if !strings.Contains(capturedPath, "/user/tokens/tok-add1/permissions") {
+		t.Errorf("request path = %q, want to contain /user/tokens/tok-add1/permissions",
+			capturedPath)
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Fatal("stdout is empty; expected PATResponse JSON")
+	}
+
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %s", stdout)
+	}
+
+	var pat map[string]any
+	if err := json.Unmarshal([]byte(stdout), &pat); err != nil {
+		t.Fatalf("failed to parse stdout as JSON: %v", err)
+	}
+
+	perms, ok := pat["permissions"].([]any)
+	if !ok {
+		t.Fatalf("permissions is not an array: %T", pat["permissions"])
+	}
+	found := false
+	for _, p := range perms {
+		if p == "orgs:read" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'orgs:read' in permissions, got %v", perms)
+	}
+}
+
+// TestTokensAdd_NoRevocationWarning verifies that `akc tokens add` never
+// prints a revocation warning to stderr.
+//
+// Test Spec: TS-17-32
+// Requirement: 17-REQ-12.2
+func TestTokensAdd_NoRevocationWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			resp := map[string]any{
+				"token_id":    "tok-add-norev",
+				"name":        "ci-bot",
+				"permissions": []string{"users:read", "orgs:read"},
+				"created_at":  "2024-01-01T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	_, stderr, err := executeTokensCmdWithClient(client,
+		"add", "tok-add-norev", "--permissions", "orgs:read")
+
+	if err != nil {
+		t.Errorf("tokens add returned error: %v, want nil (exit 0)", err)
+	}
+
+	if strings.Contains(stderr, "has been revoked") {
+		t.Errorf("stderr = %q, should not contain revocation warning for add", stderr)
+	}
+}
+
+// TestTokensAdd_MissingPermissionsFlag verifies that `akc tokens add
+// <token_id>` without --permissions flag exits with a non-zero code.
+//
+// Requirement: 17-REQ-12.E1
+func TestTokensAdd_MissingPermissionsFlag(t *testing.T) {
+	_, _, err := executeTokensCmd("add", "tok-123")
+
+	if err == nil {
+		t.Fatal("tokens add without --permissions returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensAdd_ServerError verifies that when the server returns a non-200
+// HTTP status, tokens add exits non-zero.
+//
+// Requirement: 17-REQ-12.E2
+func TestTokensAdd_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		resp := map[string]any{
+			"error": map[string]any{
+				"code":    403,
+				"message": "insufficient permissions",
+			},
+		}
+		respJSON, _ := json.Marshal(resp)
+		w.Write(respJSON)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	_, _, err := executeTokensCmdWithClient(client,
+		"add", "tok-123", "--permissions", "users:read")
+
+	if err == nil {
+		t.Fatal("tokens add with server error returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensRemove_HappyPath verifies that `akc tokens remove <token_id>
+// --permissions orgs:read` sends a DELETE request to
+// /user/tokens/<token_id>/permissions and prints PATResponse JSON to stdout.
+//
+// Test Spec: TS-17-33
+// Requirement: 17-REQ-13.1
+func TestTokensRemove_HappyPath(t *testing.T) {
+	var capturedMethod string
+	var capturedPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/permissions") {
+			resp := map[string]any{
+				"token_id":    "tok-remove1",
+				"name":        "ci-bot",
+				"permissions": []string{"users:read"},
+				"created_at":  "2024-01-01T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, _, err := executeTokensCmdWithClient(client,
+		"remove", "tok-remove1", "--permissions", "orgs:read")
+
+	if err != nil {
+		t.Errorf("tokens remove returned error: %v, want nil (exit 0)", err)
+	}
+
+	if capturedMethod != http.MethodDelete {
+		t.Errorf("HTTP method = %q, want DELETE", capturedMethod)
+	}
+
+	if !strings.Contains(capturedPath, "/user/tokens/tok-remove1/permissions") {
+		t.Errorf("request path = %q, want to contain /user/tokens/tok-remove1/permissions",
+			capturedPath)
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Fatal("stdout is empty; expected PATResponse JSON")
+	}
+
+	if !json.Valid([]byte(stdout)) {
+		t.Fatalf("stdout is not valid JSON: %s", stdout)
+	}
+
+	var pat map[string]any
+	if err := json.Unmarshal([]byte(stdout), &pat); err != nil {
+		t.Fatalf("failed to parse stdout as JSON: %v", err)
+	}
+
+	perms, ok := pat["permissions"].([]any)
+	if !ok {
+		t.Fatalf("permissions is not an array: %T", pat["permissions"])
+	}
+	if len(perms) != 1 {
+		t.Errorf("expected 1 permission, got %d: %v", len(perms), perms)
+	}
+	if len(perms) > 0 && perms[0] != "users:read" {
+		t.Errorf("permissions[0] = %v, want %q", perms[0], "users:read")
+	}
+}
+
+// TestTokensRemove_AutoRevokeWarning verifies that when the server returns
+// a PATResponse with a non-null revoked_at, the CLI prints a revocation
+// warning to stderr.
+//
+// Test Spec: TS-17-34
+// Requirement: 17-REQ-13.2
+func TestTokensRemove_AutoRevokeWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/permissions") {
+			resp := map[string]any{
+				"token_id":    "tok-rm-rev",
+				"name":        "removed-all",
+				"permissions": []string{},
+				"created_at":  "2024-01-01T00:00:00Z",
+				"revoked_at":  "2024-06-15T00:00:00Z",
+			}
+			respJSON, _ := json.Marshal(resp)
+			w.Write(respJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	stdout, stderr, err := executeTokensCmdWithClient(client,
+		"remove", "tok-rm-rev", "--permissions", "users:read")
+
+	if err != nil {
+		t.Errorf("tokens remove returned error: %v, want nil (exit 0)", err)
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Fatal("stdout is empty; expected PATResponse JSON")
+	}
+
+	expectedMsg := "Token tok-rm-rev has been revoked (no permissions remaining)"
+	if !strings.Contains(stderr, expectedMsg) {
+		t.Errorf("stderr = %q, want to contain %q", stderr, expectedMsg)
+	}
+}
+
+// TestTokensRemove_MissingPermissionsFlag verifies that `akc tokens remove
+// <token_id>` without --permissions flag exits with a non-zero code.
+//
+// Requirement: 17-REQ-13.E1
+func TestTokensRemove_MissingPermissionsFlag(t *testing.T) {
+	_, _, err := executeTokensCmd("remove", "tok-123")
+
+	if err == nil {
+		t.Fatal("tokens remove without --permissions returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensRemove_MissingTokenID verifies that `akc tokens remove`
+// without a token_id positional argument exits with a non-zero code.
+//
+// Requirement: 17-REQ-13.E3
+func TestTokensRemove_MissingTokenID(t *testing.T) {
+	_, _, err := executeTokensCmd("remove", "--permissions", "users:read")
+
+	if err == nil {
+		t.Fatal("tokens remove without token_id returned nil error, want non-zero exit")
+	}
+}
+
+// TestTokensRemove_ServerError verifies that when the server returns a
+// non-200 HTTP status, tokens remove exits non-zero.
+//
+// Requirement: 17-REQ-13.E2
+func TestTokensRemove_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		resp := map[string]any{
+			"error": map[string]any{
+				"code":    403,
+				"message": "insufficient permissions",
+			},
+		}
+		respJSON, _ := json.Marshal(resp)
+		w.Write(respJSON)
+	}))
+	defer server.Close()
+
+	client := &CmdClient{
+		endpointURL: server.URL,
+		apiKey:      "ak_k_s",
+	}
+	_, _, err := executeTokensCmdWithClient(client,
+		"remove", "tok-123", "--permissions", "users:read")
+
+	if err == nil {
+		t.Fatal("tokens remove with server error returned nil error, want non-zero exit")
+	}
+}

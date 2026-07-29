@@ -5264,3 +5264,838 @@ func TestAddPATPermissions_Escalation_Blocked(t *testing.T) {
 
 	assertErrorResponse(t, rec, http.StatusForbidden, "cannot grant permission: orgs:write")
 }
+
+// ========================================================================
+// Spec 17 — PAT Permission Updates
+// Task Group 3: Failing tests for removePATPermissions handler,
+// auto-revocation behavior, and CLI commands.
+// ========================================================================
+
+// ========================================================================
+// Task 3.1: Unit tests for DELETE removePATPermissions handler
+// Test Spec: TS-17-23, TS-17-24, TS-17-25, TS-17-26
+// Requirements: 17-REQ-9, 17-REQ-10
+// ========================================================================
+
+// TestRemovePATPermissions_ValidRemove verifies that a valid DELETE request
+// removes the specified permissions from the token and returns HTTP 200 with
+// the reduced permissions set.
+//
+// Test Spec: TS-17-23
+// Requirement: 17-REQ-9.1
+func TestRemovePATPermissions_ValidRemove(t *testing.T) {
+	userID := testUUID("remove-valid")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Caller has tokens:write permission.
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read", "orgs:read"}))
+	handler.RegisterRoutes(g)
+
+	// Target PAT with permissions ["users:read", "orgs:read"]
+	insertTestPAT(t, database.SqlDB, "remval01", userID, "target-pat",
+		"hash-tgt", `["users:read","orgs:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Remove ["orgs:read"]
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remval01/permissions",
+		`{"permissions": ["orgs:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify permissions reduced to ["users:read"].
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+
+	// Verify revoked_at is null (still has permissions).
+	if resp.RevokedAt != nil {
+		t.Errorf("expected revoked_at to be null, got %q", *resp.RevokedAt)
+	}
+
+	// Verify database reflects the update.
+	var permJSON string
+	err = database.SqlDB.QueryRow(
+		"SELECT permissions FROM pats WHERE token_id = ?", "remval01",
+	).Scan(&permJSON)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	var dbPerms []string
+	if err := json.Unmarshal([]byte(permJSON), &dbPerms); err != nil {
+		t.Fatalf("failed to parse permissions JSON from DB: %v", err)
+	}
+	if len(dbPerms) != 1 || dbPerms[0] != "users:read" {
+		t.Errorf("expected DB permissions [\"users:read\"], got %v", dbPerms)
+	}
+}
+
+// TestRemovePATPermissions_Idempotent verifies that a DELETE request where
+// none of the specified permissions are present on the token is idempotent
+// and returns HTTP 200 with unchanged permissions.
+//
+// Test Spec: TS-17-24
+// Requirement: 17-REQ-9.2
+func TestRemovePATPermissions_Idempotent(t *testing.T) {
+	userID := testUUID("remove-idempotent")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	// Target PAT with permissions ["users:read"]
+	insertTestPAT(t, database.SqlDB, "remidem1", userID, "target-pat",
+		"hash-tgt", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Remove ["orgs:read"] — not present on the token.
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remidem1/permissions",
+		`{"permissions": ["orgs:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify permissions unchanged.
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// TestRemovePATPermissions_AllRemoved_AutoRevokes verifies that a DELETE
+// request that removes all permissions auto-revokes the token and returns
+// HTTP 200 with revoked_at set and empty permissions.
+//
+// Test Spec: TS-17-25
+// Requirement: 17-REQ-9.3
+func TestRemovePATPermissions_AllRemoved_AutoRevokes(t *testing.T) {
+	userID := testUUID("remove-all-autorevoke")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	// Target PAT with permissions ["users:read"] and revoked_at NULL.
+	insertTestPAT(t, database.SqlDB, "remall01", userID, "target-pat",
+		"hash-tgt", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Remove ["users:read"] — the only permission, triggering auto-revocation.
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remall01/permissions",
+		`{"permissions": ["users:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// Verify permissions are empty.
+	if len(resp.Permissions) != 0 {
+		t.Errorf("expected empty permissions, got %v", resp.Permissions)
+	}
+
+	// Verify revoked_at is non-null (auto-revoked).
+	if resp.RevokedAt == nil {
+		t.Fatal("expected revoked_at to be non-null after auto-revocation")
+	}
+
+	// Verify the database also has revoked_at set.
+	var revokedAt sql.NullString
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "remall01",
+	).Scan(&revokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if !revokedAt.Valid {
+		t.Fatal("expected revoked_at to be set in database after auto-revocation")
+	}
+}
+
+// TestRemovePATPermissions_AbsentPermissionsField verifies that a DELETE
+// request with an absent 'permissions' field returns HTTP 400.
+//
+// Requirement: 17-REQ-9.E1
+func TestRemovePATPermissions_AbsentPermissionsField(t *testing.T) {
+	userID := testUUID("remove-absent-perms")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "permissions are required")
+}
+
+// TestRemovePATPermissions_EmptyArray verifies that a DELETE request with
+// an empty permissions array returns HTTP 400.
+//
+// Requirement: 17-REQ-9.E1
+func TestRemovePATPermissions_EmptyArray(t *testing.T) {
+	userID := testUUID("remove-empty-array")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": []}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "permissions are required")
+}
+
+// TestRemovePATPermissions_NullPermissionsField verifies that a DELETE
+// request with permissions: null returns HTTP 400.
+//
+// Requirement: 17-REQ-9.E1
+func TestRemovePATPermissions_NullPermissionsField(t *testing.T) {
+	userID := testUUID("remove-null-perms")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": null}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "permissions are required")
+}
+
+// TestRemovePATPermissions_UnregisteredPermission_Ignored verifies that a
+// DELETE request with unregistered but validly formatted permissions silently
+// ignores them and returns HTTP 200 with unchanged permissions.
+//
+// Test Spec: TS-17-26
+// Requirement: 17-REQ-9.4
+func TestRemovePATPermissions_UnregisteredPermission_Ignored(t *testing.T) {
+	userID := testUUID("remove-unreg-perm")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": ["widgets:destroy"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// TestRemovePATPermissions_MalformedPermission_Rejected verifies that a
+// DELETE request with a malformed permission string (no colon) returns
+// HTTP 400. Format validation still applies to remove operations.
+//
+// Requirement: 17-REQ-9
+func TestRemovePATPermissions_MalformedPermission_Rejected(t *testing.T) {
+	userID := testUUID("remove-malformed")
+	e, _, targetTokenID := setupPermissionUpdateServer(t, userID,
+		patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/"+targetTokenID+"/permissions",
+		`{"permissions": ["usersread"]}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid permission format: usersread")
+}
+
+// ========================================================================
+// Task 3.2: Unit tests for DELETE removePATPermissions — guard and escalation
+// Requirements: 17-REQ-9
+// ========================================================================
+
+// TestRemovePATPermissions_RevokedToken verifies that a DELETE request on
+// a revoked token returns HTTP 400 with 'token is revoked'.
+//
+// Requirement: 17-REQ-4.2
+func TestRemovePATPermissions_RevokedToken(t *testing.T) {
+	userID := testUUID("remove-revoked-token")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	insertTestPAT(t, database.SqlDB, "remrev01", userID, "revoked-pat",
+		"hash-rev", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStr("2024-06-15T00:00:00Z"), "2024-06-01T00:00:00Z")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remrev01/permissions",
+		`{"permissions": ["users:read"]}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "token is revoked")
+}
+
+// TestRemovePATPermissions_ExpiredToken verifies that a DELETE request on
+// an expired token returns HTTP 400 with 'token is expired'.
+//
+// Requirement: 17-REQ-4.3
+func TestRemovePATPermissions_ExpiredToken(t *testing.T) {
+	userID := testUUID("remove-expired-token")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	insertTestPAT(t, database.SqlDB, "remexp01", userID, "expired-pat",
+		"hash-exp", `["users:read"]`, 30,
+		nullStr("2020-01-01T00:00:00Z"), nullStrEmpty(), "2019-12-01T00:00:00Z")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read"}))
+	handler.RegisterRoutes(g)
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remexp01/permissions",
+		`{"permissions": ["users:read"]}`)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "token is expired")
+}
+
+// TestRemovePATPermissions_NoEscalationCheck verifies that a PAT caller
+// can remove any permission from a target token without privilege escalation
+// checks — even permissions the caller does not hold.
+//
+// Requirement: 17-REQ-6.4
+func TestRemovePATPermissions_NoEscalationCheck(t *testing.T) {
+	userID := testUUID("remove-no-escalation")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Caller PAT has only ["tokens:write"] — does NOT hold keys:manage.
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	// Target PAT with permissions ["users:read", "keys:manage"]
+	insertTestPAT(t, database.SqlDB, "remnoesc", userID, "target-pat",
+		"hash-tgt", `["users:read","keys:manage"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Remove ["keys:manage"] — caller doesn't hold it, but remove skips escalation.
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remnoesc/permissions",
+		`{"permissions": ["keys:manage"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 for remove without escalation check, got %d; body: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// TestRemovePATPermissions_UnregisteredMixedWithValid verifies that a DELETE
+// request with a mix of unregistered and valid permissions silently ignores
+// the unregistered ones and removes the valid ones.
+//
+// Requirement: 17-REQ-9.4
+func TestRemovePATPermissions_UnregisteredMixedWithValid(t *testing.T) {
+	userID := testUUID("remove-mixed-unreg")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read", "orgs:read"}))
+	handler.RegisterRoutes(g)
+
+	// Target PAT with permissions ["users:read", "orgs:read"]
+	insertTestPAT(t, database.SqlDB, "remmix01", userID, "target-pat",
+		"hash-tgt", `["users:read","orgs:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Remove ["orgs:read", "widgets:destroy"]
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/remmix01/permissions",
+		`{"permissions": ["orgs:read", "widgets:destroy"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	expectedPerms := []string{"users:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+}
+
+// ========================================================================
+// Task 3.3: Unit tests for auto-revocation behavior
+// Test Spec: TS-17-27, TS-17-28
+// Requirements: 17-REQ-10.1, 17-REQ-10.2
+// ========================================================================
+
+// TestAutoRevocation_PUT_EmptyArray verifies that when a PUT replaces
+// permissions with an empty array, revoked_at is set in both the DB and response.
+//
+// Test Spec: TS-17-27
+// Requirement: 17-REQ-10.1
+func TestAutoRevocation_PUT_EmptyArray(t *testing.T) {
+	userID := testUUID("autorev-put-empty")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	insertTestPAT(t, database.SqlDB, "arput001", userID, "autorevoke-put-pat",
+		"hash-arput", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodPut,
+		"/user/tokens/arput001/permissions",
+		`{"permissions": []}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.RevokedAt == nil {
+		t.Fatal("expected revoked_at to be non-null in response")
+	}
+	if len(resp.Permissions) != 0 {
+		t.Errorf("expected empty permissions, got %v", resp.Permissions)
+	}
+
+	var dbRevokedAt sql.NullString
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "arput001",
+	).Scan(&dbRevokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if !dbRevokedAt.Valid {
+		t.Fatal("expected revoked_at to be set in database, but it was NULL")
+	}
+}
+
+// TestAutoRevocation_DELETE_RemovesAll verifies that when a DELETE removes
+// all permissions, revoked_at is set in the same UPDATE transaction.
+//
+// Test Spec: TS-17-27
+// Requirement: 17-REQ-10.1
+func TestAutoRevocation_DELETE_RemovesAll(t *testing.T) {
+	userID := testUUID("autorev-del-all")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	insertTestPAT(t, database.SqlDB, "ardel001", userID, "autorevoke-del-pat",
+		"hash-ardel", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodDelete,
+		"/user/tokens/ardel001/permissions",
+		`{"permissions": ["users:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.RevokedAt == nil {
+		t.Fatal("expected revoked_at to be non-null after removing all permissions")
+	}
+	if len(resp.Permissions) != 0 {
+		t.Errorf("expected empty permissions, got %v", resp.Permissions)
+	}
+
+	var dbRevokedAt sql.NullString
+	var permJSON string
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at, permissions FROM pats WHERE token_id = ?", "ardel001",
+	).Scan(&dbRevokedAt, &permJSON)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if !dbRevokedAt.Valid {
+		t.Fatal("expected revoked_at to be set in database")
+	}
+	var dbPerms []string
+	if err := json.Unmarshal([]byte(permJSON), &dbPerms); err != nil {
+		t.Fatalf("failed to parse DB permissions: %v", err)
+	}
+	if len(dbPerms) != 0 {
+		t.Errorf("expected empty permissions in DB, got %v", dbPerms)
+	}
+}
+
+// TestAutoRevocation_PATCH_NeverRevokes verifies that the addPATPermissions
+// handler (PATCH) never triggers auto-revocation.
+//
+// Test Spec: TS-17-28
+// Requirement: 17-REQ-10.2
+func TestAutoRevocation_PATCH_NeverRevokes(t *testing.T) {
+	userID := testUUID("autorev-patch-never")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "orgs:read"}))
+	handler.RegisterRoutes(g)
+
+	insertTestPAT(t, database.SqlDB, "arpatch1", userID, "autorevoke-patch-pat",
+		"hash-arp", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodPatch,
+		"/user/tokens/arpatch1/permissions",
+		`{"permissions": ["orgs:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.RevokedAt != nil {
+		t.Errorf("expected revoked_at to be null after PATCH (add), got %q", *resp.RevokedAt)
+	}
+
+	var dbRevokedAt sql.NullString
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "arpatch1",
+	).Scan(&dbRevokedAt)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if dbRevokedAt.Valid {
+		t.Errorf("expected revoked_at to be NULL in DB after PATCH, got %q", dbRevokedAt.String)
+	}
+}
+
+// TestAutoRevocation_PUT_NonEmptyResult_NoRevocation verifies that when a
+// PUT replaces permissions with a non-empty set, revoked_at remains NULL.
+//
+// Requirement: 17-REQ-10.1
+func TestAutoRevocation_PUT_NonEmptyResult_NoRevocation(t *testing.T) {
+	userID := testUUID("autorev-put-nonempty")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "orgs:read"}))
+	handler.RegisterRoutes(g)
+
+	insertTestPAT(t, database.SqlDB, "arnorev1", userID, "no-autorevoke-pat",
+		"hash-ar", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodPut,
+		"/user/tokens/arnorev1/permissions",
+		`{"permissions": ["orgs:read"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	if resp.RevokedAt != nil {
+		t.Errorf("expected revoked_at to be null for non-empty result, got %q", *resp.RevokedAt)
+	}
+}
+
+// TestAutoRevocation_RevokedAtInPATResponse verifies that when auto-revoked,
+// the revoked_at field is included in the PATResponse JSON.
+//
+// Test Spec: TS-17-27
+// Requirement: 17-REQ-10.1
+func TestAutoRevocation_RevokedAtInPATResponse(t *testing.T) {
+	userID := testUUID("autorev-response-check")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	insertTestPAT(t, database.SqlDB, "arresp01", userID, "autorevoke-resp-pat",
+		"hash-arr", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	rec := sendJSON(t, e, http.MethodPut,
+		"/user/tokens/arresp01/permissions",
+		`{"permissions": []}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse response as map: %v", err)
+	}
+
+	revokedAtVal, exists := raw["revoked_at"]
+	if !exists {
+		t.Fatal("expected 'revoked_at' key in response JSON after auto-revocation")
+	}
+	if revokedAtVal == nil {
+		t.Fatal("expected 'revoked_at' to be non-null after auto-revocation")
+	}
+}
