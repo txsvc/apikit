@@ -68,4 +68,7 @@ var schemaStatements = []string{
 	key TEXT NOT NULL PRIMARY KEY,
 	value TEXT NOT NULL
 )`,
+
+	// 7. idx_users_email — unique index on users.email for flexible selectors
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
 }

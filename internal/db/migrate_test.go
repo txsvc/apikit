@@ -28,6 +28,18 @@ func insertTestUserForMigration(t *testing.T, database *DB, id, username, email,
 	}
 }
 
+// dropEmailIndex drops the idx_users_email index to simulate a pre-migration
+// database state. This is needed because schema.go now includes the index for
+// new databases, but migration tests must verify behavior on databases that
+// were created before the index existed.
+func dropEmailIndex(t *testing.T, database *DB) {
+	t.Helper()
+	_, err := database.SqlDB.Exec("DROP INDEX IF EXISTS idx_users_email")
+	if err != nil {
+		t.Fatalf("failed to drop idx_users_email index: %v", err)
+	}
+}
+
 // TestMigrateEmailIndex_CleanSchema verifies that the migration succeeds on
 // a clean schema with no existing users, and that the idx_users_email unique
 // index is created on the users.email column.
@@ -113,6 +125,9 @@ func TestMigrateEmailIndex_DuplicateEmails(t *testing.T) {
 	}
 	defer database.Close()
 
+	// Drop the index to simulate a pre-migration database state.
+	dropEmailIndex(t, database)
+
 	// Insert users with duplicate email addresses.
 	insertTestUserForMigration(t, database, "user-1", "alice1", "alice@example.com", "github", "gh-1")
 	insertTestUserForMigration(t, database, "user-2", "alice2", "alice@example.com", "github", "gh-2")
@@ -155,6 +170,9 @@ func TestMigrateEmailIndex_NoAutoDedup(t *testing.T) {
 		t.Fatalf("OpenMemory error = %v; want nil", err)
 	}
 	defer database.Close()
+
+	// Drop the index to simulate a pre-migration database state.
+	dropEmailIndex(t, database)
 
 	// Insert users with duplicate email addresses.
 	insertTestUserForMigration(t, database, "user-1", "alice1", "alice@example.com", "github", "gh-1")
