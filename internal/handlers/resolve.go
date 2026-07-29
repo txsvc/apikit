@@ -1,6 +1,11 @@
 package handlers
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+
+	"github.com/google/uuid"
+)
 
 // resolveUserID resolves a user selector string (UUID, email, or username)
 // to a canonical user UUID by querying the users table using a three-step
@@ -12,8 +17,20 @@ import "database/sql"
 // Returns (uuid, nil) on success, or ("", sql.ErrNoRows) when no matching
 // row exists, or ("", err) for any other database error.
 func resolveUserID(sqlDB *sql.DB, selector string) (string, error) {
-	// Stub — implementation in task group 5.
-	return "", nil
+	var query string
+	if _, err := uuid.Parse(selector); err == nil {
+		query = "SELECT id FROM users WHERE id = ?"
+	} else if strings.Contains(selector, "@") {
+		query = "SELECT id FROM users WHERE email = ?"
+	} else {
+		query = "SELECT id FROM users WHERE username = ?"
+	}
+
+	var id string
+	if err := sqlDB.QueryRow(query, selector).Scan(&id); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // resolveOrgID resolves an org selector string (UUID or slug) to a canonical
@@ -24,6 +41,16 @@ func resolveUserID(sqlDB *sql.DB, selector string) (string, error) {
 // Returns (uuid, nil) on success, or ("", sql.ErrNoRows) when no matching
 // row exists, or ("", err) for any other database error.
 func resolveOrgID(sqlDB *sql.DB, selector string) (string, error) {
-	// Stub — implementation in task group 5.
-	return "", nil
+	var query string
+	if _, err := uuid.Parse(selector); err == nil {
+		query = "SELECT id FROM orgs WHERE id = ?"
+	} else {
+		query = "SELECT id FROM orgs WHERE slug = ?"
+	}
+
+	var id string
+	if err := sqlDB.QueryRow(query, selector).Scan(&id); err != nil {
+		return "", err
+	}
+	return id, nil
 }
