@@ -6099,3 +6099,376 @@ func TestAutoRevocation_RevokedAtInPATResponse(t *testing.T) {
 		t.Fatal("expected 'revoked_at' to be non-null after auto-revocation")
 	}
 }
+
+// ========================================================================
+// Task 9.5: Smoke tests and integration tests
+// Test Spec: TS-17-SMOKE-1
+// Execution Paths: 17-PATH-1, 17-PATH-6
+// Requirements: 17-REQ-7.1, 17-REQ-8.1, 17-REQ-9.1, 17-REQ-10.1
+// ========================================================================
+
+// TestSmoke_ReplacePATPermissions_HappyPath is the end-to-end smoke test
+// for TS-17-SMOKE-1. A PAT caller with tokens:write replaces a token's
+// permissions and receives HTTP 200 with updated PATResponse. Verifies
+// both the response body and the database state.
+//
+// Real components exercised: PermissionRegistry, PATHandler with all helpers
+// (requireTokensWriteOrManage → lookupAndGuardPAT → validatePermissions →
+// checkPrivilegeEscalation → db.WithTx UPDATE → buildPATResponse),
+// pats SQLite table.
+//
+// Test Spec: TS-17-SMOKE-1
+// Execution Path: 17-PATH-1
+// Requirement: 17-REQ-7.1
+func TestSmoke_ReplacePATPermissions_HappyPath(t *testing.T) {
+	userID := testUUID("smoke-replace-happy")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// Caller is a PAT with tokens:write, users:read, and orgs:read permissions.
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write", "users:read", "orgs:read"}))
+	handler.RegisterRoutes(g)
+
+	// Insert a target PAT with initial permissions ["keys:read"].
+	insertTestPAT(t, database.SqlDB, "smoke001", userID, "smoke-test-pat",
+		"hash-smoke", `["keys:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// PUT /user/tokens/smoke001/permissions with ["users:read", "orgs:read"].
+	rec := sendJSON(t, e, http.MethodPut,
+		"/user/tokens/smoke001/permissions",
+		`{"permissions": ["users:read", "orgs:read"]}`)
+
+	// Verify HTTP 200.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Parse PATResponse.
+	var resp patResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse PATResponse: %v\nbody: %s", err, rec.Body.String())
+	}
+
+	// PATResponse.permissions equals ["users:read", "orgs:read"].
+	expectedPerms := []string{"users:read", "orgs:read"}
+	if len(resp.Permissions) != len(expectedPerms) {
+		t.Fatalf("expected %d permissions, got %d: %v",
+			len(expectedPerms), len(resp.Permissions), resp.Permissions)
+	}
+	for i, perm := range resp.Permissions {
+		if perm != expectedPerms[i] {
+			t.Errorf("permission[%d] = %q, want %q", i, perm, expectedPerms[i])
+		}
+	}
+
+	// PATResponse.revoked_at is null.
+	if resp.RevokedAt != nil {
+		t.Errorf("expected revoked_at to be null, got %q", *resp.RevokedAt)
+	}
+
+	// Verify database state: permissions column updated.
+	var permJSON string
+	err = database.SqlDB.QueryRow(
+		"SELECT permissions FROM pats WHERE token_id = ?", "smoke001",
+	).Scan(&permJSON)
+	if err != nil {
+		t.Fatalf("failed to query pats table: %v", err)
+	}
+	if permJSON != `["users:read","orgs:read"]` {
+		t.Errorf("expected DB permissions %q, got %q",
+			`["users:read","orgs:read"]`, permJSON)
+	}
+
+	// Verify database state: revoked_at remains NULL.
+	var dbRevokedAt sql.NullString
+	err = database.SqlDB.QueryRow(
+		"SELECT revoked_at FROM pats WHERE token_id = ?", "smoke001",
+	).Scan(&dbRevokedAt)
+	if err != nil {
+		t.Fatalf("failed to query revoked_at: %v", err)
+	}
+	if dbRevokedAt.Valid {
+		t.Errorf("expected revoked_at to be NULL in DB, got %q", dbRevokedAt.String)
+	}
+}
+
+// TestIntegration_PATPermissionLifecycle exercises the full PAT permission
+// lifecycle (17-PATH-6): add permissions → replace permissions → remove all
+// permissions → auto-revoke. Verifies database state at each step.
+//
+// Uses an API key caller (bypasses permission and escalation checks) to
+// focus on the data flow through the handler chain. Each step builds on
+// the prior step's state, confirming the handlers compose correctly.
+//
+// Execution Path: 17-PATH-6
+// Requirements: 17-REQ-7.1, 17-REQ-8.1, 17-REQ-9.1, 17-REQ-10.1
+func TestIntegration_PATPermissionLifecycle(t *testing.T) {
+	userID := testUUID("lifecycle-integration")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	// API key caller bypasses permission and escalation checks.
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(nonAdminAuthMiddleware(userID))
+	handler.RegisterRoutes(g)
+
+	// Start: PAT with permissions ["users:read"].
+	insertTestPAT(t, database.SqlDB, "life0001", userID, "lifecycle-pat",
+		"hash-life", `["users:read"]`, 90,
+		nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+	// Step 1: PATCH — add "orgs:read" → ["users:read", "orgs:read"]
+	t.Run("Step1_Add_OrgsRead", func(t *testing.T) {
+		rec := sendJSON(t, e, http.MethodPatch,
+			"/user/tokens/life0001/permissions",
+			`{"permissions": ["orgs:read"]}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp patResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+
+		expected := []string{"users:read", "orgs:read"}
+		if len(resp.Permissions) != len(expected) {
+			t.Fatalf("expected %d permissions, got %d: %v",
+				len(expected), len(resp.Permissions), resp.Permissions)
+		}
+		for i, p := range expected {
+			if resp.Permissions[i] != p {
+				t.Errorf("permission[%d] = %q, want %q", i, resp.Permissions[i], p)
+			}
+		}
+		if resp.RevokedAt != nil {
+			t.Errorf("expected revoked_at null after add, got %q", *resp.RevokedAt)
+		}
+	})
+
+	// Step 2: PUT — replace with ["orgs:write"] → ["orgs:write"]
+	t.Run("Step2_Replace_OrgsWrite", func(t *testing.T) {
+		rec := sendJSON(t, e, http.MethodPut,
+			"/user/tokens/life0001/permissions",
+			`{"permissions": ["orgs:write"]}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp patResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+
+		if len(resp.Permissions) != 1 || resp.Permissions[0] != "orgs:write" {
+			t.Errorf("expected [\"orgs:write\"], got %v", resp.Permissions)
+		}
+		if resp.RevokedAt != nil {
+			t.Errorf("expected revoked_at null after replace, got %q", *resp.RevokedAt)
+		}
+
+		// Verify DB state.
+		var permJSON string
+		err := database.SqlDB.QueryRow(
+			"SELECT permissions FROM pats WHERE token_id = ?", "life0001",
+		).Scan(&permJSON)
+		if err != nil {
+			t.Fatalf("failed to query DB: %v", err)
+		}
+		if permJSON != `["orgs:write"]` {
+			t.Errorf("expected DB permissions %q, got %q", `["orgs:write"]`, permJSON)
+		}
+	})
+
+	// Step 3: DELETE — remove "orgs:write" → [] → auto-revoke
+	t.Run("Step3_Remove_OrgsWrite_AutoRevoke", func(t *testing.T) {
+		rec := sendJSON(t, e, http.MethodDelete,
+			"/user/tokens/life0001/permissions",
+			`{"permissions": ["orgs:write"]}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("DELETE: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp patResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+
+		// Permissions should be empty.
+		if len(resp.Permissions) != 0 {
+			t.Errorf("expected empty permissions after remove, got %v", resp.Permissions)
+		}
+
+		// Token should be auto-revoked.
+		if resp.RevokedAt == nil {
+			t.Fatal("expected revoked_at non-null after removing all permissions")
+		}
+
+		// Verify DB: both permissions and revoked_at are set in the same transaction.
+		var dbPermJSON string
+		var dbRevokedAt sql.NullString
+		err := database.SqlDB.QueryRow(
+			"SELECT permissions, revoked_at FROM pats WHERE token_id = ?", "life0001",
+		).Scan(&dbPermJSON, &dbRevokedAt)
+		if err != nil {
+			t.Fatalf("failed to query DB: %v", err)
+		}
+		if dbPermJSON != `[]` {
+			t.Errorf("expected DB permissions %q, got %q", `[]`, dbPermJSON)
+		}
+		if !dbRevokedAt.Valid {
+			t.Fatal("expected revoked_at set in DB after auto-revocation")
+		}
+	})
+
+	// Step 4: Verify that the revoked token cannot be modified further.
+	t.Run("Step4_RevokedToken_Rejected", func(t *testing.T) {
+		rec := sendJSON(t, e, http.MethodPatch,
+			"/user/tokens/life0001/permissions",
+			`{"permissions": ["users:read"]}`)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for revoked token, got %d; body: %s",
+				rec.Code, rec.Body.String())
+		}
+
+		var raw map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("failed to parse error response: %v", err)
+		}
+		errObj, _ := raw["error"].(map[string]interface{})
+		if errObj == nil {
+			t.Fatalf("expected error envelope, got %v", raw)
+		}
+		msg, _ := errObj["message"].(string)
+		if msg != "token is revoked" {
+			t.Errorf("expected error message %q, got %q", "token is revoked", msg)
+		}
+	})
+}
+
+// TestIntegration_AutoRevocationTransaction verifies that when auto-revocation
+// is triggered, both the permissions update and the revoked_at timestamp are
+// set in the same db.WithTx transaction. This is verified by checking that
+// both columns are updated atomically — if the permissions are empty AND
+// revoked_at is set, the transaction committed both together.
+//
+// Requirement: 17-REQ-10.1
+func TestIntegration_AutoRevocationTransaction(t *testing.T) {
+	userID := testUUID("autorevoke-tx-integration")
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	insertTestUser(t, database.SqlDB, userID, "testuser",
+		"test@example.com", "github", "gh-test")
+
+	registry := auth.NewPermissionRegistry()
+	handler := handlers.NewPATHandler(database, registry)
+	if handler == nil {
+		t.Fatal("NewPATHandler returned nil")
+	}
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(patAuthMiddleware(userID, []string{"tokens:write"}))
+	handler.RegisterRoutes(g)
+
+	// Test with PUT (empty array → auto-revoke).
+	t.Run("PUT_EmptyArray", func(t *testing.T) {
+		insertTestPAT(t, database.SqlDB, "artx0001", userID, "autorevoke-tx-put",
+			"hash-tx1", `["users:read"]`, 90,
+			nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		rec := sendJSON(t, e, http.MethodPut,
+			"/user/tokens/artx0001/permissions",
+			`{"permissions": []}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		// Verify both columns updated atomically.
+		var dbPermJSON string
+		var dbRevokedAt sql.NullString
+		err := database.SqlDB.QueryRow(
+			"SELECT permissions, revoked_at FROM pats WHERE token_id = ?", "artx0001",
+		).Scan(&dbPermJSON, &dbRevokedAt)
+		if err != nil {
+			t.Fatalf("failed to query DB: %v", err)
+		}
+		if dbPermJSON != `[]` {
+			t.Errorf("expected DB permissions %q, got %q", `[]`, dbPermJSON)
+		}
+		if !dbRevokedAt.Valid {
+			t.Fatal("expected revoked_at set in DB — transaction should commit both permissions and revoked_at")
+		}
+	})
+
+	// Test with DELETE (remove all → auto-revoke).
+	t.Run("DELETE_RemoveAll", func(t *testing.T) {
+		insertTestPAT(t, database.SqlDB, "artx0002", userID, "autorevoke-tx-del",
+			"hash-tx2", `["users:read"]`, 90,
+			nullStr("2099-01-01T00:00:00Z"), nullStrEmpty(), "2024-06-01T00:00:00Z")
+
+		rec := sendJSON(t, e, http.MethodDelete,
+			"/user/tokens/artx0002/permissions",
+			`{"permissions": ["users:read"]}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		// Verify both columns updated atomically.
+		var dbPermJSON string
+		var dbRevokedAt sql.NullString
+		err := database.SqlDB.QueryRow(
+			"SELECT permissions, revoked_at FROM pats WHERE token_id = ?", "artx0002",
+		).Scan(&dbPermJSON, &dbRevokedAt)
+		if err != nil {
+			t.Fatalf("failed to query DB: %v", err)
+		}
+		if dbPermJSON != `[]` {
+			t.Errorf("expected DB permissions %q, got %q", `[]`, dbPermJSON)
+		}
+		if !dbRevokedAt.Valid {
+			t.Fatal("expected revoked_at set in DB — transaction should commit both permissions and revoked_at")
+		}
+	})
+}
