@@ -189,7 +189,7 @@
             "16-REQ-3",
             "16-REQ-12"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -210,7 +210,7 @@
             "16-REQ-3",
             "16-REQ-12"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -232,7 +232,7 @@
             "16-REQ-4",
             "16-REQ-12"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -255,7 +255,7 @@
             "16-REQ-5",
             "16-REQ-12"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
