@@ -281,13 +281,16 @@ func (h *userHandlers) getUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	var user User
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
 		        role, status, provider, provider_id, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
@@ -328,9 +331,12 @@ func (h *userHandlers) updateUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Bind request body into UpdateUserRequest (07-REQ-5.2, 07-REQ-5.E2).
@@ -346,7 +352,7 @@ func (h *userHandlers) updateUser(c echo.Context) error {
 
 	// Verify the user exists (07-REQ-5.3).
 	var exists int
-	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
+	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
@@ -389,14 +395,17 @@ func (h *userHandlers) promoteUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch the target user (07-REQ-6.3).
 	var user User
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
 		        role, status, provider, provider_id, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
@@ -442,14 +451,17 @@ func (h *userHandlers) demoteUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch the target user (07-REQ-7.4).
 	var user User
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
 		        role, status, provider, provider_id, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
@@ -507,14 +519,17 @@ func (h *userHandlers) blockUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch the target user (07-REQ-8.3).
 	var user User
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
 		        role, status, provider, provider_id, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
@@ -558,14 +573,17 @@ func (h *userHandlers) unblockUser(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Fetch the target user (07-REQ-9.3).
 	var user User
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
 		        role, status, provider, provider_id, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
@@ -610,14 +628,17 @@ func (h *userHandlers) listUserKeys(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Verify the user exists before querying api_keys (07-REQ-10.2).
 	var exists int
-	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
+	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
@@ -661,15 +682,18 @@ func (h *userHandlers) revokeUserKey(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	keyID := c.Param("key_id")
 
 	// Fetch the key matching both key_id and user_id (07-REQ-11.3).
 	var revokedAt sql.NullString
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT revoked_at FROM api_keys WHERE key_id = ? AND user_id = ?`,
 		keyID, id,
 	).Scan(&revokedAt)
@@ -709,14 +733,17 @@ func (h *userHandlers) listUserTokens(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	// Verify the user exists before querying pats (07-REQ-12.2).
 	var exists int
-	err := h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
+	err = h.db.QueryRow("SELECT 1 FROM users WHERE id = ?", id).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
@@ -766,15 +793,18 @@ func (h *userHandlers) revokeUserToken(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
 	}
 
-	id := c.Param("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusBadRequest, "invalid user id")
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 	tokenID := c.Param("token_id")
 
 	// Fetch the token matching both token_id and user_id (07-REQ-13.3).
 	var revokedAt sql.NullString
-	err := h.db.QueryRow(
+	err = h.db.QueryRow(
 		`SELECT revoked_at FROM pats WHERE token_id = ? AND user_id = ?`,
 		tokenID, id,
 	).Scan(&revokedAt)
