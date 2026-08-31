@@ -98,9 +98,12 @@ func CmdPrintJSON(cmd *cobra.Command, v any) error {
 // CmdHandleError writes a JSON error envelope to stdout and returns
 // the original error. For coded errors (satisfying codedError), the
 // envelope uses the error's code. For other errors, code is 2.
+// If the error also provides a machine-readable error type (via
+// apiErrorTyper), the error_type field is included in the envelope.
 func CmdHandleError(cmd *cobra.Command, err error) error {
 	code := 2
 	msg := err.Error()
+	errorType := ""
 
 	var ce codedError
 	if errors.As(err, &ce) {
@@ -108,11 +111,24 @@ func CmdHandleError(cmd *cobra.Command, err error) error {
 		msg = ce.ErrorMessage()
 	}
 
+	// Check for error_type support.
+	var ae apiErrorer
+	if asAPIError(err, &ae) {
+		if at, ok := ae.(apiErrorTyper); ok {
+			errorType = at.ErrorErrorType()
+		}
+	}
+
+	errMap := map[string]any{
+		"code":    code,
+		"message": msg,
+	}
+	if errorType != "" {
+		errMap["error_type"] = errorType
+	}
+
 	envelope := map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": msg,
-		},
+		"error": errMap,
 	}
 	_ = CmdPrintJSON(cmd, envelope)
 	return &printedError{err}

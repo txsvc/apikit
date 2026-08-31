@@ -16,6 +16,14 @@ type apiErrorer interface {
 	ErrorMessage() string
 }
 
+// apiErrorTyper is an optional extension of apiErrorer that also provides
+// a machine-readable error type. Checked separately to maintain backward
+// compatibility with older APIError implementations.
+type apiErrorTyper interface {
+	apiErrorer
+	ErrorErrorType() string
+}
+
 // asAPIError checks if err implements apiErrorer, traversing the error chain.
 // This is equivalent to errors.As but uses interface matching rather than
 // concrete type assertion, avoiding the import cycle.
@@ -83,21 +91,28 @@ func PrintError(err error) {
 
 	code := 0
 	message := err.Error()
+	errorType := ""
 
 	var ae apiErrorer
 	if asAPIError(err, &ae) {
 		code = ae.ErrorCode()
 		message = ae.ErrorMessage()
+		// Check if the error also provides a machine-readable error type.
+		if at, ok := ae.(apiErrorTyper); ok {
+			errorType = at.ErrorErrorType()
+		}
 	}
 
 	envelope := struct {
 		Error struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
+			Code      int    `json:"code"`
+			Message   string `json:"message"`
+			ErrorType string `json:"error_type,omitempty"`
 		} `json:"error"`
 	}{}
 	envelope.Error.Code = code
 	envelope.Error.Message = message
+	envelope.Error.ErrorType = errorType
 
 	data, _ := json.MarshalIndent(envelope, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))

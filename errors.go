@@ -12,10 +12,12 @@ type errorEnvelope struct {
 	Error errorDetail `json:"error"`
 }
 
-// errorDetail carries the integer code and human-readable message.
+// errorDetail carries the integer code, human-readable message, and optional
+// machine-readable error type for programmatic switching.
 type errorDetail struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	ErrorType string `json:"error_type,omitempty"`
 }
 
 // WriteAPIError writes a standard JSON error response envelope to the response.
@@ -30,6 +32,22 @@ func WriteAPIError(c echo.Context, code int, message string) error {
 		Error: errorDetail{
 			Code:    code,
 			Message: message,
+		},
+	})
+}
+
+// WriteAPIErrorWithType writes a standard JSON error response envelope with an
+// additional error_type field for machine-readable error classification.
+// Format: {"error": {"code": <integer>, "message": "<string>", "error_type": "<string>"}}
+// The error_type field enables programmatic switching on error conditions
+// without parsing the human-readable message string.
+func WriteAPIErrorWithType(c echo.Context, code int, message, errorType string) error {
+	c.Response().Header().Set("Content-Type", "application/json; charset=utf-8")
+	return c.JSON(code, errorEnvelope{
+		Error: errorDetail{
+			Code:      code,
+			Message:   message,
+			ErrorType: errorType,
 		},
 	})
 }

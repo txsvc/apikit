@@ -206,8 +206,9 @@ func decodeErrorResponse(resp *http.Response) *APIError {
 	}
 	if envelope.Error.Code != 0 && envelope.Error.Message != "" {
 		return &APIError{
-			Code:    envelope.Error.Code,
-			Message: envelope.Error.Message,
+			Code:      envelope.Error.Code,
+			Message:   envelope.Error.Message,
+			ErrorType: envelope.Error.ErrorType,
 		}
 	}
 	return &APIError{
