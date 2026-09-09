@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/txsvc/apikit/internal/apiutil"
+	"github.com/txsvc/apikit/internal/auth"
 	"github.com/txsvc/apikit/internal/authctx"
 	"github.com/txsvc/apikit/internal/db"
 )
@@ -87,7 +88,13 @@ func writeAPIError(c echo.Context, code int, message string) error {
 
 // listKeys handles GET /user/keys — lists all API key metadata for the
 // authenticated user, ordered by created_at DESC, with ETag caching support.
+// Requires the keys:read permission for PAT credentials; admin tokens and
+// API keys carry implicit full permissions.
 func (h *keyHandlers) listKeys(c echo.Context) error {
+	if err := auth.RequirePermission(c, "keys", "read"); err != nil {
+		return writeAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
 	userID := authctx.GetUserID(c)
 
 	// Step 1: ETag derivation query.
@@ -287,10 +294,15 @@ func (h *keyHandlers) refreshKey(c echo.Context) error {
 
 // revokeKey handles DELETE /user/keys/:key_id — permanently revokes a key.
 // Accepts authentication via API key or PAT with keys:manage permission
-// (enforced by auth middleware). Self-revocation is permitted because the auth
-// middleware validates the credential before handler execution and does not
-// re-validate mid-flight.
+// (enforced here via auth.RequirePermission; the auth middleware only
+// validates the credential itself). Self-revocation is permitted because the
+// auth middleware validates the credential before handler execution and does
+// not re-validate mid-flight.
 func (h *keyHandlers) revokeKey(c echo.Context) error {
+	if err := auth.RequirePermission(c, "keys", "manage"); err != nil {
+		return writeAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
 	userID := authctx.GetUserID(c)
 	keyID := c.Param("key_id")
 

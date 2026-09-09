@@ -35,8 +35,13 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
-	// Open the SQLite connection.
-	sqlDB, err := sql.Open("sqlite", path)
+	// Open the SQLite connection. Foreign-key enforcement is a per-connection
+	// setting in SQLite, so it is requested through the DSN: database/sql may
+	// transparently discard and reopen the underlying connection, and a
+	// connection opened without the pragma would silently stop enforcing
+	// REFERENCES and ON DELETE CASCADE. initDB additionally executes the
+	// PRAGMA explicitly for the initial connection.
+	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +66,7 @@ func Open(path string) (*DB, error) {
 // OpenMemory opens an in-memory SQLite database with full initialization
 // (skipping WAL mode). Each call returns an independent isolated instance.
 func OpenMemory() (*DB, error) {
-	sqlDB, err := sql.Open("sqlite", ":memory:")
+	sqlDB, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}

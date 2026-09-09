@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,7 +47,6 @@ func cachePublicMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		return next(c)
 	}
 }
-
 
 // handleCallback returns an Echo handler for POST /auth/callback.
 // It implements the full OAuth callback flow:
@@ -123,6 +124,21 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string, aft
 			return oauthError(c, http.StatusBadRequest, "provider returned empty email; email is required")
 		}
 
+		// Validate the provider identity. (provider, provider_id) is the key
+		// that binds an OAuth login to a local account; an empty provider_id
+		// would map every such login onto one shared account.
+		if userInfo.ProviderID == "" {
+			return oauthError(c, http.StatusBadGateway, "provider returned empty user id")
+		}
+
+		// Derive the username. Providers may return an empty display name;
+		// fall back to a stable, provider-scoped identifier rather than
+		// storing an empty (and globally unique) username.
+		providerUsername := userInfo.Username
+		if providerUsername == "" {
+			providerUsername = req.Provider + "-" + userInfo.ProviderID
+		}
+
 		// --- 8.3 & 8.4: User upsert, key revocation, key generation in a single transaction ---
 
 		// Capture the current time for consistent timestamps within the transaction.
@@ -169,17 +185,29 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string, aft
 				}
 
 				// Update username, email, updated_at for active user.
+				finalUsername := providerUsername
 				_, updateErr := tx.ExecContext(ctx,
 					`UPDATE users SET username = ?, email = ?, updated_at = ? WHERE id = ?`,
-					userInfo.Username, userInfo.Email, nowStr, existingID,
+					providerUsername, userInfo.Email, nowStr, existingID,
 				)
+				if updateErr != nil && isUsernameConflict(updateErr) {
+					// Another account already holds the provider-supplied
+					// username (display names are user-controlled and not
+					// unique across providers). Keep the existing username so
+					// a provider-side rename can never lock a user out.
+					finalUsername = existingUsername
+					_, updateErr = tx.ExecContext(ctx,
+						`UPDATE users SET email = ?, updated_at = ? WHERE id = ?`,
+						userInfo.Email, nowStr, existingID,
+					)
+				}
 				if updateErr != nil {
 					return updateErr
 				}
 
 				// Populate response data from existing record (updated fields).
 				userID = existingID
-				username = userInfo.Username
+				username = finalUsername
 				email = userInfo.Email
 				fullName = existingFullName
 				status = existingStatus
@@ -209,21 +237,35 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string, aft
 					}
 				}
 
-				// Insert new user.
+				// Insert new user. The username column is globally unique but
+				// the provider-supplied value is not (a Google display name can
+				// equal a GitHub login), so on a username collision retry with
+				// a numeric suffix instead of refusing the signup.
 				newID := uuid.New().String()
-				_, insertErr := tx.ExecContext(ctx,
-					`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
-					 VALUES (?, ?, ?, NULL, ?, 'active', ?, ?, ?, ?)`,
-					newID, userInfo.Username, userInfo.Email, newRole,
-					req.Provider, userInfo.ProviderID, nowStr, nowStr,
-				)
-				if insertErr != nil {
-					return insertErr
+				chosenUsername := ""
+				for attempt := 0; attempt < maxUsernameAttempts; attempt++ {
+					candidate := providerUsername
+					if attempt > 0 {
+						candidate = fmt.Sprintf("%s-%d", providerUsername, attempt+1)
+					}
+					_, insertErr := tx.ExecContext(ctx,
+						`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+						 VALUES (?, ?, ?, NULL, ?, 'active', ?, ?, ?, ?)`,
+						newID, candidate, userInfo.Email, newRole,
+						req.Provider, userInfo.ProviderID, nowStr, nowStr,
+					)
+					if insertErr == nil {
+						chosenUsername = candidate
+						break
+					}
+					if !isUsernameConflict(insertErr) || attempt == maxUsernameAttempts-1 {
+						return insertErr
+					}
 				}
 
 				// Populate response data.
 				userID = newID
-				username = userInfo.Username
+				username = chosenUsername
 				email = userInfo.Email
 				fullName = nil
 				status = "active"
@@ -238,7 +280,7 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string, aft
 				// (e.g. personal org creation) are atomic with the user INSERT.
 				// A non-nil error rolls back the entire transaction (04-REQ-2.2).
 				if afterUserCreate != nil {
-					if hookErr := afterUserCreate(ctx, tx, newID, userInfo.Username, userInfo.Email); hookErr != nil {
+					if hookErr := afterUserCreate(ctx, tx, newID, chosenUsername, userInfo.Email); hookErr != nil {
 						return hookErr
 					}
 				}
@@ -327,6 +369,20 @@ func handleCallback(registry *Registry, database *db.DB, externalURL string, aft
 
 		return c.JSON(http.StatusOK, resp)
 	}
+}
+
+// maxUsernameAttempts bounds the number of INSERT attempts made while
+// searching for a free username (base, base-2, base-3, ...).
+const maxUsernameAttempts = 10
+
+// isUsernameConflict reports whether err is a UNIQUE constraint violation on
+// users.username. SQLite reports the offending column in the error text and
+// db.WrapError collapses all constraint failures into ErrConflict, so the
+// column identity has to be recovered from the message. A failed statement
+// inside a SQLite transaction only aborts that statement, so callers may
+// retry within the same transaction.
+func isUsernameConflict(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: users.username")
 }
 
 // errUserBlocked is a sentinel error used within the db.WithTx callback to

@@ -70,12 +70,14 @@ Revocation sets the `revoked_at` timestamp. The row is never deleted, preserving
 **Validation flow:**
 
 1. Look up the `key_id` in the `api_keys` table, selecting `user_id`, `secret_hash`, `revoked_at`, `expires_at`.
-2. Check `revoked_at`: if non-NULL and non-empty, return 401 "credential revoked".
-3. Check `expires_at`: if non-NULL and in the past, return 401 "credential expired".
-4. Compute `SHA-256(secret)` and compare against `secret_hash` using `crypto/subtle.ConstantTimeCompare`.
+2. Compute `SHA-256(secret)` and compare against `secret_hash` using `crypto/subtle.ConstantTimeCompare`. On mismatch, return 401 "invalid credentials".
+3. Check `revoked_at`: if non-NULL and non-empty, return 401 "credential revoked".
+4. Check `expires_at`: if non-NULL and in the past, return 401 "credential expired".
 5. Query the `users` table for the user's `role` and `status`.
 6. If `status == "blocked"`, return 403 "user is blocked".
 7. On success, return `AuthInfo` with `CredentialType: "api_key"`, the user's `UserID`, `Role`, and `KeyID`.
+
+The secret is verified before the revocation and expiry checks so that the distinct "revoked" / "expired" responses are only ever returned to a caller who holds the secret (see [Credential state disclosure](#credential-state-disclosure)).
 
 ---
 
@@ -102,9 +104,9 @@ Note that the PAT alphabet (`[a-z0-9]`, 36 characters) differs from the API key 
 **Validation flow:**
 
 1. Look up `token_id` in the `pats` table, selecting `user_id`, `secret_hash`, `permissions`, `revoked_at`, `expires_at`.
-2. Check `revoked_at`: if non-NULL and non-empty, return 401 "credential revoked".
-3. Check `expires_at`: if non-NULL and in the past, return 401 "credential expired".
-4. Compute `SHA-256(secret)` and compare against `secret_hash` using `crypto/subtle.ConstantTimeCompare`.
+2. Compute `SHA-256(secret)` and compare against `secret_hash` using `crypto/subtle.ConstantTimeCompare`. On mismatch, return 401 "invalid credentials".
+3. Check `revoked_at`: if non-NULL and non-empty, return 401 "credential revoked".
+4. Check `expires_at`: if non-NULL and in the past, return 401 "credential expired".
 5. Query the `users` table for the user's `role` and `status`.
 6. If `status == "blocked"`, return 403 "user is blocked".
 7. Deserialize the `permissions` column (stored as a JSON string array) into `[]string`.
@@ -230,12 +232,18 @@ Checks whether the credential carries a specific `resource_type:action` permissi
 - **PATs** must have the exact `resource_type:action` string in their `Permissions` slice. If the permission is not found, returns 403 "insufficient permissions".
 - If `AuthInfo` is nil, returns 403 "forbidden" (fail-closed).
 
-**Used by:** Self-service endpoints under `/user/*`:
+**Used by:** Self-service endpoints under `/user/*` and the member-accessible organization endpoints:
 - `GET /user` and `PATCH /user` require `users:read`.
 - `GET /user/orgs` requires `orgs:read`.
-- `GET /user/tokens` requires `tokens:read`.
+- `GET /orgs/:id` and `GET /orgs/:id/members` require `orgs:read` in addition to the admin-or-member check.
+- `GET /user/tokens` and `GET /user/tokens/:token_id` require `tokens:read`.
 - `POST /user/tokens` and `DELETE /user/tokens/:token_id` require `tokens:manage`.
-- `GET /user/keys`, `POST /user/keys/:key_id/refresh`, and `DELETE /user/keys/:key_id` require any valid credential (Admin Token, API Key, or PAT). No specific permission is enforced by the handlers; the auth middleware validates the credential.
+- `PUT`, `PATCH`, and `DELETE /user/tokens/:token_id/permissions` require `tokens:write` or `tokens:manage`.
+- `GET /user/keys` requires `keys:read`.
+- `DELETE /user/keys/:key_id` requires `keys:manage`.
+- `POST /user/keys/:key_id/refresh` rejects PAT credentials outright with 401 "API key authentication required"; only API keys (and admin tokens) may refresh a key.
+
+The auth middleware only validates the credential; every permission above is enforced by the handler.
 
 ### Authorization summary by credential type
 
@@ -314,10 +322,11 @@ Any OAuth provider must implement four methods:
 1. **Parse and validate** the request body: `provider`, `code`, and `redirect_uri` are required. `expires` defaults to 90 days.
 2. **Redirect URI validation.** The redirect URI must be either `http://localhost:<port>/*` (HTTPS on localhost is rejected) or match the scheme and host of the configured `external_url`.
 3. **Code exchange.** Call `provider.Exchange()` to obtain an access token. Failure returns 401.
-4. **User info retrieval.** Call `provider.UserInfo()` to get the user's identity. Failure returns 502. Empty email is rejected with 400.
-5. **Database transaction** (user upsert + key generation):
-   - **Existing user:** Look up by `(provider, provider_id)`. If `status == "blocked"`, return 403. Otherwise, update `username`, `email`, and `updated_at`.
-   - **New user:** Insert with `role = "user"` and `status = "active"`. Check auto-promotion (see below).
+4. **User info retrieval.** Call `provider.UserInfo()` to get the user's identity. Failure returns 502. Empty email is rejected with 400. An empty provider user id is rejected with 502: `(provider, provider_id)` is the key that binds a login to a local account, so an empty id can never be accepted. The built-in providers also reject a missing GitHub `id` or Google `sub` themselves.
+5. **Username derivation.** The provider-supplied username (GitHub `login`, Google `name`) is used as-is when present. If it is empty, `<provider>-<provider_id>` is used instead so that no user is ever stored with an empty username.
+6. **Database transaction** (user upsert + key generation):
+   - **Existing user:** Look up by `(provider, provider_id)`. If `status == "blocked"`, return 403. Otherwise, update `username`, `email`, and `updated_at`. If the new username is already owned by a different account, the existing username is kept and only `email` and `updated_at` are refreshed, so a provider-side rename can never lock a user out.
+   - **New user:** Insert with `role = "user"` and `status = "active"`. `username` is globally unique but provider display names are not, so on a username collision the insert is retried with a numeric suffix (`alice`, `alice-2`, `alice-3`, ... up to ten attempts). Check auto-promotion (see below).
    - **Key revocation:** Revoke all active API keys for the user.
    - **Key generation:** Generate a new API key and insert it.
 6. **Response.** Return 200 with the user object and the new API key (including plaintext secret).
@@ -350,6 +359,10 @@ All secrets are hashed with SHA-256 before storage. The hash is stored as a 64-c
 - **Admin tokens:** The hash covers the full token string including the prefix (`ak_admin_...`).
 - **API key secrets:** The hash covers only the 32-character secret portion, not the full key string.
 - **PAT secrets:** The hash covers only the 32-character secret portion, not the full token string.
+
+### Credential state disclosure
+
+For API keys and PATs the secret is verified before the revocation and expiry state is inspected. A request that presents a known `key_id` or `token_id` with the wrong secret always receives the generic 401 "invalid credentials"; the more specific "credential revoked" / "credential expired" messages are reserved for callers who hold the secret. Identifiers are not secret (they appear in listings, admin endpoints, and logs), so reporting state before verifying the secret would let anyone probe whether a credential is still live.
 
 ### Blocked user checks
 

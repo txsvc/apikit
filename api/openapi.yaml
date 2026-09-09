@@ -659,10 +659,39 @@ paths:
                 $ref: '#/components/schemas/AuthCallbackResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '403':
+          description: The matched user account is blocked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The provider-supplied email is already registered to a different account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+        '502':
+          description: >-
+            The provider user info request failed, or the provider returned an
+            empty user id.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /user:
     get:
@@ -820,7 +849,8 @@ paths:
       summary: Refresh user's API key
       description: >-
         Refresh the authenticated user's API key with a new secret. Accepts
-        Admin Token, API Key, or PAT with keys:manage permission.
+        Admin Token or API Key only; PAT credentials are rejected with 401
+        regardless of their permissions.
       security:
         - bearerAuth: []
       parameters:

@@ -643,10 +643,13 @@ All three credential types follow a similar validation pipeline:
 
 1. Format validation (fast rejection before any I/O)
 2. Database lookup (credential existence)
-3. Revocation check (`revoked_at IS NOT NULL`)
-4. Expiry check (`expires_at` in the past)
-5. Secret comparison (SHA-256 + `crypto/subtle.ConstantTimeCompare`)
+3. Secret comparison (SHA-256 + `crypto/subtle.ConstantTimeCompare`)
+4. Revocation check (`revoked_at IS NOT NULL`)
+5. Expiry check (`expires_at` in the past)
 6. User status check (blocked users get 403)
+
+The secret is compared before revocation and expiry are inspected so that
+credential state is never disclosed to a caller who only knows the identifier.
 
 The admin token hashes the entire token string (including prefix) before comparison.
 

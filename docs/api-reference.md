@@ -289,7 +289,8 @@ The `api_key.key` value contains the plaintext secret and is only returned once.
 | 400 | Missing required field, invalid `expires` value, unknown provider, disallowed redirect URI, empty email from provider |
 | 401 | Authorization code exchange failed |
 | 403 | User account is blocked |
-| 409 | Provider identity already registered |
+| 409 | Email already registered to a different account |
+| 502 | Provider user info request failed, or the provider returned an empty user id |
 | 502 | Failed to retrieve user info from the OAuth provider |
 
 ---
@@ -362,7 +363,7 @@ Updates the authenticated user's profile. Only `full_name` can be changed.
 
 Lists all API keys for the authenticated user (metadata only, no secrets).
 
-**Auth:** Bearer (Admin Token, API Key, or PAT)
+**Auth:** Bearer (Admin Token, API Key, or PAT with `keys:read`)
 
 **Conditional request:** Supports `If-None-Match` header.
 
@@ -433,7 +434,7 @@ authentication -- PAT authentication is rejected with 401.
 Revokes an API key. The key remains in the database for audit purposes but can
 no longer be used for authentication.
 
-**Auth:** Bearer (Admin Token, API Key, or PAT)
+**Auth:** Bearer (Admin Token, API Key, or PAT with `keys:manage`)
 
 **Path parameters:**
 
@@ -687,7 +688,7 @@ The new user is created with `role=user`, `status=active`, and an empty `full_na
 | Status | Condition |
 |---|---|
 | 400 | Missing required field |
-| 409 | Username already exists, or provider identity already exists |
+| 409 | Username already exists, email already exists, or provider identity already exists |
 
 ---
 
@@ -1013,7 +1014,8 @@ Results are ordered by `name` ascending.
 Returns an organization by ID. Admins can view any organization. Non-admin users
 can only view organizations they are a member of.
 
-**Auth:** Bearer (Admin, or authenticated member of the organization)
+**Auth:** Bearer (Admin, or authenticated member of the organization; a PAT must
+also hold `orgs:read`)
 
 **Path parameters:**
 
@@ -1150,7 +1152,8 @@ Unblocks an organization, restoring it to active status. Idempotent.
 Lists members of an organization. Admins can list any organization's members.
 Non-admin users can only list members of organizations they belong to.
 
-**Auth:** Bearer (Admin, or authenticated member of the organization)
+**Auth:** Bearer (Admin, or authenticated member of the organization; a PAT must
+also hold `orgs:read`)
 
 **Path parameters:**
 

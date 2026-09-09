@@ -64,7 +64,12 @@ func (g *GitHubProvider) Name() string {
 // AuthorizeURL constructs the full OAuth authorization URL with
 // client_id, scope=user:email, state, and redirect_uri as query parameters.
 func (g *GitHubProvider) AuthorizeURL(state, redirectURI string) string {
-	u, _ := url.Parse(g.authorizeURL)
+	u, err := url.Parse(g.authorizeURL)
+	if err != nil {
+		// A malformed configured authorize_url must not panic the handler;
+		// return it unchanged so the misconfiguration is visible to the operator.
+		return g.authorizeURL
+	}
 	q := u.Query()
 	q.Set("client_id", g.clientID)
 	q.Set("scope", "user:email")
@@ -145,6 +150,13 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("userinfo: %w", err)
+	}
+
+	// The numeric id is the stable provider identity used as the users
+	// (provider, provider_id) key. A missing id must never be mapped to "0"
+	// — that would collapse every such login onto a single account.
+	if result.ID == 0 {
+		return nil, fmt.Errorf("userinfo: user id not returned")
 	}
 
 	email := result.Email
