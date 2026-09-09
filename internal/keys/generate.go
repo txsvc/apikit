@@ -20,7 +20,8 @@ const (
 	keyIDLen  = 8
 	secretLen = 32
 	// charset is the 62-character alphanumeric set used for key generation.
-	// Ordering: digits, uppercase, lowercase — must match test helpers.
+	// Ordering: digits, uppercase, lowercase — must match test helpers
+	// (which map a byte b < 252 to charset[b%62]).
 	charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	// maxInsertAttempts is the maximum number of INSERT attempts before giving up
 	// on key_id collision.
@@ -46,18 +47,36 @@ type APIKeyResult struct {
 	ExpiresAt *time.Time
 }
 
+// maxUnbiasedByte is the largest multiple of len(charset) (62) that fits in
+// a byte. Random bytes at or above this value are discarded so that every
+// character in charset is selected with equal probability. Plain
+// "byte % 62" would favour the first eight characters (256 = 4*62 + 8).
+const maxUnbiasedByte = 252
+
 // randAlphanumeric generates a random alphanumeric string of length n
 // using the package-level randReader. Characters are drawn from the
-// 62-character alphanumeric charset via modular arithmetic (byte % 62).
+// 62-character alphanumeric charset using rejection sampling to avoid
+// modular bias. Bytes are read in bulk (one Read for the initial n bytes,
+// then one Read per top-up) rather than one at a time.
 func randAlphanumeric(n int) (string, error) {
+	out := make([]byte, 0, n)
 	buf := make([]byte, n)
-	if _, err := io.ReadFull(randReader, buf); err != nil {
-		return "", err
+	for len(out) < n {
+		need := n - len(out)
+		if _, err := io.ReadFull(randReader, buf[:need]); err != nil {
+			return "", err
+		}
+		for _, b := range buf[:need] {
+			if b >= maxUnbiasedByte {
+				continue
+			}
+			out = append(out, charset[int(b)%len(charset)])
+			if len(out) == n {
+				break
+			}
+		}
 	}
-	for i := range buf {
-		buf[i] = charset[int(buf[i])%len(charset)]
-	}
-	return string(buf), nil
+	return string(out), nil
 }
 
 // hashSecret computes the SHA-256 hash of the secret and returns the

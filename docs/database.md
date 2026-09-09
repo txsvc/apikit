@@ -11,7 +11,7 @@ Key characteristics:
 - **Engine:** SQLite via `modernc.org/sqlite`, a pure-Go CGo-free implementation.
 - **Journal mode:** WAL (Write-Ahead Logging) for file-based databases. In-memory
   databases skip WAL.
-- **Foreign keys:** Enforced via `PRAGMA foreign_keys = ON` on every connection.
+- **Foreign keys:** Enforced on every connection. The pragma is requested through the DSN (`?_pragma=foreign_keys(1)`) so that any connection database/sql opens later carries it, and additionally executed as `PRAGMA foreign_keys = ON` on the initial connection.
 - **Connection pool:** Single connection (`MaxOpenConns(1)`, `MaxIdleConns(1)`),
   the standard SQLite best practice since SQLite does not support concurrent
   writers.

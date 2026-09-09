@@ -27,6 +27,10 @@ import (
 // It is not user-configurable.
 const drainTimeout = 15 * time.Second
 
+// oauthProviderTimeout bounds each HTTP call the server makes to an OAuth
+// identity provider (code exchange, userinfo) during POST /auth/callback.
+const oauthProviderTimeout = 15 * time.Second
+
 // HealthChecker is a function that checks service health.
 // A nil HealthChecker means the service is always considered ready.
 type HealthChecker func() error
@@ -336,7 +340,9 @@ func (s *Server) MountHandlers(database *DB, permissions ...Permission) error {
 	for i, p := range s.cfg.OAuth.Providers {
 		oauthProviders[i] = oauth.ProviderConfig(p)
 	}
-	registry, err := oauth.BuildRegistryFromConfig(oauthProviders, http.DefaultClient)
+	// Provider token/userinfo calls run inside the unauthenticated callback
+	// handler; a hung provider must not tie up server goroutines indefinitely.
+	registry, err := oauth.BuildRegistryFromConfig(oauthProviders, &http.Client{Timeout: oauthProviderTimeout})
 	if err != nil {
 		return err
 	}

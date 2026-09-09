@@ -87,8 +87,9 @@ func validateAdminToken(database *db.DB, fullToken string, hexSuffix string) (*A
 }
 
 // validateAPIKey validates an API key by looking up the key_id in the api_keys
-// table, checking revocation and expiry status, comparing the secret hash via
-// crypto/subtle.ConstantTimeCompare, and verifying the owning user is not blocked.
+// table, comparing the secret hash via crypto/subtle.ConstantTimeCompare,
+// checking revocation and expiry status, and verifying the owning user is not
+// blocked.
 //
 // Returns an AuthInfo with CredentialType "api_key", the user's UUID, role,
 // and key_id on success. Returns an authError on any validation failure.
@@ -115,12 +116,23 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 		return nil, errInternalServer
 	}
 
-	// Step 2: Check revoked_at — if non-NULL, credential is revoked (05-REQ-5.2).
+	// Step 2: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-5.4).
+	// The secret is verified BEFORE the revocation and expiry checks so that
+	// the distinct "credential revoked" / "credential expired" responses are
+	// only ever returned to a caller who actually holds the secret. Checking
+	// state first would let anyone who knows a key_id (which appears in
+	// listings and logs) probe the key's status without the secret.
+	computedHash := hashToken(secret)
+	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
+		return nil, errInvalidCredentials
+	}
+
+	// Step 3: Check revoked_at — if non-NULL, credential is revoked (05-REQ-5.2).
 	if revokedAt.Valid && revokedAt.String != "" {
 		return nil, errCredentialRevoked
 	}
 
-	// Step 3: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-5.3).
+	// Step 4: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-5.3).
 	if expiresAt.Valid && expiresAt.String != "" {
 		expTime, parseErr := db.ParseTime(expiresAt.String)
 		if parseErr != nil {
@@ -130,12 +142,6 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 		if time.Now().After(expTime) {
 			return nil, errCredentialExpired
 		}
-	}
-
-	// Step 4: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-5.4).
-	computedHash := hashToken(secret)
-	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
-		return nil, errInvalidCredentials
 	}
 
 	// Step 5: Query users table by user_id and check status (05-REQ-5.5).
@@ -164,8 +170,8 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 }
 
 // validatePAT validates a personal access token by looking up the token_id in
-// the pats table, checking revocation and expiry status, comparing the secret
-// hash via crypto/subtle.ConstantTimeCompare, and verifying the owning user is
+// the pats table, comparing the secret hash via crypto/subtle.ConstantTimeCompare,
+// checking revocation and expiry status, and verifying the owning user is
 // not blocked. The permissions JSON array from the pats row is deserialized
 // into a []string for the AuthInfo.
 //
@@ -195,12 +201,21 @@ func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 		return nil, errInternalServer
 	}
 
-	// Step 2: Check revoked_at — if non-NULL, credential is revoked (05-REQ-6.2).
+	// Step 2: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-6.4).
+	// As with API keys, the secret is verified before the revocation and
+	// expiry checks so that token state is never disclosed to a caller who
+	// only knows the token_id.
+	computedHash := hashToken(secret)
+	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
+		return nil, errInvalidCredentials
+	}
+
+	// Step 3: Check revoked_at — if non-NULL, credential is revoked (05-REQ-6.2).
 	if revokedAt.Valid && revokedAt.String != "" {
 		return nil, errCredentialRevoked
 	}
 
-	// Step 3: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-6.3).
+	// Step 4: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-6.3).
 	if expiresAt.Valid && expiresAt.String != "" {
 		expTime, parseErr := db.ParseTime(expiresAt.String)
 		if parseErr != nil {
@@ -210,12 +225,6 @@ func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 		if time.Now().After(expTime) {
 			return nil, errCredentialExpired
 		}
-	}
-
-	// Step 4: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-6.4).
-	computedHash := hashToken(secret)
-	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
-		return nil, errInvalidCredentials
 	}
 
 	// Step 5: Query users table by user_id and check status (05-REQ-6.5).

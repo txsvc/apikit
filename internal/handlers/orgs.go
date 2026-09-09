@@ -210,9 +210,15 @@ func (h *orgHandlers) listOrgs(c echo.Context) error {
 
 // getOrg handles GET /orgs/:id — retrieves a single organization by ID.
 // Admin users can view any organization. Non-admin users can only view
-// organizations they are a member of (checked via isOrgMember). Sets an
-// ETag header from updated_at and supports conditional GET via If-None-Match.
+// organizations they are a member of (checked via isOrgMember). PAT
+// credentials must additionally hold orgs:read. Sets an ETag header from
+// updated_at and supports conditional GET via If-None-Match.
 func (h *orgHandlers) getOrg(c echo.Context) error {
+	// Permission check: PATs need orgs:read; admin tokens and API keys bypass.
+	if err := auth.RequirePermission(c, "orgs", "read"); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
 	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
 	id, err := resolveOrgID(h.db, c.Param("id"))
 	if err != nil {
@@ -535,10 +541,16 @@ func (h *orgHandlers) unblockOrg(c echo.Context) error {
 
 // listOrgMembers handles GET /orgs/:id/members — lists members of an organization.
 // Admin users can view any org's members. Non-admin users can only view members
-// of organizations they belong to (checked via isOrgMember). Returns a JSON array
-// of OrgMemberResponse objects ordered alphabetically by username. Returns an
-// empty JSON array (not null) when the org has no members.
+// of organizations they belong to (checked via isOrgMember). PAT credentials
+// must additionally hold orgs:read. Returns a JSON array of OrgMemberResponse
+// objects ordered alphabetically by username. Returns an empty JSON array
+// (not null) when the org has no members.
 func (h *orgHandlers) listOrgMembers(c echo.Context) error {
+	// Permission check: PATs need orgs:read; admin tokens and API keys bypass.
+	if err := auth.RequirePermission(c, "orgs", "read"); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "insufficient permissions")
+	}
+
 	// Resolve :id path parameter via flexible selector (16-REQ-4.1).
 	id, err := resolveOrgID(h.db, c.Param("id"))
 	if err != nil {

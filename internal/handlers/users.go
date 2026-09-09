@@ -135,7 +135,8 @@ func RegisterUserHandlers(g *echo.Group, database *sql.DB, hooks ...func(ctx con
 // createUser handles POST /users — creates a new user record.
 // Requires admin access. Validates all four required fields, generates a UUID,
 // inserts into the users table, and returns HTTP 201 with the created User.
-// Detects unique constraint violations on username and (provider, provider_id).
+// Detects unique constraint violations on username, email, and
+// (provider, provider_id) and reports each as HTTP 409.
 func (h *userHandlers) createUser(c echo.Context) error {
 	// Auth check: admin only (07-REQ-2.6, 07-PROP-5).
 	if err := auth.RequireAdmin(c); err != nil {
@@ -203,6 +204,11 @@ func (h *userHandlers) createUser(c echo.Context) error {
 		}
 		if strings.Contains(errStr, "UNIQUE constraint failed: users.provider") {
 			return apiutil.WriteAPIError(c, http.StatusConflict, "provider identity already exists")
+		}
+		// users.email carries a unique index (idx_users_email) so that email
+		// selectors resolve unambiguously; report it as a conflict, not a 500.
+		if strings.Contains(errStr, "UNIQUE constraint failed: users.email") {
+			return apiutil.WriteAPIError(c, http.StatusConflict, "email already exists")
 		}
 		// Any unexpected DB error (07-REQ-2.E1).
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")

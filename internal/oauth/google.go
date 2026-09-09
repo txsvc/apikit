@@ -64,7 +64,12 @@ func (g *GoogleProvider) Name() string {
 // client_id, response_type=code, scope=openid email profile, state,
 // and redirect_uri as query parameters.
 func (g *GoogleProvider) AuthorizeURL(state, redirectURI string) string {
-	u, _ := url.Parse(g.authorizeURL)
+	u, err := url.Parse(g.authorizeURL)
+	if err != nil {
+		// A malformed configured authorize_url must not panic the handler;
+		// return it unchanged so the misconfiguration is visible to the operator.
+		return g.authorizeURL
+	}
 	q := u.Query()
 	q.Set("client_id", g.clientID)
 	q.Set("response_type", "code")
@@ -151,6 +156,9 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		return nil, fmt.Errorf("userinfo: %w", err)
 	}
 
+	if result.Sub == "" {
+		return nil, fmt.Errorf("userinfo: subject identifier not returned")
+	}
 	if result.Email == "" {
 		return nil, fmt.Errorf("userinfo: email not returned")
 	}

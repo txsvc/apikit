@@ -81,7 +81,12 @@ to accept it as a parameter in a future task group.
 provider returns a username already taken by a different user, the UPDATE fails
 with a constraint violation.
 
-**Implementation:** The generic DB error handling catches this via
-`db.WrapError` and returns HTTP 500 with `"internal server error"` (per
-06-ERR-11). No special handling for this edge case — it falls through to the
-existing error path.
+**Implementation (original):** The generic DB error handling caught this via
+`db.WrapError` and returned HTTP 500 with `"internal server error"` (per
+06-ERR-11), which locked the user out of their account.
+
+**Implementation (current):** Superseded by `security_review_hardening.md`
+section 5. On a `users.username` collision the existing user keeps their
+current username (only `email` and `updated_at` are refreshed) and the login
+succeeds; a new user is created with a numeric suffix (`name-2`, `name-3`,
+...).
