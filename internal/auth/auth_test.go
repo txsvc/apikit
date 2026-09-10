@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -515,5 +518,130 @@ func TestHashRepresentation(t *testing.T) {
 		if strings.Contains(trimmed, "hashToken(") && strings.Contains(trimmed, "==") {
 			t.Errorf("line %d: found direct string comparison of hashToken result: %s", i+1, trimmed)
 		}
+	}
+}
+
+// ========================================================================
+// ValidateCredential Unit & Parity Tests (Issue #42)
+// ========================================================================
+
+func TestValidateCredential_UnitAndParity(t *testing.T) {
+	database := openTestDB(t)
+
+	// Setup users
+	insertUser(t, database, "uid-active", "user", "active")
+	insertUser(t, database, "uid-blocked", "user", "blocked")
+
+	// Setup admin token
+	adminToken := "ak_admin_" + strings.Repeat("ef", 32)
+	insertAdminConfig(t, database, "admin_token_hash", hexSHA256(adminToken))
+
+	// Setup API keys
+	apiKeySecret := "validsecret123"
+	apiKeyToken := "ak_keyvalid_" + apiKeySecret
+	insertAPIKey(t, database, "keyvalid", "uid-active", hexSHA256(apiKeySecret), "2099-01-01T00:00:00Z", "")
+
+	blockedKeyToken := "ak_keyblocked_" + apiKeySecret
+	insertAPIKey(t, database, "keyblocked", "uid-blocked", hexSHA256(apiKeySecret), "2099-01-01T00:00:00Z", "")
+
+	revokedKeyToken := "ak_keyrevoked_" + apiKeySecret
+	insertAPIKey(t, database, "keyrevoked", "uid-active", hexSHA256(apiKeySecret), "", "2026-01-01T00:00:00Z")
+
+	expiredKeyToken := "ak_keyexpired_" + apiKeySecret
+	insertAPIKey(t, database, "keyexpired", "uid-active", hexSHA256(apiKeySecret), "2020-01-01T00:00:00Z", "")
+
+	// Setup PATs
+	patSecret := "patsecret123"
+	patToken := "ak_pat_patvalid_" + patSecret
+	insertPATRow(t, database, "patvalid", "uid-active", hexSHA256(patSecret), `["workspaces:read"]`, "2099-01-01T00:00:00Z", "")
+
+	blockedPatToken := "ak_pat_patblocked_" + patSecret
+	insertPATRow(t, database, "patblocked", "uid-blocked", hexSHA256(patSecret), `["workspaces:read"]`, "2099-01-01T00:00:00Z", "")
+
+	revokedPatToken := "ak_pat_patrevoked_" + patSecret
+	insertPATRow(t, database, "patrevoked", "uid-active", hexSHA256(patSecret), `["workspaces:read"]`, "", "2026-01-01T00:00:00Z")
+
+	expiredPatToken := "ak_pat_patexpired_" + patSecret
+	insertPATRow(t, database, "patexpired", "uid-active", hexSHA256(patSecret), `["workspaces:read"]`, "2020-01-01T00:00:00Z", "")
+
+	cases := []struct {
+		name       string
+		token      string
+		expectCode int
+		expectErr  error
+	}{
+		{name: "admin_valid", token: adminToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "admin_bearer_valid", token: "Bearer " + adminToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "admin_invalid_hex", token: "ak_admin_short", expectCode: http.StatusUnauthorized, expectErr: ErrInvalidCredentials},
+		{name: "admin_wrong_hash", token: "ak_admin_" + strings.Repeat("00", 32), expectCode: http.StatusUnauthorized, expectErr: ErrInvalidCredentials},
+		{name: "api_key_valid", token: apiKeyToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "api_key_bearer_valid", token: "Bearer " + apiKeyToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "api_key_wrong_secret", token: "ak_keyvalid_wrongsecret", expectCode: http.StatusUnauthorized, expectErr: ErrInvalidCredentials},
+		{name: "api_key_blocked", token: blockedKeyToken, expectCode: http.StatusForbidden, expectErr: ErrUserBlocked},
+		{name: "api_key_revoked", token: revokedKeyToken, expectCode: http.StatusUnauthorized, expectErr: ErrCredentialRevoked},
+		{name: "api_key_expired", token: expiredKeyToken, expectCode: http.StatusUnauthorized, expectErr: ErrCredentialExpired},
+		{name: "pat_valid", token: patToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "pat_bearer_valid", token: "Bearer " + patToken, expectCode: http.StatusOK, expectErr: nil},
+		{name: "pat_wrong_secret", token: "ak_pat_patvalid_wrongsecret", expectCode: http.StatusUnauthorized, expectErr: ErrInvalidCredentials},
+		{name: "pat_blocked", token: blockedPatToken, expectCode: http.StatusForbidden, expectErr: ErrUserBlocked},
+		{name: "pat_revoked", token: revokedPatToken, expectCode: http.StatusUnauthorized, expectErr: ErrCredentialRevoked},
+		{name: "pat_expired", token: expiredPatToken, expectCode: http.StatusUnauthorized, expectErr: ErrCredentialExpired},
+		{name: "unrecognized", token: "garbage_format", expectCode: http.StatusUnauthorized, expectErr: ErrUnrecognizedToken},
+		{name: "unrecognized_api_key_no_secret", token: "ak_nosecret", expectCode: http.StatusUnauthorized, expectErr: ErrUnrecognizedToken},
+	}
+
+	registry := NewPermissionRegistry()
+	mw := NewAuthMiddleware(database, registry)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Direct ValidateCredential call
+			valInfo, valErr := ValidateCredential(context.Background(), database, tc.token)
+
+			// Middleware call
+			e := echo.New()
+			var mwInjectedInfo *AuthInfo
+			handler := func(c echo.Context) error {
+				mwInjectedInfo = GetAuthInfo(c)
+				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+			}
+			e.GET("/test", handler, mw)
+
+			cleanToken := strings.TrimPrefix(tc.token, "Bearer ")
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Bearer "+cleanToken)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.expectCode {
+				t.Fatalf("middleware code = %d, want %d (body: %s)", rec.Code, tc.expectCode, rec.Body.String())
+			}
+
+			if tc.expectErr != nil {
+				if !errors.Is(valErr, tc.expectErr) {
+					t.Fatalf("ValidateCredential error = %v, want %v", valErr, tc.expectErr)
+				}
+				var resp errorResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("unmarshal middleware response: %v", err)
+				}
+				var ae *AuthError
+				if errors.As(valErr, &ae) {
+					if resp.Error.Message != ae.Message {
+						t.Errorf("message mismatch: middleware %q, ValidateCredential %q", resp.Error.Message, ae.Message)
+					}
+					if resp.Error.Code != ae.Code {
+						t.Errorf("code mismatch: middleware %d, ValidateCredential %d", resp.Error.Code, ae.Code)
+					}
+				}
+			} else {
+				if valErr != nil {
+					t.Fatalf("ValidateCredential unexpected error: %v", valErr)
+				}
+				if !reflect.DeepEqual(valInfo, mwInjectedInfo) {
+					t.Errorf("AuthInfo mismatch:\nValidateCredential: %+v\nMiddleware: %+v", valInfo, mwInjectedInfo)
+				}
+			}
+		})
 	}
 }

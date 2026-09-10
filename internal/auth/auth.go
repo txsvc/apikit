@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -46,43 +47,57 @@ func NewAuthMiddleware(database *db.DB, registry *PermissionRegistry) echo.Middl
 				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "missing token")
 			}
 
-			// Step 2: Detect credential type.
-			credType, components, err := parseToken(token)
+			// Step 2: Validate token via ValidateCredential.
+			authInfo, err := ValidateCredential(c.Request().Context(), database, token)
 			if err != nil {
-				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
-			}
-
-			// Step 3: Dispatch to credential-type-specific validation.
-			var authInfo *AuthInfo
-			var validationErr error
-
-			switch credType {
-			case "admin_token":
-				// Extract hex suffix after '<prefix>_admin_'.
-				adminPrefix := apiutil.TokenPrefix + "_admin_"
-				hexSuffix := token[len(adminPrefix):]
-				authInfo, validationErr = validateAdminToken(database, token, hexSuffix)
-			case "api_key":
-				// components[0] = key_id, components[1] = secret.
-				authInfo, validationErr = validateAPIKey(database, components[0], components[1])
-			case "pat":
-				// components[0] = token_id, components[1] = secret.
-				authInfo, validationErr = validatePAT(database, components[0], components[1])
-			default:
-				return apiutil.WriteAPIError(c, http.StatusUnauthorized, "unrecognized token format")
-			}
-
-			if validationErr != nil {
-				if ae, ok := validationErr.(*authError); ok {
+				var ae *AuthError
+				if errors.As(err, &ae) {
 					return apiutil.WriteAPIError(c, ae.Code, ae.Message)
 				}
 				return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 			}
 
-			// Step 4: Inject AuthInfo into request context and call next handler.
+			// Step 3: Inject AuthInfo into request context and call next handler.
 			setAuthInfoContext(c, authInfo)
 			return next(c)
 		}
+	}
+}
+
+// ValidateCredential validates a raw token string (admin token, API key, or PAT)
+// against the database without requiring an Echo context.
+// The rawToken may optionally include a "Bearer " prefix, which is stripped
+// before parsing. It determines the credential type, verifies validity,
+// checks revocation, expiration, and user status, and returns the resulting
+// AuthInfo or an AuthError.
+func ValidateCredential(ctx context.Context, database *db.DB, rawToken string) (*AuthInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	token := strings.TrimPrefix(rawToken, "Bearer ")
+
+	// Detect credential type.
+	credType, components, err := parseToken(token)
+	if err != nil {
+		return nil, ErrUnrecognizedToken
+	}
+
+	// Dispatch to credential-type-specific validation.
+	switch credType {
+	case "admin_token":
+		// Extract hex suffix after '<prefix>_admin_'.
+		adminPrefix := apiutil.TokenPrefix + "_admin_"
+		hexSuffix := token[len(adminPrefix):]
+		return validateAdminToken(ctx, database, token, hexSuffix)
+	case "api_key":
+		// components[0] = key_id, components[1] = secret.
+		return validateAPIKey(ctx, database, components[0], components[1])
+	case "pat":
+		// components[0] = token_id, components[1] = secret.
+		return validatePAT(ctx, database, components[0], components[1])
+	default:
+		return nil, ErrUnrecognizedToken
 	}
 }
 

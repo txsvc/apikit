@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
@@ -13,24 +14,34 @@ import (
 	"github.com/txsvc/apikit/internal/db"
 )
 
-// authError carries an HTTP status code and message for credential validation
+// AuthError carries an HTTP status code and message for credential validation
 // failures. The middleware translates these into WriteAPIError responses.
-type authError struct {
+type AuthError struct {
 	Code    int
 	Message string
 }
 
-func (e *authError) Error() string {
+func (e *AuthError) Error() string {
 	return e.Message
 }
 
-// Predefined authError values for common credential validation failures.
+// Is reports whether target matches this AuthError by status code and message.
+func (e *AuthError) Is(target error) bool {
+	t, ok := target.(*AuthError)
+	if !ok {
+		return false
+	}
+	return e.Code == t.Code && e.Message == t.Message
+}
+
+// Predefined AuthError values for common credential validation failures.
 var (
-	errInvalidCredentials = &authError{Code: http.StatusUnauthorized, Message: "invalid credentials"}
-	errCredentialRevoked  = &authError{Code: http.StatusUnauthorized, Message: "credential revoked"}
-	errCredentialExpired  = &authError{Code: http.StatusUnauthorized, Message: "credential expired"}
-	errUserBlocked        = &authError{Code: http.StatusForbidden, Message: "user is blocked"}
-	errInternalServer     = &authError{Code: http.StatusInternalServerError, Message: "internal server error"}
+	ErrUnrecognizedToken  = &AuthError{Code: http.StatusUnauthorized, Message: "unrecognized token format"}
+	ErrInvalidCredentials = &AuthError{Code: http.StatusUnauthorized, Message: "invalid credentials"}
+	ErrCredentialRevoked  = &AuthError{Code: http.StatusUnauthorized, Message: "credential revoked"}
+	ErrCredentialExpired  = &AuthError{Code: http.StatusUnauthorized, Message: "credential expired"}
+	ErrUserBlocked        = &AuthError{Code: http.StatusForbidden, Message: "user is blocked"}
+	ErrInternalServer     = &AuthError{Code: http.StatusInternalServerError, Message: "internal server error"}
 )
 
 // validateAdminToken validates an admin token by checking the hex suffix format,
@@ -39,43 +50,44 @@ var (
 // in the admin_config table.
 //
 // Returns an AuthInfo with CredentialType "admin_token", empty UserID, and
-// Role "admin" on success. Returns an authError on any validation failure.
-func validateAdminToken(database *db.DB, fullToken string, hexSuffix string) (*AuthInfo, error) {
+// Role "admin" on success. Returns an AuthError on any validation failure.
+func validateAdminToken(ctx context.Context, database *db.DB, fullToken string, hexSuffix string) (*AuthInfo, error) {
 	// Step 1: Validate hex suffix is exactly 64 characters of valid hexadecimal.
 	// This check is performed BEFORE any database lookup (05-REQ-4.1, 05-REQ-4.E2).
 	if len(hexSuffix) != 64 {
-		return nil, errInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 	if _, err := hex.DecodeString(hexSuffix); err != nil {
-		return nil, errInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 
 	// Step 2: Compute SHA-256 hash of the full token string (including prefix).
 	computedHash := hashToken(fullToken)
 
 	// Step 3: Query admin_config table for the stored admin_token_hash.
-	if database.SqlDB == nil {
+	if database == nil || database.SqlDB == nil {
 		log.Printf("auth: database connection is nil")
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 	var storedHash string
-	err := database.SqlDB.QueryRow(
+	err := database.SqlDB.QueryRowContext(
+		ctx,
 		`SELECT value FROM admin_config WHERE key = ?`, "admin_token_hash",
 	).Scan(&storedHash)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// admin_token_hash row missing → treat as invalid credentials (05-REQ-4.4).
-			return nil, errInvalidCredentials
+			return nil, ErrInvalidCredentials
 		}
 		// Non-ErrNotFound database error → log and return 500 (05-REQ-4.E1).
 		log.Printf("auth: admin_config query error: %v", err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	// Step 4: Constant-time comparison of computed hash vs stored hash (05-REQ-4.2).
 	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(storedHash)) != 1 {
-		return nil, errInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 
 	// Step 5: Success — return admin AuthInfo (05-REQ-4.3).
@@ -92,16 +104,17 @@ func validateAdminToken(database *db.DB, fullToken string, hexSuffix string) (*A
 // blocked.
 //
 // Returns an AuthInfo with CredentialType "api_key", the user's UUID, role,
-// and key_id on success. Returns an authError on any validation failure.
-func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
+// and key_id on success. Returns an AuthError on any validation failure.
+func validateAPIKey(ctx context.Context, database *db.DB, keyID, secret string) (*AuthInfo, error) {
 	// Step 1: Query api_keys table by key_id (05-REQ-5.1).
-	if database.SqlDB == nil {
+	if database == nil || database.SqlDB == nil {
 		log.Printf("auth: database connection is nil")
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 	var userID, secretHash string
 	var revokedAt, expiresAt sql.NullString
-	err := database.SqlDB.QueryRow(
+	err := database.SqlDB.QueryRowContext(
+		ctx,
 		`SELECT user_id, secret_hash, revoked_at, expires_at FROM api_keys WHERE key_id = ?`,
 		keyID,
 	).Scan(&userID, &secretHash, &revokedAt, &expiresAt)
@@ -109,11 +122,11 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// key_id not found → invalid credentials (05-REQ-5.1).
-			return nil, errInvalidCredentials
+			return nil, ErrInvalidCredentials
 		}
 		// Non-ErrNotFound database error → log and return 500 (05-REQ-5.E1).
 		log.Printf("auth: api_keys query error: %v", err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	// Step 2: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-5.4).
@@ -124,12 +137,12 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 	// listings and logs) probe the key's status without the secret.
 	computedHash := hashToken(secret)
 	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
-		return nil, errInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 
 	// Step 3: Check revoked_at — if non-NULL, credential is revoked (05-REQ-5.2).
 	if revokedAt.Valid && revokedAt.String != "" {
-		return nil, errCredentialRevoked
+		return nil, ErrCredentialRevoked
 	}
 
 	// Step 4: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-5.3).
@@ -137,27 +150,28 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 		expTime, parseErr := db.ParseTime(expiresAt.String)
 		if parseErr != nil {
 			log.Printf("auth: failed to parse expires_at for key %q: %v", keyID, parseErr)
-			return nil, errInternalServer
+			return nil, ErrInternalServer
 		}
 		if time.Now().After(expTime) {
-			return nil, errCredentialExpired
+			return nil, ErrCredentialExpired
 		}
 	}
 
 	// Step 5: Query users table by user_id and check status (05-REQ-5.5).
 	var role, status string
-	err = database.SqlDB.QueryRow(
+	err = database.SqlDB.QueryRowContext(
+		ctx,
 		`SELECT role, status FROM users WHERE id = ?`, userID,
 	).Scan(&role, &status)
 
 	if err != nil {
 		// Any user lookup failure → log and return 500 (05-REQ-5.E2).
 		log.Printf("auth: users query error for user %q: %v", userID, err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	if status == "blocked" {
-		return nil, errUserBlocked
+		return nil, ErrUserBlocked
 	}
 
 	// Step 6: Success — return API key AuthInfo (05-REQ-5.6).
@@ -176,17 +190,18 @@ func validateAPIKey(database *db.DB, keyID, secret string) (*AuthInfo, error) {
 // into a []string for the AuthInfo.
 //
 // Returns an AuthInfo with CredentialType "pat", the user's UUID, role,
-// token_id, and permissions on success. Returns an authError on any validation
+// token_id, and permissions on success. Returns an AuthError on any validation
 // failure.
-func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
+func validatePAT(ctx context.Context, database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 	// Step 1: Query pats table by token_id (05-REQ-6.1).
-	if database.SqlDB == nil {
+	if database == nil || database.SqlDB == nil {
 		log.Printf("auth: database connection is nil")
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 	var userID, secretHash, permissionsJSON string
 	var revokedAt, expiresAt sql.NullString
-	err := database.SqlDB.QueryRow(
+	err := database.SqlDB.QueryRowContext(
+		ctx,
 		`SELECT user_id, secret_hash, permissions, revoked_at, expires_at FROM pats WHERE token_id = ?`,
 		tokenID,
 	).Scan(&userID, &secretHash, &permissionsJSON, &revokedAt, &expiresAt)
@@ -194,11 +209,11 @@ func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// token_id not found → invalid credentials (05-REQ-6.1).
-			return nil, errInvalidCredentials
+			return nil, ErrInvalidCredentials
 		}
 		// Non-ErrNotFound database error → log and return 500 (05-REQ-6.E1).
 		log.Printf("auth: pats query error: %v", err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	// Step 2: Compute SHA-256 of secret and compare via constant-time comparison (05-REQ-6.4).
@@ -207,12 +222,12 @@ func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 	// only knows the token_id.
 	computedHash := hashToken(secret)
 	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(secretHash)) != 1 {
-		return nil, errInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 
 	// Step 3: Check revoked_at — if non-NULL, credential is revoked (05-REQ-6.2).
 	if revokedAt.Valid && revokedAt.String != "" {
-		return nil, errCredentialRevoked
+		return nil, ErrCredentialRevoked
 	}
 
 	// Step 4: Check expires_at — if non-NULL and in the past, credential expired (05-REQ-6.3).
@@ -220,34 +235,35 @@ func validatePAT(database *db.DB, tokenID, secret string) (*AuthInfo, error) {
 		expTime, parseErr := db.ParseTime(expiresAt.String)
 		if parseErr != nil {
 			log.Printf("auth: failed to parse expires_at for PAT %q: %v", tokenID, parseErr)
-			return nil, errInternalServer
+			return nil, ErrInternalServer
 		}
 		if time.Now().After(expTime) {
-			return nil, errCredentialExpired
+			return nil, ErrCredentialExpired
 		}
 	}
 
 	// Step 5: Query users table by user_id and check status (05-REQ-6.5).
 	var role, status string
-	err = database.SqlDB.QueryRow(
+	err = database.SqlDB.QueryRowContext(
+		ctx,
 		`SELECT role, status FROM users WHERE id = ?`, userID,
 	).Scan(&role, &status)
 
 	if err != nil {
 		// Any user lookup failure → log and return 500 (05-REQ-6.E2).
 		log.Printf("auth: users query error for user %q: %v", userID, err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	if status == "blocked" {
-		return nil, errUserBlocked
+		return nil, ErrUserBlocked
 	}
 
 	// Step 6: Deserialize permissions JSON array from pats row into []string.
 	var permissions []string
 	if err := json.Unmarshal([]byte(permissionsJSON), &permissions); err != nil {
 		log.Printf("auth: failed to parse permissions JSON for PAT %q: %v", tokenID, err)
-		return nil, errInternalServer
+		return nil, ErrInternalServer
 	}
 
 	// Step 7: Success — return PAT AuthInfo (05-REQ-6.6).

@@ -56,7 +56,7 @@ github.com/txsvc/apikit
 |   |   |-- timestamp.go    TimeFormat, FormatTime, ParseTime
 |   |
 |   |-- auth/               Authentication middleware and authorization helpers
-|   |   |-- auth.go         NewAuthMiddleware (Bearer token validation)
+|   |   |-- auth.go         NewAuthMiddleware, ValidateCredential
 |   |   |-- context.go      SetAuthInfo, GetAuthInfo, GetUserID (delegates to authctx)
 |   |   |-- credentials.go  parseToken, validateAdminToken, validateAPIKey, validatePAT
 |   |   |-- permissions.go  PermissionRegistry, IsAdmin, RequireAdmin, RequirePermission

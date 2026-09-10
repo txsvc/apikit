@@ -427,3 +427,16 @@ Request arrives at API group
 The auth middleware is applied to the API route group (`/api/v1`), not the server root. This means health probes (`/healthz`, `/readyz`, `/version`) and OAuth endpoints (`/auth/providers`, `/auth/callback`) are not protected by authentication.
 
 The middleware itself panics at construction time if either the database or permission registry is nil, ensuring a fail-fast startup rather than silent misconfiguration that manifests at request time.
+
+### Transport-agnostic credential validation
+
+For callers authenticating outside the Echo middleware pipeline (e.g. HTTP Basic auth handlers in a git server), `apikit.ValidateCredential` provides direct credential validation:
+
+```go
+authInfo, err := apikit.ValidateCredential(ctx, database, rawToken)
+if err != nil {
+    // Handle error (e.g. errors.Is(err, apikit.ErrUserBlocked))
+}
+```
+
+It supports admin tokens, API keys, and personal access tokens (PATs), with or without an optional `Bearer ` prefix. The same verification rules (token parsing, hashing, expiration, revocation, and blocked user checks) apply identically to both the Echo middleware and `ValidateCredential`.
