@@ -198,6 +198,48 @@ func TestExitCodeMapping(t *testing.T) {
 	}
 }
 
+func TestExitCodeCmdErrorMapping(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"CmdError code 1 (API error convention)", cli.NewCmdError(1, "api error"), 1},
+		{"CmdError code 2 (client error convention)", cli.NewCmdError(2, "client error"), 2},
+		{"CmdError code 400 (HTTP bad request)", cli.NewCmdError(400, "bad request"), 1},
+		{"CmdError code 404 (HTTP not found)", cli.NewCmdError(404, "not found"), 1},
+		{"CmdError code 500 (HTTP internal server error)", cli.NewCmdError(500, "internal error"), 1},
+		{"CmdError code 42 (other user code)", cli.NewCmdError(42, "custom client error"), 2},
+		{"CmdError wrapped in fmt.Errorf (code 2)", fmt.Errorf("outer: %w", cli.NewCmdError(2, "inner client")), 2},
+		{"CmdError wrapped in fmt.Errorf (code 1)", fmt.Errorf("outer: %w", cli.NewCmdError(1, "inner api")), 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code := cli.ExitCode(tt.err)
+			if code != tt.wantCode {
+				t.Errorf("ExitCode(%v) = %d, want %d", tt.err, code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestExitCodeCmdHandleError(t *testing.T) {
+	cmd := &cobra.Command{Use: "test"}
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	clientErr := cli.CmdHandleError(cmd, cli.NewCmdError(2, "client error"))
+	if code := cli.ExitCode(clientErr); code != 2 {
+		t.Errorf("ExitCode after CmdHandleError(code 2) = %d, want 2", code)
+	}
+
+	apiErr := cli.CmdHandleError(cmd, cli.NewCmdError(1, "api error"))
+	if code := cli.ExitCode(apiErr); code != 1 {
+		t.Errorf("ExitCode after CmdHandleError(code 1) = %d, want 1", code)
+	}
+}
+
 // =========================================================================
 // TS-13-41: Human-readable messages (warnings, progress) are written to
 // stderr only and never appear on stdout.

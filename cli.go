@@ -38,7 +38,10 @@ func CLIExecute() error { return cli.Execute() }
 // Skips errors already printed by command-level handlers.
 func CLIPrintError(err error) { cli.PrintError(err) }
 
-// CLIExitCode maps an error to an exit code: 0 (nil), 1 (API error), 2 (other).
+// CLIExitCode maps an error to an integer exit code:
+//   - 0: nil (success)
+//   - 1: API error (APIError, or CLIError/CmdError with code 1 or >= 400)
+//   - 2: client error (CLIError/CmdError with code 2 or other non-API codes, or other non-nil errors)
 func CLIExitCode(err error) int { return cli.ExitCode(err) }
 
 // ---------------------------------------------------------------------------

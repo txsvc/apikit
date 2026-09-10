@@ -2,6 +2,7 @@ package apikit
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,5 +91,36 @@ func TestCLIClientFromCmd_NoClient(t *testing.T) {
 	_, err := CLIClientFromCmd(cmd)
 	if err == nil {
 		t.Fatal("expected error when no client in context")
+	}
+}
+
+func TestCLIExitCode(t *testing.T) {
+	cmd := &cobra.Command{Use: "test"}
+	cmd.SetOut(new(strings.Builder))
+	cmd.SetErr(new(strings.Builder))
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"nil error", nil, 0},
+		{"APIError", &APIError{Code: 400, Message: "bad request"}, 1},
+		{"plain error", fmt.Errorf("plain"), 2},
+		{"NewCLIError(1)", NewCLIError(1, "api error"), 1},
+		{"NewCLIError(2)", NewCLIError(2, "client error"), 2},
+		{"NewCLIError(404)", NewCLIError(404, "not found"), 1},
+		{"NewCLIError(42)", NewCLIError(42, "custom"), 2},
+		{"CLIHandleError with code 2", CLIHandleError(cmd, NewCLIError(2, "--flag required")), 2},
+		{"CLIHandleError with code 1", CLIHandleError(cmd, NewCLIError(1, "failed")), 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code := CLIExitCode(tt.err)
+			if code != tt.wantCode {
+				t.Errorf("CLIExitCode(%v) = %d, want %d", tt.err, code, tt.wantCode)
+			}
+		})
 	}
 }

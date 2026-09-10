@@ -53,11 +53,20 @@ func asAPIError(err error, target *apiErrorer) bool {
 
 // ExitCode maps an error to an integer exit code:
 //   - nil -> 0
+//   - *CmdError with code == 1 (API error convention) or code >= 400 (HTTP status) -> 1
+//   - *CmdError with code == 2 (client error convention) or other non-API codes -> 2
 //   - error implementing apiErrorer (i.e., *apikit.APIError) -> 1
 //   - all other non-nil errors -> 2
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var ce *CmdError
+	if errors.As(err, &ce) {
+		if ce.code == 1 || ce.code >= 400 {
+			return 1
+		}
+		return 2
 	}
 	var ae apiErrorer
 	if asAPIError(err, &ae) {

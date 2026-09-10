@@ -115,6 +115,17 @@ func TestPropertyExitCodeConsistentWithErrorTypeTable(t *testing.T) {
 		{"wrapped APIError", fmt.Errorf("wrapped: %w", &apikit.APIError{Code: 401, Message: "unauthorized"}), 1},
 		{"double wrapped APIError", fmt.Errorf("a: %w", fmt.Errorf("b: %w", &apikit.APIError{Code: 403, Message: "forbidden"})), 1},
 
+		// *cli.CmdError (code 1 or >= 400 -> 1; code 2 and others -> 2)
+		{"CmdError code 1", cli.NewCmdError(1, "api error"), 1},
+		{"CmdError code 2", cli.NewCmdError(2, "client error"), 2},
+		{"CmdError code 400", cli.NewCmdError(400, "bad request"), 1},
+		{"CmdError code 404", cli.NewCmdError(404, "not found"), 1},
+		{"CmdError code 500", cli.NewCmdError(500, "internal error"), 1},
+		{"CmdError code 42", cli.NewCmdError(42, "custom client error"), 2},
+		{"wrapped CmdError code 2", fmt.Errorf("outer: %w", cli.NewCmdError(2, "inner client")), 2},
+		{"wrapped CmdError code 1", fmt.Errorf("outer: %w", cli.NewCmdError(1, "inner api")), 1},
+		{"double wrapped CmdError code 2", fmt.Errorf("a: %w", fmt.Errorf("b: %w", cli.NewCmdError(2, "deep"))), 2},
+
 		// plain errors -> 2
 		{"plain error", fmt.Errorf("something went wrong"), 2},
 		{"empty message error", fmt.Errorf(""), 2},
