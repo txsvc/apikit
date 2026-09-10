@@ -254,13 +254,15 @@ so they are protected.
 
 ## 5. Middleware Pipeline
 
-Middleware executes in registration order on the way in and reverse order on the way out. The ordering was explicitly corrected from the original specification to fix two problems: security headers must appear on every response (including short-circuited ones), and logging must wrap error-producing middleware to capture all status codes.
+Middleware executes in registration order on the way in and reverse order on the way out. Global middleware on the Echo instance handles cross-cutting concerns (panic recovery, request ID, security headers, logging). Route group middleware on the API group handles API-specific concerns (cache headers, body size limit, content-type enforcement, auth).
 
 ```
 Request ──►
     │
     ▼
 ┌─────────────────────────────┐
+│ Global Middleware (Echo)    │
+├─────────────────────────────┤
 │ (1) Panic Recovery          │  Outermost. Catches panics from everything
 │     panicRecoveryMiddleware │  downstream. Logs error + stack trace.
 │                             │  Returns 500 JSON envelope.
@@ -278,20 +280,21 @@ Request ──►
 │                             │  debug level; all others at info level.
 │                             │  Fields: method, path, status, duration, request_id.
 ├─────────────────────────────┤
-│ (5) Body Size Limit         │  Rejects bodies exceeding MaxBodySize (default
-│     bodySizeLimitMiddleware │  1MB). Returns 413 via WriteAPIError.
-│                             │  Wraps chunked/unknown-length bodies with a
-│                             │  limitedReadCloser for streaming enforcement.
+│ API Group Middleware        │
 ├─────────────────────────────┤
-│ (6) Content-Type Enforce    │  Rejects POST/PUT/PATCH with non-JSON
+│ (5) Cache-Control           │  Per-route/group middleware. The API
+│     CacheMiddleware(cat)    │  group gets CacheNoStore by default.
+├─────────────────────────────┤
+│ (6) Body Size Limit         │  Rejects bodies exceeding MaxBodySize (default
+│     BodySizeLimitMiddleware │  1MB). Returns 413 via WriteAPIError.
+│                             │  Wraps chunked/unknown-length bodies with a
+│                             │  MaxBytesReader for streaming enforcement.
+├─────────────────────────────┤
+│ (7) Content-Type Enforce    │  Rejects POST/PUT/PATCH with non-JSON
 │     contentTypeEnforcement  │  Content-Type. Returns 415 via WriteAPIError.
 │     Middleware              │  GET/DELETE/HEAD/OPTIONS pass through.
 ├─────────────────────────────┤
-│ (7) Cache-Control           │  Per-route middleware, not global. Applied to
-│     CacheMiddleware(cat)    │  individual routes or route groups. The API
-│                             │  group gets CacheNoStore by default.
-├─────────────────────────────┤
-│ (8) Auth Middleware          │  Applied to the API group only (not health
+│ (8) Auth Middleware         │  Applied to the API group only (not health
 │     NewAuthMiddleware       │  probes or OAuth endpoints). Validates
 │                             │  Bearer tokens, injects AuthInfo into context.
 ├─────────────────────────────┤
@@ -307,9 +310,10 @@ Request ──►
 | (1) Panic Recovery first | Must be outermost to catch panics from any middleware or handler. If placed later, a panic in an earlier middleware would crash the process. |
 | (2) Request ID second | Generates the ID before logging so all log entries include it. Before security headers so the ID is available for error responses. |
 | (3) Security Headers third | Must execute before any middleware that can short-circuit (body limit, content-type) to guarantee security headers appear on 413 and 415 responses. |
-| (4) Logging fourth | Wraps the error-producing middleware (5, 6) so their short-circuit responses are captured in logs with accurate status codes and durations. |
-| (5) Body Size Limit fifth | Rejects oversized bodies before the handler reads them, preventing memory exhaustion. Must run after logging. |
-| (6) Content-Type sixth | Rejects wrong content types before the handler attempts JSON binding. The cheapest check runs last among the global middleware. |
+| (4) Logging fourth | Wraps the error-producing middleware so their short-circuit responses are captured in logs with accurate status codes and durations. |
+| (5) Cache-Control fifth | Sets Cache-Control: no-store on the API group before body/content-type checks or handler execution. |
+| (6) Body Size Limit sixth | Rejects oversized bodies before the handler reads them, preventing memory exhaustion. Scoped to API group so non-API routes (e.g. git smart HTTP) can handle larger bodies. |
+| (7) Content-Type seventh | Rejects wrong content types before the handler attempts JSON binding. Scoped to API group so non-API routes can use their own content types. |
 
 ---
 
@@ -332,10 +336,10 @@ Echo Router (path matching)
     └── /api/v1/**                       ──► API group
             │
             ▼
-        Global middleware chain (1-6)
+        Global middleware chain (1-4)
             │
             ▼
-        CacheMiddleware(CacheNoStore)    (group-level)
+        API group middleware chain (5-7: Cache-Control, Body Size Limit, Content-Type)
             │
             ▼
         Auth Middleware                  (group-level)

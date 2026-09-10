@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -89,9 +90,15 @@ func TestServer_ExportedSymbols(t *testing.T) {
 	var newServer func(*apikit.Config, apikit.HealthChecker) *apikit.Server = apikit.NewServer
 	_ = newServer
 
+	var bodySizeLimitMiddleware func(int64) echo.MiddlewareFunc = apikit.BodySizeLimitMiddleware
+	_ = bodySizeLimitMiddleware
+
 	// Verify method set of *Server
 	cfg := buildTestConfig(0)
 	srv := apikit.NewServer(cfg, nil)
+
+	var echoFunc func() *echo.Echo = srv.Echo
+	_ = echoFunc
 
 	var apiGroup func() = func() { _ = srv.APIGroup() }
 	_ = apiGroup
@@ -865,5 +872,168 @@ func TestMountHandlers_NoPermissions(t *testing.T) {
 	err = srv.MountHandlers(database)
 	if err != nil {
 		t.Fatalf("MountHandlers with no custom permissions failed: %v", err)
+	}
+}
+
+// ========================================================================
+// Issue #41: bodySizeLimitMiddleware scoped to API group
+// ========================================================================
+
+// TestServer_Echo_BodySizeLimitExempt verifies that routes mounted directly
+// on Server.Echo() outside the API group prefix are exempt from the default
+// body size limit (1MB).
+func TestServer_Echo_BodySizeLimitExempt(t *testing.T) {
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	// Register a route directly on Echo() outside the API group
+	srv.Echo().POST("/custom-upload", func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"status": "ok",
+			"bytes":  len(body),
+		})
+	})
+
+	// Send POST with 2MB body (exceeds default 1MB limit)
+	body2MB := strings.Repeat("x", 2*1024*1024)
+	req, err := http.NewRequest("POST",
+		"http://"+addr+"/custom-upload",
+		strings.NewReader(body2MB))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (routes outside API group should not have body size limit)", resp.StatusCode)
+	}
+}
+
+// TestServer_APIGroup_BodySizeLimitEnforced verifies that routes mounted on
+// the API group still enforce the configured body size limit.
+func TestServer_APIGroup_BodySizeLimitEnforced(t *testing.T) {
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	api := srv.APIGroup()
+	if api == nil {
+		t.Fatal("APIGroup() returned nil")
+	}
+	api.POST("/upload", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Send POST with 2MB body (exceeds default 1MB limit)
+	body2MB := strings.Repeat("x", 2*1024*1024)
+	req, err := http.NewRequest("POST",
+		"http://"+addr+"/api/v1/upload",
+		strings.NewReader(body2MB))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
+// TestServer_Echo_BodySizeLimitAppliedManually verifies that
+// BodySizeLimitMiddleware can be explicitly attached to routes mounted on
+// Server.Echo() outside the API group prefix, enforcing custom limits.
+func TestServer_Echo_BodySizeLimitAppliedManually(t *testing.T) {
+	cfg := buildTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	startErr := startServerInBackground(srv)
+	t.Cleanup(func() {
+		srv.Shutdown(context.Background())
+		<-startErr
+	})
+
+	addr := waitUntilListening(t, srv, 2*time.Second)
+
+	// Register a route on Echo() with an explicit BodySizeLimitMiddleware (512KB)
+	srv.Echo().POST("/limited-upload", func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"status": "ok",
+			"bytes":  len(body),
+		})
+	}, apikit.BodySizeLimitMiddleware(512*1024))
+
+	// Request within 512KB limit should succeed
+	body100KB := strings.Repeat("x", 100*1024)
+	req1, err := http.NewRequest("POST",
+		"http://"+addr+"/limited-upload",
+		strings.NewReader(body100KB))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req1.Header.Set("Content-Type", "application/octet-stream")
+
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp1.Body.Close()
+
+	if resp1.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 for body within limit", resp1.StatusCode)
+	}
+
+	// Request exceeding 512KB limit should be rejected with 413
+	body1MB := strings.Repeat("x", 1024*1024)
+	req2, err := http.NewRequest("POST",
+		"http://"+addr+"/limited-upload",
+		strings.NewReader(body1MB))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req2.Header.Set("Content-Type", "application/octet-stream")
+
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 for body exceeding limit", resp2.StatusCode)
 	}
 }

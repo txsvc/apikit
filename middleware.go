@@ -116,9 +116,9 @@ func loggingMiddleware(logHealthProbes bool) echo.MiddlewareFunc {
 	}
 }
 
-// bodySizeLimitMiddleware returns Echo middleware that rejects requests with
+// BodySizeLimitMiddleware returns Echo middleware that rejects requests with
 // a body exceeding maxBytes with HTTP 413 via WriteAPIError().
-func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
+func BodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if c.Request().Body != nil && c.Request().ContentLength > maxBytes {
@@ -132,6 +132,10 @@ func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
+}
+
+func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
+	return BodySizeLimitMiddleware(maxBytes)
 }
 
 // contentTypeEnforcementMiddleware returns Echo middleware that rejects POST,

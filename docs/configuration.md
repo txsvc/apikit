@@ -66,7 +66,7 @@ HTTP server settings.
 | Bind | string | `bind` | `"0.0.0.0"` | Network address to bind to. |
 | ExternalURL | string | `external_url` | `""` | Public-facing base URL of the server. Used for OAuth redirect URI validation. |
 | MountPoint | string | `mount_point` | `"/api/v1"` | URL path prefix for all API routes. Health endpoints (`/healthz`, `/readyz`, `/version`) are always served at the root, outside this prefix. |
-| MaxBodySize | string | `max_body_size` | `"1MB"` | Maximum allowed request body size. Format: a positive integer followed by `KB`, `MB`, or `GB` (case-sensitive in the regex, but the parser upper-cases input). Examples: `"512KB"`, `"2MB"`, `"1GB"`. |
+| MaxBodySize | string | `max_body_size` | `"1MB"` | Maximum allowed request body size for API group routes. Format: a positive integer followed by `KB`, `MB`, or `GB` (case-sensitive in the regex, but the parser upper-cases input). Examples: `"512KB"`, `"2MB"`, `"1GB"`. Routes mounted directly on Echo via `Server.Echo()` are exempt by default. |
 
 ### `[database]`
 
