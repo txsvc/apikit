@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/txsvc/apikit/internal/apiutil"
+	"github.com/txsvc/apikit/internal/auth"
 	"github.com/txsvc/apikit/internal/authctx"
 	"github.com/txsvc/apikit/internal/bootstrap"
 	"github.com/txsvc/apikit/internal/config"
@@ -57,6 +58,35 @@ type APIKeyResult = keys.APIKeyResult
 // Consumers can use *apikit.AuthInfo to inspect the authenticated credential
 // without importing internal/authctx.
 type AuthInfo = authctx.AuthInfo
+
+// AuthError is a type alias for the internal auth.AuthError struct.
+// Consumers can use *apikit.AuthError to inspect authentication error details
+// (Code, Message) without importing internal/auth.
+type AuthError = auth.AuthError
+
+// Sentinels for credential validation errors returned by ValidateCredential.
+var (
+	// ErrUnrecognizedToken is returned when a token string cannot be parsed as any supported token type.
+	ErrUnrecognizedToken = auth.ErrUnrecognizedToken
+	// ErrInvalidCredentials is returned when a credential is not found, its format or hex suffix is invalid, or its secret does not match.
+	ErrInvalidCredentials = auth.ErrInvalidCredentials
+	// ErrCredentialRevoked is returned when the credential has been revoked.
+	ErrCredentialRevoked = auth.ErrCredentialRevoked
+	// ErrCredentialExpired is returned when the credential has passed its expiration date.
+	ErrCredentialExpired = auth.ErrCredentialExpired
+	// ErrUserBlocked is returned when the user owning the credential is in blocked status.
+	ErrUserBlocked = auth.ErrUserBlocked
+	// ErrInternalServer is returned when an internal database or server error occurs during validation.
+	ErrInternalServer = auth.ErrInternalServer
+)
+
+// ValidateCredential validates a raw token string (admin token, API key, or PAT)
+// against the database without requiring an Echo context.
+// The rawToken may optionally include a "Bearer " prefix.
+// Returns the resolved AuthInfo or an AuthError.
+func ValidateCredential(ctx context.Context, database *DB, rawToken string) (*AuthInfo, error) {
+	return auth.ValidateCredential(ctx, database, rawToken)
+}
 
 // GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
 // Returns nil if no AuthInfo has been injected (e.g. no auth middleware ran).
