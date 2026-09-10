@@ -1412,7 +1412,7 @@ func TestClose(t *testing.T) {
 }
 
 // TestOpen_MaxOpenConnections verifies that Open configures
-// SetMaxOpenConns(1) on the connection pool. (TS-02-45)
+// SetMaxOpenConns(4) on the connection pool. (TS-02-45)
 func TestOpen_MaxOpenConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "maxopen.db")
 	db, err := Open(path)
@@ -1425,13 +1425,14 @@ func TestOpen_MaxOpenConnections(t *testing.T) {
 	defer db.Close()
 
 	stats := db.SqlDB.Stats()
-	if stats.MaxOpenConnections != 1 {
-		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	if stats.MaxOpenConnections != 4 {
+		t.Errorf("MaxOpenConnections = %d; want 4", stats.MaxOpenConnections)
 	}
 }
 
 // TestOpenMemory_MaxOpenConnections verifies that OpenMemory configures
-// SetMaxOpenConns(1) on the connection pool. (TS-02-46)
+// SetMaxOpenConns(1) on the connection pool because in-memory databases
+// in SQLite are connection-scoped. (TS-02-46)
 func TestOpenMemory_MaxOpenConnections(t *testing.T) {
 	db, err := OpenMemory()
 	if err != nil {
@@ -1445,6 +1446,160 @@ func TestOpenMemory_MaxOpenConnections(t *testing.T) {
 	stats := db.SqlDB.Stats()
 	if stats.MaxOpenConnections != 1 {
 		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	}
+}
+
+// TestOpen_BusyTimeout verifies that Open configures PRAGMA busy_timeout to 5000.
+func TestOpen_BusyTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "busy_open.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v; want nil", path, err)
+	}
+	if db == nil {
+		t.Fatal("Open returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.SqlDB.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d; want 5000", timeout)
+	}
+}
+
+// TestOpenMemory_BusyTimeout verifies that OpenMemory configures PRAGMA busy_timeout to 5000.
+func TestOpenMemory_BusyTimeout(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.SqlDB.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d; want 5000", timeout)
+	}
+}
+
+// TestWAL_ConcurrentReaders verifies that two goroutines can concurrently
+// execute SELECT queries without serializing on the connection pool. (AC-2)
+func TestWAL_ConcurrentReaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal_readers.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	// Insert a test row.
+	_, err = d.SqlDB.Exec("INSERT INTO admin_config VALUES ('key1', 'val1')")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Reader 1 starts a read transaction, holding its connection.
+	tx1, err := d.SqlDB.Begin()
+	if err != nil {
+		t.Fatalf("Begin tx1: %v", err)
+	}
+	defer tx1.Rollback()
+
+	var val1 string
+	if err := tx1.QueryRow("SELECT value FROM admin_config WHERE key = 'key1'").Scan(&val1); err != nil {
+		t.Fatalf("tx1 read: %v", err)
+	}
+
+	// Reader 2 executes concurrently using another connection from the pool.
+	read2Done := make(chan struct{})
+	var val2 string
+	var read2Err error
+	go func() {
+		defer close(read2Done)
+		read2Err = d.SqlDB.QueryRow("SELECT value FROM admin_config WHERE key = 'key1'").Scan(&val2)
+	}()
+
+	select {
+	case <-read2Done:
+		if read2Err != nil {
+			t.Fatalf("concurrent read error: %v", read2Err)
+		}
+		if val2 != "val1" {
+			t.Fatalf("concurrent read value = %q, want %q", val2, "val1")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent read blocked waiting for first connection")
+	}
+
+	// WaitCount should be 0 because the pool had available connections.
+	stats := d.SqlDB.Stats()
+	if stats.WaitCount != 0 {
+		t.Errorf("WaitCount = %d; want 0 (concurrent reads serialized on pool)", stats.WaitCount)
+	}
+}
+
+// TestConcurrent_WriteLockRetry verifies that when one connection holds a write lock,
+// another concurrent write waits and retries transparently via busy_timeout instead
+// of immediately failing with ErrDatabaseLocked. (AC-3)
+func TestConcurrent_WriteLockRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "write_retry.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	// Writer 1 begins a transaction and writes, acquiring SQLite's write lock.
+	tx1, err := d.SqlDB.Begin()
+	if err != nil {
+		t.Fatalf("Begin tx1: %v", err)
+	}
+	if _, err := tx1.Exec("INSERT INTO admin_config VALUES ('w1', 'v1')"); err != nil {
+		tx1.Rollback()
+		t.Fatalf("tx1 write: %v", err)
+	}
+
+	// Writer 2 attempts a write from another pooled connection in a goroutine.
+	writer2Done := make(chan error, 1)
+	go func() {
+		// Use raw Exec so database/sql picks an available connection from the pool.
+		_, err := d.SqlDB.Exec("INSERT INTO admin_config VALUES ('w2', 'v2')")
+		writer2Done <- err
+	}()
+
+	// Ensure Writer 2 has started and is waiting on SQLite's lock.
+	time.Sleep(100 * time.Millisecond)
+
+	// Writer 1 commits and releases the write lock.
+	if err := tx1.Commit(); err != nil {
+		t.Fatalf("tx1 commit: %v", err)
+	}
+
+	// Writer 2 should now succeed thanks to busy_timeout retry.
+	select {
+	case err := <-writer2Done:
+		if err != nil {
+			t.Fatalf("writer 2 failed: %v; want transparent retry and success", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer 2 did not complete within timeout")
+	}
+
+	// Verify both rows were written.
+	var count int
+	if err := d.SqlDB.QueryRow("SELECT COUNT(*) FROM admin_config").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d; want 2", count)
 	}
 }
 
@@ -1512,8 +1667,8 @@ func TestProperty_SharedInitDB(t *testing.T) {
 }
 
 // TestProperty_InitDB_PoolSettings verifies that after Open, the *sql.DB
-// handle reports MaxOpenConnections == 1, confirming initDB sets
-// SetMaxOpenConns(1) before executing any PRAGMAs. (TS-02-8)
+// handle reports MaxOpenConnections == 4, confirming initDB sets
+// SetMaxOpenConns(4) before executing any PRAGMAs. (TS-02-8)
 func TestProperty_InitDB_PoolSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pool.db")
 	db, err := Open(path)
@@ -1526,8 +1681,8 @@ func TestProperty_InitDB_PoolSettings(t *testing.T) {
 	defer db.Close()
 
 	stats := db.SqlDB.Stats()
-	if stats.MaxOpenConnections != 1 {
-		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	if stats.MaxOpenConnections != 4 {
+		t.Errorf("MaxOpenConnections = %d; want 4", stats.MaxOpenConnections)
 	}
 }
 
@@ -1993,9 +2148,9 @@ func TestSmoke_Open_HappyPath(t *testing.T) {
 	// All six tables present.
 	verifyTablesExist(t, db.SqlDB)
 
-	// MaxOpenConnections == 1.
-	if stats := db.SqlDB.Stats(); stats.MaxOpenConnections != 1 {
-		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
+	// MaxOpenConnections == 4.
+	if stats := db.SqlDB.Stats(); stats.MaxOpenConnections != 4 {
+		t.Errorf("MaxOpenConnections = %d; want 4", stats.MaxOpenConnections)
 	}
 }
 
@@ -2028,7 +2183,7 @@ func TestSmoke_OpenMemory_HappyPath(t *testing.T) {
 	// All six tables.
 	verifyTablesExist(t, db.SqlDB)
 
-	// Pool setting.
+	// Pool setting (single-connection for in-memory database).
 	if stats := db.SqlDB.Stats(); stats.MaxOpenConnections != 1 {
 		t.Errorf("MaxOpenConnections = %d; want 1", stats.MaxOpenConnections)
 	}

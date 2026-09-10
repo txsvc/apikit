@@ -539,9 +539,8 @@ if errors.Is(err, apikit.ErrNotModified) {
 apikit uses SQLite via `modernc.org/sqlite`, a pure-Go (CGo-free) SQLite implementation. The database layer is in `internal/db/`.
 
 **Connection management**:
-- `db.Open(path)` opens a file-based database with WAL (Write-Ahead Logging) mode enabled, foreign keys enforced, and the schema initialized.
-- `db.OpenMemory()` opens an in-memory database for testing. WAL mode is skipped (not applicable to `:memory:` databases).
-- Both set `MaxOpenConns(1)` and `MaxIdleConns(1)`, enforcing a single-connection pool. This is the standard SQLite best practice since SQLite does not support concurrent writers. WAL mode allows concurrent readers alongside the single writer.
+- `db.Open(path)` opens a file-based database with WAL (Write-Ahead Logging) mode enabled, foreign keys enforced, busy timeout set to 5000ms, and the schema initialized. Sets `MaxOpenConns(4)` and `MaxIdleConns(4)` to leverage WAL mode's support for concurrent readers alongside SQLite's busy timeout (5000ms) for graceful write retry.
+- `db.OpenMemory()` opens an in-memory database for testing. WAL mode is skipped and `MaxOpenConns(1)` / `MaxIdleConns(1)` is maintained as SQLite `:memory:` databases are connection-scoped. Busy timeout and foreign keys are enforced.
 
 **Path resolution**: The database path is resolved through a hierarchy:
 1. `database.path` with a directory component (e.g. `"./name.db"`) is used as-is
@@ -690,9 +689,9 @@ Bootstrap runs conditionally: only when `--admin-email`, `--reset-admin-token`, 
 
 Echo provides the HTTP router, context, and middleware chain. apikit wraps it rather than exposing it directly -- consumers interact with `*Server`, `*echo.Group` (for route registration), and `echo.MiddlewareFunc` (for custom middleware). This limits the coupling surface.
 
-### Why SQLite with Single-Connection Pool?
+### Why SQLite with WAL Mode and Small Connection Pool?
 
-SQLite with `MaxOpenConns(1)` avoids write contention entirely. WAL mode enables concurrent reads alongside the single writer. This is appropriate for the target deployment model (single-instance API servers) and eliminates the operational complexity of a separate database server.
+SQLite with `MaxOpenConns(4)` and `PRAGMA busy_timeout(5000)` allows concurrent readers to query in parallel under WAL mode without queuing behind writers or other readers, while busy timeout provides transparent retries during brief write locks. This is appropriate for the target deployment model (single-instance API servers) and eliminates the operational complexity of a separate database server.
 
 ### Why Internal Packages?
 
