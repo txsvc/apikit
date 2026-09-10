@@ -174,7 +174,9 @@ func NewCLIError(code int, message string) *CLIError
 Creates a typed error with a code and message. Use code `2` for
 client-side validation errors (convention: 1 = API error, 2 = client
 error). The error is rendered by `CLIHandleError` into the standard
-JSON error envelope.
+JSON error envelope, and `CLIExitCode` maps code `1` and HTTP status
+codes (`>= 400`) to process exit code 1, while code `2` and other
+non-API codes map to process exit code 2.
 
 ```go
 if name == "" {
@@ -182,6 +184,17 @@ if name == "" {
         apikit.NewCLIError(2, "--name flag is required"))
 }
 ```
+
+#### CLIExitCode
+
+```go
+func CLIExitCode(err error) int
+```
+
+Maps an error to an integer process exit code:
+- `0` for `nil` (success)
+- `1` for API errors (`*APIError`, or `*CLIError` with code 1 or >= 400)
+- `2` for client-side errors (`*CLIError` with code 2 or other non-API codes, and all other non-nil errors)
 
 ---
 
