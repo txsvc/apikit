@@ -90,13 +90,15 @@ func NewServer(cfg *Config, checker HealthChecker) *Server {
 	// run before any middleware that can short-circuit, to ensure security headers
 	// appear on EVERY response (01-PROP-4).
 	//
-	// Corrected order:
+	// Middleware order:
 	// (1) Panic Recovery  — outermost; catches panics from everything
 	// (2) Request ID      — assigns UUID v4 early for logging and responses
 	// (3) Security Headers — sets response headers before any short-circuit
 	// (4) Logging          — wraps error-producing middleware to capture all status codes
-	// (5) Body Size Limit  — may short-circuit with 413
-	// (6) Content-Type Enforcement — may short-circuit with 415
+	//
+	// Note: Body Size Limit and Content-Type Enforcement are scoped to the
+	// API group so that non-API routes mounted on Echo() (e.g. git smart HTTP)
+	// can use custom payload sizes and content types.
 	e.Use(panicRecoveryMiddleware())
 	e.Use(requestIDMiddleware())
 	e.Use(securityHeadersMiddleware())
@@ -114,21 +116,21 @@ func NewServer(cfg *Config, checker HealthChecker) *Server {
 			maxBytes = 1048576 // 1MB default
 		}
 	}
-	e.Use(bodySizeLimitMiddleware(maxBytes))
 
 	// Register health probe endpoints at the server root (not under mount_point)
 	e.GET("/healthz", s.healthzHandler, CacheMiddleware(CacheNoCache))
 	e.GET("/readyz", s.readyzHandler, CacheMiddleware(CacheNoCache))
 	e.GET("/version", s.versionHandler, CacheMiddleware(CachePublic))
 
-	// Pre-create the API group with CacheNoStore and Content-Type enforcement.
-	// Content-Type enforcement is scoped to the API group so that non-API
-	// routes (e.g. git smart HTTP) can use their own content types.
+	// Pre-create the API group with CacheNoStore, body size limiting, and
+	// Content-Type enforcement. Body size limit and Content-Type enforcement
+	// are scoped to the API group so that non-API routes (e.g. git smart HTTP)
+	// can use their own content types and larger payload sizes.
 	mp := cfg.Server.MountPoint
 	if mp == "" {
 		mp = "/api/v1"
 	}
-	s.apiGroup = e.Group(mp, CacheMiddleware(CacheNoStore), contentTypeEnforcementMiddleware())
+	s.apiGroup = e.Group(mp, CacheMiddleware(CacheNoStore), BodySizeLimitMiddleware(maxBytes), contentTypeEnforcementMiddleware())
 
 	return s
 }
@@ -318,13 +320,17 @@ func (s *Server) ExternalURL() string {
 // Echo returns the underlying Echo HTTP server instance.
 // Use this to register routes directly on the Echo instance rather than
 // through the API group (e.g., for the git smart HTTP server which
-// mounts routes outside the API group prefix).
+// mounts routes outside the API group prefix). Routes registered directly
+// on Echo do not have API-group middleware (CacheNoStore, BodySizeLimitMiddleware,
+// contentTypeEnforcementMiddleware) applied; callers can apply BodySizeLimitMiddleware
+// manually if a limit is desired.
 func (s *Server) Echo() *echo.Echo {
 	return s.echo
 }
 
 // APIGroup returns the Echo route group at the configured mount point.
-// The group has CacheMiddleware(CacheNoStore) pre-applied.
+// The group has CacheMiddleware(CacheNoStore), BodySizeLimitMiddleware,
+// and contentTypeEnforcementMiddleware pre-applied.
 // Returns the same *echo.Group on every call.
 func (s *Server) APIGroup() *echo.Group {
 	return s.apiGroup
