@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -34,6 +35,10 @@ type CmdClient struct {
 	saveConfigFn func(string, *CLIConfig) error
 	configPath   string
 }
+
+// defaultRequestTimeout is the default timeout applied to HTTP requests
+// made by CmdClient when the caller context does not already specify a deadline.
+var defaultRequestTimeout = 30 * time.Second
 
 // NewCmdClient constructs a CmdClient for making authenticated API calls.
 // Custom CLI commands that bypass PersistentPreRunE can use this directly.
@@ -137,7 +142,17 @@ func CmdHandleError(cmd *cobra.Command, err error) error {
 // DoRequest performs an authenticated HTTP request and returns the decoded
 // response body. On 4xx/5xx responses, it decodes the error envelope and
 // returns a *CmdError. The caller prints the result or error envelope.
+// If ctx does not carry a deadline, a default 30-second timeout is applied.
 func (c *CmdClient) DoRequest(ctx context.Context, method, path string, body any) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultRequestTimeout)
+		defer cancel()
+	}
+
 	fullURL := strings.TrimRight(c.endpointURL, "/") + "/api/v1" + path
 
 	var bodyReader io.Reader
@@ -205,7 +220,17 @@ func (c *CmdClient) DoRequest(ctx context.Context, method, path string, body any
 // response body and HTTP status code. Unlike DoRequest, it does not decode
 // the response — the caller is responsible for unmarshaling. On 4xx/5xx
 // responses it decodes the error envelope and returns a *CmdError.
+// If ctx does not carry a deadline, a default 30-second timeout is applied.
 func (c *CmdClient) DoRequestRaw(ctx context.Context, method, path string, body any) ([]byte, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultRequestTimeout)
+		defer cancel()
+	}
+
 	fullURL := strings.TrimRight(c.endpointURL, "/") + "/api/v1" + path
 
 	var bodyReader io.Reader

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -405,5 +406,193 @@ func TestUserShow_APIError401(t *testing.T) {
 	}
 	if env.Error.Code == 0 {
 		t.Error("error envelope code is 0; want server error code")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue #47: CmdClient.DoRequest/DoRequestRaw lack a default timeout
+// ---------------------------------------------------------------------------
+
+// AC-1 / AC-2: Verify default timeout is 30 seconds.
+func TestCmdClient_DefaultRequestTimeout_Value(t *testing.T) {
+	if defaultRequestTimeout != 30*time.Second {
+		t.Fatalf("expected defaultRequestTimeout to be 30s, got %v", defaultRequestTimeout)
+	}
+}
+
+// AC-1: Given a CmdClient built via NewCmdClient/defaultNewAPIClient with no
+// explicit httpClient or context deadline, when DoRequest is called against a
+// server that never responds, then the call returns an error within a bounded
+// default time instead of hanging indefinitely.
+func TestCmdClient_DoRequest_DefaultTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	orig := defaultRequestTimeout
+	defaultRequestTimeout = 50 * time.Millisecond
+	defer func() { defaultRequestTimeout = orig }()
+
+	// Test with client from NewCmdClient
+	client := NewCmdClient(server.URL, "ak_test")
+	start := time.Now()
+	_, err := client.DoRequest(context.Background(), http.MethodGet, "/user", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DoRequest took too long: %v (expected ~50ms)", elapsed)
+	}
+
+	// Test with client from defaultNewAPIClient
+	rawClient := defaultNewAPIClient(server.URL, "ak_test")
+	apiClient, ok := rawClient.(*CmdClient)
+	if !ok {
+		t.Fatalf("expected *CmdClient from defaultNewAPIClient, got %T", rawClient)
+	}
+	start = time.Now()
+	_, err = apiClient.DoRequest(context.Background(), http.MethodGet, "/user", nil)
+	elapsed = time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DoRequest took too long: %v (expected ~50ms)", elapsed)
+	}
+}
+
+// AC-1: Given a CmdClient built via NewCmdClient/defaultNewAPIClient with no
+// explicit httpClient or context deadline, when DoRequestRaw is called against a
+// server that never responds, then the call returns an error within a bounded
+// default time instead of hanging indefinitely.
+func TestCmdClient_DoRequestRaw_DefaultTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	orig := defaultRequestTimeout
+	defaultRequestTimeout = 50 * time.Millisecond
+	defer func() { defaultRequestTimeout = orig }()
+
+	// Test with client from NewCmdClient
+	client := NewCmdClient(server.URL, "ak_test")
+	start := time.Now()
+	_, _, err := client.DoRequestRaw(context.Background(), http.MethodGet, "/user", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DoRequestRaw took too long: %v (expected ~50ms)", elapsed)
+	}
+
+	// Test with client from defaultNewAPIClient
+	rawClient := defaultNewAPIClient(server.URL, "ak_test")
+	apiClient, ok := rawClient.(*CmdClient)
+	if !ok {
+		t.Fatalf("expected *CmdClient from defaultNewAPIClient, got %T", rawClient)
+	}
+	start = time.Now()
+	_, _, err = apiClient.DoRequestRaw(context.Background(), http.MethodGet, "/user", nil)
+	elapsed = time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DoRequestRaw took too long: %v (expected ~50ms)", elapsed)
+	}
+}
+
+// AC-2: Given a caller that already wrapped its context with a shorter deadline
+// via context.WithTimeout/WithDeadline, when DoRequest/DoRequestRaw is called,
+// then that caller-supplied deadline is respected and not overridden by the new default.
+func TestCmdClient_DoRequest_CallerDeadlinePreserved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	// Keep defaultRequestTimeout at default 30s
+	client := NewCmdClient(server.URL, "ak_test")
+
+	// Caller specifies a 50ms deadline
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := client.DoRequest(ctx, http.MethodGet, "/user", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// The call must abort within the caller's 50ms deadline, NOT wait 30s
+	if elapsed > 2*time.Second {
+		t.Fatalf("caller deadline was not respected; took %v (expected ~50ms)", elapsed)
+	}
+}
+
+// AC-2: Same check for DoRequestRaw
+func TestCmdClient_DoRequestRaw_CallerDeadlinePreserved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	// Keep defaultRequestTimeout at default 30s
+	client := NewCmdClient(server.URL, "ak_test")
+
+	// Caller specifies a 50ms deadline
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, _, err := client.DoRequestRaw(ctx, http.MethodGet, "/user", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// The call must abort within the caller's 50ms deadline, NOT wait 30s
+	if elapsed > 2*time.Second {
+		t.Fatalf("caller deadline was not respected; took %v (expected ~50ms)", elapsed)
+	}
+}
+
+// AC-2: Verify that when caller sets a deadline longer than defaultRequestTimeout,
+// DoRequest does not override it with the default timeout.
+func TestCmdClient_DoRequest_CallerLongerDeadlineNotOverridden(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	orig := defaultRequestTimeout
+	defaultRequestTimeout = 50 * time.Millisecond
+	defer func() { defaultRequestTimeout = orig }()
+
+	client := NewCmdClient(server.URL, "ak_test")
+	// Caller provides a deadline of 200ms (longer than defaultRequestTimeout's 50ms).
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := client.DoRequest(ctx, http.MethodGet, "/user", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// If defaultRequestTimeout was erroneously applied, elapsed would be ~50ms (<100ms).
+	// Since caller deadline is respected, elapsed should be >= 150ms.
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("caller deadline was prematurely canceled by defaultRequestTimeout: took %v (expected >= 150ms)", elapsed)
 	}
 }
