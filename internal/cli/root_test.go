@@ -1138,3 +1138,17 @@ func TestChildPersistentPreRunEShadowsRootHook(t *testing.T) {
 		t.Error("root's PersistentPreRunE should NOT be called when a child defines its own PersistentPreRunE — this demonstrates the shadow problem")
 	}
 }
+
+func TestDefaultNewAPIClient(t *testing.T) {
+	client := defaultNewAPIClient("https://api.example.com", "test-api-key")
+	cmdClient, ok := client.(*CmdClient)
+	if !ok {
+		t.Fatalf("expected *CmdClient, got %T", client)
+	}
+	if cmdClient.EndpointURL() != "https://api.example.com" {
+		t.Errorf("expected endpoint URL 'https://api.example.com', got %q", cmdClient.EndpointURL())
+	}
+	if cmdClient.APIKey() != "test-api-key" {
+		t.Errorf("expected API key 'test-api-key', got %q", cmdClient.APIKey())
+	}
+}

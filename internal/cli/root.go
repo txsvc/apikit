@@ -142,10 +142,7 @@ func RootCommand() *cobra.Command {
 var newAPIClient = defaultNewAPIClient
 
 func defaultNewAPIClient(endpointURL, apiKey string) any {
-	return &CmdClient{
-		endpointURL: endpointURL,
-		apiKey:      apiKey,
-	}
+	return NewCmdClient(endpointURL, apiKey)
 }
 
 // isAdminCommand returns true if cmd is in the "admin" subtree.

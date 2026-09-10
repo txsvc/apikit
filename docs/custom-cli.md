@@ -91,7 +91,8 @@ Makes an authenticated request to `<endpoint>/api/v1<path>`. The `body`
 is marshaled to JSON (pass `nil` for bodyless requests). Returns the
 decoded JSON response as `any` (`map[string]any` for objects, `[]any`
 for arrays). On 4xx/5xx responses, decodes the server's error envelope
-and returns a `*CLIError`.
+and returns a `*CLIError`. If `ctx` does not already carry a deadline,
+a default 30-second timeout is applied.
 
 ```go
 // GET /api/v1/widgets
@@ -109,7 +110,8 @@ func (c *CLIClient) DoRequestRaw(ctx context.Context, method, path string, body 
 ```
 
 Like `DoRequest` but returns the raw response bytes and HTTP status code
-instead of decoded JSON. Use this when you need to unmarshal into a
+instead of decoded JSON. Applies the same default 30-second timeout if
+`ctx` has no deadline. Use this when you need to unmarshal into a
 specific Go struct:
 
 ```go
