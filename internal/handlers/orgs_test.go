@@ -1,8 +1,10 @@
 package handlers_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -3446,4 +3448,200 @@ func TestOrgConditionalGet(t *testing.T) {
 	if getRec3.Body.Len() != 0 {
 		t.Errorf("expected empty body for 304 response, got %q", getRec3.Body.String())
 	}
+}
+
+// ========================================================================
+// Tests for Before/After Org Delete Hooks (Issue #43)
+// ========================================================================
+
+func TestDeleteOrg_BeforeHookVeto(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	orgID := "c0000001-0000-4000-8000-000000000001"
+	userID := "c0000001-0000-4000-8000-100000000001"
+	insertTestUser(t, database.SqlDB, userID, "deleteuser", "delete@example.com", "github", "gh-del")
+	insertTestOrg(t, database.SqlDB, orgID, "Veto Corp", "veto-corp", "", "active")
+	insertTestOrgMember(t, database.SqlDB, orgID, userID)
+
+	beforeHookCalled := false
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB, handlers.OrgHooks{
+		BeforeDelete: func(ctx context.Context, id string) error {
+			beforeHookCalled = true
+			if id != orgID {
+				t.Errorf("BeforeDelete received id %q; want %q", id, orgID)
+			}
+			return errors.New("vetoed: active workloads present")
+		},
+	})
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if !beforeHookCalled {
+		t.Fatal("expected before delete hook to be called")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected HTTP 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify org row is NOT deleted.
+	var orgCount int
+	err = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&orgCount)
+	if err != nil {
+		t.Fatalf("failed to query orgs table: %v", err)
+	}
+	if orgCount != 1 {
+		t.Errorf("expected org row to be preserved, found %d", orgCount)
+	}
+
+	// Verify member row is NOT deleted.
+	var memberCount int
+	err = database.SqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if memberCount != 1 {
+		t.Errorf("expected member row to be preserved, found %d", memberCount)
+	}
+}
+
+func TestDeleteOrg_AfterHookRollback(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	orgID := "c0000001-0000-4000-8000-000000000002"
+	userID := "c0000001-0000-4000-8000-100000000002"
+	insertTestUser(t, database.SqlDB, userID, "deleteuser2", "delete2@example.com", "github", "gh-del2")
+	insertTestOrg(t, database.SqlDB, orgID, "Rollback Corp", "rollback-corp", "", "active")
+	insertTestOrgMember(t, database.SqlDB, orgID, userID)
+
+	afterHookCalled := false
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB, handlers.OrgHooks{
+		AfterDelete: func(ctx context.Context, tx *sql.Tx, id string) error {
+			afterHookCalled = true
+			if tx == nil {
+				t.Error("AfterDelete received nil tx")
+			}
+			if id != orgID {
+				t.Errorf("AfterDelete received id %q; want %q", id, orgID)
+			}
+			return errors.New("cleanup failed")
+		},
+	})
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if !afterHookCalled {
+		t.Fatal("expected after delete hook to be called")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected HTTP 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify transaction rolled back: org row still exists.
+	var orgCount int
+	err = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&orgCount)
+	if err != nil {
+		t.Fatalf("failed to query orgs table: %v", err)
+	}
+	if orgCount != 1 {
+		t.Errorf("expected org row to be preserved after rollback, found %d", orgCount)
+	}
+
+	// Verify member row still exists.
+	var memberCount int
+	err = database.SqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE org_id = ?", orgID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("failed to query org_members: %v", err)
+	}
+	if memberCount != 1 {
+		t.Errorf("expected member row to be preserved after rollback, found %d", memberCount)
+	}
+}
+
+func TestDeleteOrg_BeforeAndAfterHooks_Success(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	orgID := "c0000001-0000-4000-8000-000000000003"
+	userID := "c0000001-0000-4000-8000-100000000003"
+	insertTestUser(t, database.SqlDB, userID, "deleteuser3", "delete3@example.com", "github", "gh-del3")
+	insertTestOrg(t, database.SqlDB, orgID, "Success Corp", "success-corp", "", "active")
+	insertTestOrgMember(t, database.SqlDB, orgID, userID)
+
+	var callOrder []string
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB, handlers.OrgHooks{
+		BeforeDelete: func(ctx context.Context, id string) error {
+			callOrder = append(callOrder, "before")
+			return nil
+		},
+		AfterDelete: func(ctx context.Context, tx *sql.Tx, id string) error {
+			callOrder = append(callOrder, "after")
+			return nil
+		},
+	})
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(callOrder) != 2 || callOrder[0] != "before" || callOrder[1] != "after" {
+		t.Errorf("unexpected call order: %v; want [before, after]", callOrder)
+	}
+
+	// Verify org is deleted.
+	var orgCount int
+	err = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&orgCount)
+	if err != nil {
+		t.Fatalf("failed to query orgs table: %v", err)
+	}
+	if orgCount != 0 {
+		t.Errorf("expected org row to be deleted, found %d", orgCount)
+	}
+}
+
+func TestDeleteOrg_EchoHTTPError(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	orgID := "c0000001-0000-4000-8000-000000000004"
+	insertTestOrg(t, database.SqlDB, orgID, "Custom Error Corp", "custom-err-corp", "", "active")
+
+	e := echo.New()
+	g := e.Group("", apikit.CacheMiddleware(apikit.CacheNoStore))
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterOrgHandlers(g, database.SqlDB, handlers.OrgHooks{
+		BeforeDelete: func(ctx context.Context, id string) error {
+			return echo.NewHTTPError(http.StatusForbidden, "organization is protected")
+		},
+	})
+
+	rec := sendDelete(t, e, "/orgs/"+orgID)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	assertErrorResponse(t, rec, http.StatusForbidden, "organization is protected")
 }

@@ -78,7 +78,7 @@ Machine-to-machine API keys. Each belongs to one user.
 ```sql
 CREATE TABLE IF NOT EXISTS api_keys (
     key_id       TEXT    NOT NULL PRIMARY KEY,
-    user_id      TEXT    NOT NULL REFERENCES users(id),
+    user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     secret_hash  TEXT    NOT NULL,
     expires_days INTEGER NOT NULL,
     expires_at   TEXT,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | `key_id` | TEXT | NOT NULL PRIMARY KEY | 8-char alphanumeric ID |
-| `user_id` | TEXT | NOT NULL REFERENCES users(id) | FK to users |
+| `user_id` | TEXT | NOT NULL REFERENCES users(id) ON DELETE CASCADE | FK to users; cascade delete with user |
 | `secret_hash` | TEXT | NOT NULL | SHA-256 hex digest |
 | `expires_days` | INTEGER | NOT NULL | Original expiry duration |
 | `expires_at` | TEXT | nullable | NULL for non-expiring keys |
@@ -105,7 +105,7 @@ user.
 ```sql
 CREATE TABLE IF NOT EXISTS pats (
     token_id     TEXT    NOT NULL PRIMARY KEY,
-    user_id      TEXT    NOT NULL REFERENCES users(id),
+    user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name         TEXT    NOT NULL,
     secret_hash  TEXT    NOT NULL,
     permissions  TEXT    NOT NULL,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS pats (
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | `token_id` | TEXT | NOT NULL PRIMARY KEY | 8-char alphanumeric ID |
-| `user_id` | TEXT | NOT NULL REFERENCES users(id) | FK to users |
+| `user_id` | TEXT | NOT NULL REFERENCES users(id) ON DELETE CASCADE | FK to users; cascade delete with user |
 | `name` | TEXT | NOT NULL | Human-readable label (max 255 chars) |
 | `secret_hash` | TEXT | NOT NULL | SHA-256 hex digest |
 | `permissions` | TEXT | NOT NULL | JSON string array (e.g. `["users:read","orgs:read"]`) |
@@ -161,7 +161,7 @@ Join table linking users to organizations. Composite primary key.
 ```sql
 CREATE TABLE IF NOT EXISTS org_members (
     org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    user_id    TEXT NOT NULL REFERENCES users(id),
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL,
     PRIMARY KEY (org_id, user_id)
 )
@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS org_members (
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | `org_id` | TEXT | NOT NULL REFERENCES orgs(id) ON DELETE CASCADE | Cascade: deleting an org removes all memberships |
-| `user_id` | TEXT | NOT NULL REFERENCES users(id) | No cascade: deleting a user while memberships exist is blocked by the FK |
+| `user_id` | TEXT | NOT NULL REFERENCES users(id) ON DELETE CASCADE | Cascade: deleting a user removes all memberships |
 | `created_at` | TEXT | NOT NULL | `TimeFormat` timestamp |
 
 ### admin_config

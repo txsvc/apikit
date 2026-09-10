@@ -19,10 +19,10 @@ var schemaStatements = []string{
 	UNIQUE (provider, provider_id)
 )`,
 
-	// 2. api_keys — FK to users(id)
+	// 2. api_keys — FK to users(id) ON DELETE CASCADE
 	`CREATE TABLE IF NOT EXISTS api_keys (
 	key_id TEXT NOT NULL PRIMARY KEY,
-	user_id TEXT NOT NULL REFERENCES users(id),
+	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	secret_hash TEXT NOT NULL,
 	expires_days INTEGER NOT NULL,
 	expires_at TEXT,
@@ -30,10 +30,10 @@ var schemaStatements = []string{
 	created_at TEXT NOT NULL
 )`,
 
-	// 3. pats — FK to users(id)
+	// 3. pats — FK to users(id) ON DELETE CASCADE
 	`CREATE TABLE IF NOT EXISTS pats (
 	token_id TEXT NOT NULL PRIMARY KEY,
-	user_id TEXT NOT NULL REFERENCES users(id),
+	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	name TEXT NOT NULL,
 	secret_hash TEXT NOT NULL,
 	permissions TEXT NOT NULL,
@@ -55,10 +55,10 @@ var schemaStatements = []string{
 	updated_at TEXT NOT NULL
 )`,
 
-	// 5. org_members — FK to orgs(id) ON DELETE CASCADE, FK to users(id)
+	// 5. org_members — FK to orgs(id) ON DELETE CASCADE, FK to users(id) ON DELETE CASCADE
 	`CREATE TABLE IF NOT EXISTS org_members (
 	org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-	user_id TEXT NOT NULL REFERENCES users(id),
+	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	created_at TEXT NOT NULL,
 	PRIMARY KEY (org_id, user_id)
 )`,

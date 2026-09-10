@@ -1,8 +1,10 @@
 package handlers_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -227,12 +229,13 @@ func TestRegisterUserHandlers_AllRoutes(t *testing.T) {
 	g := e.Group("")
 	handlers.RegisterUserHandlers(g, database.SqlDB)
 
-	// The 15 expected (method, path) pairs from the spec.
+	// The 16 expected (method, path) pairs from the spec.
 	expected := map[string]bool{
 		"POST /users":                       false,
 		"GET /users":                        false,
 		"GET /users/:id":                    false,
 		"PATCH /users/:id":                  false,
+		"DELETE /users/:id":                 false,
 		"POST /users/:id/promote":           false,
 		"POST /users/:id/demote":            false,
 		"POST /users/:id/block":             false,
@@ -263,8 +266,8 @@ func TestRegisterUserHandlers_AllRoutes(t *testing.T) {
 		}
 	}
 
-	if found != 15 {
-		t.Errorf("expected 15 routes to be registered, found %d", found)
+	if found != 16 {
+		t.Errorf("expected 16 routes to be registered, found %d", found)
 	}
 }
 
@@ -330,7 +333,7 @@ func TestHandlerFunctionsUnexported(t *testing.T) {
 
 	// Verify expected handler functions are NOT exported.
 	handlerNames := []string{
-		"createUser", "listUsers", "getUser", "updateUser",
+		"createUser", "listUsers", "getUser", "updateUser", "deleteUser",
 		"promoteUser", "demoteUser", "blockUser", "unblockUser",
 		"listUserKeys", "revokeUserKey", "listUserTokens", "revokeUserToken",
 		"getOwnProfile", "updateOwnProfile", "listOwnOrgs",
@@ -3492,5 +3495,283 @@ func TestSmoke_FullEndToEnd(t *testing.T) {
 		if org.Status == "blocked" {
 			t.Error("Step 3: blocked org should not appear in response")
 		}
+	}
+}
+
+// ========================================================================
+// Tests for DELETE /users/:id and User Delete Hooks (Issue #43)
+// ========================================================================
+
+func TestDeleteUser_Success(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	targetID := testUUID("target-delete-user-uuid")
+	insertTestUser(t, sqlDB, targetID, "targetuser", "target@example.com", "github", "gh-target")
+
+	// Create API key, PAT, org membership, and owned org.
+	keyID := "ak-delete-test"
+	insertTestAPIKey(t, sqlDB, keyID, targetID, "hash", 30, sql.NullString{}, sql.NullString{}, "2024-01-01T00:00:00Z")
+
+	tokenID := "pat-delete-test"
+	insertTestPAT(t, sqlDB, tokenID, targetID, "test-token", "hash", `["users:read"]`, 30, sql.NullString{}, sql.NullString{}, "2024-01-01T00:00:00Z")
+
+	orgID := "org-delete-test"
+	insertTestOrg(t, sqlDB, orgID, "User Owned Org", "user-owned-org", "https://example.com", "active")
+	// Set targetID as owner
+	_, err := sqlDB.Exec("UPDATE orgs SET owner_id = ? WHERE id = ?", targetID, orgID)
+	if err != nil {
+		t.Fatalf("failed to set org owner: %v", err)
+	}
+	insertTestOrgMember(t, sqlDB, orgID, targetID)
+
+	rec := sendDelete(t, e, "/users/"+targetID)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for 204, got %q", rec.Body.String())
+	}
+
+	// Verify user is deleted.
+	var userCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&userCount)
+	if err != nil {
+		t.Fatalf("querying users: %v", err)
+	}
+	if userCount != 0 {
+		t.Errorf("expected user row to be deleted, found %d", userCount)
+	}
+
+	// Verify API keys deleted.
+	var keyCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", targetID).Scan(&keyCount)
+	if err != nil {
+		t.Fatalf("querying api_keys: %v", err)
+	}
+	if keyCount != 0 {
+		t.Errorf("expected api_keys to be deleted, found %d", keyCount)
+	}
+
+	// Verify PATs deleted.
+	var patCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM pats WHERE user_id = ?", targetID).Scan(&patCount)
+	if err != nil {
+		t.Fatalf("querying pats: %v", err)
+	}
+	if patCount != 0 {
+		t.Errorf("expected pats to be deleted, found %d", patCount)
+	}
+
+	// Verify org memberships deleted.
+	var memberCount int
+	err = sqlDB.QueryRow("SELECT COUNT(*) FROM org_members WHERE user_id = ?", targetID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("querying org_members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected org_members to be deleted, found %d", memberCount)
+	}
+
+	// Verify org owner_id is set to NULL.
+	var ownerID *string
+	err = sqlDB.QueryRow("SELECT owner_id FROM orgs WHERE id = ?", orgID).Scan(&ownerID)
+	if err != nil {
+		t.Fatalf("querying orgs: %v", err)
+	}
+	if ownerID != nil {
+		t.Errorf("expected org owner_id to be NULL, got %v", *ownerID)
+	}
+}
+
+func TestDeleteUser_NotFound(t *testing.T) {
+	e, _ := setupAdminTestServer(t)
+
+	rec := sendDelete(t, e, "/users/nonexistent-uuid")
+	assertErrorResponse(t, rec, http.StatusNotFound, "user not found")
+}
+
+func TestDeleteUser_NonAdmin(t *testing.T) {
+	e, sqlDB := setupNonAdminTestServer(t)
+
+	targetID := testUUID("target-nonadmin-delete")
+	insertTestUser(t, sqlDB, targetID, "nonadmintarget", "target@example.com", "github", "gh-na")
+
+	rec := sendDelete(t, e, "/users/"+targetID)
+	assertErrorResponse(t, rec, http.StatusForbidden, "forbidden")
+}
+
+func TestDeleteUser_FlexibleSelector(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	targetID := testUUID("target-flexible-selector")
+	insertTestUser(t, sqlDB, targetID, "flexuser", "flex@example.com", "github", "gh-flex")
+
+	// Delete by username
+	rec := sendDelete(t, e, "/users/flexuser")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 when deleting by username, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	_ = sqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected user to be deleted via username selector, found %d", count)
+	}
+}
+
+func TestDeleteUser_LastAdminSafeguard(t *testing.T) {
+	e, sqlDB := setupAdminTestServer(t)
+
+	admin1 := testUUID("admin-1")
+	now := "2024-01-01T00:00:00Z"
+	insertTestUserFull(t, sqlDB, admin1, "admin1", "admin1@example.com", "Admin One", "admin", "active", "github", "gh-a1", now, now)
+
+	// Sole active admin in the DB: cannot delete
+	rec := sendDelete(t, e, "/users/"+admin1)
+	assertErrorResponse(t, rec, http.StatusConflict, "cannot delete the last admin")
+
+	// Add a second active admin
+	admin2 := testUUID("admin-2")
+	insertTestUserFull(t, sqlDB, admin2, "admin2", "admin2@example.com", "Admin Two", "admin", "active", "github", "gh-a2", now, now)
+
+	// Now admin1 can be deleted because admin2 remains
+	rec2 := sendDelete(t, e, "/users/"+admin1)
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 when deleting admin with another admin remaining, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Now admin2 is the last admin: cannot delete
+	rec3 := sendDelete(t, e, "/users/"+admin2)
+	assertErrorResponse(t, rec3, http.StatusConflict, "cannot delete the last admin")
+
+	// Add a blocked admin; deleting blocked admin when active admin remains succeeds
+	blockedAdmin := testUUID("admin-blocked")
+	insertTestUserFull(t, sqlDB, blockedAdmin, "adminb", "adminb@example.com", "Admin Blocked", "admin", "blocked", "github", "gh-ab", now, now)
+
+	recBlocked := sendDelete(t, e, "/users/"+blockedAdmin)
+	if recBlocked.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 when deleting blocked admin, got %d; body: %s", recBlocked.Code, recBlocked.Body.String())
+	}
+}
+
+func TestDeleteUser_BeforeHookVeto(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	targetID := testUUID("user-hook-veto")
+	insertTestUser(t, database.SqlDB, targetID, "vetouser", "vetouser@example.com", "github", "gh-vu")
+
+	beforeCalled := false
+	e := echo.New()
+	g := e.Group("")
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB, handlers.UserHooks{
+		BeforeDelete: func(ctx context.Context, id string) error {
+			beforeCalled = true
+			if id != targetID {
+				t.Errorf("BeforeDelete received id %q; want %q", id, targetID)
+			}
+			return errors.New("cannot delete user with pending tasks")
+		},
+	})
+
+	rec := sendDelete(t, e, "/users/"+targetID)
+	if !beforeCalled {
+		t.Fatal("expected before delete hook to be called")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected HTTP 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected user row to be preserved after veto, found %d", count)
+	}
+}
+
+func TestDeleteUser_AfterHookRollback(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	targetID := testUUID("user-hook-rollback")
+	insertTestUser(t, database.SqlDB, targetID, "rollbackuser", "rollback@example.com", "github", "gh-rb")
+
+	afterCalled := false
+	e := echo.New()
+	g := e.Group("")
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB, handlers.UserHooks{
+		AfterDelete: func(ctx context.Context, tx *sql.Tx, id string) error {
+			afterCalled = true
+			if tx == nil {
+				t.Error("AfterDelete received nil tx")
+			}
+			if id != targetID {
+				t.Errorf("AfterDelete received id %q; want %q", id, targetID)
+			}
+			return errors.New("after hook cleanup failed")
+		},
+	})
+
+	rec := sendDelete(t, e, "/users/"+targetID)
+	if !afterCalled {
+		t.Fatal("expected after delete hook to be called")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected HTTP 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected user row to be preserved after rollback, found %d", count)
+	}
+}
+
+func TestDeleteUser_BeforeAndAfterHooks_Success(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer database.Close()
+
+	targetID := testUUID("user-hook-success")
+	insertTestUser(t, database.SqlDB, targetID, "successuser", "success@example.com", "github", "gh-su")
+
+	var callOrder []string
+	e := echo.New()
+	g := e.Group("")
+	g.Use(adminAuthMiddleware("test-admin-uuid"))
+	handlers.RegisterUserHandlers(g, database.SqlDB, handlers.UserHooks{
+		BeforeDelete: func(ctx context.Context, id string) error {
+			callOrder = append(callOrder, "before")
+			return nil
+		},
+		AfterDelete: func(ctx context.Context, tx *sql.Tx, id string) error {
+			callOrder = append(callOrder, "after")
+			return nil
+		},
+	})
+
+	rec := sendDelete(t, e, "/users/"+targetID)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(callOrder) != 2 || callOrder[0] != "before" || callOrder[1] != "after" {
+		t.Errorf("unexpected call order: %v; want [before, after]", callOrder)
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected user row to be deleted, found %d", count)
 	}
 }

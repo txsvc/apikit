@@ -747,6 +747,30 @@ Updates a user's profile by ID. Only `full_name` can be changed.
 
 ---
 
+### DELETE /users/:id
+
+Deletes a user record by ID, username, or email. Cascades removal of user API keys,
+PATs, and organization memberships, and clears `owner_id` on owned organizations.
+Enforces the last-admin safeguard: refuses to delete the only remaining active admin.
+
+**Auth:** Admin required
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | UUID, username, or email |
+
+**Response:**
+
+| Status | Body |
+|---|---|
+| 204 | Empty |
+
+**Errors:** 401, 403, 404, 409
+
+---
+
 ### POST /users/:id/promote
 
 Promotes a user to the admin role. Idempotent: if the user already has the admin
@@ -1271,6 +1295,7 @@ Removes a user from an organization. Does not affect the user's account.
 | POST | /users | Admin | Create a user |
 | GET | /users/:id | Admin | Get user by ID |
 | PATCH | /users/:id | Admin | Update user by ID |
+| DELETE | /users/:id | Admin | Delete user |
 | POST | /users/:id/promote | Admin | Promote to admin |
 | POST | /users/:id/demote | Admin | Demote from admin |
 | POST | /users/:id/block | Admin | Block a user |

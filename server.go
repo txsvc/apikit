@@ -47,7 +47,11 @@ type Server struct {
 	apiGroup            *echo.Group
 	shutdown            bool
 	done                chan struct{}
-	afterUserCreateHook AfterUserCreateFunc
+	afterUserCreateHook  AfterUserCreateFunc
+	beforeOrgDeleteHook  BeforeOrgDeleteFunc
+	afterOrgDeleteHook   AfterOrgDeleteFunc
+	beforeUserDeleteHook BeforeUserDeleteFunc
+	afterUserDeleteHook  AfterUserDeleteFunc
 }
 
 // NewServer constructs a configured Echo HTTP server from a *Config.
@@ -369,8 +373,15 @@ func (s *Server) MountHandlers(database *DB, permissions ...Permission) error {
 	}
 	api.Use(auth.NewAuthMiddleware(database, permReg))
 
-	handlers.RegisterUserHandlers(api, database.SqlDB, s.afterUserCreateHook)
-	handlers.RegisterOrgHandlers(api, database.SqlDB)
+	handlers.RegisterUserHandlers(api, database.SqlDB, handlers.UserHooks{
+		AfterCreate:  s.afterUserCreateHook,
+		BeforeDelete: s.beforeUserDeleteHook,
+		AfterDelete:  s.afterUserDeleteHook,
+	})
+	handlers.RegisterOrgHandlers(api, database.SqlDB, handlers.OrgHooks{
+		BeforeDelete: s.beforeOrgDeleteHook,
+		AfterDelete:  s.afterOrgDeleteHook,
+	})
 	keys.RegisterKeyHandlers(api, database.SqlDB)
 	handlers.NewPATHandler(database, permReg).RegisterRoutes(api)
 

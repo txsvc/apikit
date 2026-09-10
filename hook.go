@@ -28,3 +28,51 @@ type AfterUserCreateFunc func(ctx context.Context, tx *sql.Tx, userID, username,
 func (s *Server) OnAfterUserCreate(fn AfterUserCreateFunc) {
 	s.afterUserCreateHook = fn
 }
+
+// BeforeOrgDeleteFunc is a callback invoked before an organization row is deleted.
+// It receives the context and the ID of the organization to be deleted.
+// If it returns a non-nil error, the deletion is aborted (vetoed) and the error
+// is returned to the client without modifying the database.
+type BeforeOrgDeleteFunc func(ctx context.Context, orgID string) error
+
+// AfterOrgDeleteFunc is a callback invoked after an organization row is deleted,
+// within the same database transaction. It receives the context, the active
+// transaction, and the ID of the deleted organization. If it returns a non-nil
+// error, the transaction is rolled back, undoing the deletion.
+type AfterOrgDeleteFunc func(ctx context.Context, tx *sql.Tx, orgID string) error
+
+// BeforeUserDeleteFunc is a callback invoked before a user row is deleted.
+// It receives the context and the ID of the user to be deleted.
+// If it returns a non-nil error, the deletion is aborted (vetoed) and the error
+// is returned to the client without modifying the database.
+type BeforeUserDeleteFunc func(ctx context.Context, userID string) error
+
+// AfterUserDeleteFunc is a callback invoked after a user row is deleted,
+// within the same database transaction. It receives the context, the active
+// transaction, and the ID of the deleted user. If it returns a non-nil error,
+// the transaction is rolled back, undoing the deletion.
+type AfterUserDeleteFunc func(ctx context.Context, tx *sql.Tx, userID string) error
+
+// OnBeforeOrgDelete registers a BeforeOrgDeleteFunc hook on the server.
+// Calling OnBeforeOrgDelete replaces any previously registered hook.
+func (s *Server) OnBeforeOrgDelete(fn BeforeOrgDeleteFunc) {
+	s.beforeOrgDeleteHook = fn
+}
+
+// OnAfterOrgDelete registers an AfterOrgDeleteFunc hook on the server.
+// Calling OnAfterOrgDelete replaces any previously registered hook.
+func (s *Server) OnAfterOrgDelete(fn AfterOrgDeleteFunc) {
+	s.afterOrgDeleteHook = fn
+}
+
+// OnBeforeUserDelete registers a BeforeUserDeleteFunc hook on the server.
+// Calling OnBeforeUserDelete replaces any previously registered hook.
+func (s *Server) OnBeforeUserDelete(fn BeforeUserDeleteFunc) {
+	s.beforeUserDeleteHook = fn
+}
+
+// OnAfterUserDelete registers an AfterUserDeleteFunc hook on the server.
+// Calling OnAfterUserDelete replaces any previously registered hook.
+func (s *Server) OnAfterUserDelete(fn AfterUserDeleteFunc) {
+	s.afterUserDeleteHook = fn
+}
