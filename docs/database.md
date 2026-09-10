@@ -12,9 +12,12 @@ Key characteristics:
 - **Journal mode:** WAL (Write-Ahead Logging) for file-based databases. In-memory
   databases skip WAL.
 - **Foreign keys:** Enforced on every connection. The pragma is requested through the DSN (`?_pragma=foreign_keys(1)`) so that any connection database/sql opens later carries it, and additionally executed as `PRAGMA foreign_keys = ON` on the initial connection.
-- **Connection pool:** Single connection (`MaxOpenConns(1)`, `MaxIdleConns(1)`),
-  the standard SQLite best practice since SQLite does not support concurrent
-  writers.
+- **Busy timeout:** Configured to 5000ms both in the DSN (`_pragma=busy_timeout(5000)`) and via `PRAGMA busy_timeout = 5000` in `initDB`, allowing SQLite to retry transparently under lock contention.
+- **Connection pool:** Pool of 4 connections (`MaxOpenConns(4)`, `MaxIdleConns(4)`)
+  for file-backed databases, allowing concurrent readers under WAL mode while SQLite's
+  busy timeout gracefully manages write serialization. In-memory databases use a single
+  connection (`MaxOpenConns(1)`, `MaxIdleConns(1)`) as `:memory:` databases are
+  connection-scoped in SQLite.
 
 Source files:
 
@@ -243,20 +246,25 @@ does not already exist.
 
 Connection setup is handled by `Open` (file-based) and `OpenMemory` (in-memory).
 Both delegate to the unexported `initDB` function, which applies all post-connection
-initialization in four steps:
+initialization in five steps:
 
-1. **Connection pool** -- `MaxOpenConns(1)` and `MaxIdleConns(1)`. SQLite does
-   not support concurrent writers, so a single-connection pool avoids contention.
-   WAL mode allows concurrent readers alongside the single writer.
+1. **Connection pool** -- `MaxOpenConns(4)` and `MaxIdleConns(4)` for file-based
+   databases to allow concurrent readers under WAL mode without Go-level connection
+   pool serialization. In-memory databases use `MaxOpenConns(1)` and `MaxIdleConns(1)`
+   as `:memory:` databases in SQLite are connection-scoped.
 
 2. **WAL mode** -- Enabled for file-based databases via `PRAGMA journal_mode=WAL`.
    The function verifies the returned mode is `"wal"` and returns an error if
    WAL activation fails. Skipped for in-memory databases.
 
-3. **Foreign key enforcement** -- `PRAGMA foreign_keys = ON`. Without this
+3. **Busy timeout** -- `PRAGMA busy_timeout = 5000`. Configures SQLite to retry
+   for up to 5000ms upon encountering locked tables or database files, preventing
+   transient write contention from immediately failing.
+
+4. **Foreign key enforcement** -- `PRAGMA foreign_keys = ON`. Without this
    pragma, SQLite does not enforce foreign key constraints.
 
-4. **Schema creation** -- All six `CREATE TABLE IF NOT EXISTS` statements execute
+5. **Schema creation** -- All six `CREATE TABLE IF NOT EXISTS` statements execute
    inside a single DEFERRED transaction. If any statement fails, the transaction
    rolls back and `initDB` returns the error.
 

@@ -46,3 +46,38 @@ func TestOpen_ForeignKeysEnforcedViaDSN(t *testing.T) {
 		})
 	}
 }
+
+// TestOpen_BusyTimeoutPreservedViaDSN verifies that busy_timeout is
+// requested through the DSN, so that newly opened pooled connections
+// retain the busy_timeout setting even after idle connection eviction.
+func TestOpen_BusyTimeoutPreservedViaDSN(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func() (*DB, error)
+	}{
+		{"file", func() (*DB, error) { return Open(filepath.Join(t.TempDir(), "busy.db")) }},
+		{"memory", OpenMemory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := tc.open()
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer d.Close()
+
+			// Force the pool to discard the initial connection and open a
+			// fresh one; the pragma must survive because it lives in the DSN.
+			d.SqlDB.SetMaxIdleConns(0)
+			d.SqlDB.SetMaxIdleConns(1)
+
+			var timeout int
+			if err := d.SqlDB.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+				t.Fatalf("query pragma busy_timeout: %v", err)
+			}
+			if timeout != 5000 {
+				t.Fatalf("PRAGMA busy_timeout = %d, want 5000", timeout)
+			}
+		})
+	}
+}
+

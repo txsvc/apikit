@@ -41,7 +41,7 @@ func Open(path string) (*DB, error) {
 	// connection opened without the pragma would silently stop enforcing
 	// REFERENCES and ON DELETE CASCADE. initDB additionally executes the
 	// PRAGMA explicitly for the initial connection.
-	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
+	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func Open(path string) (*DB, error) {
 // OpenMemory opens an in-memory SQLite database with full initialization
 // (skipping WAL mode). Each call returns an independent isolated instance.
 func OpenMemory() (*DB, error) {
-	sqlDB, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
+	sqlDB, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +83,15 @@ func OpenMemory() (*DB, error) {
 // OpenMemory: pool settings, WAL mode (file databases only), foreign key
 // PRAGMA, and schema creation.
 func initDB(sqlDB *sql.DB, skipWAL bool) error {
-	// Step 1: Connection pool — single connection for SQLite.
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
+	// Step 1: Connection pool — pool of 4 connections for file-backed SQLite WAL mode,
+	// single connection for in-memory databases (which are connection-scoped in SQLite).
+	if skipWAL {
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+	} else {
+		sqlDB.SetMaxOpenConns(4)
+		sqlDB.SetMaxIdleConns(4)
+	}
 
 	// Step 2: WAL mode (file databases only).
 	if !skipWAL {
@@ -98,12 +104,17 @@ func initDB(sqlDB *sql.DB, skipWAL bool) error {
 		}
 	}
 
-	// Step 3: Foreign key enforcement.
+	// Step 3: Busy timeout.
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		return err
+	}
+
+	// Step 4: Foreign key enforcement.
 	if _, err := sqlDB.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		return err
 	}
 
-	// Step 4: Schema creation in a single DEFERRED transaction.
+	// Step 5: Schema creation in a single DEFERRED transaction.
 	tx, err := sqlDB.Begin()
 	if err != nil {
 		return err
