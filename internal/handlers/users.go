@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -67,22 +69,32 @@ type PATMeta struct {
 	RevokedAt   *string  `json:"revoked_at"`
 }
 
+// UserHooks holds lifecycle hook callbacks for user handlers.
+type UserHooks struct {
+	AfterCreate  func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	BeforeDelete func(ctx context.Context, userID string) error
+	AfterDelete  func(ctx context.Context, tx *sql.Tx, userID string) error
+}
+
 // userHandlers holds the database handle shared by all user management
 // handler functions. Methods on this struct are unexported; only
 // RegisterUserHandlers is exported from this file.
 type userHandlers struct {
-	db              *sql.DB
-	afterUserCreate func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	db               *sql.DB
+	afterUserCreate  func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	beforeUserDelete func(ctx context.Context, userID string) error
+	afterUserDelete  func(ctx context.Context, tx *sql.Tx, userID string) error
 }
 
 // RegisterUserHandlers registers all user management routes on the provided
 // Echo group and stores the *sql.DB handle for use by all handler functions.
-// All 15 routes are registered:
+// All 16 routes are registered:
 //
 //   - POST   /users
 //   - GET    /users
 //   - GET    /users/:id
 //   - PATCH  /users/:id
+//   - DELETE /users/:id
 //   - POST   /users/:id/promote
 //   - POST   /users/:id/demote
 //   - POST   /users/:id/block
@@ -95,21 +107,43 @@ type userHandlers struct {
 //   - PATCH  /user
 //   - GET    /user/orgs
 //
-// An optional after-user-create hook may be passed as the last argument.
-// When provided, createUser wraps the INSERT and hook call in a database
-// transaction for atomic user + side-effect creation (04-REQ-3.1).
-func RegisterUserHandlers(g *echo.Group, database *sql.DB, hooks ...func(ctx context.Context, tx *sql.Tx, userID, username, email string) error) {
-	var hook func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
-	if len(hooks) > 0 {
-		hook = hooks[0]
+// Optional hooks (UserHooks or legacy AfterUserCreate func) may be passed
+// as the last argument.
+func RegisterUserHandlers(g *echo.Group, database *sql.DB, hooks ...any) {
+	var afterCreate func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+	var beforeDelete func(ctx context.Context, userID string) error
+	var afterDelete func(ctx context.Context, tx *sql.Tx, userID string) error
+
+	for _, arg := range hooks {
+		switch h := arg.(type) {
+		case UserHooks:
+			afterCreate = h.AfterCreate
+			beforeDelete = h.BeforeDelete
+			afterDelete = h.AfterDelete
+		case *UserHooks:
+			if h != nil {
+				afterCreate = h.AfterCreate
+				beforeDelete = h.BeforeDelete
+				afterDelete = h.AfterDelete
+			}
+		case func(ctx context.Context, tx *sql.Tx, userID, username, email string) error:
+			afterCreate = h
+		}
 	}
-	h := &userHandlers{db: database, afterUserCreate: hook}
+
+	h := &userHandlers{
+		db:               database,
+		afterUserCreate:  afterCreate,
+		beforeUserDelete: beforeDelete,
+		afterUserDelete:  afterDelete,
+	}
 
 	// Admin user CRUD endpoints.
 	g.POST("/users", h.createUser)
 	g.GET("/users", h.listUsers)
 	g.GET("/users/:id", h.getUser)
 	g.PATCH("/users/:id", h.updateUser)
+	g.DELETE("/users/:id", h.deleteUser)
 
 	// Admin role management endpoints.
 	g.POST("/users/:id/promote", h.promoteUser)
@@ -390,6 +424,134 @@ func (h *userHandlers) updateUser(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, user)
+}
+
+// deleteUser handles DELETE /users/:id — deletes a user record.
+// Requires admin access. Validates the user exists, enforces the last-admin
+// safeguard, executes cascading cleanup of user credentials/memberships,
+// and deletes the user record within a database transaction.
+// Invokes before/after user delete hooks if registered.
+// Returns HTTP 204 with no body on success, 404 when user not found,
+// 409 when attempting to delete the last active admin, and 500 on database error.
+func (h *userHandlers) deleteUser(c echo.Context) error {
+	// Auth check: admin only.
+	if err := auth.RequireAdmin(c); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
+	}
+
+	id, err := resolveUserID(h.db, c.Param("id"))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Fetch user to check role and status for last-admin safeguard.
+	var user User
+	err = h.db.QueryRow(
+		`SELECT id, username, email, COALESCE(full_name, '') AS full_name,
+		        role, status, provider, provider_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.FullName,
+		&user.Role, &user.Status, &user.Provider, &user.ProviderID,
+		&user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+		}
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Last-admin safeguard: refuse to delete the only remaining active admin.
+	if user.Role == "admin" && user.Status == "active" {
+		var adminCount int
+		err = h.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`).Scan(&adminCount)
+		if err != nil {
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		if adminCount <= 1 {
+			return apiutil.WriteAPIError(c, http.StatusConflict, "cannot delete the last admin")
+		}
+	}
+
+	// Call before-user-delete hook (if registered) to allow veto before mutations.
+	ctx := c.Request().Context()
+	if h.beforeUserDelete != nil {
+		if hookErr := h.beforeUserDelete(ctx, id); hookErr != nil {
+			var he *echo.HTTPError
+			if errors.As(hookErr, &he) {
+				msg := fmt.Sprint(he.Message)
+				return apiutil.WriteAPIError(c, he.Code, msg)
+			}
+			return apiutil.WriteAPIError(c, http.StatusConflict, hookErr.Error())
+		}
+	}
+
+	// Begin database transaction for deletion and cascading cleanup.
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer tx.Rollback()
+
+	// Re-verify last-admin safeguard inside transaction to prevent TOCTOU race.
+	if user.Role == "admin" && user.Status == "active" {
+		var adminCount int
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`).Scan(&adminCount)
+		if err != nil {
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+		if adminCount <= 1 {
+			return apiutil.WriteAPIError(c, http.StatusConflict, "cannot delete the last admin")
+		}
+	}
+
+	// Cascade cleanup: clear org owner_id references, remove user API keys, PATs, and org memberships.
+	if _, err := tx.ExecContext(ctx, `UPDATE orgs SET owner_id = NULL WHERE owner_id = ?`, id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM api_keys WHERE user_id = ?`, id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pats WHERE user_id = ?`, id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM org_members WHERE user_id = ?`, id); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	// Delete user record.
+	result, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	if rowsAffected == 0 {
+		return apiutil.WriteAPIError(c, http.StatusNotFound, "user not found")
+	}
+
+	// Invoke after-user-delete hook within the transaction.
+	if h.afterUserDelete != nil {
+		if hookErr := h.afterUserDelete(ctx, tx, id); hookErr != nil {
+			var he *echo.HTTPError
+			if errors.As(hookErr, &he) {
+				msg := fmt.Sprint(he.Message)
+				return apiutil.WriteAPIError(c, he.Code, msg)
+			}
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // promoteUser handles POST /users/:id/promote — sets user role to admin.

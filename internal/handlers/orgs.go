@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -53,22 +55,34 @@ type UpdateOrgRequest struct {
 	URL  *string `json:"url"`
 }
 
+// OrgHooks holds lifecycle hook callbacks for organization handlers.
+type OrgHooks struct {
+	BeforeDelete func(ctx context.Context, orgID string) error
+	AfterDelete  func(ctx context.Context, tx *sql.Tx, orgID string) error
+}
+
 // orgHandlers holds the database handle shared by all organization management
 // handler functions. Methods on this struct are unexported; only
 // RegisterOrgHandlers is exported from this file.
 type orgHandlers struct {
-	db *sql.DB
+	db           *sql.DB
+	beforeDelete func(ctx context.Context, orgID string) error
+	afterDelete  func(ctx context.Context, tx *sql.Tx, orgID string) error
 }
 
 // RegisterOrgHandlers registers all organization management routes on the
 // provided Echo group and stores the *sql.DB handle for use by all handler
 // functions. Panics if db is nil.
-func RegisterOrgHandlers(g *echo.Group, database *sql.DB) {
+func RegisterOrgHandlers(g *echo.Group, database *sql.DB, hooks ...OrgHooks) {
 	if database == nil {
 		panic("RegisterOrgHandlers: db must not be nil")
 	}
 
 	h := &orgHandlers{db: database}
+	if len(hooks) > 0 {
+		h.beforeDelete = hooks[0].BeforeDelete
+		h.afterDelete = hooks[0].AfterDelete
+	}
 
 	// Organization CRUD endpoints.
 	g.POST("/orgs", h.createOrg)
@@ -390,8 +404,28 @@ func (h *orgHandlers) deleteOrg(c echo.Context) error {
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
+	// Call before-delete hook (if registered) to allow veto before mutations.
+	ctx := c.Request().Context()
+	if h.beforeDelete != nil {
+		if hookErr := h.beforeDelete(ctx, id); hookErr != nil {
+			var he *echo.HTTPError
+			if errors.As(hookErr, &he) {
+				msg := fmt.Sprint(he.Message)
+				return apiutil.WriteAPIError(c, he.Code, msg)
+			}
+			return apiutil.WriteAPIError(c, http.StatusConflict, hookErr.Error())
+		}
+	}
+
+	// Begin database transaction for deletion and after-delete hook.
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+	}
+	defer tx.Rollback()
+
 	// Execute DELETE (08-REQ-6.1); ON DELETE CASCADE handles org_members.
-	result, err := h.db.Exec("DELETE FROM orgs WHERE id = ?", id)
+	result, err := tx.ExecContext(ctx, "DELETE FROM orgs WHERE id = ?", id)
 	if err != nil {
 		// DB error (08-REQ-6.E1).
 		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
@@ -404,6 +438,22 @@ func (h *orgHandlers) deleteOrg(c echo.Context) error {
 	}
 	if rowsAffected == 0 {
 		return apiutil.WriteAPIError(c, http.StatusNotFound, "organization not found")
+	}
+
+	// Invoke after-delete hook within the transaction.
+	if h.afterDelete != nil {
+		if hookErr := h.afterDelete(ctx, tx, id); hookErr != nil {
+			var he *echo.HTTPError
+			if errors.As(hookErr, &he) {
+				msg := fmt.Sprint(he.Message)
+				return apiutil.WriteAPIError(c, he.Code, msg)
+			}
+			return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apiutil.WriteAPIError(c, http.StatusInternalServerError, "internal server error")
 	}
 
 	return c.NoContent(http.StatusNoContent)

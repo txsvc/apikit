@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/txsvc/apikit"
 	"github.com/txsvc/apikit/internal/auth"
@@ -1367,6 +1368,406 @@ func TestAfterUserCreate_PropertyHookInvocationCount(t *testing.T) {
 					totalInvocations, expectedNew)
 			}
 		})
+	}
+}
+
+// ========================================================================
+// Tests for Before/After Org and User Delete Hooks on Server (Issue #43)
+// ========================================================================
+
+func insertHookTestOrg(t *testing.T, sqlDB *sql.DB, id, name, slug string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := sqlDB.Exec(
+		`INSERT INTO orgs (id, name, slug, url, status, created_at, updated_at)
+		 VALUES (?, ?, ?, '', 'active', ?, ?)`,
+		id, name, slug, now, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test org: %v", err)
+	}
+}
+
+func insertHookTestUser(t *testing.T, sqlDB *sql.DB, id, username, email string) string {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := sqlDB.Exec(
+		`INSERT INTO users (id, username, email, full_name, role, status, provider, provider_id, created_at, updated_at)
+		 VALUES (?, ?, ?, '', 'user', 'active', 'test', ?, ?, ?)`,
+		id, username, email, username+"-pid", now, now,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+	return id
+}
+
+func setupHookTestServer(t *testing.T) (*apikit.Server, *db.DB, string) {
+	t.Helper()
+	cfg := buildHookTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+	database := openHookTestDB(t)
+
+	// Admin user and API key with valid UUID.
+	adminID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, adminID, "admin-hook-tester", "admin-hook@test.com")
+	_, err := database.SqlDB.Exec("UPDATE users SET role = 'admin' WHERE id = ?", adminID)
+	if err != nil {
+		t.Fatalf("failed to promote admin: %v", err)
+	}
+	apiKey := insertTestAPIKey(t, database.SqlDB, adminID, "hookkey1", "hooksecret0123456789012345678ab")
+
+	return srv, database, apiKey
+}
+
+func TestHook_Server_DeleteHooksRegistrationAndReplacement(t *testing.T) {
+	cfg := buildHookTestConfig(0)
+	srv := apikit.NewServer(cfg, nil)
+
+	callCountBeforeOrg1, callCountBeforeOrg2 := 0, 0
+	srv.OnBeforeOrgDelete(func(ctx context.Context, orgID string) error {
+		callCountBeforeOrg1++
+		return nil
+	})
+	srv.OnBeforeOrgDelete(func(ctx context.Context, orgID string) error {
+		callCountBeforeOrg2++
+		return nil
+	})
+
+	callCountAfterOrg1, callCountAfterOrg2 := 0, 0
+	srv.OnAfterOrgDelete(func(ctx context.Context, tx *sql.Tx, orgID string) error {
+		callCountAfterOrg1++
+		return nil
+	})
+	srv.OnAfterOrgDelete(func(ctx context.Context, tx *sql.Tx, orgID string) error {
+		callCountAfterOrg2++
+		return nil
+	})
+
+	callCountBeforeUser1, callCountBeforeUser2 := 0, 0
+	srv.OnBeforeUserDelete(func(ctx context.Context, userID string) error {
+		callCountBeforeUser1++
+		return nil
+	})
+	srv.OnBeforeUserDelete(func(ctx context.Context, userID string) error {
+		callCountBeforeUser2++
+		return nil
+	})
+
+	callCountAfterUser1, callCountAfterUser2 := 0, 0
+	srv.OnAfterUserDelete(func(ctx context.Context, tx *sql.Tx, userID string) error {
+		callCountAfterUser1++
+		return nil
+	})
+	srv.OnAfterUserDelete(func(ctx context.Context, tx *sql.Tx, userID string) error {
+		callCountAfterUser2++
+		return nil
+	})
+
+	database := openHookTestDB(t)
+	adminID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, adminID, "admin-repl-test", "admin-repl@test.com")
+	_, err := database.SqlDB.Exec("UPDATE users SET role = 'admin' WHERE id = ?", adminID)
+	if err != nil {
+		t.Fatalf("failed to promote admin: %v", err)
+	}
+	apiKey := insertTestAPIKey(t, database.SqlDB, adminID, "replkey1", "replsecret0123456789012345678ab")
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	// Test Org Delete hooks replacement
+	orgID := uuid.New().String()
+	insertHookTestOrg(t, database.SqlDB, orgID, "Repl Org", "repl-org")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/orgs/"+orgID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE org returned %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if callCountBeforeOrg1 != 0 {
+		t.Errorf("callCountBeforeOrg1 = %d; want 0", callCountBeforeOrg1)
+	}
+	if callCountBeforeOrg2 != 1 {
+		t.Errorf("callCountBeforeOrg2 = %d; want 1", callCountBeforeOrg2)
+	}
+	if callCountAfterOrg1 != 0 {
+		t.Errorf("callCountAfterOrg1 = %d; want 0", callCountAfterOrg1)
+	}
+	if callCountAfterOrg2 != 1 {
+		t.Errorf("callCountAfterOrg2 = %d; want 1", callCountAfterOrg2)
+	}
+
+	// Test User Delete hooks replacement
+	targetUserID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, targetUserID, "repl-target", "repl-target@test.com")
+
+	req2 := httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+targetUserID, nil)
+	req2.Header.Set("Authorization", "Bearer "+apiKey)
+	rec2 := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("DELETE user returned %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+	if callCountBeforeUser1 != 0 {
+		t.Errorf("callCountBeforeUser1 = %d; want 0", callCountBeforeUser1)
+	}
+	if callCountBeforeUser2 != 1 {
+		t.Errorf("callCountBeforeUser2 = %d; want 1", callCountBeforeUser2)
+	}
+	if callCountAfterUser1 != 0 {
+		t.Errorf("callCountAfterUser1 = %d; want 0", callCountAfterUser1)
+	}
+	if callCountAfterUser2 != 1 {
+		t.Errorf("callCountAfterUser2 = %d; want 1", callCountAfterUser2)
+	}
+}
+
+func TestHook_Server_OrgDeleteHooks_Lifecycle(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	var callSequence []string
+	var capturedBeforeID, capturedAfterID string
+
+	srv.OnBeforeOrgDelete(func(ctx context.Context, orgID string) error {
+		callSequence = append(callSequence, "before")
+		capturedBeforeID = orgID
+		return nil
+	})
+	srv.OnAfterOrgDelete(func(ctx context.Context, tx *sql.Tx, orgID string) error {
+		callSequence = append(callSequence, "after")
+		capturedAfterID = orgID
+		if tx == nil {
+			t.Error("AfterOrgDelete hook received nil tx")
+		}
+		return nil
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	orgID := uuid.New().String()
+	insertHookTestOrg(t, database.SqlDB, orgID, "Lifecycle Org", "lifecycle-org")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/orgs/"+orgID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(callSequence) != 2 || callSequence[0] != "before" || callSequence[1] != "after" {
+		t.Errorf("unexpected call sequence: %v; want [before, after]", callSequence)
+	}
+	if capturedBeforeID != orgID {
+		t.Errorf("capturedBeforeID = %q; want %q", capturedBeforeID, orgID)
+	}
+	if capturedAfterID != orgID {
+		t.Errorf("capturedAfterID = %q; want %q", capturedAfterID, orgID)
+	}
+
+	// Verify org is deleted from DB.
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected org to be deleted, count = %d", count)
+	}
+}
+
+func TestHook_Server_OrgDeleteHooks_Veto(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	afterCalled := false
+	srv.OnBeforeOrgDelete(func(ctx context.Context, orgID string) error {
+		return errors.New("vetoed: active workloads")
+	})
+	srv.OnAfterOrgDelete(func(ctx context.Context, tx *sql.Tx, orgID string) error {
+		afterCalled = true
+		return nil
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	orgID := uuid.New().String()
+	insertHookTestOrg(t, database.SqlDB, orgID, "Veto Org", "veto-org")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/orgs/"+orgID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if afterCalled {
+		t.Error("after-delete hook should not be called when before-delete hook vetoes")
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected org to remain in DB after veto, count = %d", count)
+	}
+}
+
+func TestHook_Server_OrgDeleteHooks_Rollback(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	srv.OnAfterOrgDelete(func(ctx context.Context, tx *sql.Tx, orgID string) error {
+		return errors.New("cleanup failed")
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	orgID := uuid.New().String()
+	insertHookTestOrg(t, database.SqlDB, orgID, "Rollback Org", "rollback-org")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/orgs/"+orgID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM orgs WHERE id = ?", orgID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected org to remain in DB after rollback, count = %d", count)
+	}
+}
+
+func TestHook_Server_UserDeleteHooks_Lifecycle(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	var callSequence []string
+	var capturedBeforeID, capturedAfterID string
+
+	srv.OnBeforeUserDelete(func(ctx context.Context, userID string) error {
+		callSequence = append(callSequence, "before")
+		capturedBeforeID = userID
+		return nil
+	})
+	srv.OnAfterUserDelete(func(ctx context.Context, tx *sql.Tx, userID string) error {
+		callSequence = append(callSequence, "after")
+		capturedAfterID = userID
+		if tx == nil {
+			t.Error("AfterUserDelete hook received nil tx")
+		}
+		return nil
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	targetUserID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, targetUserID, "user-lifecycle-target", "lifecycle@test.com")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+targetUserID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(callSequence) != 2 || callSequence[0] != "before" || callSequence[1] != "after" {
+		t.Errorf("unexpected call sequence: %v; want [before, after]", callSequence)
+	}
+	if capturedBeforeID != targetUserID {
+		t.Errorf("capturedBeforeID = %q; want %q", capturedBeforeID, targetUserID)
+	}
+	if capturedAfterID != targetUserID {
+		t.Errorf("capturedAfterID = %q; want %q", capturedAfterID, targetUserID)
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetUserID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected user to be deleted, count = %d", count)
+	}
+}
+
+func TestHook_Server_UserDeleteHooks_Veto(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	afterCalled := false
+	srv.OnBeforeUserDelete(func(ctx context.Context, userID string) error {
+		return errors.New("vetoed: pending tasks")
+	})
+	srv.OnAfterUserDelete(func(ctx context.Context, tx *sql.Tx, userID string) error {
+		afterCalled = true
+		return nil
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	targetUserID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, targetUserID, "user-veto-target", "veto-user@test.com")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+targetUserID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if afterCalled {
+		t.Error("after-delete hook should not be called when before-delete hook vetoes")
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetUserID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected user to remain in DB after veto, count = %d", count)
+	}
+}
+
+func TestHook_Server_UserDeleteHooks_Rollback(t *testing.T) {
+	srv, database, apiKey := setupHookTestServer(t)
+
+	srv.OnAfterUserDelete(func(ctx context.Context, tx *sql.Tx, userID string) error {
+		return errors.New("cleanup failed")
+	})
+
+	if err := srv.MountHandlers((*apikit.DB)(database)); err != nil {
+		t.Fatalf("MountHandlers failed: %v", err)
+	}
+
+	targetUserID := uuid.New().String()
+	insertHookTestUser(t, database.SqlDB, targetUserID, "user-rollback-target", "rollback-user@test.com")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+targetUserID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec := httptest.NewRecorder()
+	srv.Echo().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	_ = database.SqlDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetUserID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected user to remain in DB after rollback, count = %d", count)
 	}
 }
 

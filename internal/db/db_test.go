@@ -692,6 +692,85 @@ func TestOpen_CascadeDelete(t *testing.T) {
 	}
 }
 
+// TestOpen_CascadeDeleteUser verifies that ON DELETE CASCADE on user_id
+// in api_keys, pats, and org_members removes child rows when the referenced user is deleted.
+func TestOpen_CascadeDeleteUser(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory error = %v; want nil", err)
+	}
+	if db == nil {
+		t.Fatal("OpenMemory returned nil DB; want non-nil")
+	}
+	defer db.Close()
+
+	// Insert a user.
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO users VALUES ('u_casc','usercasc','casc@e.com',NULL,'user','active','gh','ghcasc','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert user failed: %v", err)
+	}
+
+	// Insert an API key.
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO api_keys VALUES ('k_casc','u_casc','hash',30,NULL,NULL,'2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert api_key failed: %v", err)
+	}
+
+	// Insert a PAT.
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO pats VALUES ('p_casc','u_casc','tok','hash','[]',30,NULL,NULL,'2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert pat failed: %v", err)
+	}
+
+	// Insert an org and membership.
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO orgs VALUES ('org_casc','OrgCasc','org-casc',NULL,NULL,'active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert org failed: %v", err)
+	}
+	_, err = db.SqlDB.Exec(
+		`INSERT INTO org_members VALUES ('org_casc','u_casc','2026-01-01T00:00:00Z')`,
+	)
+	if err != nil {
+		t.Fatalf("insert org_member failed: %v", err)
+	}
+
+	// Delete the user — cascade should remove api_keys, pats, and org_members.
+	_, err = db.SqlDB.Exec(`DELETE FROM users WHERE id='u_casc'`)
+	if err != nil {
+		t.Fatalf("delete user failed: %v", err)
+	}
+
+	var keyCount, patCount, memberCount int
+	if err := db.SqlDB.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE user_id='u_casc'`).Scan(&keyCount); err != nil {
+		t.Fatalf("count api_keys failed: %v", err)
+	}
+	if keyCount != 0 {
+		t.Errorf("expected 0 api_keys rows after cascade delete; got %d", keyCount)
+	}
+
+	if err := db.SqlDB.QueryRow(`SELECT COUNT(*) FROM pats WHERE user_id='u_casc'`).Scan(&patCount); err != nil {
+		t.Fatalf("count pats failed: %v", err)
+	}
+	if patCount != 0 {
+		t.Errorf("expected 0 pats rows after cascade delete; got %d", patCount)
+	}
+
+	if err := db.SqlDB.QueryRow(`SELECT COUNT(*) FROM org_members WHERE user_id='u_casc'`).Scan(&memberCount); err != nil {
+		t.Fatalf("count org_members failed: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected 0 org_members rows after cascade delete; got %d", memberCount)
+	}
+}
+
 // TestPing verifies that Ping returns nil on a healthy database connection. (TS-02-59)
 func TestPing(t *testing.T) {
 	db, err := OpenMemory()

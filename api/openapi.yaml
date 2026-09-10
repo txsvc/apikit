@@ -1270,6 +1270,38 @@ paths:
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
 
+    delete:
+      operationId: deleteUser
+      summary: Delete a user (admin)
+      description: >-
+        Delete a user by ID. Admin only. Cascades removal of user API keys,
+        tokens, and organization memberships. Refuses to delete the last active admin.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID, username, or email address of the user.
+      responses:
+        '204':
+          description: User deleted. Cascaded credentials and memberships. No body.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
   /users/{id}/promote:
     post:
       operationId: promoteUser
