@@ -24,6 +24,7 @@ func TestBuildTimeVariableDefaults(t *testing.T) {
 		{"Version", Version, "dev"},
 		{"Build", Build, "unknown"},
 		{"TokenPrefix", TokenPrefix, "ak"},
+		{"EnvPrefix", EnvPrefix, ""},
 	}
 
 	for _, tt := range tests {
@@ -104,3 +105,43 @@ func TestTokenPrefixDeterminesConfigDirAndVersionOutput(t *testing.T) {
 		t.Error("version command should produce output")
 	}
 }
+
+func TestEnvPrefixNameAndPrefixedEnvVar(t *testing.T) {
+	savedTokenPrefix := TokenPrefix
+	savedEnvPrefix := EnvPrefix
+	defer func() {
+		TokenPrefix = savedTokenPrefix
+		EnvPrefix = savedEnvPrefix
+	}()
+
+	// Default: TokenPrefix="ak", EnvPrefix="" -> "AK"
+	TokenPrefix = "ak"
+	EnvPrefix = ""
+	if got := EnvPrefixName(); got != "AK" {
+		t.Errorf("EnvPrefixName() = %q, want %q", got, "AK")
+	}
+	if got := PrefixedEnvVar("API_KEY"); got != "AK_API_KEY" {
+		t.Errorf("PrefixedEnvVar(\"API_KEY\") = %q, want %q", got, "AK_API_KEY")
+	}
+
+	// TokenPrefix="af", EnvPrefix="" -> "AF"
+	TokenPrefix = "af"
+	EnvPrefix = ""
+	if got := EnvPrefixName(); got != "AF" {
+		t.Errorf("EnvPrefixName() = %q, want %q", got, "AF")
+	}
+	if got := PrefixedEnvVar("ENDPOINT_URL"); got != "AF_ENDPOINT_URL" {
+		t.Errorf("PrefixedEnvVar(\"ENDPOINT_URL\") = %q, want %q", got, "AF_ENDPOINT_URL")
+	}
+
+	// EnvPrefix explicitly set to "myapp" -> "MYAPP"
+	TokenPrefix = "af"
+	EnvPrefix = "myapp"
+	if got := EnvPrefixName(); got != "MYAPP" {
+		t.Errorf("EnvPrefixName() = %q, want %q", got, "MYAPP")
+	}
+	if got := PrefixedEnvVar("CONFIG_DIR"); got != "MYAPP_CONFIG_DIR" {
+		t.Errorf("PrefixedEnvVar(\"CONFIG_DIR\") = %q, want %q", got, "MYAPP_CONFIG_DIR")
+	}
+}
+

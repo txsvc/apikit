@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -1646,3 +1648,228 @@ func TestRunLogin_ParentCancel_CancelsHTTPRequests(t *testing.T) {
 		t.Errorf("runLogin took %v after cancel, want < 500ms", elapsed)
 	}
 }
+
+// ===========================================================================
+// AC-1 and AC-4 Tests: Non-interactive login & config dir override
+// ===========================================================================
+
+func TestRunLogin_NonInteractive_ValidAPIKey_Success(t *testing.T) {
+	user := loginUser{
+		ID:       "usr-12345",
+		Username: "ci-bot",
+		Email:    "bot@example.com",
+		Role:     "user",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/user" {
+			http.NotFound(w, r)
+			return
+		}
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer valid-secret-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]string{"message": "unauthorized"},
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(user)
+	}))
+	defer server.Close()
+
+	configDir := t.TempDir()
+	var browserCalled bool
+	var stdoutBuf, stderrBuf bytes.Buffer
+
+	opts := loginOpts{
+		endpointURL: server.URL,
+		apiKey:      "valid-secret-key",
+		configPath:  configDir,
+		openBrowserFn: func(url string) error {
+			browserCalled = true
+			return errors.New("browser should not be called in non-interactive login")
+		},
+		stdout: &stdoutBuf,
+		stderr: &stderrBuf,
+	}
+
+	err := runLogin(context.Background(), 5*time.Second, opts)
+	if err != nil {
+		t.Fatalf("runLogin non-interactive returned error: %v", err)
+	}
+
+	if browserCalled {
+		t.Error("browser was opened during non-interactive login")
+	}
+
+	// Verify config.toml was created with correct credentials
+	cfg, err := LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("failed to load config after non-interactive login: %v", err)
+	}
+	if cfg.EndpointURL != server.URL {
+		t.Errorf("config EndpointURL = %q, want %q", cfg.EndpointURL, server.URL)
+	}
+	if cfg.UserID != "usr-12345" {
+		t.Errorf("config UserID = %q, want %q", cfg.UserID, "usr-12345")
+	}
+	if cfg.APIKey != "valid-secret-key" {
+		t.Errorf("config APIKey = %q, want %q", cfg.APIKey, "valid-secret-key")
+	}
+
+	// Verify stdout has valid JSON with user ID
+	var outUser loginUser
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &outUser); err != nil {
+		t.Fatalf("stdout did not contain valid user JSON: %v; raw: %s", err, stdoutBuf.String())
+	}
+	if outUser.ID != "usr-12345" {
+		t.Errorf("output user ID = %q, want %q", outUser.ID, "usr-12345")
+	}
+
+	// Verify stderr has logged in message
+	if !strings.Contains(stderrBuf.String(), "Logged in as ci-bot") {
+		t.Errorf("stderr %q does not contain %q", stderrBuf.String(), "Logged in as ci-bot")
+	}
+}
+
+func TestRunLogin_NonInteractive_Stdin(t *testing.T) {
+	user := loginUser{
+		ID:       "usr-stdin-1",
+		Username: "stdin-user",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/user" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer key-from-stdin" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(user)
+	}))
+	defer server.Close()
+
+	configDir := t.TempDir()
+	opts := loginOpts{
+		endpointURL: server.URL,
+		apiKey:      "-",
+		stdin:       strings.NewReader("  key-from-stdin \n"),
+		configPath:  configDir,
+		stdout:      new(bytes.Buffer),
+		stderr:      new(bytes.Buffer),
+	}
+
+	err := runLogin(context.Background(), 5*time.Second, opts)
+	if err != nil {
+		t.Fatalf("runLogin with stdin key returned error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.APIKey != "key-from-stdin" {
+		t.Errorf("config APIKey = %q, want %q", cfg.APIKey, "key-from-stdin")
+	}
+}
+
+func TestRunLogin_NonInteractive_InvalidKey_ReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"message": "token is invalid or expired"},
+		})
+	}))
+	defer server.Close()
+
+	configDir := t.TempDir()
+	opts := loginOpts{
+		endpointURL: server.URL,
+		apiKey:      "invalid-token",
+		configPath:  configDir,
+		stdout:      new(bytes.Buffer),
+		stderr:      new(bytes.Buffer),
+	}
+
+	err := runLogin(context.Background(), 5*time.Second, opts)
+	if err == nil {
+		t.Fatal("expected error for invalid token, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "token is invalid or expired") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "token is invalid or expired")
+	}
+
+	// Verify config was not saved
+	if _, statErr := os.Stat(filepath.Join(configDir, "config.toml")); !os.IsNotExist(statErr) {
+		t.Error("config.toml should not exist when authentication fails")
+	}
+}
+
+func TestLoginCommand_NonInteractive_And_ConfigDirOverride(t *testing.T) {
+	user := loginUser{
+		ID:       "usr-override",
+		Username: "bot-override",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/user" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer flag-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(user)
+	}))
+	defer server.Close()
+
+	savedPrefix := TokenPrefix
+	TokenPrefix = "af"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	customConfigDir := t.TempDir()
+	os.Setenv("AF_CONFIG_DIR", customConfigDir)
+	defer os.Unsetenv("AF_CONFIG_DIR")
+
+	rootCmd := RootCommand()
+	rootCmd.AddCommand(NewLoginCmd())
+	rootCmd.SetArgs([]string{
+		"login",
+		"--api-key", "flag-key",
+		"--endpoint-url", server.URL,
+	})
+
+	var stdoutBuf bytes.Buffer
+	rootCmd.SetOut(&stdoutBuf)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("rootCmd.Execute() failed: %v", err)
+	}
+
+	// Verify config.toml was created in customConfigDir (AF_CONFIG_DIR)
+	cfgPath := filepath.Join(customConfigDir, "config.toml")
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		t.Fatalf("config.toml was not created in AF_CONFIG_DIR (%q)", customConfigDir)
+	}
+
+	cfg, err := LoadConfig(customConfigDir)
+	if err != nil {
+		t.Fatalf("failed to load config from AF_CONFIG_DIR: %v", err)
+	}
+	if cfg.APIKey != "flag-key" {
+		t.Errorf("cfg.APIKey = %q, want %q", cfg.APIKey, "flag-key")
+	}
+	if cfg.UserID != "usr-override" {
+		t.Errorf("cfg.UserID = %q, want %q", cfg.UserID, "usr-override")
+	}
+}
+

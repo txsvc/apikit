@@ -881,3 +881,118 @@ func TestSaveConfigConcurrentLastWriterWins(t *testing.T) {
 		}
 	}
 }
+
+// =========================================================================
+// AC-2, AC-3, AC-4 Tests: Prefixed env vars, legacy fallback, ConfigDir
+// =========================================================================
+
+func TestConfigDir_EnvVarOverride(t *testing.T) {
+	savedPrefix := TokenPrefix
+	TokenPrefix = "af"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	customDir := t.TempDir()
+	os.Setenv("AF_CONFIG_DIR", customDir)
+	defer os.Unsetenv("AF_CONFIG_DIR")
+
+	dir, err := ConfigDir()
+	if err != nil {
+		t.Fatalf("ConfigDir() returned error: %v", err)
+	}
+	if dir != customDir {
+		t.Errorf("ConfigDir() = %q, want %q", dir, customDir)
+	}
+}
+
+func TestResolveField_PrefixedEnvTakesPrecedenceOverBare(t *testing.T) {
+	savedPrefix := TokenPrefix
+	TokenPrefix = "af"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	os.Setenv("AF_ENDPOINT_URL", "https://prefixed.example.com")
+	os.Setenv("ENDPOINT_URL", "https://bare.example.com")
+	defer func() {
+		os.Unsetenv("AF_ENDPOINT_URL")
+		os.Unsetenv("ENDPOINT_URL")
+	}()
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "AF_ENDPOINT_URL", "", true)
+	if err != nil {
+		t.Fatalf("ResolveField failed: %v", err)
+	}
+	if val != "https://prefixed.example.com" {
+		t.Errorf("ResolveField = %q, want %q", val, "https://prefixed.example.com")
+	}
+}
+
+func TestResolveField_LegacyBareEnvVarFallback(t *testing.T) {
+	savedPrefix := TokenPrefix
+	TokenPrefix = "af"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	os.Unsetenv("AF_ENDPOINT_URL")
+	os.Setenv("ENDPOINT_URL", "https://bare.example.com")
+	defer os.Unsetenv("ENDPOINT_URL")
+
+	val, err := ResolveField("endpoint_url", "--endpoint-url", "", false, "AF_ENDPOINT_URL", "", true)
+	if err != nil {
+		t.Fatalf("ResolveField failed: %v", err)
+	}
+	if val != "https://bare.example.com" {
+		t.Errorf("ResolveField fallback = %q, want %q", val, "https://bare.example.com")
+	}
+}
+
+func TestPersistentPreRunE_PrefixedEnvVarsHonored(t *testing.T) {
+	savedPrefix := TokenPrefix
+	TokenPrefix = "af"
+	defer func() { TokenPrefix = savedPrefix }()
+
+	tmpDir := t.TempDir()
+	os.Setenv("AF_CONFIG_DIR", tmpDir)
+	os.Setenv("AF_ENDPOINT_URL", "https://af.example.com")
+	os.Setenv("AF_API_KEY", "af-secret-key")
+	os.Setenv("ENDPOINT_URL", "https://legacy.example.com")
+	os.Setenv("API_KEY", "legacy-key")
+	defer func() {
+		os.Unsetenv("AF_CONFIG_DIR")
+		os.Unsetenv("AF_ENDPOINT_URL")
+		os.Unsetenv("AF_API_KEY")
+		os.Unsetenv("ENDPOINT_URL")
+		os.Unsetenv("API_KEY")
+	}()
+
+	var gotEndpoint, gotKey string
+	oldNewClient := newAPIClient
+	newAPIClient = func(endpointURL, apiKey string) any {
+		gotEndpoint = endpointURL
+		gotKey = apiKey
+		return &CmdClient{endpointURL: endpointURL, apiKey: apiKey}
+	}
+	defer func() { newAPIClient = oldNewClient }()
+
+	rootCmd := RootCommand()
+	called := false
+	rootCmd.AddCommand(&cobra.Command{
+		Use: "testprefixed",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			called = true
+			return nil
+		},
+	})
+	rootCmd.SetArgs([]string{"testprefixed"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("rootCmd.Execute() failed: %v", err)
+	}
+	if !called {
+		t.Fatal("command RunE was not executed")
+	}
+	if gotEndpoint != "https://af.example.com" {
+		t.Errorf("got endpoint = %q, want %q", gotEndpoint, "https://af.example.com")
+	}
+	if gotKey != "af-secret-key" {
+		t.Errorf("got key = %q, want %q", gotKey, "af-secret-key")
+	}
+}
+
