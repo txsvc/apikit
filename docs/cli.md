@@ -60,6 +60,11 @@ $HOME/.<prefix>/config.toml
 The default prefix is `ak`, so the default path is `$HOME/.ak/config.toml`.
 The prefix is set at build time via `-X github.com/txsvc/apikit/internal/cli.TokenPrefix=<prefix>`.
 
+The config directory location can be overridden at runtime by setting the
+`<PREFIX>_CONFIG_DIR` environment variable (for example `AK_CONFIG_DIR` or
+`AF_CONFIG_DIR`). When set, `config.toml` is read from and written to that
+directory instead of `$HOME/.<prefix>/`.
+
 ### Config file format
 
 ```toml
@@ -77,11 +82,15 @@ Each credential field is resolved using a four-level precedence chain
 (highest to lowest):
 
 1. **CLI flag** -- `--endpoint-url`, `--api-key`, `--user-id`
-2. **Environment variable** -- `ENDPOINT_URL`, `API_KEY`, `USER_ID`
+2. **Environment variable** -- Prefixed variable (`<PREFIX>_ENDPOINT_URL`, `<PREFIX>_API_KEY`, `<PREFIX>_USER_ID`, such as `AK_API_KEY` or `AF_API_KEY`), falling back to legacy unprefixed variables (`ENDPOINT_URL`, `API_KEY`, `USER_ID`) if the prefixed variable is unset
 3. **Config file** -- values from `config.toml`
 4. **Error** (for required fields) or empty string (for optional fields)
 
 Required fields: `endpoint_url`, `api_key`. Optional: `user_id`.
+
+Legacy bare environment variables (`ENDPOINT_URL`, `API_KEY`, `USER_ID`) are
+supported for backward compatibility. Prefixed variables take precedence
+over bare variables when both are set.
 
 ### Config initialization
 
@@ -191,36 +200,58 @@ When no endpoint is configured, `server_version` is silently omitted:
 
 ### akc login
 
-Authenticate via browser-based OAuth and persist credentials to the config
-file. Does not require an existing API key.
+Authenticate via browser-based OAuth or pre-obtained API key and persist credentials
+to the config file.
 
 ```
-akc login [--provider <name>] [--expires <days>] --endpoint-url <url>
+akc login [--provider <name>] [--expires <days>] [--api-key <key>] --endpoint-url <url>
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--provider` | string | `github` | OAuth provider name |
-| `--expires` | int | `90` | Credential expiry in days (0, 30, 60, or 90) |
+| `--provider` | string | `github` | OAuth provider name (interactive OAuth only) |
+| `--expires` | int | `90` | Credential expiry in days (0, 30, 60, or 90; interactive OAuth only) |
+| `--api-key` | string | `""` | API key for non-interactive login (or `-` to read from stdin) |
 
 **Flow:**
 
-1. Discovers available OAuth providers from the server
-2. Generates a cryptographic state token (32 random bytes, hex-encoded)
-3. Starts a local callback server on `127.0.0.1` (random port)
-4. Opens the authorization URL in the default browser
-5. Waits up to 120 seconds for the OAuth callback
-6. Exchanges the authorization code for credentials
-7. Saves `endpoint_url`, `user_id`, and `api_key` to `config.toml`
+- **Interactive OAuth flow (default, when `--api-key` is omitted):**
+  1. Discovers available OAuth providers from the server
+  2. Generates a cryptographic state token (32 random bytes, hex-encoded)
+  3. Starts a local callback server on `127.0.0.1` (random port)
+  4. Opens the authorization URL in the default browser
+  5. Waits up to 120 seconds for the OAuth callback
+  6. Exchanges the authorization code for credentials
+  7. Saves `endpoint_url`, `user_id`, and `api_key` to `config.toml`
+
+- **Non-interactive API key flow (when `--api-key` is provided):**
+  1. Reads API key from flag value or from standard input if `--api-key -`
+  2. Validates the key against `GET /api/v1/user` on the server
+  3. Saves `endpoint_url`, `user_id`, and `api_key` to `config.toml`
+  4. Skips browser launch, OAuth provider discovery, and callback server entirely
 
 **stdout:** User profile JSON
 
-**stderr:** `"Opening browser for authentication..."` followed by `"Logged in as <username>"`
+**stderr:** `"Opening browser for authentication..."` (OAuth) followed by `"Logged in as <username>"`
 
-**Example:**
+**Examples:**
+
+Interactive browser OAuth:
 
 ```
 akc login --endpoint-url https://api.example.com
+```
+
+Non-interactive with API key:
+
+```
+akc login --api-key ak_secret_token --endpoint-url https://api.example.com
+```
+
+Non-interactive reading API key from stdin (recommended in CI / scripts):
+
+```
+echo "$MY_API_KEY" | akc login --api-key - --endpoint-url https://api.example.com
 ```
 
 ```json

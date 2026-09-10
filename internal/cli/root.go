@@ -3,8 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -61,14 +59,10 @@ func RootCommand() *cobra.Command {
 			return fmt.Errorf("TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value")
 		}
 
-		// Resolve $HOME for config directory.
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return fmt.Errorf("cannot determine home directory: $HOME is not set or unresolvable")
+		configDir, err := ConfigDir()
+		if err != nil {
+			return err
 		}
-
-		// Config directory path: $HOME/.<TokenPrefix>/
-		configDir := filepath.Join(home, "."+TokenPrefix)
 
 		// Initialize config directory and config.toml if they don't exist.
 		if err := InitConfig(configDir); err != nil {
@@ -93,7 +87,7 @@ func RootCommand() *cobra.Command {
 		if cfg != nil {
 			epConfig = cfg.EndpointURL
 		}
-		endpointURL, err := ResolveField("endpoint_url", "--endpoint-url", epFlag, epChanged, "ENDPOINT_URL", epConfig, true)
+		endpointURL, err := ResolveField("endpoint_url", "--endpoint-url", epFlag, epChanged, PrefixedEnvVar("ENDPOINT_URL"), epConfig, true)
 		if err != nil {
 			return err
 		}
@@ -105,7 +99,7 @@ func RootCommand() *cobra.Command {
 		if cfg != nil {
 			akConfig = cfg.APIKey
 		}
-		apiKey, err := ResolveField("api_key", "--api-key", akFlag, akChanged, "API_KEY", akConfig, true)
+		apiKey, err := ResolveField("api_key", "--api-key", akFlag, akChanged, PrefixedEnvVar("API_KEY"), akConfig, true)
 		if err != nil {
 			return err
 		}
@@ -117,7 +111,7 @@ func RootCommand() *cobra.Command {
 		if cfg != nil {
 			uidConfig = cfg.UserID
 		}
-		userID, _ := ResolveField("user_id", "--user-id", uidFlag, uidChanged, "USER_ID", uidConfig, false)
+		userID, _ := ResolveField("user_id", "--user-id", uidFlag, uidChanged, PrefixedEnvVar("USER_ID"), uidConfig, false)
 
 		// Construct the API client.
 		client := newAPIClient(endpointURL, apiKey)

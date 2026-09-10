@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,9 +39,12 @@ type loginOpts struct {
 	provider      string
 	expires       int
 	endpointURL   string
+	apiKey        string
 	configPath    string
 	openBrowserFn func(string) error
 	saveConfigFn  func(string, *CLIConfig) error
+	validateKeyFn func(context.Context, string, string) (*loginUser, error)
+	stdin         io.Reader
 	stderr        io.Writer
 	stdout        io.Writer
 }
@@ -97,11 +99,12 @@ const apiMountPoint = "/api/v1"
 func NewLoginCmd() *cobra.Command {
 	var provider string
 	var expires int
+	var apiKey string
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate via browser-based OAuth",
-		Long:  "Authenticate via browser-based OAuth and persist credentials to the config file.",
+		Short: "Authenticate via browser-based OAuth or API key",
+		Long:  "Authenticate via browser-based OAuth or API key and persist credentials to the config file.",
 		Annotations: map[string]string{
 			"auth":      "none",
 			"composite": "true",
@@ -114,11 +117,14 @@ func NewLoginCmd() *cobra.Command {
 				endpointURL = ResolveEndpointURL(cmd)
 			}
 
-			home, err := os.UserHomeDir()
-			if err != nil || home == "" {
-				return fmt.Errorf("cannot determine home directory: $HOME is not set or unresolvable")
+			if apiKey == "" {
+				apiKey, _ = cmd.Flags().GetString("api-key")
 			}
-			configDir := filepath.Join(home, "."+TokenPrefix)
+
+			configDir, err := ConfigDir()
+			if err != nil {
+				return err
+			}
 			if err := InitConfig(configDir); err != nil {
 				return err
 			}
@@ -127,9 +133,12 @@ func NewLoginCmd() *cobra.Command {
 				provider:      provider,
 				expires:       expires,
 				endpointURL:   endpointURL,
+				apiKey:        apiKey,
 				configPath:    configDir,
 				openBrowserFn: openBrowser,
 				saveConfigFn:  SaveConfig,
+				validateKeyFn: defaultValidateAPIKey,
+				stdin:         cmd.InOrStdin(),
 				stderr:        cmd.ErrOrStderr(),
 				stdout:        cmd.OutOrStdout(),
 			}
@@ -140,6 +149,7 @@ func NewLoginCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&provider, "provider", "github", "OAuth provider name")
 	cmd.Flags().IntVar(&expires, "expires", 90, "Credential expiry in days (0, 30, 60, or 90)")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "API key for non-interactive authentication (use '-' to read from stdin)")
 
 	return cmd
 }
@@ -148,10 +158,35 @@ func NewLoginCmd() *cobra.Command {
 // The Cobra RunE function calls this with time.Duration(loginTimeoutSeconds)*time.Second.
 // Tests call this directly with a short timeout to exercise timeout behavior.
 func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error {
+	// --- Handle non-interactive login via API key if provided ---
+	if opts.apiKey == "-" {
+		r := opts.stdin
+		if r == nil {
+			r = os.Stdin
+		}
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return fmt.Errorf("failed to read API key from stdin: %w", err)
+		}
+		opts.apiKey = strings.TrimSpace(string(data))
+		if opts.apiKey == "" {
+			return fmt.Errorf("API key from stdin is empty")
+		}
+	} else {
+		opts.apiKey = strings.TrimSpace(opts.apiKey)
+	}
+
+	if opts.apiKey != "" {
+		if opts.endpointURL == "" {
+			return fmt.Errorf("endpoint URL is required for login — use --endpoint-url or set %s", PrefixedEnvVar("ENDPOINT_URL"))
+		}
+		return runNonInteractiveLogin(ctx, opts)
+	}
+
 	// --- Precondition checks (before any network calls) ---
 
 	if opts.endpointURL == "" {
-		return fmt.Errorf("endpoint URL is required for login — use --endpoint-url or set ENDPOINT_URL")
+		return fmt.Errorf("endpoint URL is required for login — use --endpoint-url or set %s", PrefixedEnvVar("ENDPOINT_URL"))
 	}
 
 	if err := validateExpires(opts.expires); err != nil {
@@ -345,6 +380,88 @@ func runLogin(ctx context.Context, timeout time.Duration, opts loginOpts) error 
 	fmt.Fprintf(opts.stderr, "Logged in as %s\n", exchangeResp.User.Username)
 
 	return nil
+}
+
+// runNonInteractiveLogin validates the provided API key against the server,
+// saves credentials to config.toml, and outputs the user JSON to stdout.
+func runNonInteractiveLogin(ctx context.Context, opts loginOpts) error {
+	validateFn := opts.validateKeyFn
+	if validateFn == nil {
+		validateFn = defaultValidateAPIKey
+	}
+
+	user, err := validateFn(ctx, opts.endpointURL, opts.apiKey)
+	if err != nil {
+		return err
+	}
+
+	cfg := &CLIConfig{
+		EndpointURL: opts.endpointURL,
+		UserID:      user.ID,
+		APIKey:      opts.apiKey,
+	}
+
+	saveFn := opts.saveConfigFn
+	if saveFn == nil {
+		saveFn = SaveConfig
+	}
+	if err := saveFn(opts.configPath, cfg); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	enc := json.NewEncoder(opts.stdout)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(user); err != nil {
+		return fmt.Errorf("failed to encode user JSON: %w", err)
+	}
+
+	fmt.Fprintf(opts.stderr, "Logged in as %s\n", user.Username)
+	return nil
+}
+
+// defaultValidateAPIKey validates an API key by calling GET /api/v1/user.
+func defaultValidateAPIKey(ctx context.Context, endpointURL, apiKey string) (*loginUser, error) {
+	baseURL := strings.TrimRight(endpointURL, "/")
+	userURL := baseURL + apiMountPoint + "/user"
+
+	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, userURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate API key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("login failed: %s", errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("login failed: server returned HTTP %d", resp.StatusCode)
+	}
+
+	var user loginUser
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("failed to decode user JSON: %w", err)
+	}
+	if user.ID == "" {
+		return nil, fmt.Errorf("invalid user response: missing user id")
+	}
+
+	return &user, nil
 }
 
 // newCallbackHandler returns an HTTP handler for the OAuth callback server.

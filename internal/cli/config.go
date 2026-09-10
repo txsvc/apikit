@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -97,6 +98,51 @@ func SaveConfig(configDir string, cfg *CLIConfig) error {
 	return os.Rename(tmpFile.Name(), configPath)
 }
 
+// ConfigDir returns the directory used for CLI configuration.
+// It checks the environment variable <PREFIX>_CONFIG_DIR (e.g. AK_CONFIG_DIR or AF_CONFIG_DIR)
+// first. If unset, it validates that TokenPrefix is non-empty and returns $HOME/.<TokenPrefix>/.
+func ConfigDir() (string, error) {
+	if envDir := os.Getenv(PrefixedEnvVar("CONFIG_DIR")); envDir != "" {
+		return envDir, nil
+	}
+	if TokenPrefix == "" {
+		return "", fmt.Errorf("TokenPrefix is empty: binary was built without a valid -ldflags TokenPrefix value")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("cannot determine home directory: $HOME is not set or unresolvable")
+	}
+	return filepath.Join(home, "."+TokenPrefix), nil
+}
+
+// resolveEnv looks up an environment variable with fallback from prefixed to bare name.
+// If envVarName is already prefixed with EnvPrefixName() + "_", it checks envVarName then the bare name.
+// If envVarName is bare, it checks PrefixedEnvVar(envVarName) then envVarName.
+func resolveEnv(envVarName string) string {
+	if envVarName == "" {
+		return ""
+	}
+	prefix := EnvPrefixName() + "_"
+	var prefixed, bare string
+	if strings.HasPrefix(envVarName, prefix) {
+		prefixed = envVarName
+		bare = strings.TrimPrefix(envVarName, prefix)
+	} else {
+		prefixed = PrefixedEnvVar(envVarName)
+		bare = envVarName
+	}
+
+	if val := os.Getenv(prefixed); val != "" {
+		return val
+	}
+	if bare != "" {
+		if val := os.Getenv(bare); val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
 // ResolveField resolves a single credential field using the four-level
 // precedence chain:
 //  1. CLI flag (when flagChanged is true and flagValue is non-empty)
@@ -119,7 +165,7 @@ func ResolveField(fieldName, flagName, flagValue string, flagChanged bool, envVa
 	}
 
 	// 2. Environment variable.
-	if envVal := os.Getenv(envVarName); envVal != "" {
+	if envVal := resolveEnv(envVarName); envVal != "" {
 		return envVal, nil
 	}
 
@@ -150,17 +196,13 @@ func ResolveEndpointURL(cmd *cobra.Command) string {
 
 	// Try to load config for the config value.
 	var configValue string
-	if TokenPrefix != "" {
-		home, err := os.UserHomeDir()
-		if err == nil && home != "" {
-			configDir := filepath.Join(home, "."+TokenPrefix)
-			if cfg, err := LoadConfig(configDir); err == nil && cfg != nil {
-				configValue = cfg.EndpointURL
-			}
+	if configDir, err := ConfigDir(); err == nil {
+		if cfg, err := LoadConfig(configDir); err == nil && cfg != nil {
+			configValue = cfg.EndpointURL
 		}
 	}
 
 	// Resolve with required: false — returns ("", nil) when all sources are empty.
-	val, _ := ResolveField("endpoint_url", "--endpoint-url", flagValue, flagChanged, "ENDPOINT_URL", configValue, false)
+	val, _ := ResolveField("endpoint_url", "--endpoint-url", flagValue, flagChanged, PrefixedEnvVar("ENDPOINT_URL"), configValue, false)
 	return val
 }
