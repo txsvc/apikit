@@ -37,16 +37,16 @@ type HealthChecker func() error
 
 // Server wraps an Echo HTTP server with apikit configuration.
 type Server struct {
-	cfg                 *Config
-	checker             HealthChecker
-	echo                *echo.Echo
-	once                sync.Once
-	addr                string
-	addrMu              sync.RWMutex
-	listener            net.Listener
-	apiGroup            *echo.Group
-	shutdown            bool
-	done                chan struct{}
+	cfg                  *Config
+	checker              HealthChecker
+	echo                 *echo.Echo
+	once                 sync.Once
+	addr                 string
+	addrMu               sync.RWMutex
+	listener             net.Listener
+	apiGroup             *echo.Group
+	shutdown             bool
+	done                 chan struct{}
 	afterUserCreateHook  AfterUserCreateFunc
 	beforeOrgDeleteHook  BeforeOrgDeleteFunc
 	afterOrgDeleteHook   AfterOrgDeleteFunc
@@ -249,7 +249,7 @@ func (s *Server) Start() error {
 	go func() {
 		select {
 		case <-sigCh:
-			s.Shutdown(context.Background())
+			_ = s.Shutdown(context.Background())
 		case <-s.done:
 		}
 		signal.Stop(sigCh)

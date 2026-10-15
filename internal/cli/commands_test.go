@@ -62,9 +62,9 @@ func TestCommandGroupRegistration(t *testing.T) {
 
 // commandTestCase describes a command's expected metadata for TS-15-2.
 type commandTestCase struct {
-	name        string            // human-readable test name
-	findPath    []string          // path to find the command under its parent
-	parent      func() *cobra.Command // parent constructor
+	name     string                // human-readable test name
+	findPath []string              // path to find the command under its parent
+	parent   func() *cobra.Command // parent constructor
 }
 
 func allUserCommandCases() []commandTestCase {

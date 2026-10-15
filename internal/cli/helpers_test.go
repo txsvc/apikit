@@ -96,10 +96,10 @@ func TestParseKeyID_InvalidFormats(t *testing.T) {
 func TestParseKeyID_Property_PenultimateSegment(t *testing.T) {
 	// Generate api_key strings with varying underscore-prefix structures.
 	cases := []struct {
-		name     string
-		parts    []string
-		wantID   string
-		wantErr  bool
+		name    string
+		parts   []string
+		wantID  string
+		wantErr bool
 	}{
 		{
 			name:    "0 underscores (1 segment)",

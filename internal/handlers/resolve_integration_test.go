@@ -45,7 +45,7 @@ func setupIntegrationServer(t *testing.T) (*echo.Echo, *sql.DB) {
 // Test data constants used across integration tests.
 const (
 	integrationUserID   = "550e8400-e29b-41d4-a716-446655440000"
-	integrationUsername  = "alice"
+	integrationUsername = "alice"
 	integrationEmail    = "alice@example.com"
 	integrationOrgID    = "660e8400-e29b-41d4-a716-446655440001"
 	integrationOrgSlug  = "acme-corp"

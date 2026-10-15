@@ -60,14 +60,14 @@ func TestNewPermissionRegistry_AllSevenPermissions(t *testing.T) {
 	registry := auth.NewPermissionRegistry()
 
 	expected := map[string]bool{
-		"users:read":     true,
-		"orgs:read":      true,
-		"orgs:write":     true,
-		"keys:read":      true,
-		"keys:manage":    true,
-		"tokens:read":    true,
-		"tokens:manage":  true,
-		"tokens:write":   true,
+		"users:read":    true,
+		"orgs:read":     true,
+		"orgs:write":    true,
+		"keys:read":     true,
+		"keys:manage":   true,
+		"tokens:read":   true,
+		"tokens:manage": true,
+		"tokens:write":  true,
 	}
 
 	allPerms := registry.List()

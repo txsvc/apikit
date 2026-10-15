@@ -436,7 +436,7 @@ func TestRefreshKey_MalformedKeyID(t *testing.T) {
 		expiresAt, "", now)
 
 	malformedIDs := []string{
-		"abc",                // too short
+		"abc",               // too short
 		"x",                 // single char
 		"!!invalid!!",       // non-alphanumeric
 		"way_too_long_id_x", // too long

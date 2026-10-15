@@ -259,9 +259,9 @@ func TestTimestamp_PropertyFormatParseRoundTrip(t *testing.T) {
 	// Property 3: FormatUTC result is always parseable as RFC 3339
 	t.Run("format_always_valid_rfc3339", func(t *testing.T) {
 		times := []time.Time{
-			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),           // New Year midnight UTC
-			time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),       // End of year UTC
-			time.Date(2026, 6, 15, 12, 0, 0, 0,                     // Noon in an offset zone
+			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),      // New Year midnight UTC
+			time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC), // End of year UTC
+			time.Date(2026, 6, 15, 12, 0, 0, 0, // Noon in an offset zone
 				time.FixedZone("+05:30", 5*3600+30*60)),
 		}
 

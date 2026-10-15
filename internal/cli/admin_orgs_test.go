@@ -44,41 +44,41 @@ type adminOrgsClient interface {
 // mockAdminOrgsClient implements adminOrgsClient for testing.
 type mockAdminOrgsClient struct {
 	// Return values
-	listOrgsResult   []*apikit.Organization
-	listOrgsErr      error
-	createOrgResult  *apikit.Organization
-	createOrgErr     error
-	updateOrgResult  *apikit.Organization
-	updateOrgErr     error
-	deleteOrgErr     error
-	blockOrgResult   *apikit.Organization
-	blockOrgErr      error
-	unblockOrgResult *apikit.Organization
-	unblockOrgErr    error
+	listOrgsResult    []*apikit.Organization
+	listOrgsErr       error
+	createOrgResult   *apikit.Organization
+	createOrgErr      error
+	updateOrgResult   *apikit.Organization
+	updateOrgErr      error
+	deleteOrgErr      error
+	blockOrgResult    *apikit.Organization
+	blockOrgErr       error
+	unblockOrgResult  *apikit.Organization
+	unblockOrgErr     error
 	listMembersResult []*apikit.User
 	listMembersErr    error
 	addMemberErr      error
 	removeMemberErr   error
 
 	// Call tracking
-	listOrgsCalled  bool
-	listOrgsOpts    *apikit.ListOrgsOptions
-	createOrgCalled bool
-	createOrgReq    *apikit.CreateOrgRequest
-	updateOrgCalled bool
-	updateOrgID     string
-	updateOrgReq    *apikit.UpdateOrgRequest
-	deleteOrgCalled bool
-	deleteOrgID     string
-	blockOrgCalled  bool
-	blockOrgID      string
-	unblockOrgCalled bool
-	unblockOrgID     string
-	listMembersCalled bool
-	listMembersOrgID  string
-	addMemberCalled   bool
-	addMemberOrgID    string
-	addMemberUserID   string
+	listOrgsCalled     bool
+	listOrgsOpts       *apikit.ListOrgsOptions
+	createOrgCalled    bool
+	createOrgReq       *apikit.CreateOrgRequest
+	updateOrgCalled    bool
+	updateOrgID        string
+	updateOrgReq       *apikit.UpdateOrgRequest
+	deleteOrgCalled    bool
+	deleteOrgID        string
+	blockOrgCalled     bool
+	blockOrgID         string
+	unblockOrgCalled   bool
+	unblockOrgID       string
+	listMembersCalled  bool
+	listMembersOrgID   string
+	addMemberCalled    bool
+	addMemberOrgID     string
+	addMemberUserID    string
 	removeMemberCalled bool
 	removeMemberOrgID  string
 	removeMemberUserID string
@@ -1411,5 +1411,5 @@ func makeOrgsRunner(mock *mockAdminOrgsClient) *cli.OrgsRunner {
 // Ensure imports are used.
 var (
 	_ adminOrgsClient = (*mockAdminOrgsClient)(nil)
-	_ = strings.Contains
+	_                 = strings.Contains
 )

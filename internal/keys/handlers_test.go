@@ -329,23 +329,23 @@ func TestListKeys_Ordering(t *testing.T) {
 
 	// key3: oldest, expired.
 	insertTestKey(t, database.SqlDB, "key3_015", "user-015", "hash3", 30,
-		db.FormatTime(now.Add(-24*time.Hour)),  // expires_at in the past
-		"",                                      // not explicitly revoked
+		db.FormatTime(now.Add(-24*time.Hour)), // expires_at in the past
+		"",                                    // not explicitly revoked
 		db.FormatTime(now.Add(-60*24*time.Hour)), // created 60 days ago
 	)
 
 	// key2: middle, revoked.
 	insertTestKey(t, database.SqlDB, "key2_015", "user-015", "hash2", 90,
-		db.FormatTime(now.Add(30*24*time.Hour)),    // expires_at in the future
-		db.FormatTime(now.Add(-10*24*time.Hour)),    // revoked 10 days ago
-		db.FormatTime(now.Add(-30*24*time.Hour)),    // created 30 days ago
+		db.FormatTime(now.Add(30*24*time.Hour)),  // expires_at in the future
+		db.FormatTime(now.Add(-10*24*time.Hour)), // revoked 10 days ago
+		db.FormatTime(now.Add(-30*24*time.Hour)), // created 30 days ago
 	)
 
 	// key1: newest, active.
 	insertTestKey(t, database.SqlDB, "key1_015", "user-015", "hash1", 90,
 		db.FormatTime(now.Add(90*24*time.Hour)), // expires_at in the future
-		"",                                       // not revoked
-		db.FormatTime(now),                       // created now
+		"",                 // not revoked
+		db.FormatTime(now), // created now
 	)
 
 	e := setupHandlersWithAuth(t, database, &auth.AuthInfo{

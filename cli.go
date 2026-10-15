@@ -96,4 +96,3 @@ func CLIPrintResult(cmd *cobra.Command, v any) error {
 func CLIHandleError(cmd *cobra.Command, err error) error {
 	return cli.CmdHandleError(cmd, err)
 }
-

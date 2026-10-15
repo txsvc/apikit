@@ -116,17 +116,9 @@ func applyDefaults() *Config {
 // TOML parsing. This handles the case where a config file exists but omits
 // certain keys.
 func applyFieldDefaults(cfg *Config) {
-	if cfg.Server.Port == 0 {
-		// Port 0 is valid (ephemeral), but TOML returns 0 for absent int.
-		// We cannot distinguish absent from explicit 0 here. However, when
-		// port=0 is explicitly set in TOML, the parsed value is 0, and we
-		// leave it as 0 (valid). When absent from TOML, the zero value of
-		// int is 0, but we override with the default 8080 only if it was
-		// NOT explicitly present in the TOML. Since toml.Decode pre-fills
-		// the struct from applyDefaults() which sets Port=8080, an absent
-		// port field keeps 8080. An explicit port=0 sets it to 0. This is
-		// correct because we decode into the defaults struct.
-	}
+	// Server.Port is left alone: port 0 is valid (ephemeral), and because the
+	// TOML is decoded into the struct applyDefaults() pre-fills with 8080, an
+	// absent port keeps 8080 while an explicit port=0 stays 0.
 	if cfg.Server.Bind == "" {
 		cfg.Server.Bind = "0.0.0.0"
 	}

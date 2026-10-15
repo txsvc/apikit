@@ -1144,4 +1144,3 @@ func (h *userHandlers) listOwnOrgs(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, orgs)
 }
-

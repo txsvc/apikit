@@ -415,9 +415,9 @@ func TestRegisterRoutes_PATEndpoints(t *testing.T) {
 
 	// Expected routes that must be registered.
 	expected := map[string]bool{
-		"POST /user/tokens":            false,
-		"GET /user/tokens":             false,
-		"GET /user/tokens/:token_id":   false,
+		"POST /user/tokens":             false,
+		"GET /user/tokens":              false,
+		"GET /user/tokens/:token_id":    false,
 		"DELETE /user/tokens/:token_id": false,
 	}
 
@@ -2054,7 +2054,8 @@ func TestListPATs_OrderByCreatedAtDesc(t *testing.T) {
 //
 // Test Spec: TS-09-P2
 // Requirements: 09-REQ-6.4, 09-REQ-7.1, 09-REQ-7.2, 09-REQ-7.E1,
-//               09-REQ-8.1, 09-REQ-8.E2
+//
+//	09-REQ-8.1, 09-REQ-8.E2
 func TestPATUserIsolation_Property(t *testing.T) {
 	// Generate pairs of distinct users.
 	userPairs := []struct {

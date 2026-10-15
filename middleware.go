@@ -134,10 +134,6 @@ func BodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
 	}
 }
 
-func bodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc {
-	return BodySizeLimitMiddleware(maxBytes)
-}
-
 // contentTypeEnforcementMiddleware returns Echo middleware that rejects POST,
 // PUT, and PATCH requests with a Content-Type other than application/json
 // with HTTP 415 via WriteAPIError(). Requests with no body (Content-Length 0

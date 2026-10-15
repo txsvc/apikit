@@ -231,22 +231,22 @@ func TestRegisterUserHandlers_AllRoutes(t *testing.T) {
 
 	// The 16 expected (method, path) pairs from the spec.
 	expected := map[string]bool{
-		"POST /users":                       false,
-		"GET /users":                        false,
-		"GET /users/:id":                    false,
-		"PATCH /users/:id":                  false,
-		"DELETE /users/:id":                 false,
-		"POST /users/:id/promote":           false,
-		"POST /users/:id/demote":            false,
-		"POST /users/:id/block":             false,
-		"POST /users/:id/unblock":           false,
-		"GET /users/:id/keys":               false,
-		"DELETE /users/:id/keys/:key_id":    false,
-		"GET /users/:id/tokens":             false,
+		"POST /users":                        false,
+		"GET /users":                         false,
+		"GET /users/:id":                     false,
+		"PATCH /users/:id":                   false,
+		"DELETE /users/:id":                  false,
+		"POST /users/:id/promote":            false,
+		"POST /users/:id/demote":             false,
+		"POST /users/:id/block":              false,
+		"POST /users/:id/unblock":            false,
+		"GET /users/:id/keys":                false,
+		"DELETE /users/:id/keys/:key_id":     false,
+		"GET /users/:id/tokens":              false,
 		"DELETE /users/:id/tokens/:token_id": false,
-		"GET /user":                         false,
-		"PATCH /user":                       false,
-		"GET /user/orgs":                    false,
+		"GET /user":                          false,
+		"PATCH /user":                        false,
+		"GET /user/orgs":                     false,
 	}
 
 	routes := e.Routes()

@@ -99,16 +99,16 @@ func TestRegisterOrgHandlers_Routes(t *testing.T) {
 
 	// The 10 expected (method, path) pairs from the spec.
 	expected := map[string]bool{
-		"POST /orgs":                          false,
-		"GET /orgs":                           false,
-		"GET /orgs/:id":                       false,
-		"PATCH /orgs/:id":                     false,
-		"DELETE /orgs/:id":                    false,
-		"POST /orgs/:id/block":                false,
-		"POST /orgs/:id/unblock":              false,
-		"GET /orgs/:id/members":               false,
-		"PUT /orgs/:id/members/:user_id":      false,
-		"DELETE /orgs/:id/members/:user_id":   false,
+		"POST /orgs":                        false,
+		"GET /orgs":                         false,
+		"GET /orgs/:id":                     false,
+		"PATCH /orgs/:id":                   false,
+		"DELETE /orgs/:id":                  false,
+		"POST /orgs/:id/block":              false,
+		"POST /orgs/:id/unblock":            false,
+		"GET /orgs/:id/members":             false,
+		"PUT /orgs/:id/members/:user_id":    false,
+		"DELETE /orgs/:id/members/:user_id": false,
 	}
 
 	routes := e.Routes()

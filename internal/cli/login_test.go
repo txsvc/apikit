@@ -1872,4 +1872,3 @@ func TestLoginCommand_NonInteractive_And_ConfigDirOverride(t *testing.T) {
 		t.Errorf("cfg.UserID = %q, want %q", cfg.UserID, "usr-override")
 	}
 }
-

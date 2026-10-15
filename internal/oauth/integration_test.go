@@ -27,15 +27,15 @@ import (
 // testProvider is a configurable mock provider for integration tests.
 // It tracks call counts and captures arguments for assertion.
 type testProvider struct {
-	name                string
-	authURL             string
-	exchangeFn          func(ctx context.Context, code, redirectURI string) (string, error)
-	userInfoFn          func(ctx context.Context, accessToken string) (*oauth.UserInfo, error)
-	exchangeCalls       int
-	userInfoCalls       int
-	lastExchangeCode    string
+	name                 string
+	authURL              string
+	exchangeFn           func(ctx context.Context, code, redirectURI string) (string, error)
+	userInfoFn           func(ctx context.Context, accessToken string) (*oauth.UserInfo, error)
+	exchangeCalls        int
+	userInfoCalls        int
+	lastExchangeCode     string
 	lastExchangeRedirect string
-	lastUserInfoToken   string
+	lastUserInfoToken    string
 }
 
 func (p *testProvider) Name() string { return p.name }

@@ -2958,8 +2958,8 @@ func TestOpenAPIErrorCoverage(t *testing.T) {
 	extraErrors := map[opKey][]string{
 		{"post", "/users"}:             {"409"},
 		{"post", "/users/{id}/demote"}: {"409"},
-		{"post", "/orgs"}:             {"409"},
-		{"patch", "/orgs/{id}"}:       {"409"},
+		{"post", "/orgs"}:              {"409"},
+		{"patch", "/orgs/{id}"}:        {"409"},
 	}
 
 	for path, pi := range doc.Paths.PathItems.FromOldest() {

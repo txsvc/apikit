@@ -144,4 +144,3 @@ func TestEnvPrefixNameAndPrefixedEnvVar(t *testing.T) {
 		t.Errorf("PrefixedEnvVar(\"CONFIG_DIR\") = %q, want %q", got, "MYAPP_CONFIG_DIR")
 	}
 }
-

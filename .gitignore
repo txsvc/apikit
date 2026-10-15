@@ -34,3 +34,6 @@ __pycache__/
 !.agent-fox/profiles/
 !.agent-fox/profiles/*
 .claude/worktrees/
+
+# `make doc` output
+/build/

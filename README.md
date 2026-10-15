@@ -350,22 +350,26 @@ See [docs/cli.md](docs/cli.md) for the complete CLI reference and
 
 The full API is defined in the OpenAPI 3.1.0 specification at [`api/openapi.yaml`](api/openapi.yaml).
 
-See [docs/api-reference.md](docs/api-reference.md) for the complete endpoint reference.
+See [docs/api.md](docs/api.md) for the complete endpoint reference.
 
 ## Development
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.27+
 
 ### Make Targets
 
 ```bash
+make help        # List all targets
 make build       # Build bin/apikit and bin/akc
 make test        # Run all tests
-make lint        # Run go vet
+make fmt         # gofmt in place
+make vet         # go vet
+make lint        # golangci-lint, if installed
 make check-spec  # Validate OpenAPI spec
-make check       # Run lint + test + check-spec
+make check       # Run fmt + vet + lint + test + check-spec
+make doc         # Go package docs into build/docs
 make clean       # Remove build artifacts
 ```
 
@@ -373,12 +377,12 @@ make clean       # Remove build artifacts
 
 Version and build info are injected via `-ldflags`:
 
-The server reads `Version` and `Build` from the root `apikit` package. The CLI reads `Version`, `Build`, and `TokenPrefix` from `internal/cli`. Both sets must be injected for full coverage:
+The server reads `Version`, `Commit` and `BuildTime` from the root `apikit` package. The CLI reads `Version`, `Build`, and `TokenPrefix` from `internal/cli`. Both sets must be injected for full coverage:
 
 ```bash
 go build -ldflags "\
     -X github.com/txsvc/apikit.Version=1.0.0 \
-    -X github.com/txsvc/apikit.Build=$(git rev-parse --short HEAD) \
+    -X github.com/txsvc/apikit.Commit=$(git rev-parse --short HEAD) \
     -X github.com/txsvc/apikit/internal/cli.Version=1.0.0 \
     -X github.com/txsvc/apikit/internal/cli.Build=$(git rev-parse --short HEAD) \
     -X github.com/txsvc/apikit/internal/cli.TokenPrefix=ak" \
@@ -388,7 +392,8 @@ go build -ldflags "\
 | Package | Variable | Default | Purpose |
 |---|---|---|---|
 | `apikit` | `Version` | `dev` | Server version string |
-| `apikit` | `Build` | `dev` | Server build identifier |
+| `apikit` | `Commit` | `dev` | Server commit identifier |
+| `apikit` | `BuildTime` | empty | Server build timestamp |
 | `internal/cli` | `Version` | `dev` | CLI version string |
 | `internal/cli` | `Build` | `unknown` | CLI build identifier |
 | `internal/cli` | `TokenPrefix` | `ak` | Config directory name (`$HOME/.<prefix>/`) |
@@ -397,7 +402,8 @@ go build -ldflags "\
 
 - [Architecture](docs/architecture.md) -- package layout, middleware pipeline, request lifecycle
 - [Authentication](docs/authentication.md) -- credential types, bootstrap, authorization model
-- [API Reference](docs/api-reference.md) -- complete HTTP endpoint reference
+- [API Reference](docs/api.md) -- complete HTTP endpoint reference
+- [Product Requirements](docs/prd/01-build-authenticated-rest-services.md) -- intent, design principles, scope
 - [CLI Reference](docs/cli.md) -- akc command reference
 - [Custom CLI Commands](docs/custom-cli.md) -- building custom API-backed commands
 - [Database](docs/database.md) -- schema, transactions, error handling

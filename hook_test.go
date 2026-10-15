@@ -1770,4 +1770,3 @@ func TestHook_Server_UserDeleteHooks_Rollback(t *testing.T) {
 		t.Errorf("expected user to remain in DB after rollback, count = %d", count)
 	}
 }
-

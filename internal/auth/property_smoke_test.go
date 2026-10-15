@@ -79,11 +79,11 @@ func TestProperty_DetectionOrder(t *testing.T) {
 // Requirements: 05-REQ-3.1, 05-REQ-3.E3
 func TestProperty_DetectionOrder_EdgeCases(t *testing.T) {
 	tokens := []string{
-		"ak_pat_a_b",                                   // minimal PAT
-		"ak_pat_admin_secret",                          // PAT with "admin" as token_id
-		"ak_pat_pat_pat",                               // PAT with "pat" as token_id
-		"ak_pat_123_456",                               // numeric components
-		"ak_pat_x_" + strings.Repeat("a", 64),          // secret that looks like admin hex
+		"ak_pat_a_b",                          // minimal PAT
+		"ak_pat_admin_secret",                 // PAT with "admin" as token_id
+		"ak_pat_pat_pat",                      // PAT with "pat" as token_id
+		"ak_pat_123_456",                      // numeric components
+		"ak_pat_x_" + strings.Repeat("a", 64), // secret that looks like admin hex
 	}
 
 	for _, token := range tokens {
