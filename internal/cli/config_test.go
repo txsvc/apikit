@@ -995,4 +995,3 @@ func TestPersistentPreRunE_PrefixedEnvVarsHonored(t *testing.T) {
 		t.Errorf("got key = %q, want %q", gotKey, "af-secret-key")
 	}
 }
-

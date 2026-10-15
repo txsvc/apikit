@@ -300,5 +300,5 @@ func TestAdminKeysRevokeAgentInterface(t *testing.T) {
 // Ensure imports are used.
 var (
 	_ adminKeysClient = (*mockAdminKeysClient)(nil)
-	_ = strings.Contains
+	_                 = strings.Contains
 )

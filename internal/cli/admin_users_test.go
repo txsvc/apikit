@@ -56,25 +56,25 @@ type mockAdminUsersClient struct {
 	createUserErr     error
 	updateUserResult  *apikit.User
 	updateUserErr     error
-	promoteUserResult  *apikit.User
-	promoteUserErr     error
-	demoteUserResult   *apikit.User
-	demoteUserErr      error
-	blockUserResult    *apikit.User
-	blockUserErr       error
-	unblockUserResult  *apikit.User
-	unblockUserErr     error
+	promoteUserResult *apikit.User
+	promoteUserErr    error
+	demoteUserResult  *apikit.User
+	demoteUserErr     error
+	blockUserResult   *apikit.User
+	blockUserErr      error
+	unblockUserResult *apikit.User
+	unblockUserErr    error
 
 	// Call tracking
-	listUsersCalled bool
-	listUsersOpts   *apikit.ListUsersOptions
-	getUserCalled   bool
-	getUserID       string
-	createUserCalled bool
-	createUserReq    *apikit.CreateUserRequest
-	updateUserCalled bool
-	updateUserID     string
-	updateUserReq    *apikit.UpdateUserRequest
+	listUsersCalled   bool
+	listUsersOpts     *apikit.ListUsersOptions
+	getUserCalled     bool
+	getUserID         string
+	createUserCalled  bool
+	createUserReq     *apikit.CreateUserRequest
+	updateUserCalled  bool
+	updateUserID      string
+	updateUserReq     *apikit.UpdateUserRequest
 	promoteUserCalled bool
 	promoteUserID     string
 	demoteUserCalled  bool
@@ -2148,8 +2148,8 @@ func TestExitCodeAlways012(t *testing.T) {
 
 	// Error cases don't need injection.
 	errorScenarios := []struct {
-		name    string
-		args    []string
+		name string
+		args []string
 	}{
 		{name: "missing arg", args: []string{"users", "show"}},
 		{name: "missing flag", args: []string{"users", "create"}},
@@ -2339,7 +2339,7 @@ func TestParentCommandsExitZeroNoConfig(t *testing.T) {
 		t.Run(pc.name, func(t *testing.T) {
 			mock := &mockAdminUsersClient{}
 
-			stdout, err := executeAdminCmd(pc.args...)
+			_, err := executeAdminCmd(pc.args...)
 
 			// Parent commands should exit 0 (help text).
 			if err != nil {
@@ -2349,12 +2349,6 @@ func TestParentCommandsExitZeroNoConfig(t *testing.T) {
 			// No SDK method should be called.
 			if mock.listUsersCalled || mock.getUserCalled || mock.createUserCalled {
 				t.Error("SDK method was called for parent-only command")
-			}
-
-			// stdout should be non-empty (help text).
-			if stdout == "" && len(pc.args) == 0 {
-				// The root admin command with no args should print something.
-				// (It may print to stderr via Cobra, which is OK too.)
 			}
 		})
 	}
@@ -2504,6 +2498,6 @@ func TestAllAdminTestsPass(t *testing.T) {
 // Ensure imports are used.
 var (
 	_ adminUsersClient = (*mockAdminUsersClient)(nil)
-	_ = strings.Contains
-	_ = errors.New
+	_                  = strings.Contains
+	_                  = errors.New
 )

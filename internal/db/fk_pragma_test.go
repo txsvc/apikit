@@ -80,4 +80,3 @@ func TestOpen_BusyTimeoutPreservedViaDSN(t *testing.T) {
 		})
 	}
 }
-

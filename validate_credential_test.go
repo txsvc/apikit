@@ -493,4 +493,3 @@ func TestAuthError_TypeAliasAndSentinels(t *testing.T) {
 		t.Errorf("ae.Error() = %q, want 'teapot'", ae.Error())
 	}
 }
-

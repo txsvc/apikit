@@ -79,10 +79,10 @@ func adminHandleError(cmd *cobra.Command, err error) error {
 }
 
 // adminCheckMissingArg returns a Cobra PositionalArgs validator that:
-// - On missing arg (0 args): writes a JSON error envelope to stdout and
-//   returns an error. The envelope message is "missing required argument: <name>".
-// - On correct arg count (1 arg): passes validation.
-// - On extra args (>1 args): returns a Cobra-style error (no JSON envelope).
+//   - On missing arg (0 args): writes a JSON error envelope to stdout and
+//     returns an error. The envelope message is "missing required argument: <name>".
+//   - On correct arg count (1 arg): passes validation.
+//   - On extra args (>1 args): returns a Cobra-style error (no JSON envelope).
 func adminCheckMissingArg(argName string) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {

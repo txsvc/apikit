@@ -326,7 +326,7 @@ func TestHealth_EndpointsAtServerRoot(t *testing.T) {
 }
 
 // TestHealth_VersionDefaultDevValues verifies that GET /version returns
-// version='dev', commit='dev', and build_time='' when the binary was built
+// version='dev', commit='dev', and build_time=” when the binary was built
 // without -ldflags overrides.
 // Covers TS-01-E8 (Requirement: 01-REQ-5.E1).
 func TestHealth_VersionDefaultDevValues(t *testing.T) {

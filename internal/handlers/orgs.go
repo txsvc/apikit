@@ -101,15 +101,6 @@ func RegisterOrgHandlers(g *echo.Group, database *sql.DB, hooks ...OrgHooks) {
 	g.DELETE("/orgs/:id/members/:user_id", h.removeOrgMember)
 }
 
-// requireOrgAdmin is a convenience wrapper that calls auth.RequireAdmin and
-// returns a 403 APIError if the user is not an admin.
-func requireOrgAdmin(c echo.Context) error {
-	if err := auth.RequireAdmin(c); err != nil {
-		return apiutil.WriteAPIError(c, http.StatusForbidden, "forbidden")
-	}
-	return nil
-}
-
 // createOrg handles POST /orgs — creates a new organization.
 // Requires admin access. Validates name (non-empty after trimming) and slug
 // (URL-safe format). Generates a UUID v4 for the org ID, sets status to

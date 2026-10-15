@@ -413,10 +413,10 @@ func TestProperty_RetryLoopBounded(t *testing.T) {
 	// behavior.
 
 	for _, tc := range []struct {
-		name            string
+		name              string
 		collisionsToForce int
-		expectErr       bool
-		maxInserts      int
+		expectErr         bool
+		maxInserts        int
 	}{
 		{name: "1_collision_succeeds", collisionsToForce: 1, expectErr: false, maxInserts: 3},
 		{name: "2_collisions_succeeds", collisionsToForce: 2, expectErr: false, maxInserts: 3},

@@ -346,8 +346,8 @@ func TestConfig_MaxBodySizeValidation(t *testing.T) {
 		{"512KB", 524288},
 		{"1MB", 1048576},
 		{"2GB", 2147483648},
-		{"512kb", 524288},  // case-insensitive
-		{"1mb", 1048576},   // case-insensitive
+		{"512kb", 524288}, // case-insensitive
+		{"1mb", 1048576},  // case-insensitive
 	}
 	for _, tc := range validCases {
 		t.Run("valid_"+tc.input, func(t *testing.T) {

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"

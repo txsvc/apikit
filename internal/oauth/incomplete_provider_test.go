@@ -18,7 +18,7 @@ import "github.com/txsvc/apikit/internal/oauth"
 // missing Exchange() and UserInfo().
 type incompleteProvider struct{}
 
-func (p *incompleteProvider) Name() string                          { return "incomplete" }
+func (p *incompleteProvider) Name() string                               { return "incomplete" }
 func (p *incompleteProvider) AuthorizeURL(state, redirect string) string { return "" }
 
 // This line must NOT compile — incompleteProvider is missing Exchange and UserInfo.

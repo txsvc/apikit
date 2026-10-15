@@ -1320,4 +1320,3 @@ func TestError_PropertyLibraryNeverCallsOsExit(t *testing.T) {
 		// If os.Exit were called by panic recovery, we'd never reach here
 	})
 }
-

@@ -101,7 +101,6 @@ type patRecord struct {
 	permissions []string
 	createdAt   string
 	expiresAt   *string
-	revokedAt   *string
 }
 
 // RegisterRoutes registers POST /user/tokens, GET /user/tokens,

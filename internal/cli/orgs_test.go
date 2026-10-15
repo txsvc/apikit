@@ -445,7 +445,9 @@ func TestPreValidation_Property_NoNetworkRequestWithoutAPIKey(t *testing.T) {
 		func() (string, string, error) { return executeKeysCmd("refresh") },
 		func() (string, string, error) { return executeKeysCmd("revoke") },
 		func() (string, string, error) { return executeTokensCmd("list") },
-		func() (string, string, error) { return executeTokensCmd("create", "--name", "t", "--permissions", "u:r") },
+		func() (string, string, error) {
+			return executeTokensCmd("create", "--name", "t", "--permissions", "u:r")
+		},
 		func() (string, string, error) { return executeTokensCmd("show", "tok-1") },
 		func() (string, string, error) { return executeTokensCmd("revoke", "tok-1") },
 		func() (string, string, error) { return executeOrgsCmd("list") },

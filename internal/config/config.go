@@ -58,4 +58,3 @@ type LoggingConfig struct {
 	Level           string `toml:"level"`
 	LogHealthProbes bool   `toml:"log_health_probes"`
 }
-
