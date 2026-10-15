@@ -1,0 +1,779 @@
+package apikit // import "github.com/txsvc/apikit"
+
+Package apikit provides the foundational HTTP server infrastructure.
+
+VARIABLES
+
+var (
+	// Version holds the semantic version string.
+	Version = "dev"
+	// Commit holds the short git commit SHA.
+	Commit = "dev"
+	// BuildTime holds the UTC build timestamp (e.g. "2025-06-01T00:00:00Z").
+	BuildTime = ""
+	// TokenPrefix is the token namespace prefix.
+	TokenPrefix = "ak"
+)
+    Build-time configurable variables, overridable via -ldflags.
+
+var (
+	// ErrUnrecognizedToken is returned when a token string cannot be parsed as any supported token type.
+	ErrUnrecognizedToken = auth.ErrUnrecognizedToken
+	// ErrInvalidCredentials is returned when a credential is not found, its format or hex suffix is invalid, or its secret does not match.
+	ErrInvalidCredentials = auth.ErrInvalidCredentials
+	// ErrCredentialRevoked is returned when the credential has been revoked.
+	ErrCredentialRevoked = auth.ErrCredentialRevoked
+	// ErrCredentialExpired is returned when the credential has passed its expiration date.
+	ErrCredentialExpired = auth.ErrCredentialExpired
+	// ErrUserBlocked is returned when the user owning the credential is in blocked status.
+	ErrUserBlocked = auth.ErrUserBlocked
+	// ErrInternalServer is returned when an internal database or server error occurs during validation.
+	ErrInternalServer = auth.ErrInternalServer
+)
+    Sentinels for credential validation errors returned by ValidateCredential.
+
+var ErrBootstrapComplete = bootstrap.ErrTokenGenerated
+    ErrBootstrapComplete is returned by Bootstrap when the bootstrap sequence
+    generates an admin token (first boot or token rotation). The caller must
+    exit the process cleanly without starting the HTTP server — the operator
+    needs to save the token and delete the file before the next start.
+
+var ErrNotModified = errors.New("not modified")
+    ErrNotModified is a sentinel error returned when a conditional GET receives
+    HTTP 304 (Not Modified). Callers check with errors.Is.
+
+
+FUNCTIONS
+
+func AdminCmd() *cobra.Command
+    AdminCmd returns the `admin` command group (users, orgs, keys, tokens).
+
+func BodySizeLimitMiddleware(maxBytes int64) echo.MiddlewareFunc
+    BodySizeLimitMiddleware returns Echo middleware that rejects requests with a
+    body exceeding maxBytes with HTTP 413 via WriteAPIError().
+
+func Bootstrap(ctx context.Context, database *DB, opts BootstrapOptions) error
+    Bootstrap runs the admin bootstrap sequence when applicable. It detects
+    whether bootstrap is needed (admin email provided, reset flag, or server
+    already bootstrapped) and executes the appropriate sequence. Returns nil
+    without action when no bootstrap is needed.
+
+    Returns ErrBootstrapComplete when a token is generated (first boot or token
+    rotation). The caller must exit the process cleanly without starting the
+    HTTP server. Returns nil on a successful subsequent boot (server should
+    proceed to start). Any other non-nil error is fatal.
+
+    Must be called after the database is opened and before the HTTP server
+    begins accepting requests.
+
+func CLIExecute() error
+    CLIExecute runs the root command with centralized error handling. Returns
+    the error from Execute() for the caller to handle exit codes.
+
+func CLIExitCode(err error) int
+    CLIExitCode maps an error to an integer exit code:
+      - 0: nil (success)
+      - 1: API error (APIError, or CLIError/CmdError with code 1 or >= 400)
+      - 2: client error (CLIError/CmdError with code 2 or other non-API codes,
+        or other non-nil errors)
+
+func CLIHandleError(cmd *cobra.Command, err error) error
+    CLIHandleError writes a JSON error envelope to cmd's stdout and returns the
+    error wrapped so that CLIPrintError will not double-print it. Use this to
+    report errors from custom command RunE functions.
+
+func CLIPrintError(err error)
+    CLIPrintError writes a JSON error envelope to stdout for a non-nil error.
+    Skips errors already printed by command-level handlers.
+
+func CLIPrintResult(cmd *cobra.Command, v any) error
+    CLIPrintResult writes v as indented JSON (two-space indent, no HTML
+    escaping) to cmd's stdout. Use this for successful command output.
+
+func CacheMiddleware(cat CacheCategory) echo.MiddlewareFunc
+    CacheMiddleware returns Echo middleware that sets the Cache-Control header
+    based on the provided CacheCategory.
+
+func CheckETag(c echo.Context, updatedAt time.Time) bool
+    CheckETag compares the If-None-Match request header against the ETag derived
+    from updatedAt. Returns true if they match (client cache is current),
+    false otherwise. If updatedAt is the zero value of time.Time, returns false
+    without checking If-None-Match.
+
+func ConfigDir() string
+    ConfigDir returns the directory containing config.toml, used for resolving
+    adjacent files like admin_token.
+
+func ConfigPath() string
+    ConfigPath returns the resolved path to config.toml.
+
+func FormatUTC(t time.Time) string
+    FormatUTC formats a time.Time as RFC 3339 UTC with Z suffix, converting to
+    UTC if necessary.
+
+func GetUserID(c echo.Context) string
+    GetUserID returns the authenticated user's UUID string from the context
+    AuthInfo, or an empty string if AuthInfo is nil or UserID is empty.
+
+func HTTPErrorHandler(err error, c echo.Context)
+    HTTPErrorHandler is the custom Echo error handler that ensures all error
+    responses use the standard JSON envelope format.
+
+func KeysCmd() *cobra.Command
+    KeysCmd returns the `keys` command group (list, refresh, revoke).
+
+func LoginCmd() *cobra.Command
+    LoginCmd returns the `login` command for browser-based OAuth authentication.
+
+func NowUTC() string
+    NowUTC returns the current time formatted as an RFC 3339 UTC string with Z
+    suffix (e.g. "2026-07-17T14:30:00Z").
+
+func OrgsCmd() *cobra.Command
+    OrgsCmd returns the `orgs` command group (list, show, members).
+
+func ParseUTC(s string) (time.Time, error)
+    ParseUTC parses any RFC 3339 timestamp (including offset variants) and
+    normalizes the result to UTC. Returns (time.Time{}, error) for invalid or
+    non-RFC-3339 input.
+
+func RootCommand() *cobra.Command
+    RootCommand returns the base CLI command tree (version, help, persistent
+    flags for --endpoint-url, --api-key, --user-id). Add subcommands with
+    rootCmd.AddCommand().
+
+func SetAuthInfo(c echo.Context, info *AuthInfo)
+    SetAuthInfo stores the AuthInfo in the request's context.Context, making
+    it available via GetAuthInfo. Test code can call this to inject auth state
+    without running the full middleware stack.
+
+func SetETag(c echo.Context, updatedAt time.Time)
+    SetETag sets a weak ETag response header derived from the updatedAt
+    timestamp. The ETag format is W/"<RFC3339-UTC-timestamp>". If updatedAt is
+    the zero value of time.Time, SetETag is a no-op.
+
+func TokensCmd() *cobra.Command
+    TokensCmd returns the `tokens` command group (create, list, show, revoke).
+
+func UserCmd() *cobra.Command
+    UserCmd returns the `user` command group (show, update).
+
+func WriteAPIError(c echo.Context, code int, message string) error
+    WriteAPIError writes a standard JSON error response envelope to the
+    response. Format: {"error": {"code": <integer>, "message": "<string>"}}
+    Sets Content-Type: application/json; charset=utf-8. Returns the error from
+    c.JSON() directly, propagating write errors.
+
+func WriteAPIErrorWithType(c echo.Context, code int, message, errorType string) error
+    WriteAPIErrorWithType writes a standard JSON error response envelope with
+    an additional error_type field for machine-readable error classification.
+    Format: {"error": {"code": <integer>, "message": "<string>", "error_type":
+    "<string>"}} The error_type field enables programmatic switching on error
+    conditions without parsing the human-readable message string.
+
+
+TYPES
+
+type APIError struct {
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	ErrorType string `json:"error_type,omitempty"`
+}
+    APIError is a typed error struct matching the server's error envelope.
+    Callers inspect it via errors.As.
+
+func (e *APIError) Error() string
+    Error implements the error interface. Returns "API error {Code}: {Message}".
+
+func (e *APIError) ErrorCode() int
+    ErrorCode returns the HTTP status code from the API error. Used by
+    internal/cli to detect API errors via interface matching without importing
+    the root apikit package (avoiding import cycles).
+
+func (e *APIError) ErrorErrorType() string
+    ErrorErrorType returns the machine-readable error type from the API error.
+    Used by internal/cli to detect API error types via interface matching
+    without importing the root apikit package (avoiding import cycles).
+
+func (e *APIError) ErrorMessage() string
+    ErrorMessage returns the error message from the API error. Used by
+    internal/cli to detect API errors via interface matching without importing
+    the root apikit package (avoiding import cycles).
+
+type APIKeyFull struct {
+	Key       string     `json:"key"`
+	KeyID     string     `json:"key_id"`
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+    APIKeyFull is the full API key object returned on creation or refresh.
+
+type APIKeyMeta struct {
+	KeyID     string     `json:"key_id"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	RevokedAt *time.Time `json:"revoked_at"`
+}
+    APIKeyMeta is the metadata-only API key object returned in listings.
+
+type APIKeyResult = keys.APIKeyResult
+    APIKeyResult is a type alias for the internal keys.APIKeyResult struct.
+    Consumers can use *apikit.APIKeyResult without importing internal/keys.
+
+func GenerateAPIKey(tx db.Executor, userID string, expiresDays int, logger echo.Logger) (*APIKeyResult, error)
+    GenerateAPIKey creates a new API key for the given user, revoking any
+    existing active keys. It delegates to keys.GenerateAPIKey.
+
+type AfterOrgDeleteFunc func(ctx context.Context, tx *sql.Tx, orgID string) error
+    AfterOrgDeleteFunc is a callback invoked after an organization row is
+    deleted, within the same database transaction. It receives the context, the
+    active transaction, and the ID of the deleted organization. If it returns a
+    non-nil error, the transaction is rolled back, undoing the deletion.
+
+type AfterUserCreateFunc func(ctx context.Context, tx *sql.Tx, userID, username, email string) error
+    AfterUserCreateFunc is a callback invoked after a new user row is inserted
+    into the database, within the same transaction. It receives the active
+    transaction, the new user's ID, username, and email. If it returns a non-nil
+    error, the enclosing transaction is rolled back, undoing both the user
+    INSERT and any side effects the hook performed.
+
+    This hook is used by consuming projects (e.g. hub) to implement
+    post-user-creation logic such as personal organization creation.
+
+type AfterUserDeleteFunc func(ctx context.Context, tx *sql.Tx, userID string) error
+    AfterUserDeleteFunc is a callback invoked after a user row is deleted,
+    within the same database transaction. It receives the context, the active
+    transaction, and the ID of the deleted user. If it returns a non-nil error,
+    the transaction is rolled back, undoing the deletion.
+
+type AuthCallbackRequest struct {
+	Provider    string `json:"provider"`
+	Code        string `json:"code"`
+	RedirectURI string `json:"redirect_uri"`
+	Expires     *int   `json:"expires,omitempty"`
+}
+    AuthCallbackRequest is the request body for POST /auth/callback.
+
+type AuthCallbackResponse struct {
+	User   *User       `json:"user"`
+	APIKey *APIKeyFull `json:"api_key"`
+}
+    AuthCallbackResponse is the response body from POST /auth/callback.
+
+type AuthError = auth.AuthError
+    AuthError is a type alias for the internal auth.AuthError struct. Consumers
+    can use *apikit.AuthError to inspect authentication error details (Code,
+    Message) without importing internal/auth.
+
+type AuthInfo = authctx.AuthInfo
+    AuthInfo is a type alias for the internal authctx.AuthInfo struct. Consumers
+    can use *apikit.AuthInfo to inspect the authenticated credential without
+    importing internal/authctx.
+
+func GetAuthInfo(c echo.Context) *AuthInfo
+    GetAuthInfo retrieves the AuthInfo struct from the Echo request context.
+    Returns nil if no AuthInfo has been injected (e.g. no auth middleware ran).
+
+func ValidateCredential(ctx context.Context, database *DB, rawToken string) (*AuthInfo, error)
+    ValidateCredential validates a raw token string (admin token, API key,
+    or PAT) against the database without requiring an Echo context. The rawToken
+    may optionally include a "Bearer " prefix. Returns the resolved AuthInfo or
+    an AuthError.
+
+type BeforeOrgDeleteFunc func(ctx context.Context, orgID string) error
+    BeforeOrgDeleteFunc is a callback invoked before an organization row is
+    deleted. It receives the context and the ID of the organization to be
+    deleted. If it returns a non-nil error, the deletion is aborted (vetoed) and
+    the error is returned to the client without modifying the database.
+
+type BeforeUserDeleteFunc func(ctx context.Context, userID string) error
+    BeforeUserDeleteFunc is a callback invoked before a user row is deleted.
+    It receives the context and the ID of the user to be deleted. If it returns
+    a non-nil error, the deletion is aborted (vetoed) and the error is returned
+    to the client without modifying the database.
+
+type BootstrapOptions struct {
+	// AdminEmail is the designated admin email (--admin-email flag).
+	// Required on first boot; silently ignored on subsequent boots.
+	AdminEmail string
+	// ResetToken triggers admin token rotation when true (--reset-admin-token flag).
+	ResetToken bool
+}
+    BootstrapOptions configures the admin bootstrap sequence.
+
+type CLIClient = cli.CmdClient
+    CLIClient is an authenticated HTTP client for CLI commands. It handles
+    Bearer-token injection, JSON request/response marshaling, the /api/v1 path
+    prefix, and server error envelope decoding.
+
+    Custom commands should retrieve the client from the Cobra context via
+    CLIClientFromCmd rather than constructing one directly — this ensures the
+    client inherits credentials resolved by apikit's PersistentPreRunE (config
+    file, environment variables, and CLI flags).
+
+func CLIClientFromCmd(cmd *cobra.Command) (*CLIClient, error)
+    CLIClientFromCmd retrieves the authenticated CLIClient from a Cobra
+    command's context. The client is injected by apikit's PersistentPreRunE
+    after resolving credentials from flags, environment variables, and the
+    config file. Returns an error if no client is available (e.g., the user has
+    not run "login" yet).
+
+func NewCLIClient(endpointURL, apiKey string) *CLIClient
+    NewCLIClient constructs a CLIClient with the given endpoint URL and API key.
+    Prefer CLIClientFromCmd for commands registered on apikit's root command
+    tree — it automatically uses resolved credentials.
+
+type CLIError = cli.CmdError
+    CLIError represents a client-side or API error with an integer code and
+    message. It satisfies the error interface and is used by CLIHandleError to
+    render JSON error envelopes.
+
+func NewCLIError(code int, message string) *CLIError
+    NewCLIError creates a CLIError with the given code and message.
+
+type CacheCategory int
+    CacheCategory identifies one of three cache behaviors for HTTP responses.
+
+const (
+	// CacheNoStore produces Cache-Control: no-store.
+	// Default for all routes under the API mount point.
+	CacheNoStore CacheCategory = iota
+	// CacheNoCache produces Cache-Control: no-cache.
+	// Applied to health probe endpoints.
+	CacheNoCache
+	// CachePublic produces Cache-Control: public, max-age=300.
+	// Applied to the /version endpoint and static discovery routes.
+	CachePublic
+)
+type Client struct {
+	// Has unexported fields.
+}
+    Client is the SDK's entry point for making API requests. Safe for concurrent
+    use after construction — all fields are set once in NewClient and never
+    modified thereafter.
+
+func NewClient(baseURL string, opts ...ClientOption) *Client
+    NewClient creates a new Client with the given baseURL and options. Returns
+    a non-nil *Client even for empty baseURL. Trailing slash is stripped from
+    baseURL at construction time.
+
+func (c *Client) AddOrgMember(ctx context.Context, orgID, userID string) error
+    AddOrgMember calls PUT /orgs/:orgID/members/:userID to add a member. The
+    orgID parameter accepts a UUID or slug. The userID parameter accepts a UUID,
+    username, or email address.
+
+func (c *Client) BlockOrg(ctx context.Context, orgID string) (*Organization, error)
+    BlockOrg calls POST /orgs/:id/block to block an organization (admin).
+    The orgID parameter accepts a UUID or slug.
+
+func (c *Client) BlockUser(ctx context.Context, userID string) (*User, error)
+    BlockUser calls POST /users/:id/block to block a user (admin). The userID
+    parameter accepts a UUID, username, or email address.
+
+func (c *Client) CreateOrg(ctx context.Context, req *CreateOrgRequest) (*Organization, error)
+    CreateOrg calls POST /orgs to create a new organization (admin).
+
+func (c *Client) CreateToken(ctx context.Context, req *CreateTokenRequest) (*PATFull, error)
+    CreateToken calls POST /user/tokens to create a new personal access token.
+
+func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error)
+    CreateUser calls POST /users to create a new user (admin).
+
+func (c *Client) DeleteOrg(ctx context.Context, orgID string) error
+    DeleteOrg calls DELETE /orgs/:id to delete an organization (admin).
+    The orgID parameter accepts a UUID or slug.
+
+func (c *Client) DemoteUser(ctx context.Context, userID string) (*User, error)
+    DemoteUser calls POST /users/:id/demote to demote an admin to user (admin).
+    The userID parameter accepts a UUID, username, or email address.
+
+func (c *Client) ExchangeOAuthCode(ctx context.Context, req *AuthCallbackRequest) (*AuthCallbackResponse, error)
+    ExchangeOAuthCode calls POST /auth/callback to exchange an OAuth code.
+
+func (c *Client) GetOrg(ctx context.Context, orgID string, opts ...RequestOption) (*Response[Organization], error)
+    GetOrg calls GET /orgs/:id to fetch an organization. The orgID parameter
+    accepts a UUID or slug.
+
+func (c *Client) GetProviders(ctx context.Context) ([]*OAuthProvider, error)
+    GetProviders calls GET /auth/providers to discover available OAuth
+    providers.
+
+func (c *Client) GetToken(ctx context.Context, tokenID string, opts ...RequestOption) (*Response[PAT], error)
+    GetToken calls GET /user/tokens/:tokenID to fetch a PAT by ID.
+
+func (c *Client) GetUser(ctx context.Context, opts ...RequestOption) (*Response[User], error)
+    GetUser calls GET /user to fetch the authenticated user.
+
+func (c *Client) GetUserByID(ctx context.Context, userID string, opts ...RequestOption) (*Response[User], error)
+    GetUserByID calls GET /users/:id to fetch a user. The userID parameter
+    accepts a UUID, username, or email address.
+
+func (c *Client) Healthz(ctx context.Context) (*HealthResponse, error)
+    Healthz calls GET /healthz (liveness probe). Health probes bypass the mount
+    point.
+
+func (c *Client) ListKeys(ctx context.Context) ([]*APIKeyMeta, error)
+    ListKeys calls GET /user/keys to list the authenticated user's API keys.
+
+func (c *Client) ListOrgMembers(ctx context.Context, orgID string) ([]*User, error)
+    ListOrgMembers calls GET /orgs/:id/members to list organization members.
+    The orgID parameter accepts a UUID or slug. Returns []*User directly --
+    OrgMember is not a distinct Go type.
+
+func (c *Client) ListOrgs(ctx context.Context, opts *ListOrgsOptions) ([]*Organization, error)
+    ListOrgs calls GET /orgs to list all organizations. Query parameters are
+    constructed using url.Values for forward-compatible extension.
+
+func (c *Client) ListTokens(ctx context.Context) ([]*PAT, error)
+    ListTokens calls GET /user/tokens to list the authenticated user's PATs.
+
+func (c *Client) ListUserKeys(ctx context.Context, userID string) ([]*APIKeyMeta, error)
+    ListUserKeys calls GET /users/:userID/keys to list a user's API keys
+    (admin). The userID parameter accepts a UUID, username, or email address.
+
+func (c *Client) ListUserOrgs(ctx context.Context) ([]*Organization, error)
+    ListUserOrgs calls GET /user/orgs to list the authenticated user's
+    organizations.
+
+func (c *Client) ListUserTokens(ctx context.Context, userID string) ([]*PAT, error)
+    ListUserTokens calls GET /users/:userID/tokens to list a user's PATs
+    (admin). The userID parameter accepts a UUID, username, or email address.
+
+func (c *Client) ListUsers(ctx context.Context, opts *ListUsersOptions) ([]*User, error)
+    ListUsers calls GET /users to list all users. Query parameters are
+    constructed using url.Values for forward-compatible extension.
+
+func (c *Client) PromoteUser(ctx context.Context, userID string) (*User, error)
+    PromoteUser calls POST /users/:id/promote to promote a user to admin
+    (admin). The userID parameter accepts a UUID, username, or email address.
+
+func (c *Client) Readyz(ctx context.Context) (*HealthResponse, error)
+    Readyz calls GET /readyz (readiness probe). Health probes bypass the mount
+    point.
+
+func (c *Client) RefreshKey(ctx context.Context, keyID string) (*APIKeyFull, error)
+    RefreshKey calls POST /user/keys/:keyID/refresh to refresh an API key.
+
+func (c *Client) RemoveOrgMember(ctx context.Context, orgID, userID string) error
+    RemoveOrgMember calls DELETE /orgs/:orgID/members/:userID to remove a
+    member. The orgID parameter accepts a UUID or slug. The userID parameter
+    accepts a UUID, username, or email address.
+
+func (c *Client) RevokeKey(ctx context.Context, keyID string) (*RevokeKeyResponse, error)
+    RevokeKey calls DELETE /user/keys/:keyID to revoke an API key. Returns
+    *RevokeKeyResponse on HTTP 200 success.
+
+func (c *Client) RevokeToken(ctx context.Context, tokenID string) error
+    RevokeToken calls DELETE /user/tokens/:tokenID to revoke a PAT.
+
+func (c *Client) RevokeUserKey(ctx context.Context, userID, keyID string) error
+    RevokeUserKey calls DELETE /users/:userID/keys/:keyID to revoke a user's
+    API key (admin). The userID parameter accepts a UUID, username, or email
+    address.
+
+func (c *Client) RevokeUserToken(ctx context.Context, userID, tokenID string) error
+    RevokeUserToken calls DELETE /users/:userID/tokens/:tokenID to revoke a
+    user's PAT (admin). The userID parameter accepts a UUID, username, or email
+    address.
+
+func (c *Client) UnblockOrg(ctx context.Context, orgID string) (*Organization, error)
+    UnblockOrg calls POST /orgs/:id/unblock to unblock an organization (admin).
+    The orgID parameter accepts a UUID or slug.
+
+func (c *Client) UnblockUser(ctx context.Context, userID string) (*User, error)
+    UnblockUser calls POST /users/:id/unblock to unblock a user (admin).
+    The userID parameter accepts a UUID, username, or email address.
+
+func (c *Client) UpdateOrg(ctx context.Context, orgID string, req *UpdateOrgRequest) (*Organization, error)
+    UpdateOrg calls PATCH /orgs/:id to update an organization (admin). The orgID
+    parameter accepts a UUID or slug.
+
+func (c *Client) UpdateUser(ctx context.Context, req *UpdateUserRequest) (*User, error)
+    UpdateUser calls PATCH /user to update the authenticated user.
+
+func (c *Client) UpdateUserByID(ctx context.Context, userID string, req *UpdateUserRequest) (*User, error)
+    UpdateUserByID calls PATCH /users/:id to update a user (admin). The userID
+    parameter accepts a UUID, username, or email address.
+
+func (c *Client) Version(ctx context.Context) (*VersionResponse, error)
+    Version calls GET /version. Health/meta probes bypass the mount point.
+
+type ClientOption func(*Client)
+    ClientOption is a function that configures a Client at construction time.
+
+func WithAPIKey(key string) ClientOption
+    WithAPIKey sets the Bearer token for the Authorization header.
+
+func WithHTTPClient(client *http.Client) ClientOption
+    WithHTTPClient overrides the default http.Client.
+
+func WithMountPoint(path string) ClientOption
+    WithMountPoint overrides the default mount point (/api/v1). Normalizes the
+    path: adds leading slash if missing, strips trailing slash. Empty string
+    normalizes to "/".
+
+func WithRequestID(id string) ClientOption
+    WithRequestID sets a static X-Request-ID header on every request.
+
+type Config = config.Config
+    Config is a type alias for the internal config type. This allows consumers
+    to use *apikit.Config without importing internal/config.
+
+func LoadConfig() (*Config, error)
+    LoadConfig loads the server configuration from config.toml, respecting XDG
+    base directory conventions.
+
+type CreateOrgRequest struct {
+	Name string  `json:"name"`
+	Slug string  `json:"slug"`
+	URL  *string `json:"url,omitempty"`
+}
+    CreateOrgRequest is the request body for creating an organization.
+
+type CreateTokenRequest struct {
+	Name        string   `json:"name"`
+	Permissions []string `json:"permissions"`
+	Expires     *int     `json:"expires,omitempty"`
+}
+    CreateTokenRequest is the request body for creating a personal access token.
+
+type CreateUserRequest struct {
+	Username   string `json:"username"`
+	Email      string `json:"email"`
+	FullName   string `json:"full_name"`
+	Role       string `json:"role"`
+	Provider   string `json:"provider"`
+	ProviderID string `json:"provider_id"`
+}
+    CreateUserRequest is the request body for creating a new user.
+
+type DB = db.DB
+    DB is a type alias for the internal db type. Consumers can use *apikit.DB
+    without importing internal/db.
+
+func OpenDatabase(path string) (*DB, error)
+    OpenDatabase opens and initializes a SQLite database at the given path.
+    The schema is applied automatically. The caller must call Close when done.
+
+type HealthChecker func() error
+    HealthChecker is a function that checks service health. A nil HealthChecker
+    means the service is always considered ready.
+
+type HealthResponse struct {
+	Status string `json:"status"`
+}
+    HealthResponse is the response body from health probe endpoints.
+
+type ListOrgsOptions struct {
+	IncludeBlocked bool
+}
+    ListOrgsOptions configures the ListOrgs request. Designed to accommodate
+    additional filter fields (e.g., pagination, search) in future iterations
+    without breaking existing callers.
+
+type ListUsersOptions struct {
+	IncludeBlocked bool
+}
+    ListUsersOptions configures the ListUsers request. Designed to accommodate
+    additional filter fields (e.g., pagination, search) in future iterations
+    without breaking existing callers.
+
+type OAuthProvider struct {
+	Name         string `json:"name"`
+	AuthorizeURL string `json:"authorize_url"`
+}
+    OAuthProvider is a provider discovery object returned by GET
+    /auth/providers.
+
+type Organization struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Slug      string     `json:"slug"`
+	URL       string     `json:"url,omitempty"`
+	OwnerID   *string    `json:"owner_id,omitempty"`
+	Status    string     `json:"status"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	BlockedAt *time.Time `json:"blocked_at,omitempty"`
+}
+    Organization represents an organization in the system.
+
+type PAT struct {
+	TokenID     string     `json:"token_id"`
+	Name        string     `json:"name"`
+	Permissions []string   `json:"permissions"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	RevokedAt   *time.Time `json:"revoked_at"`
+}
+    PAT is the metadata-only personal access token object.
+
+type PATFull struct {
+	Token       string     `json:"token"`
+	TokenID     string     `json:"token_id"`
+	Name        string     `json:"name"`
+	Permissions []string   `json:"permissions"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+}
+    PATFull is the full personal access token object returned on creation.
+
+type Permission struct {
+	Resource string
+	Action   string
+}
+    Permission defines a custom PAT permission scope. Register custom
+    permissions by passing them to MountHandlers:
+
+        server.MountHandlers(database,
+            apikit.Permission{Resource: "workspaces", Action: "read"},
+            apikit.Permission{Resource: "workspaces", Action: "create"},
+        )
+
+type Provider = oauth.Provider
+    Provider is a type alias for the internal oauth.Provider interface.
+    Consuming projects can implement custom providers without importing
+    internal/oauth.
+
+type RequestOption func(*http.Request)
+    RequestOption is a function that configures per-request behavior.
+
+func WithIfNoneMatch(etag string) RequestOption
+    WithIfNoneMatch adds an If-None-Match header to a single request for
+    conditional GET support.
+
+type Response[T any] struct {
+	Data       T
+	StatusCode int
+	Header     http.Header
+}
+    Response wraps a typed API response with HTTP headers, enabling ETag access
+    without losing type safety.
+
+func (r *Response[T]) ETag() string
+    ETag returns the ETag header value from the response.
+
+type RevokeKeyResponse struct {
+	KeyID     string    `json:"key_id"`
+	RevokedAt time.Time `json:"revoked_at"`
+}
+    RevokeKeyResponse is the response body from DELETE /user/keys/:key_id.
+
+type Server struct {
+	// Has unexported fields.
+}
+    Server wraps an Echo HTTP server with apikit configuration.
+
+func NewServer(cfg *Config, checker HealthChecker) *Server
+    NewServer constructs a configured Echo HTTP server from a *Config. It panics
+    if cfg is nil (programming error). It does not perform file I/O or call
+    LoadConfig().
+
+func (s *Server) APIGroup() *echo.Group
+    APIGroup returns the Echo route group at the configured mount point.
+    The group has CacheMiddleware(CacheNoStore), BodySizeLimitMiddleware, and
+    contentTypeEnforcementMiddleware pre-applied. Returns the same *echo.Group
+    on every call.
+
+func (s *Server) Addr() string
+    Addr returns the actual bound host:port string after Start() begins
+    listening. Returns empty string before Start() or after shutdown.
+
+func (s *Server) Echo() *echo.Echo
+    Echo returns the underlying Echo HTTP server instance. Use this to
+    register routes directly on the Echo instance rather than through the
+    API group (e.g., for the git smart HTTP server which mounts routes
+    outside the API group prefix). Routes registered directly on Echo do
+    not have API-group middleware (CacheNoStore, BodySizeLimitMiddleware,
+    contentTypeEnforcementMiddleware) applied; callers can apply
+    BodySizeLimitMiddleware manually if a limit is desired.
+
+func (s *Server) ExternalURL() string
+    ExternalURL returns the configured external URL for this server. Returns
+    empty string if not configured.
+
+func (s *Server) MountHandlers(database *DB, permissions ...Permission) error
+    MountHandlers registers the default OAuth, authentication, and API handlers
+    on the server's API group. This wires up the OAuth provider registry from
+    config, the auth middleware, and all resource handlers (users, orgs, keys,
+    PATs).
+
+    Must be called after NewServer and before Start.
+
+func (s *Server) OnAfterOrgDelete(fn AfterOrgDeleteFunc)
+    OnAfterOrgDelete registers an AfterOrgDeleteFunc hook on the server.
+    Calling OnAfterOrgDelete replaces any previously registered hook.
+
+func (s *Server) OnAfterUserCreate(fn AfterUserCreateFunc)
+    OnAfterUserCreate registers an AfterUserCreateFunc hook on the server.
+    The hook will be called after a new user is created via either the OAuth
+    callback (handleCallback) or the admin user creation handler (createUser).
+
+    Only one hook may be registered at a time. Calling OnAfterUserCreate a
+    second time replaces the previously registered hook.
+
+    The hook must be registered before MountHandlers is called to ensure it is
+    wired into all user creation paths. Registering after MountHandlers stores
+    the hook but behavior is undefined.
+
+func (s *Server) OnAfterUserDelete(fn AfterUserDeleteFunc)
+    OnAfterUserDelete registers an AfterUserDeleteFunc hook on the server.
+    Calling OnAfterUserDelete replaces any previously registered hook.
+
+func (s *Server) OnBeforeOrgDelete(fn BeforeOrgDeleteFunc)
+    OnBeforeOrgDelete registers a BeforeOrgDeleteFunc hook on the server.
+    Calling OnBeforeOrgDelete replaces any previously registered hook.
+
+func (s *Server) OnBeforeUserDelete(fn BeforeUserDeleteFunc)
+    OnBeforeUserDelete registers a BeforeUserDeleteFunc hook on the server.
+    Calling OnBeforeUserDelete replaces any previously registered hook.
+
+func (s *Server) Shutdown(ctx context.Context) error
+    Shutdown initiates graceful server shutdown. Uses sync.Once to ensure
+    one-time execution. Derives a context with drainTimeout (15 seconds) and
+    shuts down the Echo server. All concurrent/subsequent calls return nil
+    immediately.
+
+func (s *Server) Start() error
+    Start binds the listener and serves requests until shutdown. It blocks until
+    Shutdown() is called or a SIGTERM/SIGINT is received. Returns nil on clean
+    shutdown or an error if binding fails.
+
+type UpdateOrgRequest struct {
+	Name *string `json:"name,omitempty"`
+	URL  *string `json:"url,omitempty"`
+}
+    UpdateOrgRequest is the request body for updating an organization.
+
+type UpdateUserRequest struct {
+	FullName string `json:"full_name"`
+}
+    UpdateUserRequest is the request body for updating a user. FullName is a
+    plain string (not *string) with no omitempty, so every PATCH request body
+    always includes the full_name field.
+
+type User struct {
+	ID         string     `json:"id"`
+	Username   string     `json:"username"`
+	Email      string     `json:"email"`
+	FullName   string     `json:"full_name"`
+	Status     string     `json:"status"`
+	Role       string     `json:"role"`
+	Provider   string     `json:"provider"`
+	ProviderID string     `json:"provider_id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	BlockedAt  *time.Time `json:"blocked_at,omitempty"`
+}
+    User represents an authenticated user in the system.
+
+type UserInfo = oauth.UserInfo
+    UserInfo is a type alias for the internal oauth.UserInfo struct. Consuming
+    projects can use *apikit.UserInfo without importing internal/oauth.
+
+type VersionResponse struct {
+	Version    string `json:"go_version"`
+	BuildTime  string `json:"build_time"`
+	Commit     string `json:"commit"`
+	MountPoint string `json:"mount_point"`
+}
+    VersionResponse is the response body from GET /version.
+
