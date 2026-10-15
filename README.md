@@ -369,7 +369,7 @@ make vet         # go vet
 make lint        # golangci-lint, if installed
 make check-spec  # Validate OpenAPI spec
 make check       # Run fmt + vet + lint + test + check-spec
-make doc         # Go package docs into build/docs
+make doc         # Go package docs into docs/generated
 make clean       # Remove build artifacts
 ```
 
